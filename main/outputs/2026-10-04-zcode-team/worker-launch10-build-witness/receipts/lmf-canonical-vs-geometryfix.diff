@@ -1,0 +1,46 @@
+--- .superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/src/live_module_facts.cpp	2026-10-04 13:24:48
++++ outputs/2026-10-04-zcode-team/worker-facts-geometry-fix/staging/live_module_facts.geometryfix.cpp	2026-10-05 07:26:58
+@@ -444,10 +444,42 @@
+             // Works for both routes: rtld-reported base or the span-validated
+             // VmScan chosen base (the adapter plants images[MainExe].base
+             // from the scan result via identity_source/vm_scan).
++            //
++            // worker-facts-geometry-fix (launch-9, 2026-10-05): on the VmScan
++            // route the conversion adapter derives readable_ranges by
++            // clamping THESE anchor mappings into
++            // [chosen_base, chosen_base+chosen_extent) and requires the
++            // kernel readable bit (comp6 D2 Diff A). The containing-base-only
++            // rule collected exactly ONE mapping — the span holding the ELF
++            // header — which on the launch-9 target is the EXEC-ONLY text
++            // span ([0x400000,0x787c000) prot=4, trusted in-game record).
++            // The filter then correctly dropped it and conversion refused
++            // with "no observed mapping interval intersects the module image
++            // extent with valid geometry" while the READABLE data spans of
++            // the SAME anchored image sat one entry away in the same
++            // capture. On the VmScan route the anchor mappings are therefore
++            // the mappings INTERSECTING the chosen extent — the honest
++            // anchor geometry the scan itself established; every other route
++            // keeps the exact containing rule. Integers only; never
++            // dereferenced; still capped by kMaxAnchorMappings (VMMAP order,
++            // lowest addresses first). On checked-overflow of the extent end
++            // (never observed) the containing rule applies unchanged.
+             const uint64_t base =
+                 reinterpret_cast<uintptr_t>(facts_.observed_base);
++            uint64_t scan_end = 0;
++            bool intersect_mode = false;
++            if (facts_.identity_source == IdentitySource::VmScan &&
++                facts_.vm_scan.chosen && facts_.vm_scan.chosen_extent != 0) {
++                intersect_mode =
++                    checked_add_u64(base, facts_.vm_scan.chosen_extent,
++                                    &scan_end);
++            }
+             for (size_t m = 0; m < vm_copied; ++m) {
+-                if (mappings[m].start <= base && base < mappings[m].end &&
++                const bool hits = intersect_mode
++                    ? (mappings[m].start < scan_end &&
++                       base < mappings[m].end)
++                    : (mappings[m].start <= base && base < mappings[m].end);
++                if (hits &&
+                     facts_.anchor_mapping_count < kMaxAnchorMappings) {
+                     VmMapping vm{};
+                     vm.start = mappings[m].start;

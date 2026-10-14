@@ -1,0 +1,53 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-owned-detour-1/original/sources/ZydisDisassembler.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-owned-detour-1/port/sources/ZydisDisassembler.cpp
+@@ -1,3 +1,9 @@
++#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++#include <polyhook2/OwnedTrampoline.hpp>
++#include <polyhook2/OwnedMemory.hpp>
++#include <memory>
++#include <stdexcept>
++#endif
+ #include "polyhook2/ZydisDisassembler.hpp"
+ #include "polyhook2/ErrorLog.hpp"
+ 
+@@ -40,6 +46,9 @@
+ 	insts_t insVec;
+ //	m_branchMap.clear();
+ 
++	#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++    if (end <= start || end - start > UINT32_MAX) return insVec;
++#endif
+ 	uint64_t size = end - start;
+ 	assert(size > 0);
+ 	if (size <= 0) {
+@@ -48,11 +57,20 @@
+ 
+ 	// copy potentially remote memory to local buffer
+ 	size_t read = 0;
++	#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++    std::unique_ptr<uint8_t[]> storage(new uint8_t[(uint32_t)size]);
++    auto* buf = storage.get();
++    {
++        OwnedMemory::ScopedRegion destination(buf, static_cast<size_t>(size), W);
++        if (!accessor.safe_mem_read(firstInstruction, (uint64_t)buf, size, read) || read != size) return insVec;
++    }
++#else
+ 	auto* buf = new uint8_t[(uint32_t)size];
+ 	if (!accessor.safe_mem_read(firstInstruction, (uint64_t)buf, size, read)) {
+ 		delete[] buf;
+ 		return insVec;
+ 	}
++#endif
+ 	ZydisDecodedOperand decoded_operands[ZYDIS_MAX_OPERAND_COUNT];
+ 	ZydisDecodedInstruction insInfo;
+ 	uint64_t offset = 0;
+@@ -103,7 +121,9 @@
+ 		offset += insInfo.length;
+ 	}
+ 
++#if !(defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST))
+ 	delete[] buf;
++#endif
+ 	return insVec;
+ }
+ 

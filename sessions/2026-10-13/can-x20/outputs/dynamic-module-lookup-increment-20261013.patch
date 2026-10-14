@@ -1,0 +1,485 @@
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -55,6 +55,11 @@
+         // Null => LoadLibrary of unknown DLLs is refused at call time.
+         WinModule (*load_pe)(void* user, const char* path) = nullptr;
+         void* load_user = nullptr;
++        // Required before publishing guest string-taking dynamic lookup APIs.
++        // The adapter validates the complete guest range before copying.
++        bool (*read_guest_bytes)(void* user, const void* guest_address,
++                                 void* destination, size_t bytes) = nullptr;
++        void* read_guest_user = nullptr;
+     };
+ 
+     WinApiShim();
+@@ -86,6 +91,10 @@
+     // Read-only namespace check for static dependency discovery. Presence
+     // does not mean every symbol is callable; resolve still gates each row.
+     bool has_module_surface(const char* dll_name);
++
++    // Select a previously registered process image for
++    // GetModuleHandleA(NULL). The selected handle must remain registered.
++    bool set_main_module(WinModule handle);
+ 
+     // The adapter registers each validated mapped DLL by its HMODULE/image
+     // base before DllMain. A non-TLS module needs a callback that actually
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -46,7 +46,10 @@
+ // ---- fixed Win32 constants used by the shims (public documentation values)
+ constexpr uint32_t WAIT_FAILED = 0xFFFFFFFFu;
+ constexpr uint32_t ERROR_TIMEOUT = 1460;
++constexpr uint32_t ERROR_INVALID_HANDLE = 6;
+ constexpr uint32_t ERROR_INVALID_PARAMETER = 87;
++constexpr uint32_t ERROR_MOD_NOT_FOUND = 126;
++constexpr uint32_t ERROR_PROC_NOT_FOUND = 127;
+ constexpr uint32_t TLS_OUT_OF_INDEXES = 0xFFFFFFFFu;
+ constexpr uint32_t GENERIC_WRITE = 0x40000000u;
+ 
+@@ -64,10 +67,18 @@
+     return key;
+ }
+ 
++bool needs_guest_reader(const std::string& dll, const char* symbol)
++{
++    return dll == "kernel32.dll" && symbol &&
++           (!std::strcmp(symbol, "GetModuleHandleA") ||
++            !std::strcmp(symbol, "GetProcAddress"));
++}
++
+ } // namespace
+ 
+ struct WinApiShim::Impl
+ {
++    WinApiShim* owner = nullptr;
+     struct RawExport
+     {
+         void* body = nullptr;
+@@ -80,6 +91,10 @@
+     // dll-name(lowercased) -> { symbol/ordinal -> address }
+     std::unordered_map<std::string, std::unordered_map<std::string, RawExport>> raw_exports;
+     std::unordered_map<std::string, std::unordered_map<std::string, void*>> exports;
++    // Stable opaque handles for built-in export catalogs. These are valid
++    // only for module APIs; they are not PE image bases to dereference.
++    std::unordered_map<std::string, std::unique_ptr<uint64_t>> builtin_handles;
++    WinModule main_module = nullptr;
+     ExecutableMemoryBackend executable_backend{};
+     struct ModuleEntry
+     {
+@@ -181,7 +196,7 @@
+ 
+ } // namespace
+ 
+-WinApiShim::WinApiShim() : m(new Impl()) {}
++WinApiShim::WinApiShim() : m(new Impl()) { m->owner = this; }
+ 
+ void WinApiShim::set_hooks(const Hooks& hooks) { m->hooks = hooks; }
+ void WinApiShim::set_mod_root(std::string utf8_root) { m->mod_root = std::move(utf8_root); }
+@@ -234,6 +249,19 @@
+     std::lock_guard guard(m->mu);
+     return m->modules.count(key) || m->raw_exports.count(key) ||
+            m->exports.count(key);
++}
++
++bool WinApiShim::set_main_module(WinModule handle)
++{
++    if (!handle) return false;
++    std::lock_guard guard(m->mu);
++    for (const auto& row : m->modules)
++        if (row.second.handle == handle)
++        {
++            m->main_module = handle;
++            return true;
++        }
++    return false;
+ }
+ 
+ bool WinApiShim::register_thread_notification_policy(
+@@ -733,6 +761,126 @@
+     const std::string path = shim_path(m, utf8_path_fallback, for_write);
+     if (path.empty()) return (void*)-1; // INVALID_HANDLE_VALUE
+     return std::fopen(path.c_str(), for_write ? "wb" : "rb");
++}
++
++// Every byte of a guest-supplied name is copied through an adapter that
++// validates its range. A malformed pointer never reaches strlen/strcmp.
++static bool copy_guest_name(WinApiShim::Impl* m, const char* guest,
++                            std::string* out)
++{
++    if (!guest || !out || !m->hooks.read_guest_bytes) return false;
++    const uintptr_t base = reinterpret_cast<uintptr_t>(guest);
++    out->clear();
++    try
++    {
++        for (uintptr_t i = 0; i < 4096; ++i)
++        {
++            if (base > UINTPTR_MAX - i) return false;
++            char ch = 0;
++            if (!m->hooks.read_guest_bytes(m->hooks.read_guest_user,
++                    reinterpret_cast<const void*>(base + i), &ch, 1))
++                return false;
++            if (!ch) return !out->empty();
++            if (static_cast<unsigned char>(ch) < 0x20) return false;
++            out->push_back(ch);
++        }
++    }
++    catch (const std::bad_alloc&) { return false; }
++    return false;
++}
++
++static WinModule impl_GetModuleHandleA(WinApiShim::Impl* m, const char* guest_name)
++{
++    if (!guest_name)
++    {
++        std::lock_guard guard(m->mu);
++        for (const auto& row : m->modules)
++            if (m->main_module && row.second.handle == m->main_module)
++                return m->main_module;
++        win32_set_last_error(ERROR_MOD_NOT_FOUND);
++        return nullptr;
++    }
++    std::string name;
++    if (!copy_guest_name(m, guest_name, &name) ||
++        name.find_first_of("/\\:") != std::string::npos)
++    {
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return nullptr;
++    }
++    std::string key = ascii_module_key(name.c_str());
++    if (key.back() == '.') key.pop_back();
++    else if (key.find('.') == std::string::npos) key += ".dll";
++    std::lock_guard guard(m->mu);
++    auto module = m->modules.find(key);
++    if (module != m->modules.end() && module->second.handle)
++        return module->second.handle;
++    auto builtin = m->builtin_handles.find(key);
++    if (builtin != m->builtin_handles.end())
++        return static_cast<WinModule>(builtin->second.get());
++    win32_set_last_error(ERROR_MOD_NOT_FOUND);
++    return nullptr;
++}
++
++static void* impl_GetProcAddress(WinApiShim::Impl* m, WinModule handle,
++                                 const char* guest_symbol)
++{
++    if (!handle)
++    {
++        win32_set_last_error(ERROR_INVALID_HANDLE);
++        return nullptr;
++    }
++    if (!guest_symbol)
++    {
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return nullptr;
++    }
++    const uintptr_t encoded = reinterpret_cast<uintptr_t>(guest_symbol);
++    const bool by_ordinal = encoded <= UINT16_MAX;
++    const uint64_t ordinal = by_ordinal ? encoded : 0;
++    if (by_ordinal && !ordinal)
++    {
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return nullptr;
++    }
++    std::string symbol;
++    if (!by_ordinal && !copy_guest_name(m, guest_symbol, &symbol))
++    {
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return nullptr;
++    }
++    std::string key;
++    {
++        std::lock_guard guard(m->mu);
++        for (const auto& row : m->modules)
++        {
++            if (row.second.handle != handle) continue;
++            if (!key.empty() || m->raw_exports.count(row.first))
++            {
++                win32_set_last_error(ERROR_INVALID_HANDLE);
++                return nullptr; // ambiguous or shadowed by a built-in catalog
++            }
++            key = row.first;
++        }
++        for (const auto& row : m->builtin_handles)
++        {
++            if (row.second.get() != handle) continue;
++            if (!key.empty() || m->modules.count(row.first))
++            {
++                win32_set_last_error(ERROR_INVALID_HANDLE);
++                return nullptr;
++            }
++            key = row.first;
++        }
++    }
++    if (key.empty())
++    {
++        win32_set_last_error(ERROR_INVALID_HANDLE);
++        return nullptr;
++    }
++    void* address = m->owner->resolve(key.c_str(),
++                         by_ordinal ? nullptr : symbol.c_str(), ordinal);
++    if (!address) win32_set_last_error(ERROR_PROC_NOT_FOUND);
++    return address;
+ }
+ 
+ // ===================== registry =====================
+@@ -778,6 +926,8 @@
+         {"kernel32.dll", "QueryPerformanceCounter", (void*)&impl_QueryPerformanceCounter, 1, false},
+         {"kernel32.dll", "GetTickCount", (void*)&impl_GetTickCount, 0, true},
+         {"kernel32.dll", "CreateFileW", (void*)&impl_CreateFileW, 7, false},
++        {"kernel32.dll", "GetModuleHandleA", (void*)&impl_GetModuleHandleA, 1, true},
++        {"kernel32.dll", "GetProcAddress", (void*)&impl_GetProcAddress, 2, true},
+         // T4 fail-closed (the important policy rows):
+         {"vcruntime140.dll", "__CxxFrameHandler4", (void*)&impl_fail_closed_cxx_frame, UINT8_MAX, false},
+         {"kernel32.dll", "RaiseException", (void*)&impl_fail_closed_raise, UINT8_MAX, false},
+@@ -789,6 +939,8 @@
+     std::lock_guard g(m->mu);
+     for (const auto& r : rows)
+     {
++        if (!m->builtin_handles.count(r.dll))
++            m->builtin_handles.emplace(r.dll, std::make_unique<uint64_t>(0));
+         std::string key = r.sym;
+         m->raw_exports[r.dll][key] = Impl::RawExport{
+             r.fn, r.integer_arity, r.reviewed_for_publication};
+@@ -811,6 +963,8 @@
+         if (raw_dll == m->raw_exports.end()) return BuiltinInstallStatus::Unsupported;
+         auto row = raw_dll->second.find(symbol);
+         if (row == raw_dll->second.end() || !row->second.reviewed_for_publication)
++            return BuiltinInstallStatus::Unsupported;
++        if (needs_guest_reader(dll, symbol) && !m->hooks.read_guest_bytes)
+             return BuiltinInstallStatus::Unsupported;
+         auto existing = m->exports.find(dll);
+         if (existing != m->exports.end() && existing->second.count(symbol))
+@@ -948,6 +1102,8 @@
+                 auto row = catalog->second.find(symbol);
+                 eligible = row != catalog->second.end() &&
+                            row->second.reviewed_for_publication;
++                if (eligible && needs_guest_reader(dll, symbol) &&
++                    !m->hooks.read_guest_bytes) eligible = false;
+             }
+             backend = m->executable_backend;
+         }
+--- /dev/null
++++ b/loader/tests/dynamic_module_lookup_test.cpp
+@@ -0,0 +1,203 @@
++#include "win_api_shim.h"
++#include "win64_bridge.h"
++
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <string>
++#include <sys/mman.h>
++#include <unistd.h>
++#include <utility>
++#include <vector>
++
++namespace {
++int failures = 0;
++int checks = 0;
++void check(bool ok, const char* label)
++{
++    ++checks;
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", label);
++    if (!ok) ++failures;
++}
++bool allocate_writable(size_t minimum, void** address, size_t* bytes, void*)
++{
++    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
++    if (minimum > page) return false;
++    void* region = mmap(nullptr, page, PROT_READ | PROT_WRITE,
++                        MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (region == MAP_FAILED) return false;
++    *address = region;
++    *bytes = page;
++    return true;
++}
++bool seal_executable(void* address, size_t bytes, void*)
++{
++    return mprotect(address, bytes, PROT_READ | PROT_EXEC) == 0;
++}
++void release_mapping(void* address, size_t bytes, void*) { munmap(address, bytes); }
++
++struct ReadState
++{
++    std::vector<std::pair<const char*, size_t>> ranges;
++    int reads = 0;
++};
++bool read_guest_bytes(void* user, const void* guest, void* dst, size_t bytes)
++{
++    auto& state = *static_cast<ReadState*>(user);
++    ++state.reads;
++    const uintptr_t address = reinterpret_cast<uintptr_t>(guest);
++    for (const auto& range : state.ranges)
++    {
++        const uintptr_t begin = reinterpret_cast<uintptr_t>(range.first);
++        if (address >= begin && address - begin <= range.second &&
++            bytes <= range.second - (address - begin))
++        {
++            std::memcpy(dst, guest, bytes);
++            return true;
++        }
++    }
++    return false;
++}
++extern "C" __attribute__((ms_abi)) uint64_t fake_export() { return 7; }
++bool named_lookup(cap13::WinModule, const char* symbol, void** out)
++{
++    if (symbol && std::strcmp(symbol, "is_ue4ss_initialized") == 0)
++    {
++        *out = reinterpret_cast<void*>(&fake_export);
++        return true;
++    }
++    return false;
++}
++bool mapped_lookup(void*, const char* symbol, uint64_t ordinal,
++                   void** out, std::string*)
++{
++    if ((symbol && std::strcmp(symbol, "start_mod") == 0) ||
++        (!symbol && ordinal == 7))
++    {
++        *out = reinterpret_cast<void*>(&fake_export);
++        return true;
++    }
++    return false;
++}
++} // namespace
++
++int main()
++{
++    cap13::WinApiShim shim;
++    shim.register_builtin_exports();
++    cap13::WinApiShim::ExecutableMemoryBackend backend{};
++    backend.allocate_writable = allocate_writable;
++    backend.seal_executable = seal_executable;
++    backend.release = release_mapping;
++    check(shim.set_executable_backend(backend), "executable wrapper backend configured");
++    check(shim.resolve("kernel32.dll", "GetModuleHandleA", 0) == nullptr &&
++          shim.resolve("kernel32.dll", "GetProcAddress", 0) == nullptr,
++          "dynamic lookup imports stay hidden without validated guest reads");
++
++    char ue4ss_name[] = "UE4SS.DLL";
++    char provider_name[] = "provider.dll";
++    char provider_stem[] = "provider";
++    char kernel_name[] = "KERNEL32.dll";
++    char export_name[] = "is_ue4ss_initialized";
++    char provider_export[] = "start_mod";
++    char wrong_case[] = "Start_mod";
++    char builtin_export[] = "GetCurrentProcessId";
++    char missing_module[] = "absent.dll";
++    char missing_export[] = "absent_export";
++    char unterminated[] = {'U', 'E', '4', 'S', 'S'};
++    ReadState reads;
++    for (auto range : {std::pair<const char*, size_t>{ue4ss_name, sizeof(ue4ss_name)},
++                       {provider_name, sizeof(provider_name)},
++                       {provider_stem, sizeof(provider_stem)},
++                       {kernel_name, sizeof(kernel_name)},
++                       {export_name, sizeof(export_name)},
++                       {provider_export, sizeof(provider_export)},
++                       {wrong_case, sizeof(wrong_case)},
++                       {builtin_export, sizeof(builtin_export)},
++                       {missing_module, sizeof(missing_module)},
++                       {missing_export, sizeof(missing_export)},
++                       {unterminated, sizeof(unterminated)}})
++        reads.ranges.push_back(range);
++    cap13::WinApiShim::Hooks hooks{};
++    hooks.read_guest_bytes = read_guest_bytes;
++    hooks.read_guest_user = &reads;
++    shim.set_hooks(hooks);
++    shim.register_module("UE4SS.dll", reinterpret_cast<void*>(0x100), named_lookup);
++    int owner = 0;
++    check(shim.register_mapped_module("/mods/provider.dll",
++                                      reinterpret_cast<void*>(0x500),
++                                      mapped_lookup, &owner),
++          "attached-module test registry accepts provider");
++    check(!shim.set_main_module(reinterpret_cast<void*>(0x700)),
++          "unregistered main-module handle is rejected");
++    shim.register_module("game.exe", reinterpret_cast<void*>(0x700), named_lookup);
++    check(shim.set_main_module(reinterpret_cast<void*>(0x700)),
++          "registered process module is selected for null-name lookup");
++
++    void* get_module = shim.resolve("kernel32.dll", "GetModuleHandleA", 0);
++    void* get_proc = shim.resolve("kernel32.dll", "GetProcAddress", 0);
++    check(get_module && get_proc, "validated lookup rows publish sealed Win64 wrappers");
++    if (!get_module || !get_proc) return 1;
++    const uint64_t ue4ss = cap13_win64_call1(get_module,
++                                              reinterpret_cast<uint64_t>(ue4ss_name));
++    const uint64_t provider = cap13_win64_call1(get_module,
++                                                 reinterpret_cast<uint64_t>(provider_name));
++    const uint64_t kernel = cap13_win64_call1(get_module,
++                                               reinterpret_cast<uint64_t>(kernel_name));
++    check(ue4ss == 0x100 && provider == 0x500 && kernel != 0 &&
++          kernel != ue4ss && kernel != provider,
++          "named attached and built-in modules return stable distinct handles");
++    check(cap13_win64_call1(get_module,
++              reinterpret_cast<uint64_t>(provider_stem)) == provider,
++          "extensionless module name appends the default DLL suffix");
++    check(cap13_win64_call1(get_module, 0) == 0x700,
++          "null module name returns configured main executable handle");
++    check(cap13_win64_call2(get_proc, ue4ss,
++                            reinterpret_cast<uint64_t>(export_name)) ==
++              reinterpret_cast<uint64_t>(&fake_export) &&
++          cap13_win64_call2(get_proc, provider,
++                            reinterpret_cast<uint64_t>(provider_export)) ==
++              reinterpret_cast<uint64_t>(&fake_export),
++          "GetProcAddress resolves exact named exports by module handle");
++    const int before_ordinal = reads.reads;
++    check(cap13_win64_call2(get_proc, provider, 7) ==
++              reinterpret_cast<uint64_t>(&fake_export) &&
++          reads.reads == before_ordinal,
++          "low-word ordinal resolves without dereferencing it as a pointer");
++    check(cap13_win64_call2(get_proc, provider,
++                            reinterpret_cast<uint64_t>(wrong_case)) == 0 &&
++          cap13_win64_call2(get_proc, provider, 0x10007) == 0,
++          "export names stay case-sensitive and invalid ordinal form refuses");
++    const uint64_t builtin = cap13_win64_call2(
++        get_proc, kernel, reinterpret_cast<uint64_t>(builtin_export));
++    check(builtin && cap13_win64_call0(reinterpret_cast<void*>(builtin)) ==
++          static_cast<uint64_t>(getpid()),
++          "built-in module handle returns a callable reviewed export");
++    void* get_error = shim.resolve("kernel32.dll", "GetLastError", 0);
++    check(get_error != nullptr, "dynamic failures can be inspected through GetLastError");
++    if (get_error)
++    {
++        check(cap13_win64_call1(get_module,
++                  reinterpret_cast<uint64_t>(missing_module)) == 0 &&
++              cap13_win64_call0(get_error) == 126,
++              "missing module reports ERROR_MOD_NOT_FOUND");
++        check(cap13_win64_call2(get_proc, provider,
++                  reinterpret_cast<uint64_t>(missing_export)) == 0 &&
++              cap13_win64_call0(get_error) == 127,
++              "missing procedure reports ERROR_PROC_NOT_FOUND");
++        check(cap13_win64_call2(get_proc, 0xbad, 7) == 0 &&
++              cap13_win64_call0(get_error) == 6,
++              "unknown HMODULE reports ERROR_INVALID_HANDLE");
++        check(cap13_win64_call1(get_module, 0xdead0000) == 0 &&
++              cap13_win64_call0(get_error) == 87,
++              "invalid guest pointer reports ERROR_INVALID_PARAMETER");
++    }
++    check(cap13_win64_call1(get_module, 0xdead0000) == 0 &&
++          cap13_win64_call1(get_module,
++                            reinterpret_cast<uint64_t>(unterminated)) == 0 &&
++          cap13_win64_call2(get_proc, provider, 0xdead0000) == 0 &&
++          cap13_win64_call2(get_proc, 0xbad, 7) == 0,
++          "invalid guest strings and unknown handles refuse without host dereference");
++    std::printf("cases=%d failed=%d\n", checks, failures);
++    return failures ? 1 : 0;
++}
+--- /dev/null
++++ b/loader/tests/run_dynamic_module_lookup.py
+@@ -0,0 +1,16 @@
++#!/usr/bin/env python3
++"""Build and run guarded dynamic-module lookup checks on x64 Mac."""
++from pathlib import Path
++import subprocess
++
++root = Path(__file__).resolve().parents[1]
++out = root / "tests/dynamic-module-lookup-host"
++subprocess.run([
++    "clang++", "-arch", "x86_64", "-std=c++17", "-O1", "-g",
++    "-Wall", "-Wextra", "-Werror", "-pthread",
++    "-I" + str(root / "include"), "-I" + str(root / "src"),
++    str(root / "tests/dynamic_module_lookup_test.cpp"),
++    str(root / "src/win_api_shim.cpp"), str(root / "src/win64_bridge.S"),
++    "-o", str(out),
++], check=True, timeout=30)
++subprocess.run(["arch", "-x86_64", str(out)], check=True, timeout=20)

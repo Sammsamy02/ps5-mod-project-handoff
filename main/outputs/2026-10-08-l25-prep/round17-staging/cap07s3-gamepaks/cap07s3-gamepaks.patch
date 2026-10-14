@@ -1,0 +1,186 @@
+diff -ru base/candidate/src/LuaMod.cpp new/candidate/src/LuaMod.cpp
+--- base/candidate/src/LuaMod.cpp	2026-10-13 18:46:30
++++ new/candidate/src/LuaMod.cpp	2026-10-13 20:29:16
+@@ -7100,7 +7100,9 @@
+             }
+             try
+             {
+-                Unreal::RunNativePakMountOnce(UE4SSProgram::get_program().get_mods_directory());
++                // The configured game directory (/app0 on PS5) roots the game-pak source (launch K/L).
++                Unreal::RunNativePakMountOnce(UE4SSProgram::get_program().get_mods_directory(),
++                                              UE4SSProgram::get_program().get_game_executable_directory());
+             }
+             catch (...)
+             {
+diff -ru base/candidate/src/UnrealInitializer.cpp new/candidate/src/UnrealInitializer.cpp
+--- base/candidate/src/UnrealInitializer.cpp	2026-10-13 18:09:58
++++ new/candidate/src/UnrealInitializer.cpp	2026-10-13 20:29:16
+@@ -3233,12 +3233,13 @@
+ #endif
+     }
+ 
+-    auto RunNativePakMountOnce(const std::filesystem::path& mods_directory) noexcept -> void
++    auto RunNativePakMountOnce(const std::filesystem::path& mods_directory, const std::filesystem::path& game_directory) noexcept -> void
+     {
+ #ifdef __PROSPERO__
+-        UnrealInitializer::SeedArming::RunNativePakMountOnceImpl(mods_directory);
++        UnrealInitializer::SeedArming::RunNativePakMountOnceImpl(mods_directory, game_directory);
+ #else
+         (void)mods_directory;
++        (void)game_directory;
+ #endif
+     }
+ 
+diff -ru base/include/NativePakMountAdapter.inl new/include/NativePakMountAdapter.inl
+--- base/include/NativePakMountAdapter.inl	2026-10-13 19:15:35
++++ new/include/NativePakMountAdapter.inl	2026-10-13 20:44:22
+@@ -147,18 +147,38 @@
+     void log(const char* line) override {pak_log(line);}
+ };
+ 
+-static void RunNativePakMountOnceImpl(const std::filesystem::path& mods_directory) noexcept {
++static void RunNativePakMountOnceImpl(const std::filesystem::path& mods_directory,const std::filesystem::path& game_directory) noexcept {
+     if(!IsInGameThreadRaw())return;
+     static std::atomic_bool attempted{false};
+     if(attempted.exchange(true,std::memory_order_acq_rel))return;
+     try {
+-        // Native setup_mod_directory_path supplies <configured root>/ue4ss/Mods.
+-        if(mods_directory.filename()!="Mods"||mods_directory.parent_path().filename()!="ue4ss"){
+-            pak_log("[PAKMOUNT] pre-call refuse: configured native root shape unavailable");return;
++        // [#7 step 2 source, launches K/L] Two sources, the first visible one is the only one used:
++        //  1. <configured root>/pakmods (native setup_mod_directory_path supplies <configured root>/ue4ss/Mods);
++        //     launch K: not visible from the game process after module_start.
++        //  2. the game's own <Project>/Content/Paks/~mods (PakRequestProducer game_pak_mods_directory).
++        // Neither present means opt-out. Game files are never rewritten; only a ~mods child is listed.
++        char line[640];
++        std::filesystem::path directory;const char* source="";
++        if(mods_directory.filename()=="Mods"&&mods_directory.parent_path().filename()=="ue4ss"){
++            const auto configured=mods_directory.parent_path().parent_path()/"pakmods";
++            std::error_code configured_ec;
++            const auto configured_status=std::filesystem::status(configured,configured_ec);
++            if(!configured_ec&&configured_status.type()==std::filesystem::file_type::directory){directory=configured;source="configured";}
++            else{
++                std::snprintf(line,sizeof line,"[PAKMOUNT] configured pakmods not visible: %s (errno %d) type=%d",configured.string().c_str(),configured_ec.value(),static_cast<int>(configured_status.type()));
++                pak_log(line);
++            }
++        }else pak_log("[PAKMOUNT] configured native root shape unavailable");
++        if(directory.empty()){
++            std::string why;
++            directory=::ModBridge::PakMount::game_pak_mods_directory(game_directory,why);
++            if(directory.empty()){
++                std::snprintf(line,sizeof line,"[PAKMOUNT] disabled: no pakmods directory (game paks: %s)",why.c_str());
++                pak_log(line);return;
++            }
++            source="game-paks";
+         }
+-        const auto directory=mods_directory.parent_path().parent_path()/"pakmods";
+-        // No directory means opt-out; game files are never searched or installed.
+-        if(::ModBridge::PakMount::checked_status(directory,true).type()==std::filesystem::file_type::not_found){pak_log("[PAKMOUNT] disabled: no pakmods directory");return;}
++        std::snprintf(line,sizeof line,"[PAKMOUNT] source=%s dir=%s",source,directory.string().c_str());pak_log(line);
+         const auto requests=::ModBridge::PakMount::discover_requests(directory);
+         if(requests.empty()){pak_log("[PAKMOUNT] pre-call refuse: zero selected containers");return;}
+         const auto* admission=PakMountAdmission(SeedArming::module_view_base());
+@@ -168,7 +188,6 @@
+         NativePakMountBridge bridge(pins);
+         for(const auto& request:requests){
+             const auto result=::ModBridge::PakMount::mount(pins,request,bridge);
+-            char line[320];
+             std::snprintf(line,sizeof line,"[PAKMOUNT] status=%u call=%u ret=0x%llx before=%u after=%u order=%d reason=%s",unsigned(result.verdict),unsigned(result.call_made),static_cast<unsigned long long>(result.returned_pak),result.count_before,result.count_after,result.order_argument,result.why);
+             pak_log(line);
+             if(result.verdict!=::ModBridge::PakMount::Verdict::Mounted)break;
+diff -ru base/include/NativePakMountEntry.hpp new/include/NativePakMountEntry.hpp
+--- base/include/NativePakMountEntry.hpp	2026-10-13 18:09:58
++++ new/include/NativePakMountEntry.hpp	2026-10-13 20:29:16
+@@ -1,3 +1,3 @@
+ #pragma once
+ #include <filesystem>
+-namespace RC::Unreal { void RunNativePakMountOnce(const std::filesystem::path&) noexcept; }
++namespace RC::Unreal { void RunNativePakMountOnce(const std::filesystem::path& mods_directory,const std::filesystem::path& game_directory) noexcept; }
+diff -ru base/include/PakRequestProducer.hpp new/include/PakRequestProducer.hpp
+--- base/include/PakRequestProducer.hpp	2026-10-13 19:17:04
++++ new/include/PakRequestProducer.hpp	2026-10-13 20:44:22
+@@ -20,6 +20,84 @@
+  std::error_code ec;auto n=std::filesystem::file_size(p,ec);
+  if(ec||!n)throw std::runtime_error("container size unavailable/empty");return n;
+ }
++// [#7 step 2 source, launches K/L, 2026-10-14] Console-proven: the configured <root>/pakmods is not visible from
++// the game process after module_start (launch K: stat ENOENT on a folder FTP lists), and this engine build does not
++// auto-mount Paks/~mods (launch L). The engine reads its own paks from the game package, so pak mods go in its
++// "~mods" child (the PC UE convention). The pak folder is derived from the configured game directory with the
++// generic UE package shape IterateGameDirectories uses on PS5: <game dir>/<Project>/Content/Paks, where <Project> is
++// the ONE child (not "Engine") holding a Content folder. Names compare ASCII case-insensitively (package paths are
++// often lower-case). No name is guessed: zero or several matches is a miss. No filesystem call throws (only string building can, and
++// the caller catches it); every miss returns
++// an empty path and a reason naming the path and the OS error number. Symlinked entries are never followed.
++inline bool ascii_iequals(const std::string& a,const char* b){
++ size_t i=0;
++ for(;i<a.size()&&b[i];++i){
++  char x=a[i],y=b[i];
++  if(x>='A'&&x<='Z')x=static_cast<char>(x-'A'+'a');
++  if(y>='A'&&y<='Z')y=static_cast<char>(y-'A'+'a');
++  if(x!=y)return false;
++ }
++ return i==a.size()&&!b[i];
++}
++inline std::string fs_why(const char* what,const std::filesystem::path& p,const std::error_code& ec){
++ return std::string(what)+": "+p.string()+" (errno "+std::to_string(ec.value())+")";
++}
++// Directory children of `dir` named `name` (case-insensitive), or every child except "engine" when name is null.
++inline bool list_child_dirs(const std::filesystem::path& dir,const char* name,std::vector<std::filesystem::path>& out,std::string& why){
++ out.clear();std::error_code list_ec;
++ std::filesystem::directory_iterator it(dir,list_ec),end;
++ if(list_ec){why=fs_why("listing unavailable",dir,list_ec);return false;}
++ for(size_t n=0;it!=end;it.increment(list_ec)){
++  if(list_ec){why=fs_why("listing failed",dir,list_ec);return false;}
++  if(++n>4096){why="listing limit: "+dir.string();return false;}
++  const auto child=it->path().filename().string();
++  if(name?!ascii_iequals(child,name):ascii_iequals(child,"engine"))continue;
++  std::error_code type_ec;const bool link=it->is_symlink(type_ec);
++  if(type_ec){why=fs_why("entry type unavailable",it->path(),type_ec);return false;}
++  if(link)continue;
++  const bool folder=it->is_directory(type_ec);
++  if(type_ec){why=fs_why("entry type unavailable",it->path(),type_ec);return false;}
++  if(folder)out.push_back(it->path());
++ }
++ if(list_ec){why=fs_why("listing failed",dir,list_ec);return false;}
++ return true;
++}
++inline std::filesystem::path unique_child_dir(const std::filesystem::path& dir,const char* name,std::string& why){
++ if(!name){why="internal: unnamed child lookup";return {};}
++ std::vector<std::filesystem::path> hits;
++ if(!list_child_dirs(dir,name,hits,why))return {};
++ if(hits.size()!=1){why=std::string(hits.empty()?"no ":"several ")+name+" folder in "+dir.string();return {};}
++ return hits[0];
++}
++inline std::filesystem::path game_pak_mods_directory(const std::filesystem::path& game_dir,std::string& why){
++ if(game_dir.empty()||!game_dir.is_absolute()||game_dir==game_dir.root_path()||game_dir.lexically_normal()!=game_dir){
++  why="configured game directory unavailable";return {};
++ }
++ std::vector<std::filesystem::path> children,content;
++ if(!list_child_dirs(game_dir,nullptr,children,why))return {};
++ // Real UE packages have about five children; more is not a UE package layout (bounds the game-thread walk).
++ if(children.size()>256){why="too many children in "+game_dir.string()+" ("+std::to_string(children.size())+")";return {};}
++ // A child that cannot be listed (a system folder of the package) is skipped and counted, never fatal. A miss names
++ // every child examined with its Content-hit count or its listing error, so one log line explains it.
++ size_t unreadable=0;std::string seen;
++ for(const auto& child:children){
++  std::vector<std::filesystem::path> hits;std::string child_why;
++  const bool listed=list_child_dirs(child,"content",hits,child_why);
++  if(seen.size()<360)seen+=" "+child.filename().string()+(listed?"="+std::to_string(hits.size()):" ["+child_why+"]");
++  if(!listed){++unreadable;continue;}
++  content.insert(content.end(),hits.begin(),hits.end());
++ }
++ if(content.size()!=1){
++  why=std::string(content.empty()?"no":"several")+" project Content folder in "+game_dir.string()+" (children="+
++      std::to_string(children.size())+" unreadable="+std::to_string(unreadable)+":"+seen+")";
++  return {};
++ }
++ const auto paks=unique_child_dir(content[0],"paks",why);
++ if(paks.empty())return {};
++ const auto mods=unique_child_dir(paks,"~mods",why);
++ if(mods.empty())return {};
++ return mods;
++}
+ // All-or-nothing bounded directory discovery; never reads or rewrites containers.
+ inline std::vector<MountRequest> discover_requests(const std::filesystem::path& directory) {
+  const auto root=directory.lexically_normal();

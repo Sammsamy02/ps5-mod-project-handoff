@@ -1,0 +1,224 @@
+--- outputs/2026-10-04-zcode-team/worker-luamod-lineage/offline-proof/luamod-next-candidate-merged/LuaMod.cpp	2026-10-06 15:47:01.452664358 +0000
++++ outputs/2026-10-06-claude-cloud/staging/luamod-event-carrier/LuaMod.cpp	2026-10-06 16:19:50.741445254 +0000
+@@ -4191,9 +4191,31 @@
+     // the identity publication is legitimately pending, and queueing then is
+     // the designed lazy semantics (R3D 4.4a); publication refusal remains the
+     // drain body's own fail-closed gate (funcptr_marshal_hook).
++    static auto r3_marshal_lazy_arm() -> void; // defined after the calibration consumer
+     static auto funcptr_marshal_usable() -> bool
+     {
+-        return is_funcptr_marshal_armed() && Unreal::R3MarshalPumpPending();
++        // [claude-cloud 2026-10-06 event-carrier] pump_pending means the initializer
++        // deferred every EngineTick registration, so the marshal is the ONLY possible
++        // game-thread pump in this world whether or not a carrier has armed yet. Routing
++        // to it while unarmed is the designed lazy semantics (R3D 4.4a: closures await
++        // arming); falling through to the EngineTick/ProcessEvent ladders instead strands
++        // closures behind refused detours. Arming is (re)attempted here, rate-limited.
++        if (!Unreal::R3MarshalPumpPending())
++        {
++            return false;
++        }
++        r3_marshal_lazy_arm();
++        return true;
++    }
++
++    // [claude-cloud 2026-10-06 event-carrier] Blueprint-override carrier family state.
++    static std::mutex m_funcptr_marshal_carrier_mutex{};
++    static std::vector<Unreal::UFunction*> m_funcptr_marshal_event_carriers{};
++    static std::atomic<int64_t> m_funcptr_marshal_last_fire_ms{0};
++    static std::atomic<int64_t> m_funcptr_marshal_last_scan_ms{0};
++    static auto r3_now_ms() -> int64_t
++    {
++        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+     }
+ #endif
+ 
+@@ -4739,6 +4761,8 @@
+         {
+             return;
+         }
++        // [claude-cloud event-carrier] liveness for r3_marshal_lazy_arm's staleness rescan.
++        m_funcptr_marshal_last_fire_ms.store(r3_now_ms(), std::memory_order_relaxed);
+         NativeLuaActionDispatchScope action_dispatch;
+         if (!action_dispatch.owns_dispatch())
+             return;
+@@ -4911,6 +4935,123 @@
+ 
+ #ifdef __PROSPERO__
+     // =====================================================================================
++    // [claude-cloud 2026-10-06 event-carrier] Blueprint-override carrier family.
++    // Engine per-frame events (AActor::ReceiveTick, UAnimInstance::BlueprintUpdateAnimation,
++    // UUserWidget::Tick) are BlueprintImplementableEvents: the engine calls them through
++    // UObject::ProcessEvent -> UFunction::Invoke -> Func on the game thread, resolving the
++    // MOST-DERIVED UFunction, i.e. the Blueprint class's own override object. Those
++    // overrides are script functions (Func = the VM entry, no FUNC_Native), so
++    // r3_marshal_carrier_precheck refuses them; but a Func swap on the override object
++    // intercepts exactly the engine-driven Invoke while the saved original Func still runs
++    // the Blueprint body (post-hook, parms untouched). Calls from other Blueprint code use
++    // the local-script path and bypass Func; that only means fewer drains, never a wrong
++    // thread. Every armed function is game-thread-only by engine contract; the drain's
++    // identity publication + IsInGameThreadRaw gate stay the backstop.
++    // =====================================================================================
++    static auto r3_event_carrier_precheck(Unreal::UFunction* carrier) -> bool
++    {
++        if (!carrier || !carrier->GetFuncPtr())
++        {
++            return false;
++        }
++        // Natives go through r3_marshal_carrier_precheck; this family is script overrides only.
++        return !carrier->HasAnyFunctionFlags(Unreal::EFunctionFlags::FUNC_Native);
++    }
++
++    // Caller holds m_funcptr_marshal_carrier_mutex.
++    static auto arm_event_carrier_locked(Unreal::UFunction* carrier) -> bool
++    {
++        if (!r3_event_carrier_precheck(carrier))
++        {
++            return false;
++        }
++        if (std::find(m_funcptr_marshal_event_carriers.begin(), m_funcptr_marshal_event_carriers.end(), carrier) != m_funcptr_marshal_event_carriers.end())
++        {
++            return false; // already armed on this function
++        }
++        const int32_t callback_id = carrier->RegisterPostHook(&funcptr_marshal_hook, nullptr);
++        if (callback_id < 0)
++        {
++            Output::send<LogLevel::Error>(STR("[R3] event carrier refused: RegisterPostHook returned an invalid callback id for {}\n"), carrier->GetFullName());
++            return false;
++        }
++        m_funcptr_marshal_event_carriers.push_back(carrier);
++        if (m_funcptr_marshal_event_carriers.size() <= 8)
++        {
++            Output::send(STR("[R3] FuncPtr-marshal event carrier armed: {} (callback id {})\n"), carrier->GetFullName(), callback_id);
++        }
++        if (!is_funcptr_marshal_armed())
++        {
++            m_funcptr_marshal_callback_id = callback_id;
++            m_funcptr_marshal_carrier_id = carrier->GetFName();
++            m_funcptr_marshal_armed.store(true, std::memory_order_release);
++        }
++        return true;
++    }
++
++    static auto r3_marshal_arm_event_carriers() -> size_t
++    {
++        static constexpr const CharType* k_event_bases[]{
++            STR("/Script/Engine.Actor:ReceiveTick"),
++            STR("/Script/Engine.AnimInstance:BlueprintUpdateAnimation"),
++            STR("/Script/UMG.UserWidget:Tick"),
++        };
++        std::lock_guard<std::mutex> lock{m_funcptr_marshal_carrier_mutex};
++        std::vector<Unreal::UStruct*> bases{};
++        for (const CharType* base_path : k_event_bases)
++        {
++            const StringType base_string{base_path};
++            if (auto* base = Unreal::UObjectGlobals::StaticFindObject<Unreal::UFunction*>(nullptr, nullptr, base_string); base)
++            {
++                bases.push_back(base);
++            }
++        }
++        if (bases.empty())
++        {
++            Output::send<LogLevel::Warning>(STR("[R3] event carriers: no engine per-frame event base function found yet\n"));
++            return 0;
++        }
++        static const Unreal::FName function_class_name{STR("Function"), Unreal::FNAME_Find};
++        std::vector<Unreal::UFunction*> overrides{};
++        Unreal::UObjectGlobals::ForEachUObject([&](void* raw_object, [[maybe_unused]] int32_t chunk_index, [[maybe_unused]] int32_t object_index) {
++            auto* object = static_cast<Unreal::UObject*>(raw_object);
++            if (!object)
++            {
++                return LoopAction::Continue;
++            }
++            auto* object_class = object->GetClassPrivate();
++            if (!object_class || !object_class->GetNamePrivate().Equals(function_class_name))
++            {
++                return LoopAction::Continue;
++            }
++            auto* function = static_cast<Unreal::UFunction*>(object);
++            // An override's SuperStruct is the function it overrides (BP child -> BP
++            // parent override -> engine base); bounded walk.
++            Unreal::UStruct* super = function->GetSuperStruct();
++            for (int depth = 0; super && depth < 16; ++depth, super = super->GetSuperStruct())
++            {
++                if (std::find(bases.begin(), bases.end(), super) != bases.end())
++                {
++                    overrides.push_back(function);
++                    break;
++                }
++            }
++            return LoopAction::Continue;
++        });
++        size_t armed_now{};
++        for (auto* function : overrides)
++        {
++            if (arm_event_carrier_locked(function))
++            {
++                ++armed_now;
++            }
++        }
++        Output::send(STR("[R3] event carrier scan: {} override(s) found, {} newly armed, {} armed total\n"),
++                     overrides.size(), armed_now, m_funcptr_marshal_event_carriers.size());
++        return armed_now;
++    }
++
++    // =====================================================================================
+     // [R3] THE CALIBRATION CONSUMER (launch-11 marshal-integration; the driver of the
+     // arming service R3-TIER-DESIGN 5.2 item 4 scopes and DIFF 1 deliberately left
+     // unimplemented — worker-r3-diffs-authoring REPORT 4: "the only intended caller of
+@@ -4963,8 +5104,39 @@
+             // Refused loudly by r3_marshal_carrier_precheck (null FuncPtr / script-only /
+             // non-native): fall through to the next rank. No store happened.
+         }
++        // [claude-cloud event-carrier] The ranked names are BlueprintImplementableEvents
++        // (no FUNC_Native), so the precheck above refuses them by construction. Arm the
++        // Blueprint overrides of the same per-frame events instead (see below).
++        m_funcptr_marshal_last_scan_ms.store(r3_now_ms(), std::memory_order_relaxed);
++        if (r3_marshal_arm_event_carriers() > 0)
++        {
++            return;
++        }
+         Output::send<LogLevel::Warning>(STR("[R3] marshal arm failed: no ranked candidate passed the carrier precheck; closures will queue until a carrier arms\n"));
+     }
++
++    static auto r3_marshal_lazy_arm() -> void
++    {
++        // Rescan when nothing is armed yet (Blueprint classes load with levels, after
++        // program start), or when armed carriers have stopped firing (their classes can
++        // unload with a level). At most one GUObjectArray scan per second.
++        const auto now = r3_now_ms();
++        if (is_funcptr_marshal_armed())
++        {
++            const auto last_fire = m_funcptr_marshal_last_fire_ms.load(std::memory_order_relaxed);
++            if (last_fire != 0 && now - last_fire <= 1000)
++            {
++                return;
++            }
++        }
++        const auto last_scan = m_funcptr_marshal_last_scan_ms.load(std::memory_order_relaxed);
++        if (last_scan != 0 && now - last_scan < 1000)
++        {
++            return;
++        }
++        m_funcptr_marshal_last_scan_ms.store(now, std::memory_order_relaxed);
++        r3_marshal_arm_event_carriers();
++    }
+ #endif
+ 
+     // Helper to ensure engine tick hook is registered
+@@ -5168,6 +5340,15 @@
+ 
+             const auto mod = get_mod_ref(lua);
+ 
++#if defined(__PROSPERO__)
++            // [claude-cloud event-carrier] In the marshal world (pump_pending) the marshal
++            // is the only pump: queue onto it even before a carrier arms, never onto the
++            // EngineTick/ProcessEvent queues whose detours are refused (stranded closures).
++            if (funcptr_marshal_usable())
++            {
++                method = kFuncPtrMarshalExecutor;
++            }
++#endif
+             // Check hook availability before registering
+             if (method == GameThreadExecutionMethod::EngineTick)
+             {

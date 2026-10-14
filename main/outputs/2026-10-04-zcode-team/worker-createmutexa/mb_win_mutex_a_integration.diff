@@ -1,0 +1,57 @@
+--- a/outputs/ps5-mod-bridge/windows-services/mb_win_mutex_abi.c
++++ b/outputs/ps5-mod-bridge/windows-services/mb_win_mutex_abi.c
+@@ -31,6 +31,25 @@
+     (void)security;
+     return (void*)(uintptr_t)mb_win_mutex_create(installed,name,initial_owner?MB_WIN_MUTEX_INITIAL_OWNER:0);
+ }
++/* CreateMutexA: CP_ACP single-byte name. Adapter policy on the PS5 target
++ * (no codepage tables / no locale): every ANSI byte is zero-extended into
++ * one UTF-16 code unit (verbatim byte->WCHAR cast); NULL stays NULL. The
++ * converted name is handed to the same wide path, so every object-namespace
++ * rule (Local\ prefix, backslash refusal, 260-unit MAX_PATH bound, ASCII
++ * case folding) and its documented error is enforced exactly once, by the
++ * wide path's parse_name. A name too long for the conversion buffer is
++ * deliberately passed unterminated at MB_WIN_MUTEX_MAX_NAME+1 units so
++ * parse_name itself fails ERROR_FILENAME_EXCED_RANGE exactly like it does
++ * for the W entry point. */
++static WIN64 void *create_mutex_a(void *security,int32_t initial_owner,const char *name){
++    (void)security;
++    if(!name)return (void*)(uintptr_t)mb_win_mutex_create(installed,NULL,initial_owner?MB_WIN_MUTEX_INITIAL_OWNER:0);
++    uint16_t wide[MB_WIN_MUTEX_MAX_NAME+1];
++    size_t units=0;
++    while(name[units]&&units<=(size_t)MB_WIN_MUTEX_MAX_NAME){wide[units]=(uint16_t)(unsigned char)name[units];++units;}
++    if(units<=(size_t)MB_WIN_MUTEX_MAX_NAME)wide[units]=0;
++    return (void*)(uintptr_t)mb_win_mutex_create(installed,wide,initial_owner?MB_WIN_MUTEX_INITIAL_OWNER:0);
++}
+ static WIN64 void *create_mutex_ex_w(void *security,const uint16_t *name,uint32_t flags,uint32_t desired_access){
+     (void)security;(void)desired_access;
+     return (void*)(uintptr_t)mb_win_mutex_create(installed,name,flags);
+@@ -55,6 +74,7 @@
+     if(!s||!*find(s)||!s->active||!i||!out||(!i->library.data&&i->library.size)||(!i->name.data&&i->name.size)||(s->module->state!=MB_PE_MODULE_LOADING&&s->module->state!=MB_PE_MODULE_ACTIVE))return MB_PE_BIND_ERROR;
+     if(i->by_ordinal||!MATCH(i->library,"kernel32.dll",1))return MB_PE_BIND_UNRESOLVED;
+     if(MATCH(i->name,"CreateMutexW",0))*out=(uint64_t)(uintptr_t)&create_mutex_w;
++    else if(MATCH(i->name,"CreateMutexA",0))*out=(uint64_t)(uintptr_t)&create_mutex_a;
+     else if(MATCH(i->name,"CreateMutexExW",0))*out=(uint64_t)(uintptr_t)&create_mutex_ex_w;
+     else if(MATCH(i->name,"OpenMutexW",0))*out=(uint64_t)(uintptr_t)&open_mutex_w;
+     else if(MATCH(i->name,"ReleaseMutex",0))*out=(uint64_t)(uintptr_t)&release_mutex;
+--- a/outputs/ps5-mod-bridge/windows-services/mb_win_mutex_abi.h
++++ b/outputs/ps5-mod-bridge/windows-services/mb_win_mutex_abi.h
+@@ -17,12 +17,14 @@
+  * end after EMPTY and all its calls/objects retire. First/final controls
+  * require global call quiescence; other controls/binding are externally
+  * serialized. One immutable installed owner while sessions exist; every
+- * consumer pins it. Library ASCII-folded KERNEL32.dll, exact six names,
++ * consumer pins it. Library ASCII-folded KERNEL32.dll, exact seven names,
+  * ordinals unresolved. Signatures follow the Microsoft x64 documentation:
+  * HANDLE CreateMutexW(LPSECURITY_ATTRIBUTES,BOOL,LPCWSTR),
+- * HANDLE CreateMutexExW(LPSECURITY_ATTRIBUTES,LPCWSTR,DWORD,DWORD),
+- * HANDLE OpenMutexW(DWORD,BOOL,LPCWSTR), BOOL ReleaseMutex(HANDLE),
+- * DWORD WaitForSingleObject(HANDLE,DWORD) and
++ * HANDLE CreateMutexA(LPSECURITY_ATTRIBUTES,BOOL,LPCSTR) (CP_ACP name; the
++ * adapter zero-extends each byte into one UTF-16 code unit and delegates to
++ * the CreateMutexW path), HANDLE CreateMutexExW(LPSECURITY_ATTRIBUTES,
++ * LPCWSTR,DWORD,DWORD), HANDLE OpenMutexW(DWORD,BOOL,LPCWSTR),
++ * BOOL ReleaseMutex(HANDLE), DWORD WaitForSingleObject(HANDLE,DWORD) and
+  * DWORD WaitForSingleObjectEx(HANDLE,DWORD,BOOL): HANDLE pointer-sized,
+  * BOOL/DWORD 32-bit, LPCWSTR UTF-16 code units. Invalid session/view ->
+  * ERROR; only BOUND writes the output address. NOTE: mb_win_workers_abi.c

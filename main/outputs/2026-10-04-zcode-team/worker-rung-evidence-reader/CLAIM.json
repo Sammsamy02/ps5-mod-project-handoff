@@ -1,0 +1,79 @@
+{
+  "worker": "worker-rung-evidence-reader",
+  "date": "2026-10-04",
+  "task": "Pin the exact on-console FILE PATH of every acceptance-rung observable from the composed runtime source, and deliver rung_check.py (stdlib-only, FTP fresh-curl-per-file) so the controller has ONE command per rung assertion for composition-5 r3.",
+  "claims": [
+    {
+      "id": "P1",
+      "claim": "The QueryResultRecord JSONL (the C2 channel) on-console path is /data/modbridge-ingame-facts.jsonl, pinned by the IgSink writer constants.",
+      "cites": [
+        "outputs/2026-10-04-zcode-team/worker-igf5-diagnosis-rebuild/src/record_sink.c:15 (#define IG_LOG_PATH_DEFAULT \"/data/modbridge-ingame-facts.jsonl\")",
+        "outputs/2026-10-04-zcode-team/worker-igf5-diagnosis-rebuild/determinism/run1/generated/ingame_config.h:4 and run2/generated/ingame_config.h:4 (#define IG_LOG_PATH \"/data/modbridge-ingame-facts.jsonl\")",
+        "outputs/2026-10-04-zcode-team/worker-acceptance-evidence/EVIDENCE-SPEC.md:25 (channel C2 row)"
+      ],
+      "caveat": "LOUD: the composed runtime PRX itself (composition-5 r3 overlay) contains NO caller of FormatRecordJsonLine and NO IgSink. worker-query-s2-arm/integration-patch/WIRING.md:122-124 states the controller driver (TrySnapshot/SnapshotDispatchCounters/FormatRecordJsonLine) 'remains the controller's console-evidence step and needs no target code'. C2 is written only by the separate probe PRX family (modbridge_ingame_facts / ig_run_* add-ons) through record_sink.c. Until a query-harness driver add-on is staged, /data/modbridge-ingame-facts.jsonl cannot contain native_query_harness lines: rung_check.py reports UNVERIFIED_DRIVER instead of silently passing, and --discover lists candidate /data files over FTP."
+    },
+    {
+      "id": "P2",
+      "claim": "The native_query_harness JSON line shape (for RUNG1/RUNG2 parsing) is exactly the FormatRecordJsonLine format; ticks_accepted lives at .ticks.accepted, game_thread_id_key is a lowercase 0x+16-hex-digit string.",
+      "cites": [
+        "outputs/2026-10-04-zcode-team/worker-query-harness/src/NativeQueryHarness.cpp:402-445 (FormatRecordJsonLine: starts {\"record\":\"native_query_harness\",\"magic\":\"NQH1\",\"status\":\"...\")",
+        "outputs/2026-10-04-zcode-team/worker-query-harness/src/NativeQueryHarness.cpp:332-341 (hex(): '0x' + 16 lowercase digits)",
+        "outputs/2026-10-04-zcode-team/worker-query-harness/src/NativeQueryHarness.cpp:357-375 (StatusName 'completed'/'inconclusive_below_threshold', MonotonicName 'equal'/'non_decreasing'/'decreasing')",
+        "ue4ss-native-tick-file-owner-1/include/NativeQueryHarness.hpp:103-131 (128-byte POD record; ticks_accepted, game_thread_id_key fields)"
+      ]
+    },
+    {
+      "id": "P3",
+      "claim": "UE4SS.log success lines live at /data/plugins/UE4SS.log. The port file device names UE4SS.log under m_log_directory, and the __PROSPERO__ native-context branch sets log dir = working dir = /data/plugins. Banner: 'Native console, GUI, crash dumping and filesystem watching are unavailable' then 'UE4SS - v<maj>.<min>.<patch><pre> - Git SHA #<sha>'; init lines: 'Unreal Engine modules (modular|non-modular)', 'Using engine version: 5.6', mods: 'Setting up mods...', 'start_mods<...>'.",
+      "cites": [
+        ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/UE4SSProgram.cpp:256-258 (file device = m_log_directory / \"UE4SS.log\")",
+        ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/UE4SSProgram.cpp:317-319 (banner lines)",
+        ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/UE4SSProgram.cpp:778-784 (__PROSPERO__ mod_source: m_log_directory = m_working_directory = /data/plugins; FIRST-RUN-PLAYBOOK.md:49-51)",
+        ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/UnrealInitializer.cpp:989 (Output::send \"Using engine version: {}.{}\")",
+        "outputs/2026-10-04-zcode-team/worker-first-run-playbook/FIRST-RUN-PLAYBOOK.md:90-105 (row 13/14/19/20/25/26 formats)"
+      ]
+    },
+    {
+      "id": "P4",
+      "claim": "runtime-status.txt is at /data/modbridge/roots/PPSA33286/runtime-status.txt (mfa_status_open joins the literal name under mfa root; composition-5 entry hardcodes MODBRIDGE_MOD_ROOT). Grammar: header 'modforge-runtime-status\\t1', 'session\\t<pid>\\t<mono ms>', 'state\\t<seq>\\t<state>\\t<code>\\t<detail>'; states exactly: activated, engine-ready, mods-started, then terminal stopped|failed; O_TRUNC per session.",
+      "cites": [
+        ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/activation/modforge_activation.c:599-618 (name[]=\"runtime-status.txt\", join_path, O_TRUNC)",
+        ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/activation/modforge_activation.h:137-148 (grammar + state list)",
+        "outputs/2026-10-04-zcode-team/worker-composition-5-rebuild/staging/lineage-overlay-1/lifecycle/runtime_module_entry.c:65-66 (MODBRIDGE_TITLE_ID \"PPSA33286\", MODBRIDGE_MOD_ROOT \"/data/modbridge/roots/PPSA33286\")"
+      ]
+    },
+    {
+      "id": "P5",
+      "claim": "Lua print() goes to /data/plugins/UE4SS.log (NOT a separate console device): global_print prefixes '[Lua] ' and calls Output::send, whose file device is the UE4SS.log NewFileDevice; the mod's log() adds '[TownfallItemSpawner] ', so mod lines read '[Lua] [TownfallItemSpawner] ...'. EVIDENCE-SPEC's alternate retained paths (/data/townfall_runtime_buffered_lua.log, /data/townfall_mod.log) are older-lineage candidates, not writers in this composed source.",
+      "cites": [
+        ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaLibrary.cpp:36-102 (global_print: STR(\"[Lua] \") + Output::send(formatted_string); FOutputDevice mirror only if OutputDeviceRef set)",
+        ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/Mod/LuaMod.cpp:1519-1521 (register_function(\"print\", LuaLibrary::global_print))",
+        "outputs/2026-10-04-zcode-team/worker-first-run-playbook/FIRST-RUN-PLAYBOOK.md:103 (row 26: '[Lua] [TownfallItemSpawner] <msg>')",
+        "outputs/2026-10-04-zcode-team/worker-acceptance-evidence/EVIDENCE-SPEC.md:29-35, 346-354 (path-agnostic oracle + alternate paths)"
+      ]
+    },
+    {
+      "id": "P6",
+      "claim": "Two distinct diagnostic-channel logs exist and must not be conflated: the composition-5 entry lineage writes /data/townfall_runtime_aligned_entry.log (post_launch_check.py's observer fetch), while the standalone aligned-entry observer PRX writes /data/townfall_runtime_aligned_observer.log (its probe_config.h deliberately diverged). rung_check.py fetches both.",
+      "cites": [
+        "outputs/2026-10-04-zcode-team/worker-composition-5-rebuild/staging/lineage-overlay-1/generated/probe_config.h:3 (PROBE_LOG_PATH \"/data/townfall_runtime_aligned_entry.log\")",
+        "outputs/2026-10-04-zcode-team/worker-aligned-entry-observer/source/generated/probe_config.h:3-7 (PROBE_LOG_PATH \"/data/townfall_runtime_aligned_observer.log\", comment: 'distinct from the proven /data/townfall_runtime_aligned_entry.log so both modules can be staged alongside each other')",
+        "outputs/2026-10-04-zcode-team/worker-composition-5-rebuild/staging/lineage-overlay-1/lifecycle/runtime_module_entry.c:68 (MODBRIDGE_UE4SS_LOG_PATH \"/data/plugins/UE4SS.log\" for entry failure lines)"
+      ]
+    },
+    {
+      "id": "P7",
+      "claim": "RUNG1 = status engine-ready-or-later AND C2 file present AND ticks_accepted strictly increasing across two snapshots AND stable nonzero game_thread_id_key AND >=1 counted guard refusal; RUNG2 = terminal FormatRecordJsonLine record with status=completed, count_source=engine_uobject_array, counts.recorded=2, both counts>10000, monotonic equal|non_decreasing, identity_checks=2, nonzero key, refusals_between=0, threshold=10000. RUNG3-5 are log-line placeholders per EVIDENCE-SPEC 3.1/4.1/5.3. rung_check.py asserts exactly these from the pinned files.",
+      "cites": [
+        "outputs/2026-10-04-zcode-team/worker-acceptance-evidence/EVIDENCE-SPEC.md:55-147 (rung 1), 150-230 (rung 2), 233-326 (rung 3), 329-441 (rung 4), 444-547 (rung 5)"
+      ]
+    }
+  ],
+  "non_claims": [
+    "No rung is claimed PASSED; rung_check.py only classifies console files.",
+    "No console contact was made by this worker (FTP host defaults copied from post_launch_check.py; --from-dir/--discover fixtures only).",
+    "The counter-snapshot line format (dispatch counters other than the terminal record) is NOT pinned anywhere in source; the driver does not exist in the composed PRX. rung_check.py extracts ticks_accepted from native_query_harness lines or any parsable line carrying ticks_accepted, and reports UNVERIFIED_DRIVER when no native_query_harness line exists.",
+    "post_launch_check.py was read but NOT modified."
+  ]
+}

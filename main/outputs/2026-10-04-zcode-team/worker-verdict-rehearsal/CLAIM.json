@@ -1,0 +1,96 @@
+{
+  "worker": "worker-verdict-rehearsal",
+  "date": "2026-10-04",
+  "mission": "Dress-rehearse the launch-10 verdict pipeline end-to-end with SYNTHETIC evidence sets, one per verdict class (BEST/GOOD/MINIMAL-ACCEPT/FAIL + S-30S timing), so the real launch's evidence reading is fast and correct. evidence.sh run UNMODIFIED in --from-dir mode; gaps reported, never fixed here.",
+  "honesty": [
+    "Synthetic rehearsal only: these fixtures are drafted logs and NEVER advance a verdict (oracle claim guard). No console contact, no replay of any prior launch.",
+    "All log strings are oracle-verbatim or oracle-pattern lines with the task-pinned runtime values (anchor_count=7, spans=6, reg=6, intervals_found=1, pool 0x9765ec0, ctor 0x63d590); no invented refusal wording.",
+    "Fixtures are staged as the real sinks would be: UE4SS.log = pinned baseline bytes + appended new lines; entry log and xwp byte-identical to baselines (shortest-config no-growth); runtime-status = fresh O_TRUNC session; supplier-diag jsonl = oracle schema, tags confirmed against pinned BG/EN staging sources.",
+    "evidence.sh was not modified; every gap below is reported for the evidence worker."
+  ],
+  "inputs": {
+    "classifier": "outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/evidence.sh",
+    "oracle": "outputs/2026-10-04-zcode-team/worker-launch10-acceptance-criteria/ORACLE.md",
+    "post_popup": "outputs/2026-10-04-zcode-team/worker-post-popup-evidence/POST-POPUP.md"
+  },
+  "baseline_provenance": {
+    "ue4ss": "fixtures/_baselines/ue4ss-log-baseline.txt 7591B sha256 edf404a56d0a9ed85e15d2b20a00bdd07e93b189d4e70a9db988d46acd22a0ff (recovered from worker-launch10-evidence-upgrade/fixtures/l10_success head window, sha-verified)",
+    "entry": "fixtures/_baselines/entry-log-baseline.txt 2343756B sha256 4b33b9852ef53d714b32e839db2c927b5c79814821d76ac383295e487941129f",
+    "status": "fixtures/_baselines/runtime-status-baseline.txt 169B sha256 57c40d4cf7e91c8ac73fd726b3a268e7b613ee3b202459d8d181db7b79f51c4b (baseline session 273/44372083)",
+    "xwp": "fixtures/_baselines/xwp-jsonl-baseline.txt 4362B sha256 20cff60141e356c2a30822c8e37d5225430c8cb487b9b3311e1115499339c2fe",
+    "guard_result": "all five runs produced ZERO WARN lines with --baseline-dir (drift guard clean)"
+  },
+  "runs": [
+    {
+      "set": "A",
+      "intended_class": "BEST",
+      "classifier_verdict": "MODS_STARTED",
+      "match": true,
+      "stage_chain_sdiag": "S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S5_IDENTITY_ANCHORS -> S4_LEASE_REG -> S9_START_ACK -> S11_STOP",
+      "stage_chain_ue4ss": "S8B_INITIALIZER -> S10_LADDER",
+      "status": "pid=417 ms=27641000 fresh=yes ladder=[ activated engine-ready mods-started ] last=mods-started code=0",
+      "evidence_present": "F1 armed + F2 + F6/F9/F14/F18/F21 bind set + F24-F32 progress + G1 + G2 load line + POST-POPUP drain 'Menu created.'; sdiag 45 events start_ok=1 lease 6/6; PATH_TEST+ACTIVATION_TEST stamps",
+      "timing": "pathtest 27661022133455ns (first); sdiag deltas from 27638412; status single point",
+      "summary": "runs/A.summary.txt"
+    },
+    {
+      "set": "B",
+      "intended_class": "GOOD",
+      "classifier_verdict": "FAILED_STATUS",
+      "match": true,
+      "match_note": "controller mapping per ORACLE sec2 GOOD: status detail = F15 value-carrying pool refusal verbatim; ladder=[ activated ] (no engine-ready); notable lines prove past V1/V2 (slot 3 bind present); F15 caps GOOD",
+      "stage_chain_sdiag": "S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S5_IDENTITY_ANCHORS -> S4_LEASE_REG -> S9_START_ACK -> S11_STOP",
+      "stage_chain_ue4ss": "S8B_INITIALIZER",
+      "status_detail_verbatim": "[Seeds] REFUTED: FName pool at 0x9765ec0: CurrentBlock < 1 (pool not initialized or wrong pool/base) (observed CurrentBlock 0, Blocks[0] 0x0 vs span [0x8018c000,0x100118000)). Terminal for this launch; derive afresh with new evidence, never replay.",
+      "summary": "runs/B.summary.txt"
+    },
+    {
+      "set": "C",
+      "intended_class": "MINIMAL-ACCEPT",
+      "classifier_verdict": "FAILED_STATUS",
+      "match": true,
+      "match_note": "controller mapping per ORACLE sec2 MINIMAL-ACCEPT: conversion passed (sdiag intervals_found=1, anchor_count=7, lease 6/6, start_ok=1, activated present), D6 absent, NEW F7 walkguard refusal verbatim in status detail; slot 0 never bound (armed marker only in notable lines)",
+      "stage_chain_sdiag": "S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S5_IDENTITY_ANCHORS -> S4_LEASE_REG -> S9_START_ACK -> S11_STOP",
+      "stage_chain_ue4ss": "S8B_INITIALIZER",
+      "status_detail_verbatim": "[Seeds] REFUTED: slot 0 g_uobject_array 0x97ba110: seed class exec-only (call-only) (expected data-readable); refusing reads. Terminal for this launch; derive afresh with new evidence, never replay.",
+      "summary": "runs/C.summary.txt"
+    },
+    {
+      "set": "D",
+      "intended_class": "FAIL (geometry refusal recurs verbatim)",
+      "classifier_verdict": "FAILED_S6_CONVERSION",
+      "match": true,
+      "stage_chain_sdiag": "S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S5_IDENTITY_ANCHORS -> S4_LEASE_REG -> S6_CONVERSION -> S11_STOP",
+      "stage_chain_ue4ss": "S6_CONVERSION",
+      "evidence_present": "r4-prefixed failure line verbatim + STAGEHIT attribution (derive_readable_ranges) + status failed detail + sdiag fan-out (lmf_intervals_found=0, lmf_*_cap, provider_code, identity_source) start_failed=1",
+      "timing": "writer=failline pid=417 t=27646987ms (first stamp); pathtest 27658446233901ns (post-refusal)",
+      "summary": "runs/D.summary.txt"
+    },
+    {
+      "set": "E",
+      "intended_class": "S-30S special row (ploader 30s cap, sinks complete)",
+      "classifier_verdict": "MODS_STARTED",
+      "match": true,
+      "match_note": "timing table carries runtime_start_ok t=31237720 +34783ms (>30s cap) while ladder stays full; DECLARATION LAW (judge durable sinks, never the toast) is exercisable from the page; C_comp>30s would be recorded as a launch-11 latency item, not a functional failure",
+      "stage_chain_sdiag": "S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S4_LEASE_REG -> S7_CFG_ATTACH -> S9_START_ACK -> S11_STOP",
+      "stage_chain_ue4ss": "S8B_INITIALIZER -> S10_LADDER",
+      "status": "pid=419 ms=31211900 fresh=yes ladder=[ activated engine-ready mods-started ]",
+      "summary": "runs/E.summary.txt"
+    }
+  ],
+  "gaps_reported_for_evidence_worker": [
+    {"id": "GAP-1", "severity": "HIGH", "finding": "Conversion SUCCESS-path tags (lmf_extent_base_low/high, lmf_extent_end_low/high, lmf_anchor_count, lmf_intervals_found) are in neither stage_of_tag nor SDIAGSUM: no S6_CONVERSION in success chains, and the oracle D3/D4 gating values anchor_count=7 / intervals_found=1 never appear in the one-page summary (controller must read the raw jsonl).", "repro": "runs/A.summary.txt (absent entirely; STIME cap hides them) vs runs/E.summary.txt (timing rows only, incidental)"},
+    {"id": "GAP-2", "severity": "MEDIUM", "finding": "The BEST-decisive mod lines ([Lua] [TownfallItemSpawner] Loaded v1.0..., post-OPTIONS 'Menu created.') count only as progress markers (4) and are never printed verbatim; G2-vs-G3 discrimination needs the raw log.", "repro": "runs/A.summary.txt notable-lines section"},
+    {"id": "GAP-3", "severity": "LOW", "finding": "bridge_exepath_source is staged S7_CFG_ATTACH though emitted mid-walk, so success chains print S3->S7->S5->S4 (first-seen order, reads out of numeric order); display-only.", "repro": "stage chains of A/B/C"},
+    {"id": "GAP-4", "severity": "LOW", "finding": "crash_tail=3 on BEST summaries (LoadMap/Tick vtable-walk lines); precedence correctly keeps MODS_STARTED but the JSON flag reads alarming at a glance.", "repro": "runs/A.stdout.txt / runs/E.stdout.txt JSON tail"},
+    {"id": "GAP-5", "severity": "LOW", "finding": "supplier-diag STIME rows capped at 24: event-rich boots hide conversion->start_ok deltas (S-30S readable only with compact event counts or raw jsonl).", "repro": "runs/A.summary.txt (45 events, cut) vs runs/E.summary.txt (19 events, full)"},
+    {"id": "NOTE-1", "severity": "mapping-note", "finding": "GOOD/MINIMAL-ACCEPT launches classify FAILED_STATUS by design (seed refusals reach only status detail per oracle F30; seeds grammar is text-stream-only). All ladder inputs ARE on the page (verbatim status detail, ladder without engine-ready, sdiag conversion proof, notable [Seeds] bind lines). Controller rule rehearsed: slot-3 bind present + later pool/ctor-class refusal = GOOD (F15 caps GOOD); bind lines absent + armed marker only = MINIMAL-ACCEPT.", "repro": "runs/B.summary.txt vs runs/C.summary.txt"},
+    {"id": "NOTE-2", "severity": "unexercised", "finding": "failline DELTA branch (two r4 stamps same pid) and real S11 stop phase (runtime_stop_begin/result) not fixture-built; module_start_return maps to S11_STOP so every chain ends ->S11_STOP even with nothing stopped (label quirk, tag parsed correctly)."}
+  ],
+  "artifacts": {
+    "fixtures": "fixtures/{A,B,C,D,E}/from-dir (UE4SS.log, runtime-status.txt, townfall_runtime_aligned_entry.log, modbridge-exec-write-probe.jsonl, modbridge-supplier-diag.jsonl) + fixtures/_baselines",
+    "builder": "build-fixtures.sh (deterministic rebuild)",
+    "raw_outputs": "runs/<S>.summary.txt + runs/<S>.stdout.txt (summary + JSON tail) + empty .stderr.txt"
+  },
+  "claim": "The verdict pipeline reads all four oracle verdict classes correctly end-to-end on synthetic evidence: BEST->MODS_STARTED, FAIL->FAILED_S6_CONVERSION direct; GOOD/MINIMAL-ACCEPT->FAILED_STATUS with every ladder input present on the one-page summary; timing extraction correct per writer including the >30s S-30S spread. This rehearsal advances NO verdict; the real console launch remains the only evidence source."
+}

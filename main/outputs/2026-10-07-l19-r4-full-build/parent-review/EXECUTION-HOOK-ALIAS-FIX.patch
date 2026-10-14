@@ -1,0 +1,40 @@
+--- execution-v1/admission.py
++++ execution/admission.py
+@@ -205,6 +205,7 @@
+         require(tools <= self.tool_pins.keys(), 'all actual147 compiler/config tool pins required')
+         for p, h in self.tool_pins.items():
+             pin({'path': p, 'sha256': h}, 'compiler tool')
++        self.validate_tool_aliases()
+         for p, h in self.allowed.items():
+             pin({'path': p, 'sha256': h}, 'all-source dependency')
+         for p, h in self.base_inputs.items():
+@@ -229,6 +230,19 @@
+             if r['pass1_reusable']:
+                 require(r['pass1_argv'] == pass1[n]['argv'], 'accepted144 argv mismatch: ' + n)
+ 
++    def validate_tool_aliases(self):
++        aliases = self.data.get('tool_aliases', {})
++        expected = str(self.pins['linker'].parent / 'clang++')
++        require(expected in aliases, 'exact delegated clang++ alias mapping required')
++        for path, record in aliases.items():
++            alias = Path(path)
++            require(alias.is_absolute() and alias.is_symlink(), 'expected compiler alias missing')
++            require(str(alias.readlink()) == record.get('link_target'), 'compiler alias spelling drift')
++            target = alias.resolve()
++            require(str(target) == record.get('resolved_path'), 'compiler alias target drift')
++            require(self.tool_pins.get(str(target)) == record.get('sha256'), 'compiler alias target not tool-pinned')
++            pin({'path': str(target), 'sha256': record.get('sha256')}, 'delegated compiler alias target')
++
+     def check_dependencies(self, name, dependency_file):
+         actual = dependencies(dependency_file)
+         require(str(self.owner_header) in actual, 'accepted FField header absent from actual .d: ' + name)
+--- execution-v1/composition.py
++++ execution/composition.py
+@@ -166,6 +166,7 @@
+         # Rehash all admitted source dependencies and actual link inputs after execution.
+         for p, h in {**a.allowed, **hashes, **a.tool_pins}.items():
+             pin({'path': p, 'sha256': h}, 'final source/input/tool pin')
++        a.validate_tool_aliases()
+         for name in a.recipes['recipes']:
+             a.check_dependencies(name, selected[name]['dependency_file'])
+         inherited_delta = dict(a.base['undefined_delta'], current=current, current_count=len(current))

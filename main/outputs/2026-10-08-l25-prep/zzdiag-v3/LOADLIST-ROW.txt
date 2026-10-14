@@ -1,0 +1,43 @@
+zzdiag v3 loadlist admission sidecar (agent-CK, 2026-10-08)
+===========================================================
+
+MFA admission is SIZE-EXACT: the loadlist row byte count must equal the
+on-console file size byte-for-byte (modforge MFA size-exact admission law;
+agent-I-mfa-audit.md). The console currently holds zzdiag v2 at 1107 bytes
+(loadlist row 'ue4ss/Mods/zzdiag/Scripts/main.lua 1107', verified
+post-reboot 2026-10-08, evidence/UFUNCTION-NULLPTR-FINDING.md). Uploading
+v3 WITHOUT updating this row fails admission (mfa_activate_failed family).
+
+v3 file (this directory):
+  main.lua  2314 bytes
+  sha256    2670e493d1c89d1f1499d82aad5f9dbd7d1f0fc85aa8798d5e9983f639fa8228
+  (measure again after ANY edit: wc -c main.lua ; shasum -a 256 main.lua)
+
+Exact replacement loadlist rows (tabs between fields, verbatim):
+  file	lua_mod	ue4ss/Mods/zzdiag/Scripts/main.lua	2314
+  file	lua_mod	ue4ss/Mods/zzdiag/enabled.txt	0
+
+Full expected console loadlist after the v3 swap (9 rows, 545 bytes with
+trailing newline; built from the verified postboot copy /tmp/loadlist-postboot.txt
+with only the zzdiag main.lua size changed 1107 -> 2314):
+
+  modforge-loadlist	1
+  title	PPSA33286
+  engine	unreal
+  framework	ue4ss-ps5
+  mod	TownfallItemSpawner	1.0.0
+  file	config	ue4ss/UE4SS-settings.ini	1947
+  file	config	ue4ss/MemberVariableLayout.ini	588
+  file	config	ue4ss/VTableLayout.ini	216
+  file	config	ue4ss/PS5Pad.ini	3718
+  file	lua_mod	ue4ss/Mods/TownfallItemSpawner/Scripts/main.lua	21415
+  file	lua_mod	ue4ss/Mods/TownfallItemSpawner/enabled.txt	0
+  file	lua_mod	ue4ss/Mods/shared/UEHelpers/UEHelpers.lua	9962
+  file	lua_mod	ue4ss/Mods/zzdiag/Scripts/main.lua	2314
+  file	lua_mod	ue4ss/Mods/zzdiag/enabled.txt	0
+
+A ready-to-upload copy of that full file is staged next to this sidecar:
+loadlist-zzdiag-v3.txt (verify with: cmp <(curl -s ftp://ps5-host-not-configured.invalid:2121/data/modbridge/roots/PPSA33286/loadlist.txt) loadlist-zzdiag-v3.txt after upload).
+
+Removal (post-test, see RUNBOOK phase 5): delete BOTH zzdiag rows and the
+two remote zzdiag files; the loadlist returns to the 7-row l23 composition.

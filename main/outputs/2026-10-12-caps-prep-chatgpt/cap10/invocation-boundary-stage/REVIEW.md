@@ -1,0 +1,13 @@
+# Independent additive boundary source review
+
+Verdict: **PASS_SOURCE_STAGE_REVIEW**, no blocking findings. This is the single independent review of this new helper. The existing observer was read as its immutable interface contract. No unchanged suite, compiler, C++/Mono execution or target operation was run. This is not build/application approval.
+
+The real public GC enter/exit pair uses the same live native-stack marker and actual cookie; nested null cookie is preserved. There is no thread-current attachment probe, implicit attach or fake owner. Loader.h is directly included and explicitly declares method_get_name/class; the other used APIs are declared in the retained directly included object/class/appdomain/threads-api headers. Complete transitive header closure and target compilation remain unproved.
+
+Run uses the actual native cookie argument and reviewed RunImports window around real mono_runtime_invoke. Exception presence is checked before using its result, and finish precedes handle/type queries. Throw uses NoNativeCalls around the real deliberate invocation, checks actual exception first and requires its exact corlib class. A distinct nonzero cookie drives the real recovery Run. Native observation alone cannot establish managed origin or an exception.
+
+Raw result has compiler-visible volatile pointer storage; exception is an address-taken native local. These are subject to the explicit genuine port scanning prerequisite, not invented root registration. Outer GC-unsafe state and volatile alone cannot establish rooting. Handle acquisition tracks ownership separately from numeric value, including zero; target is reacquired, exact Int32 class checked before unbox, and its scalar copied while pinned. No borrowed Mono object/storage escapes in the native report.
+
+Local RAII frees owned handles, aborts an unfinished native window and restores the GC cookie on ordinary exits/C++ unwind. No fatal/assert/OS-fault or async-teardown recovery is claimed. Static method signatures, actual loaded-artifact association, initialized/attached retained domain/thread, GC/TLS/PInvoke/unwind port and raw-root scanning remain HARD genuine-owner prerequisites. Class/image/method-name checks do not establish those predicates.
+
+This is additive/default-excluded source with no invented candidate insertion, source stager, runtime host, resolver or provider lease. Retained author results are5 lexical source-contract checks only; they are not runtime or transformation tests. REVIEW.json binds29 final inputs/files including exact author receipt and records remaining target compilation, provider lifetime/resolver/quiescence, rooting and game-continuation limits.

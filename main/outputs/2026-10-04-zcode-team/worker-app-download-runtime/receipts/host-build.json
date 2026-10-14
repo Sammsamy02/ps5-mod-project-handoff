@@ -1,0 +1,57 @@
+{
+  "worker": "worker-app-download-runtime",
+  "date": "2026-10-04",
+  "builds": [
+    {
+      "name": "download_runtime (desktop_fixture-download composition)",
+      "artifact": "build/download-runtime/desktop_fixture-download/modbridge-native-host-desktop-download",
+      "build_command": "python3 outputs/ps5-mod-bridge/native-host/build.py --profile desktop_fixture --download-profile /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-curl-profile-experiment-1 --curl-source /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/curl-release --output-root <worker>/build/download-runtime",
+      "build_id": "d23036861be171d1d6e7fb5ac1df258b0594d855351f04bf3d224fdd348f99d5",
+      "artifact_sha256": "a78c160ed8fb827e0afa6ad4f580ff46b0127ec6a7d8de8eb3491bffcaa2571c",
+      "size": 1665672,
+      "mb_host_download": 1,
+      "jobs_archive_oauth": false,
+      "notes": "Built clean on first attempt in my byte-copy of worker-app-backend-integration's vendored tree (their tree untouched). All retained curl/MbedTLS dependency shas revalidated by dependency_build.py during the build."
+    },
+    {
+      "name": "desktop_fixture A/B control (no download runtime)",
+      "artifact": "build/desktop-fixture/desktop_fixture/modbridge-native-host-desktop",
+      "build_command": "python3 outputs/ps5-mod-bridge/native-host/build.py --profile desktop_fixture --output-root <worker>/build/desktop-fixture",
+      "build_id": "017178e08091264e2d8314defaca8d27e7fa45b176f3bf1ee8d2dbbd0d7ffbfc",
+      "artifact_sha256": "56586af21be4f7f9a40c35982bd814b937c575ae324a2522ef518b1030dbfc5a",
+      "size": 533616,
+      "mb_host_download": 0,
+      "notes": "Same source tree, no --download-profile: legacy entropy.c/drbg.c compiled instead of the curl runtime; modmgr routes compiled out."
+    }
+  ],
+  "live_smoke": {
+    "receipts": ["ab-probe.json"],
+    "download_runtime": {
+      "port": 18501,
+      "GET /version": 200,
+      "GET /api/capabilities": 200,
+      "GET /report": "200; download_runtime{selected:true,status:initialized,entropy_callbacks:4,entropy_bytes:128,clock_samples:11}; legacy entropy/drbg not_selected",
+      "GET /api/mod-service/records (no session)": 503,
+      "POST /api/mod-service/request (no session, earlier probe)": 503,
+      "GET /api/downloads": 503,
+      "GET /api/installed without MB_MODMGR_* env": 404,
+      "GET /api/jobs, /api/generations": 404,
+      "console_executed": false,
+      "provider_contact": false
+    },
+    "desktop_fixture_control": {
+      "port": 18502,
+      "GET /version": 200,
+      "GET /api/mod-service/records (no session)": 503,
+      "GET /api/downloads": 404,
+      "GET /api/jobs, /api/generations": 404
+    }
+  },
+  "api_surface_regression": {
+    "driver": "test/run_api_tests.py (copied from worker-app-backend-integration; only VENDORED/BIN path constants retargeted to my copy)",
+    "compile_gate": "http.c compiled with -DMB_HOST_DOWNLOAD=1 -DMB_HOST_DOWNLOAD_STORE=1 under -Wall -Wextra -Werror; stubbed auth per the tree's own offline discipline; real fork/exec of app_core/modmgr_api.py + pinned installer",
+    "installer_sha256": "f2215f2ffd92b63c7d642089e60c37e10ba199ff279d0aaa201ff35324e21de6 (== CONSOLE-CONTRACT §7 pin, verified on my copy)",
+    "result": "PASS=42 FAIL=0",
+    "log": "receipts/api-tests-download-runtime.log"
+  }
+}

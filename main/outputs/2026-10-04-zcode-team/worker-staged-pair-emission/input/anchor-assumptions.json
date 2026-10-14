@@ -1,0 +1,47 @@
+{
+  "document_role": "PREPARATION ASSUMPTIONS for the staged-pair emission path. Nothing here is a validated or promoted fact; this file states exactly what is assumed and what must be confirmed by the in-flight anchor-validation probe before the runbook's emission commands are run.",
+  "checkpoint": "zcode_v3_MAPPING_BREAKTHROUGH",
+  "mapping_facts": {
+    "load_bias_model": "single-load-bias: runtime = image_base + p_vaddr, all segments",
+    "image_base": "0x400000",
+    "exec_span": "[0x400000, 0x787c000)",
+    "l7_predicted_start": "0x953c000 (exact RW span match; see worker-span-arbitration/VERDICT.md)",
+    "rw_span": "[0x970c000, 0x9a34000)",
+    "gua_profile_vaddr": "0x93ba110",
+    "gua_runtime_predicted": "0x97ba110 (= 0x400000 + 0x93ba110)",
+    "file_offset_rule_load0": "vaddr + 0x4000",
+    "span_arbitration_status": "0x400000-0x787c000/4 and 0x8018c000-0x100118000/1 CONFIRMED real; a W span covering 0x97ba110 is PREDICTED, not yet observed",
+    "sources": [
+      "outputs/2026-10-04-zcode-team/worker-span-arbitration/VERDICT.md",
+      "outputs/2026-10-04-zcode-team/worker-anchor-validation/CLAIM.json"
+    ]
+  },
+  "anchor_validation_probe_in_flight": {
+    "worker": "worker-anchor-validation",
+    "what_it_must_return": "live 96 bytes at 0x97ba110 read OK; live Tick (0x33ac8c0) / SCO (0x890aa0) bytes equal the retained-image expectations; vendored batch1 GUObjectArray predicate run with image_base=0x400000 and profile vaddr 0x93ba110 returns Validated under exactly one hypothesis (expected A) and Refuted/Inconclusive for the other",
+    "gate": "emission may run ONLY when gua verdict == Validated (the assembler refuses anything else)"
+  },
+  "synthetic_validated_assumption_for_this_preparation": {
+    "statement": "For the PREPARATION run only, verdict records in input/verdicts-synthetic-validated.json are treated as if the anchor probe returned Validated. They are byte-copies of worker-layout-batch3/dryrun/synthetic-verdicts.json, produced by the REAL retained predicate-chain fixture (worker-5 probe_guobject_array + batch2 probe_ustruct_chain + probe_ffield_variant + batch3 chain walks) executing on a SYNTHETIC HOST IMAGE, not on the target.",
+    "verdicts_sha256": "cee1f06ebedc9c2057c969227a8fd34989cc9509825a00284367a3baa9c5a267",
+    "hash_matches_batch3_receipt": true,
+    "expected_hypothesis": "A",
+    "expected_runtime_anchor": "0x97ba110",
+    "expected_image_base": "0x400000"
+  },
+  "identity_resolution_state": {
+    "resolved_from_candidates_profile": {
+      "target": "prospero-x86_64-sysv",
+      "pointer_size": 8,
+      "engine_major": 5,
+      "engine_minor": 6
+    },
+    "unresolved_refusal_points": {
+      "engine_revision": null,
+      "build_id": null,
+      "non_shipping": null,
+      "stats": null
+    },
+    "rule": "engine_revision / build_id / non_shipping / stats are NEVER faked or defaulted; the assembler refuses (exit 2, no output) until the controller supplies them from the live in-process scan. See EMISSION-RUNBOOK.md section 'Axes and identity resolution requirement'."
+  }
+}

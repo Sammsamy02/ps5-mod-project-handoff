@@ -1,0 +1,799 @@
+# PRE-SESSION-INVENTORY — final consumer-vs-artifact audit (worker-pre-session-inventory, 2026-10-04)
+
+Scope: every return-session local artifact vs EVERY file citing its sha/size (batch tool, plans, briefs, guides, manifests, receipts).
+Method: all citation lines collected by full-text grep over `outputs/`, `docs/`, `work/` (1,306 lines); every sha256 and byte size RECOMPUTED on disk this session (`shasum -a 256`, `stat -f%z`).
+Console-side identities (C1/C2 and the PRX readback bodies) are cross-doc-consistent but not locally recomputable.
+
+## VERDICT SUMMARY
+
+- 20 local artifact identities recomputed: ALL citing files MATCH disk, except findings F1-F3 below; 1 orphan (F4); 1 doc-hygiene note (F5).
+- Zero local artifacts are missing. Both previously-suspect ELFs EXIST and match their pins (dll7 `83ee2ae9`/334656 B at worker-static-tls-7fam; D1 `e3489297`/681528 B in worker-e2e-composer-splice/archive).
+- Tool `console_batch.py`: both copies (worker-console-batch-runner + worker-batch-final-ini-adoption) byte-identical, `b00b3a69` / 276591 B = documented final revision; every pinned constant (4 PRXs + readbacks, dll8/dll7 ELFs, e2e payload + D1 discriminator, canonical ini, v3 pair, v2 freeze pair) MATCHES disk.
+- `outputs/2026-10-04-zcode-controller/session-artifacts-manifest.json` (9 payloads): all 9 sha/bytes MATCH disk; cheat-sheet claim 'All nine payloads verified local' TRUE.
+- EVE-STATE.md '12/12 MATCH' (L1-L12): re-verified TRUE this pass. L9's owned-dll-candidate.elf = the 8fam ELF (A11).
+- Launch10 gate receipt: 15 PASS / 0 failed = cheat-sheet 'gate 15/15'. Candidates a and b are BYTE-IDENTICAL (`d8cb4a76`); bare-sdk inner `b0353bf4` matches build receipts and static-checks.json in both candidate dirs.
+- No byte artifact is orphaned; the cheat-sheet RETURN-SESSION-COMMANDS.md has zero file consumers (F4).
+
+## FINDINGS / FIX LIST (one-liners; this worker edited NO other files)
+
+- **F1 PATH GAP (live doc)** `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md:288` cites `$W/worker-engineversion-ini/package-v3/*` — directory does NOT exist (engineversion-ini holds only package-v2). Fix: -> `$W/worker-settings-v3-package/package-v3/*`. (Also in as-found/patch provenance copies — leave raw provenance unchanged.)
+- **F2 SIZE/SHA CONFLATION (live doc)** `outputs/2026-10-04-zcode-team/worker-app-track-closure/APP-SESSION-INTEGRATION.md:108` says 'the fixed **447 B `d8faa4ec…`** pair' — 447 B is the LOADLIST size; `d8faa4ec` is the SETTINGS ini (1448 B). Fix: -> 'the fixed pair (1448 B `d8faa4ec…` settings + 447 B `4d98ecd7…` loadlist)'.
+- **F3 STALE PATH BINDING (worker receipt)** `outputs/2026-10-04-zcode-team/worker-e2e-staging-final/CLAIM.json:9` (+ REPORT.md:24, STAGED-E2E-COMMANDS.md) binds `e3489297…`/681528 B to `worker-d1-chain-relink/composition/build/console/modbridge-installer.payload.elf`, whose CURRENT bytes are `b0d73e93…`/681888 B. Pinned bytes exist at `worker-e2e-composer-splice/archive/stale-51chain-build-console/modbridge-installer.payload.elf`. Fix: repoint the path. Session-safe: the tool pins the sha, which still matches the archive copy.
+- **F4 ORPHAN** `outputs/2026-10-04-zcode-controller/RETURN-SESSION-COMMANDS.md` (the cheat-sheet) is cited by NO other file. All its factual claims verified TRUE here; optionally reference it from EVE-STATE.md or the master-plan header to close the doc chain.
+- **F5 (info, no error)** Master plan L4/L54 points to 'NEW-SETTINGS §3' for the v3 restage, but `worker-engineversion-ini/NEW-SETTINGS.md` is the v2-era PROPOSALS-ONLY doc (contains NO v3 identities). The v3 spec + identities live in `worker-settings-v3-package/SETTINGS-V3-DECISION.md` (verified correct vs disk). Optional pointer update.
+
+## ARTIFACT-BY-ARTIFACT MATRIX (recomputed disk identity + every citing file)
+
+### A1 launch10 candidate a (armed fself)
+- path: `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/prx-candidate-composition6-l10-a/modbridge_supplier_composition.prx`
+- disk (recomputed this session): sha256 `d8cb4a7637b2ac581270fa05b2d9237dbbea3843f775983b4d96186f573f2c83` / 30,818,247 B — MATCH — candidate #1 of 2 (byte-identical to b)
+- consumers (5 files — same sha prefix as A1b, so the same citing set applies; A1b's own-dir receipts below cite candidate b explicitly and its twin a was re-hashed identical):
+
+### A1b launch10 candidate b (armed fself)
+- path: `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/prx-candidate-composition6-l10-b/modbridge_supplier_composition.prx`
+- disk (recomputed this session): sha256 `d8cb4a7637b2ac581270fa05b2d9237dbbea3843f775983b4d96186f573f2c83` / 30,818,247 B — MATCH — candidate #2 of 2 (identical bytes to a)
+- consumers (5 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-controller/RETURN-SESSION-COMMANDS.md`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/prx-candidate-composition6-l10-a/verification-evidence/static-checks.json`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/prx-candidate-composition6-l10-b/verification-evidence/static-checks.json`
+
+### A2 launch10 bare-sdk inner (both candidates)
+- path: `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/prx-candidate-composition6-l10-a/bare-sdk/modbridge_supplier_composition.prx`
+- disk (recomputed this session): sha256 `b0353bf4cccd062f6ee7dce7b3b758299442355347d19b78a1485d8f89a5c07f` / 30,807,368 B — MATCH — readback content-law reference inner
+- consumers (6 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/prx-candidate-composition6-l10-a/bare-sdk/modbridge_supplier_composition.prx.sdk.json`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/prx-candidate-composition6-l10-a/build-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/prx-candidate-composition6-l10-b/bare-sdk/modbridge_supplier_composition.prx.sdk.json`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/prx-candidate-composition6-l10-b/build-receipt.json`
+
+### A3 xwp armed probe PRX
+- path: `outputs/2026-10-04-zcode-team/worker-writability-probe-build/modbridge_exec_write_probe_armed.prx`
+- disk (recomputed this session): sha256 `48949316821b574bc0738b965ec0ab01500a870e34540e44568b65490704402e` / 20,013 B — MATCH — PRX ridealong 1/4; readback 67832 B daea2ff4
+- consumers (41 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-controller/session-artifacts-manifest.json`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/USER-SESSION-GUIDE.md.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/fake_console_drive-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/plan-all-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/selftest-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-comp6-driver/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-bootstrap/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-ensure/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-noop/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-obs-early/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-stop/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/CONSOLE-BATCH-CONSTANTS-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/FINAL-INI-LAYOUT.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/CURRENT-STATE-DIGEST-v2.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/INDEX-v2.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/RETURN-SESSION-MASTER-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/SESSION-REHEARSAL.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/receipts/REHEARSAL-RECEIPTS.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/CONTROLLER-DECISION-BRIEF.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/RETURN-SESSION-MASTER-PLAN.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CORRECTED-LINES.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/EVE-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-writability-probe-build/build-receipt-armed.json`
+  - `outputs/2026-10-04-zcode-team/worker-writability-probe-build/determinism/run-armed-1/build-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-writability-probe-build/determinism/run-armed-2/build-receipt.json`
+
+### A3b xwp skeleton PRX
+- path: `outputs/2026-10-04-zcode-team/worker-writability-probe-build/modbridge_exec_write_probe.prx`
+- disk (recomputed this session): sha256 `38b532155934537ff56b37bd11f7be91c3266c8510076f79d0fbbc30de2a37e5` / 19,933 B — MATCH — EVE-STATE L3
+- consumers (5 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/EVE-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-writability-probe-build/build-receipt-skeleton.json`
+  - `outputs/2026-10-04-zcode-team/worker-writability-probe-build/determinism/run-skeleton-1/build-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-writability-probe-build/determinism/run-skeleton-2/build-receipt.json`
+
+### A4 fc1pool probe PRX
+- path: `outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/modbridge_fc1pool.prx`
+- disk (recomputed this session): sha256 `d2431bf842fdba85321a6a08b2c1b6fdc9426c971fbc7cddfcd2b14fb49f0d96` / 22,733 B — MATCH — PRX ridealong 2/4; readback 67848 B 7e2dce27
+- consumers (37 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-controller/session-artifacts-manifest.json`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/USER-SESSION-GUIDE.md.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/fake_console_drive-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/plan-all-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/selftest-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-bootstrap/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-ensure/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-noop/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-obs-early/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-stop/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/STAGE-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/VERIFICATION-RECEIPTS.json`
+  - `outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/build-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/determinism/run1/artifact-checks.json`
+  - `outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/determinism/run1/build-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/determinism/run2/artifact-checks.json`
+  - `outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/determinism/run2/build-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/CONSOLE-BATCH-CONSTANTS-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/FINAL-INI-LAYOUT.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/INDEX-v2.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/RETURN-SESSION-MASTER-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/CONTROLLER-DECISION-BRIEF.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/RETURN-SESSION-MASTER-PLAN.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/EVE-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/REPORT.md`
+
+### A5 qdrv1 PRX
+- path: `outputs/2026-10-04-zcode-team/worker-record-sink-addon/modbridge_qh_driver.prx`
+- disk (recomputed this session): sha256 `52c3221665a423ddd2b22faddd4ac59ea8fd0ab8c1880c61e225d32a43df70a4` / 26,157 B — MATCH — PRX ridealong 3/4; readback 87112 B 71406d3c
+- consumers (74 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-controller/session-artifacts-manifest.json`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/USER-SESSION-GUIDE.md.asfound`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/USER-SESSION-GUIDE.md.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.asfound-fd21d1718d62.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/fake_console_drive-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/plan-all-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/selftest-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/diffs/USER-SESSION-GUIDE.md.orig`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/diffs/console_batch.py.orig`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/receipts/plan-all-dll7-dryrun.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/receipts/plan-all-dryrun.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/receipts/selftest-out.txt`
+  - `outputs/2026-10-04-zcode-team/worker-comp6-driver/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-comp6-drybuild/transport-ledger.composition5-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-composition-5-rebuild/transport-ledger.composition5-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/receipts/BUILD-RECEIPT.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/receipts/HOST-TEST-RECEIPT.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-bootstrap/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-ensure/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-noop/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-obs-early/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-stop/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-evidence-freshness-fixes/diffs/console_batch.py.asfound-c691cdd4cb8b.py`
+  - `outputs/2026-10-04-zcode-team/worker-evidence-freshness-fixes/shadow/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/FINAL-INI-LAYOUT.md`
+  - `outputs/2026-10-04-zcode-team/worker-game-session-ridealongs/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-game-session-ridealongs/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-game-session-ridealongs/STAGE-PLAN-COMBINED.md`
+  - `outputs/2026-10-04-zcode-team/worker-game-session-ridealongs/VERIFICATION-RECEIPTS.json`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/INDEX-v2.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-launch9-prediction/LAUNCH9-PREDICTION.md`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/USER-SESSION-GUIDE.md.asfound`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/USER-SESSION-GUIDE.patch`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/console_batch.patch`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/console_batch.py.asfound-92b56889cbfe.py`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/receipts/FAKE-DRIVE-RECEIPT.txt`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/receipts/SELFTEST-RECEIPT.txt`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/runs/fake-drive/ridealongs/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-project-state-index/CURRENT-STATE-DIGEST.md`
+  - `outputs/2026-10-04-zcode-team/worker-project-state-index/INDEX.md`
+  - `outputs/2026-10-04-zcode-team/worker-project-state-index/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-record-sink-addon/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-record-sink-addon/STAGE-PLAN-QDRV1.md`
+  - `outputs/2026-10-04-zcode-team/worker-record-sink-addon/build-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-record-sink-addon/determinism/run1/artifact-checks.json`
+  - `outputs/2026-10-04-zcode-team/worker-record-sink-addon/determinism/run1/build-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-record-sink-addon/determinism/run2/artifact-checks.json`
+  - `outputs/2026-10-04-zcode-team/worker-record-sink-addon/determinism/run2/build-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/RETURN-SESSION-MASTER-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/receipts/REHEARSAL-RECEIPTS.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/runs/b3-ini-drift/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/runs/session/phase2-ridealongs/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/CONTROLLER-DECISION-BRIEF.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/RETURN-SESSION-MASTER-PLAN.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/CONTROLLER-DECISION-BRIEF.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/RETURN-SESSION-MASTER-PLAN.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/EVE-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/REPORT.md`
+
+### A6 observer PRX
+- path: `outputs/2026-10-04-zcode-team/worker-observer-packaging/modbridge_runtime_aligned_observer.prx`
+- disk (recomputed this session): sha256 `1afa0997682cc6ecc14fd9f82961d68755edfacb36b36a4135203e37b1011e30` / 30,152,151 B — MATCH — PRX ridealong 4/4; readback 30143976 B 3f89a5b6
+- consumers (75 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-controller/session-artifacts-manifest.json`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/USER-SESSION-GUIDE.md.asfound`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/USER-SESSION-GUIDE.md.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.asfound-fd21d1718d62.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/fake_console_drive-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/plan-all-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/selftest-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-comp6-driver/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-comp6-drybuild/transport-ledger.composition5-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-composition-5-rebuild/transport-ledger.composition5-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/observer-badlaw/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/observer-coord/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/observer-dup/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/observer-fresh/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/observer-noop/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-bootstrap/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-ensure/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-noop/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-obs-early/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-stop/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/FINAL-INI-LAYOUT.md`
+  - `outputs/2026-10-04-zcode-team/worker-game-session-ridealongs/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-game-session-ridealongs/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-game-session-ridealongs/STAGE-PLAN-COMBINED.md`
+  - `outputs/2026-10-04-zcode-team/worker-game-session-ridealongs/VERIFICATION-RECEIPTS.json`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/INDEX-v2.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-launch9-prediction/LAUNCH9-PREDICTION.md`
+  - `outputs/2026-10-04-zcode-team/worker-observer-packaging/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-observer-packaging/PACKAGING-SOLUTION.md`
+  - `outputs/2026-10-04-zcode-team/worker-observer-packaging/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-observer-packaging/build-1/artifact-checks.json`
+  - `outputs/2026-10-04-zcode-team/worker-observer-packaging/build-1/build-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-observer-packaging/build-2/artifact-checks.json`
+  - `outputs/2026-10-04-zcode-team/worker-observer-packaging/build-2/build-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/USER-SESSION-GUIDE.patch`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/console_batch.patch`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/receipts/FAKE-DRIVE-RECEIPT.txt`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/receipts/SELFTEST-RECEIPT.txt`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/runs/fake-drive/observer-badlaw/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/runs/fake-drive/observer-coord/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/runs/fake-drive/observer-dup/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/runs/fake-drive/observer-fresh/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/runs/fake-drive/observer-noop/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/runs/fake-drive/ridealongs/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/STABILITY-GATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-project-state-index/CURRENT-STATE-DIGEST.md`
+  - `outputs/2026-10-04-zcode-team/worker-project-state-index/INDEX.md`
+  - `outputs/2026-10-04-zcode-team/worker-project-state-index/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/RETURN-SESSION-MASTER-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/receipts/REHEARSAL-RECEIPTS.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/runs/b3-ini-drift/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/runs/session/phase2-ridealongs/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/CONTROLLER-DECISION-BRIEF.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/RETURN-SESSION-MASTER-PLAN.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/CONTROLLER-DECISION-BRIEF.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/RETURN-SESSION-MASTER-PLAN.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/EVE-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/REPORT.md`
+
+### A7 settings v3 ini
+- path: `outputs/2026-10-04-zcode-team/worker-settings-v3-package/package-v3/ue4ss/UE4SS-settings.ini`
+- disk (recomputed this session): sha256 `d8faa4eca2ed2f22c02693b6841b7939412b4dd60c218a26438f985152d67038` / 1,448 B — MATCH — both [Hooks] keys = 0 verified in file
+- consumers (48 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-controller/session-artifacts-manifest.json`
+  - `outputs/2026-10-04-zcode-team/worker-app-track-closure/APP-SESSION-INTEGRATION.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/USER-SESSION-GUIDE.md.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/HOST-TEST-RECEIPT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/fake_console_drive-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/plan-all-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/selftest-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-comp6-driver/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-divergent/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-v3-noop/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-v3-noop/settings-freeze.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-v3/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/CURRENT-STATE-DIGEST-v2.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/INDEX-v2.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-initializer-integration/INTEGRATION-CHECKLIST.md`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-launch9-prediction/LAUNCH9-PREDICTION.md`
+  - `outputs/2026-10-04-zcode-team/worker-launch9-prediction/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/ACCEPTANCE-RECORD.md`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/RESTORE-PATH.md`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/RETURN-SESSION-MASTER-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/SESSION-REHEARSAL.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/receipts/REHEARSAL-RECEIPTS.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/tests/fake_console_drive.py`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/EDIT-LOG.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/RETURN-SESSION-MASTER-PLAN.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/CONTROLLER-DECISION-BRIEF.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/RETURN-SESSION-MASTER-PLAN.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CORRECTED-LINES.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/EVE-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-settings-v3-package/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-settings-v3-package/SETTINGS-V3-DECISION.md`
+
+### A8 loadlist v3
+- path: `outputs/2026-10-04-zcode-team/worker-settings-v3-package/package-v3/loadlist.txt`
+- disk (recomputed this session): sha256 `4d98ecd7aba1777028cca50552ef9d9616ecb070a0eb8772b8f3e40a590f5d5d` / 447 B — MATCH — settings row 1448 verified in file
+- consumers (44 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-controller/session-artifacts-manifest.json`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/USER-SESSION-GUIDE.md.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/HOST-TEST-RECEIPT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/fake_console_drive-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/plan-all-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/selftest-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-comp6-driver/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-divergent/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-divergent/settings-freeze.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-v3-noop/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-v3-noop/settings-freeze.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-v3/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/CURRENT-STATE-DIGEST-v2.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/INDEX-v2.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/ACCEPTANCE-RECORD.md`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/RESTORE-PATH.md`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/RETURN-SESSION-MASTER-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/SESSION-REHEARSAL.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/receipts/REHEARSAL-RECEIPTS.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/tests/fake_console_drive.py`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/EDIT-LOG.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/RETURN-SESSION-MASTER-PLAN.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/CONTROLLER-DECISION-BRIEF.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/RETURN-SESSION-MASTER-PLAN.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CORRECTED-LINES.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/EVE-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-settings-v3-package/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-settings-v3-package/SETTINGS-V3-DECISION.md`
+
+### A9 settings v2 rollback ini
+- path: `outputs/2026-10-04-zcode-team/worker-engineversion-ini/package-v2/ue4ss/UE4SS-settings.ini`
+- disk (recomputed this session): sha256 `9570ead39ce8b9a2a2d96eddbcf04d43dd0225be0bbfd5b2cd417d618b8c6e0c` / 834 B — MATCH — stage-settings freeze inventory
+- consumers (47 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/USER-SESSION-GUIDE.md.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/HOST-TEST-RECEIPT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/fake_console_drive-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/plan-all-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/selftest-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-comp6-driver/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-composition-5-rebuild/transport-ledger.composition5-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-divergent/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-v3/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-v3/settings-freeze.json`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-engineversion-ini/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-engineversion-ini/NEW-SETTINGS.md`
+  - `outputs/2026-10-04-zcode-team/worker-engineversion-ini/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-engineversion-ini/VERIFICATION.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/INDEX-v2.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/ACCEPTANCE-RECORD.md`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/RESTORE-PATH.md`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/RETURN-SESSION-MASTER-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/receipts/REHEARSAL-RECEIPTS.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/tests/fake_console_drive.py`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/EDIT-LOG.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/CONTROLLER-DECISION-BRIEF.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/CONTROLLER-DECISION-BRIEF.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/RETURN-SESSION-MASTER-PLAN.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CORRECTED-LINES.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/EVE-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-settings-v3-package/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-settings-v3-package/SETTINGS-V3-DECISION.md`
+
+### A10 loadlist v2 rollback
+- path: `outputs/2026-10-04-zcode-team/worker-engineversion-ini/package-v2/loadlist.txt`
+- disk (recomputed this session): sha256 `3afd10cebca1a89c653d70fff453bdec121f2bc6c230c4768f0833b3d0032ff5` / 446 B — MATCH — stage-settings freeze inventory
+- consumers (46 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/USER-SESSION-GUIDE.md.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/HOST-TEST-RECEIPT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/fake_console_drive-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/plan-all-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/selftest-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-comp6-driver/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-composition-5-rebuild/transport-ledger.composition5-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-divergent/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-v3/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/settings-v3/settings-freeze.json`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-engineversion-ini/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-engineversion-ini/NEW-SETTINGS.md`
+  - `outputs/2026-10-04-zcode-team/worker-engineversion-ini/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-engineversion-ini/VERIFICATION.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/INDEX-v2.md`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/ACCEPTANCE-RECORD.md`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/RESTORE-PATH.md`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/RETURN-SESSION-MASTER-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/receipts/REHEARSAL-RECEIPTS.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/tests/fake_console_drive.py`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/EDIT-LOG.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/CONTROLLER-DECISION-BRIEF.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/CONTROLLER-DECISION-BRIEF.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/RETURN-SESSION-MASTER-PLAN.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CORRECTED-LINES.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/EVE-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-settings-v3-package/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-settings-v3-package/SETTINGS-V3-DECISION.md`
+
+### A11 8fam ELF
+- path: `outputs/2026-10-04-zcode-team/worker-dll-8fam-combined/out-sdk-composition/c3aba79f968a492b849e5ece2f009e8e/owned-dll-candidate.elf`
+- disk (recomputed this session): sha256 `792811911e773c9b07a47ba3b22bc5d290f9f3ab86056ddfc985cf25e6d804fb` / 336,552 B — MATCH — dll8 flow upload
+- consumers (60 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-controller/session-artifacts-manifest.json`
+  - `outputs/2026-10-04-zcode-team/worker-8fam-console-prep/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-8fam-console-prep/CONSOLE-STAGE-PLAN-8FAM.md`
+  - `outputs/2026-10-04-zcode-team/worker-8fam-console-prep/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-8fam-console-prep/VERIFICATION.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/USER-SESSION-GUIDE.md.asfound`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.asfound-fd21d1718d62.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/plan-all-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/selftest-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/diffs/USER-SESSION-GUIDE.md.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/diffs/console_batch.py.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/receipts/TEST-RECEIPT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/receipts/plan-all-dryrun.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/receipts/plan-dll8-dryrun.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/receipts/selftest-out.txt`
+  - `outputs/2026-10-04-zcode-team/worker-comp6-driver/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/dll8/allfam8-console-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-divergence-reconciliation/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-dll-8fam-combined/EXPECTED-DELTA-8FAM.md`
+  - `outputs/2026-10-04-zcode-team/worker-dll-8fam-combined/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-dll-8fam-combined/out-sdk-composition/c3aba79f968a492b849e5ece2f009e8e/receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-dll-track-closure/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-dll-track-closure/DLL-TRACK-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-dll-track-closure/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-dll-track-closure/TRACK-COMPLETE.md`
+  - `outputs/2026-10-04-zcode-team/worker-evidence-freshness-fixes/diffs/console_batch.py.asfound-c691cdd4cb8b.py`
+  - `outputs/2026-10-04-zcode-team/worker-evidence-freshness-fixes/shadow/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/INDEX-v2.md`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/USER-SESSION-GUIDE.md.asfound`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/console_batch.py.asfound-92b56889cbfe.py`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/receipts/SELFTEST-RECEIPT.txt`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/runs/fake-drive/dll8/allfam8-console-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/ACCEPTANCE-RECORD.md`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/RETURN-SESSION-MASTER-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-archive-scaffold/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-archive-scaffold/flows/dll8.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-archive-scaffold/session_run.py`
+  - `outputs/2026-10-04-zcode-team/worker-session-archive-scaffold/tests/tmp-runroot/20261005-011906-dll8/receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-archive-scaffold/tests/tmp-runroot/20261005-011907-dll8/receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/receipts/REHEARSAL-RECEIPTS.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/runs/core/dll8/allfam8-console-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/runs/session/phase2-dll8/allfam8-console-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/CONTROLLER-DECISION-BRIEF.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/RETURN-SESSION-MASTER-PLAN.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/RETURN-SESSION-MASTER-PLAN.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/EVE-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/REPORT.md`
+
+### A12 dll7 ELF (fallback)
+- path: `outputs/2026-10-04-zcode-team/worker-static-tls-7fam/out-sdk-composition/e72f5318233845369a68556cd61e59ca/owned-dll-candidate.elf`
+- disk (recomputed this session): sha256 `83ee2ae95268a9b7f7bc4d931a29b77d5c3c2b15afdbb4e4288ac5490a847cae` / 334,656 B — MATCH — console_batch.py --dll 7 fallback pin
+- consumers (5 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-team/worker-divergence-reconciliation/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-dll-track-closure/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-index-v2-refresh/INDEX-v2.md`
+  - `outputs/2026-10-04-zcode-team/worker-project-state-index/CURRENT-STATE-DIGEST.md`
+  - `outputs/2026-10-04-zcode-team/worker-project-state-index/INDEX.md`
+
+### A13 E2E payload r1 (operative)
+- path: `outputs/2026-10-04-zcode-team/worker-e2e-payload-build/build-r1/modbridge-installer.payload.elf`
+- disk (recomputed this session): sha256 `a21771f894dd43be3dc650b12ffa65ccdc6413d150c0b9fb338302836901a054` / 681,888 B — MATCH — e2e flow upload; 13/13 cmd gate
+- consumers (83 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-controller/session-artifacts-manifest.json`
+  - `outputs/2026-10-04-zcode-team/worker-app-backend-integration/vendored/repo/outputs/ps5-mod-bridge/native-host/app_core/modmgr_api.py`
+  - `outputs/2026-10-04-zcode-team/worker-app-download-runtime/vendored-app/repo/outputs/ps5-mod-bridge/native-host/app_core/modmgr_api.py`
+  - `outputs/2026-10-04-zcode-team/worker-app-payload-repin/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-app-payload-repin/receipts/harness-diff-run_api_tests.patch`
+  - `outputs/2026-10-04-zcode-team/worker-app-payload-repin/test/regression/run_api_tests.py`
+  - `outputs/2026-10-04-zcode-team/worker-app-track-closure/APP-SESSION-INTEGRATION.md`
+  - `outputs/2026-10-04-zcode-team/worker-app-track-closure/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-app-track-closure/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-app-ui-flows/vendored/repo/outputs/ps5-mod-bridge/native-host/app_core/modmgr_api.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/USER-SESSION-GUIDE.md.asfound`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.asfound-fd21d1718d62.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/plan-all-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/selftest-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/diffs/USER-SESSION-GUIDE.md.orig`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/diffs/USER-SESSION-GUIDE.md.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/diffs/console_batch.py.orig`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/diffs/console_batch.py.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/receipts/plan-all-dll7-dryrun.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/receipts/plan-all-dryrun.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/receipts/selftest-out.txt`
+  - `outputs/2026-10-04-zcode-team/worker-comp6-driver/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-comp6-drybuild/transport-ledger.composition5-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-composition-5-rebuild/transport-ledger.composition5-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/receipts/BUILD-RECEIPT.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/receipts/HOST-TEST-RECEIPT.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/e2e/MODBRIDGE_INST_E2E-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/e2e/mode-gate.json`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-console-stage-prep/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-console-stage-prep/CONSOLE-STAGE-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-console-stage-prep/EXPECTED-LEDGER.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-console-stage-prep/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-payload-build/PAYLOAD-DELIVERY.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-payload-build/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-payload-build/receipts/console-build-config-entry.json`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-runconfig-b/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-runconfig-b/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-runconfig-b/RUNCONFIG-B-RESULTS.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-runconfig-b/logs/04-payload-identity-gate.log`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-runconfig-b/logs/06-precondition-ledger.log`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-runconfig-b/logs/07-suites-and-batchrunner.log`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-runconfig-b/logs/08-port-delta.log`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-staging-final/STAGED-E2E-COMMANDS.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-suite-completion/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-suite-completion/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-suite-completion/SUITE-RESULTS.md`
+  - `outputs/2026-10-04-zcode-team/worker-evidence-freshness-fixes/diffs/console_batch.py.asfound-c691cdd4cb8b.py`
+  - `outputs/2026-10-04-zcode-team/worker-evidence-freshness-fixes/shadow/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/USER-SESSION-GUIDE.md.asfound`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/console_batch.py.asfound-92b56889cbfe.py`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/receipts/SELFTEST-RECEIPT.txt`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/runs/fake-drive/e2e/MODBRIDGE_INST_E2E-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/runs/fake-drive/e2e/mode-gate.json`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/ACCEPTANCE-RECORD.md`
+  - `outputs/2026-10-04-zcode-team/worker-project-state-index/CURRENT-STATE-DIGEST.md`
+  - `outputs/2026-10-04-zcode-team/worker-project-state-index/INDEX.md`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/RETURN-SESSION-MASTER-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-archive-scaffold/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-archive-scaffold/flows/e2e.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-archive-scaffold/session_run.py`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/SESSION-REHEARSAL.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/receipts/REHEARSAL-RECEIPTS.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/runs/b2-e2e-not-consumed/mode-gate.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/runs/core/e2e/MODBRIDGE_INST_E2E-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/runs/core/e2e/mode-gate.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/runs/session/phase2-e2e/MODBRIDGE_INST_E2E-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-desk-rehearsal/runs/session/phase2-e2e/mode-gate.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/CONTROLLER-DECISION-BRIEF.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/RETURN-SESSION-MASTER-PLAN.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/RETURN-SESSION-MASTER-PLAN.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/EVE-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/REPORT.md`
+
+### A14 E2E payload r2 (determinism twin)
+- path: `outputs/2026-10-04-zcode-team/worker-e2e-payload-build/build-r2/modbridge-installer.payload.elf`
+- disk (recomputed this session): sha256 `ec8acdfc19161ac716e0a7b74a3b012230f39827b0dc58784c2b356c07df5fc3` / 681,888 B — MATCH — r1-identical except 16-B build-id note
+- consumers (7 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-team/worker-e2e-console-stage-prep/CONSOLE-STAGE-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-console-stage-prep/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-payload-build/PAYLOAD-DELIVERY.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-payload-build/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-payload-build/receipts/console-build-config-entry.json`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-runconfig-b/RUNCONFIG-B-RESULTS.md`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-runconfig-b/logs/04-payload-identity-gate.log`
+
+### A15 D1 relink payload (discriminator)
+- path: `outputs/2026-10-04-zcode-team/worker-e2e-composer-splice/archive/stale-51chain-build-console/modbridge-installer.payload.elf`
+- disk (recomputed this session): sha256 `e3489297193a639aab19567bad680f7a4687d7a37d841ee3545ea4502b4a0436` / 681,528 B — MATCH — tool MODE=A readback discriminator; NOTE stale path bindings - see F3
+- consumers (12 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-team/worker-app-payload-repin/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-app-track-closure/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-app-track-closure/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.asfound-fd21d1718d62.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-runner-8fam-patch/diffs/console_batch.py.orig`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-e2e-runconfig-b/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-evidence-freshness-fixes/diffs/console_batch.py.asfound-c691cdd4cb8b.py`
+  - `outputs/2026-10-04-zcode-team/worker-evidence-freshness-fixes/shadow/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/console_batch.py.asfound-92b56889cbfe.py`
+
+### A16 canonical ploader.ini (8-entry)
+- path: `outputs/2026-10-04-zcode-team/worker-final-ini-layout/ploader.ini.canonical`
+- disk (recomputed this session): sha256 `bbc34c16621ad337632d0ff29a116b0aa6e86e45ad219e8ef7539b369a5a6fe1` / 400 B — MATCH — 7 registered + 1 mode-0 line, verified in file
+- consumers (40 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/USER-SESSION-GUIDE.md.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/diffs/console_batch.py.final-ini-adoption.patch`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/HOST-TEST-RECEIPT.md`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/fake_console_drive-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/plan-all-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/selftest-final-ini-adoption.txt`
+  - `outputs/2026-10-04-zcode-team/worker-batch-final-ini-adoption/receipts/verify_selftest_adopter_rerun.txt`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/USER-SESSION-GUIDE.md`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-bootstrap/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-bootstrap/final-verifier.txt`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-bootstrap/ini-bootstrap-verdict.txt`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-ensure/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-ensure/final-verifier.txt`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-noop/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-noop/final-verifier.txt`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-noop/ploader.ini.pre.sha256`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-obs-early/events.log`
+  - `outputs/2026-10-04-zcode-team/worker-console-batch-runner/runs/fake-drive/ridealongs-final-obs-early/final-verifier.txt`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/CONSOLE-BATCH-CONSTANTS-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/FINAL-INI-LAYOUT.md`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/receipts/verify_canonical.txt`
+  - `outputs/2026-10-04-zcode-team/worker-final-ini-layout/receipts/verify_selftest.txt`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/ACCEPTANCE-RECORD.md`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/RESTORE-PATH.md`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/RETURN-SESSION-MASTER-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/EDIT-LOG.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/CONTROLLER-DECISION-BRIEF.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/RETURN-SESSION-MASTER-PLAN.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/EVE-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/REPORT.md`
+
+### A17 comp6 staged fself
+- path: `outputs/2026-10-04-zcode-controller/console/comp6-staged-fself.prx`
+- disk (recomputed this session): sha256 `76ee6af39b407ab73f78c59a3a3d38979397636bb988d3585cf6dc987098e553` / 30,773,943 B — MATCH — Phase-0/1 upload; gate 13/13
+- consumers (28 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-controller/CONSOLE-LOG.md`
+  - `outputs/2026-10-04-zcode-controller/RETURN-SESSION-COMMANDS.md`
+  - `outputs/2026-10-04-zcode-controller/session-artifacts-manifest.json`
+  - `outputs/2026-10-04-zcode-team/worker-comp6-driver/prx-candidate-composition6-1/verification-evidence/static-checks.json`
+  - `outputs/2026-10-04-zcode-team/worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/D1-DIAGNOSIS.md`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/d1-fix-receipt.json`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/prx-candidate-composition6-3/verification-evidence/static-checks.json`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/prx-candidate-composition6-4/verification-evidence/static-checks.json`
+  - `outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-divergence-reconciliation/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-divergence-reconciliation/RECONCILED.md`
+  - `outputs/2026-10-04-zcode-team/worker-divergence-reconciliation/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-launch10-prebuild/transport-ledger.composition6-mirror.json`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/ACCEPTANCE-RECORD.md`
+  - `outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/RESTORE-PATH.md`
+  - `outputs/2026-10-04-zcode-team/worker-return-session-master-plan/RETURN-SESSION-MASTER-PLAN.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/CONTROLLER-DECISION-BRIEF.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/as-found/RETURN-SESSION-MASTER-PLAN.as-found.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/CONTROLLER-DECISION-BRIEF.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-docs-final-sync/diffs/RETURN-SESSION-MASTER-PLAN.patch`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CLAIM.json`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/CORRECTED-LINES.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/EVE-STATE.md`
+  - `outputs/2026-10-04-zcode-team/worker-session-eve-coherence/REPORT.md`
+
+### A18 r11 backup fself (local)
+- path: `outputs/2026-10-04-zcode-controller/console/composition4-console-backup.prx`
+- disk (recomputed this session): sha256 `d4fc0acf6a3ab8df9e8e9882a273d601c614591bc8d23111adf20a4acd48ba39` / 30,769,672 B — MATCH — rollback chain head
+- consumers (3 files; every sha/size citation in each verified against disk):
+  - `outputs/2026-10-04-zcode-controller/CONSOLE-LOG.md`
+  - `outputs/2026-10-04-zcode-team/worker-rollback-runbook/REPORT.md`
+  - `outputs/2026-10-04-zcode-team/worker-rollback-runbook/ROLLBACK-RUNBOOK.md`
+
+## CONSOLE-SIDE IDENTITIES (consistent across all consumers; not locally recomputable)
+
+- C1 r11 slot identity (console-side, not locally recomputable): `0911af0c…` / 30,792,151 B — cited by 32 file(s); all citations agree (EVE-STATE S-rows, master plan Phase 0, cheat-sheet, INDEX-v2, RESTORE-PATH, RECONCILED).
+- C2 ploader.ini pre-image (console-side, Phase-0 gate): `8d331b3f…` / 247 B — cited by 23 file(s); all citations agree (EVE-STATE S-rows, master plan Phase 0, cheat-sheet, INDEX-v2, RESTORE-PATH, RECONCILED).
+
+PRX readback identities (SHT-strip law) agree in every consumer (master plan L49-52, console_batch.py pins, STAGE-PLAN-COMBINED table, decision brief, CLAIMs): xwp 67832 B `daea2ff4` · fc1pool 67848 B `7e2dce27` · qdrv1 87112 B `71406d3c` · observer 30143976 B `3f89a5b6`.
+

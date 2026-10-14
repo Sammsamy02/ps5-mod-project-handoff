@@ -1,0 +1,86 @@
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  writer=failline pid=317 t=60004266ms (first stamp for this pid)
+  writer=pathtest stamp=60076100108227ns (first stamp)
+  writer=failline pid=341 t=60249877ms (first stamp for this pid)
+  writer=pathtest stamp=60320585374436ns delta=+244485266209ns (vs previous pathtest stamp)
+  writer=failline pid=355 t=60900581ms (first stamp for this pid)
+  writer=pathtest stamp=60971455045302ns delta=+650869670866ns (vs previous pathtest stamp)
+  writer=supplier-diag-jsonl (t_ms, monotonic-ms; per-SESSION deltas — deltas NEVER cross sessions/pids; '(first t_ms)' opens each session):
+    module_start_entered t=60003456 (first t_ms)
+    entry_incoming_sp_mod16 t=60003460 +4ms
+    entry_call_sp_mod16 t=60003461 +1ms
+    constructor_count t=60003463 +2ms
+    import_validation_begin t=60003464 +1ms
+    import_validation_missing_count t=60003466 +2ms
+    constructor_begin t=60003470 +4ms
+    ctor-1 t=60003471 +1ms
+    constructor_return t=60003473 +2ms
+    constructor_begin t=60003474 +1ms
+    ctor-2 t=60003476 +2ms
+    constructor_return t=60003477 +1ms
+    constructor_begin t=60003479 +2ms
+    constructor_return t=60003480 +1ms
+    constructor_begin t=60003481 +1ms
+    constructor_return t=60003484 +3ms
+    constructor_begin t=60003486 +2ms
+    constructor_return t=60003487 +1ms
+    constructor_begin t=60003489 +2ms
+    constructor_return t=60003490 +1ms
+    constructor_begin t=60003492 +2ms
+    constructor_return t=60003493 +1ms
+    constructor_begin t=60003494 +1ms
+    constructor_return t=60003496 +2ms
+  writer=runtime-status session stamp: pid=355 t=60900572ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 3 (diag_channel_open_failed/-22: 0) [r4-prefixed: 3]
+  failure lines by session (r4 pid): pid=317 x1  pid=341 x1  pid=355 x1  — window note (G6): the UE4SS.log window is CUMULATIVE across this boot's launches; failure lines carry r4 pid prefixes (per-session above), PATH_TEST/ACTIVATION_TEST stamps carry none (positional attribution only); verdict precedence = LAST failure line (append-only ordering discipline)
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=3 open_failed=0 activation_test=3; MRS_* tokens: 0
+  supplier-diag jsonl: events=1591 sessions=3 pid_first=317 pid_last=355 baseline_cut=no start_ok=0 start_failed=2 lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1 vmentry=10028 cfg_gamedir=1 (file totals; value tags = last session pid=355; per-session lines follow)
+    session pid=317 events=548 t_first=60003456 t_last=60009203 start_ok=0 start_failed=1 mfa_activate_failed=- runtime_start_failed=3 extent_events=4 cfg_events=2 lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1 vmentry=22761 vm_walk_stop=0 exepath_source=0 cfg_gamedir=1 spanpub_count=16 spanpub_total=119 spanpub_cap=1 env_low=0x409d0000 env_high=0x00000010 stat_ownmod=1 stat_ownmod_ec=0 module_start_return=0
+    session pid=341 events=495 t_first=60249173 t_last=60254917 start_ok=0 start_failed=0 mfa_activate_failed=4294967288(int32 -8) runtime_start_failed=- extent_events=0 cfg_events=0 lease_spans=- lease_reg=- anchor_count=- intervals_found=- vmentry=- vm_walk_stop=- exepath_source=- cfg_gamedir=- spanpub_count=- spanpub_total=- spanpub_cap=- env_low=- env_high=- stat_ownmod=- stat_ownmod_ec=- module_start_return=0
+    session pid=355 events=548 t_first=60899781 t_last=60905523 start_ok=0 start_failed=1 mfa_activate_failed=- runtime_start_failed=3 extent_events=4 cfg_events=2 lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1 vmentry=10028 vm_walk_stop=0 exepath_source=0 cfg_gamedir=1 spanpub_count=16 spanpub_total=127 spanpub_cap=1 env_low=0x00410000 env_high=0x00000011 stat_ownmod=1 stat_ownmod_ec=0 module_start_return=0
+  diag-note (G8, oracle C7): bridge_exepath_source=0 WITH the r10 fork resolving successfully (stat_ownmod=1, stat_ownmod_ec=0) and conversion proceeding on this session — the fork refuses only when ALL THREE stats fail; oracle C7's 'source 0 leads to conversion refusal' wording is looser than live behavior (record against the row; wording update at next oracle revision).
+  diag-note (G9, oracle S2.2 item 6): spanpub env pair is the 64-bit low/high split env_low=0x00410000 env_high=0x00000011 (NOT a lone 32-bit max-record-end); bridge_spanpub_count=16 of spanpub_total=127 with spanpub_cap=1 — saturation at kMaxPublishedSpans=16 (both real 2026-10-05 boots saturated; oracle note pending).
+
+stage chain (r13/r14 marker table; file-sequence order):
+  supplier-diag: S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S4_LEASE_REG -> S5_IDENTITY_ANCHORS -> S6_CONVERSION -> S11_STOP
+  ue4ss-text:    S9_START_REFUSED -> S2_ACTIVATION
+  session chain pid=317: S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S4_LEASE_REG -> S5_IDENTITY_ANCHORS -> S6_CONVERSION -> S11_STOP
+  session chain pid=341: S1_ENTRY_CTORS -> S2_ACTIVATION -> S11_STOP
+  session chain pid=355: (current) S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S4_LEASE_REG -> S5_IDENTITY_ANCHORS -> S6_CONVERSION -> S11_STOP
+  note: S7_CFG_ATTACH appears before S4/S5 — bridge_exepath_source is emitted mid-walk by the bridge (before anchors/lease); first-seen order is correct, only the stage numbering looks out of order (display quirk, no misattribution)
+  note (G4): S11_STOP in the current session's chain is module_start_return=0 AFTER the failure line — the entry returned 0 and the game continues UNMODDED (later launches ride the same boot); it is NOT a stop/unload event (display-granularity quirk, no value misattribution)
+terminal/attributed stage hits:
+  [S9_START_REFUSED] E2 EXPECTED-REFUSAL — START-stage refusal (post-conversion: prepare/start threw; pad profile / mod source / sink open); verdict FAILED_E2_START, >= MINIMAL-ACCEPT where the session conversion quartet holds
+     modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad.ini must be ASCII text without control bytes
+  [S2_ACTIVATION] B7 EXPECTED-REFUSAL — MFA activation refused (Phase B; loadlist/roots drifted; the named offending file is in the detail); NOTHING downstream ran
+     modbridge module_start failed: mfa_activate_failed code=-8 detail=size file is shorter than the load list says ue4ss/PS5Pad.ini
+  [S9_START_REFUSED] E2 EXPECTED-REFUSAL — START-stage refusal (post-conversion: prepare/start threw; pad profile / mod source / sink open); verdict FAILED_E2_START, >= MINIMAL-ACCEPT where the session conversion quartet holds
+     modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad input unavailable: phase=6, error=-2137915388
+
+status: pid=355 ms=60900572 fresh=yes states=1 ladder=[ ] last=failed code=1
+status detail: PS5Pad input unavailable: phase=6, error=-2137915388
+
+notable lines (verbatim, capped):
+  [ue4ss] modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad.ini must be ASCII text without control bytes
+  [ue4ss] modbridge module_start failed: mfa_activate_failed code=-8 detail=size file is shorter than the load list says ue4ss/PS5Pad.ini
+  [ue4ss] modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad input unavailable: phase=6, error=-2137915388
+
+other new lines (raw, capped):
+  [ue4ss] PATH_TEST: /data/plugins/UE4SS.log writable at 60076100108227 monotonic-ns
+  [ue4ss] ACTIVATION_TEST: loadlist.txt readable, first 16 bytes: 6d6f64666f7267652d6c6f61646c6973
+  [ue4ss] PATH_TEST: /data/plugins/UE4SS.log writable at 60320585374436 monotonic-ns
+  [ue4ss] ACTIVATION_TEST: loadlist.txt readable, first 16 bytes: 6d6f64666f7267652d6c6f61646c6973
+  [ue4ss] PATH_TEST: /data/plugins/UE4SS.log writable at 60971455045302 monotonic-ns
+  [ue4ss] ACTIVATION_TEST: loadlist.txt readable, first 16 bytes: 6d6f64666f7267652d6c6f61646c6973
+
+VERDICT: MINIMAL_ACCEPT_E2_REFUSAL
+ORACLE-CLASS: E2 EXPECTED-REFUSAL - verdict >= MINIMAL-ACCEPT (oracle section 1 row E2 + section 2 ladder); E4 'activated' not literally on file (terminal-write O_TRUNC caveat) — evidence-equivalence per LAUNCH10-RESULTS section 2
+NEXT: Oracle E2 EXPECTED-REFUSAL (verdict >= MINIMAL-ACCEPT): prepare/start refused AFTER conversion (named new info in the detail). This session's supplier-diag proves the conversion quartet (extent events=4/4 + anchor_count=7 + intervals_found=1 next to lease_spans=6 + cfg_events=2), no D6 recurrence, no crash tail, fresh failed status. CAVEAT: E4 'activated' is NOT literally in the fetched status (terminal write O_TRUNC-replaces earlier acks of the same launch) — recorded by evidence-equivalence; belt-and-braces for the next launch: fetch runtime-status.txt immediately on any failed run (or before the terminal write lands). Status detail matches the refusal line verbatim.

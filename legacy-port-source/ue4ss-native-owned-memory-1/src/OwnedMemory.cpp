@@ -1,0 +1,132 @@
+// Separate provider: original Windows/Linux/Apple MemAccessor bodies untouched.
+#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
+#include <polyhook2/OwnedMemory.hpp>
+#include <polyhook2/MemAccessor.hpp>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <mutex>
+#include <vector>
+#include <limits>
+#include <stdexcept>
+#include <cstring>
+#include <exception>
+
+namespace PLH::OwnedMemory {
+namespace {
+struct Entry {
+    uint64_t token,base;
+    size_t bytes,page;
+    std::vector<ProtFlag> protection;
+    std::shared_ptr<const void> owner;
+};
+struct State { std::mutex mutex; std::vector<Entry> entries; uint64_t next=1; };
+auto state() -> State& { static State value; return value; }
+auto extent(uint64_t base,uint64_t bytes,uint64_t& end) noexcept -> bool {
+    if (!base || !bytes || base>std::numeric_limits<uintptr_t>::max() ||
+        bytes>std::numeric_limits<size_t>::max() || bytes>std::numeric_limits<uintptr_t>::max()-base) return false;
+    end=base+bytes;return true;
+}
+auto valid_protection(ProtFlag p) noexcept -> bool {
+    const auto bits=static_cast<unsigned>(p);
+    return p==NONE || (bits!=0 && (bits & ~static_cast<unsigned>(RWX))==0);
+}
+auto covering(State& s,uint64_t address,uint64_t bytes) noexcept -> Entry* {
+    uint64_t end;if(!extent(address,bytes,end))return nullptr;
+    for(auto& e:s.entries)if(address>=e.base && end<=e.base+e.bytes)return &e;
+    return nullptr;
+}
+auto add(Entry entry) -> uint64_t {
+    uint64_t end;if(!extent(entry.base,entry.bytes,end))throw std::invalid_argument("Owned region extent invalid");
+    auto& s=state();std::lock_guard lock(s.mutex);
+    for(const auto& other:s.entries)if(entry.base<other.base+other.bytes && other.base<end)
+        throw std::invalid_argument("Owned regions must not overlap");
+    if(!s.next)throw std::overflow_error("Owned region token exhausted");
+    entry.token=s.next; s.entries.push_back(std::move(entry));return s.next++;
+}
+auto remove(uint64_t token) noexcept -> void {
+    // Release arbitrary retained-owner destructors outside the service mutex.
+    std::shared_ptr<const void> owner;
+    try {auto& s=state();std::lock_guard lock(s.mutex);
+        for(auto it=s.entries.begin();it!=s.entries.end();++it)if(it->token==token){
+            owner=std::move(it->owner);s.entries.erase(it);return;
+        }
+    }catch(...){std::terminate();}
+}
+auto page_indices(const Entry& e,uint64_t address,uint64_t bytes,size_t& first,size_t& last) noexcept -> void {
+    first=e.page ? static_cast<size_t>((address-e.base)/e.page) : 0;
+    last=e.page ? static_cast<size_t>((address-e.base+bytes-1)/e.page) : 0;
+}
+auto permitted(const Entry& e,uint64_t address,uint64_t bytes,ProtFlag permission) noexcept -> bool {
+    size_t first,last;page_indices(e,address,bytes,first,last);
+    for(size_t i=first;i<=last;++i)if(!(e.protection[i]&permission))return false;
+    return true;
+}
+auto copy(uint64_t dest,uint64_t src,uint64_t bytes) -> bool {
+    auto& s=state();std::lock_guard lock(s.mutex);
+    auto* source=covering(s,src,bytes);auto* destination=covering(s,dest,bytes);
+    if(!source || !destination || !permitted(*source,src,bytes,R) || !permitted(*destination,dest,bytes,W))return false;
+    // No pointer is dereferenced until both explicitly owned extents pass.
+    std::memmove(reinterpret_cast<void*>(static_cast<uintptr_t>(dest)),
+                 reinterpret_cast<const void*>(static_cast<uintptr_t>(src)),static_cast<size_t>(bytes));return true;
+}
+auto protect(uint64_t address,uint64_t bytes,ProtFlag protection,bool& status) -> ProtFlag {
+    status=false;if(!valid_protection(protection))return UNSET;
+    auto& s=state();std::lock_guard lock(s.mutex);auto* e=covering(s,address,bytes);
+    if(!e || !e->page)return UNSET;
+    size_t first,last;page_indices(*e,address,bytes,first,last);const auto old=e->protection[first];
+    // A single return flag cannot faithfully represent mixed previous states.
+    for(size_t i=first;i<=last;++i)if(e->protection[i]!=old)return UNSET;
+    const int flags=(protection&R ? PROT_READ:0)|(protection&W ? PROT_WRITE:0)|(protection&X ? PROT_EXEC:0);
+    const auto begin=e->base+first*e->page;const auto length=(last-first+1)*e->page;
+    if(::mprotect(reinterpret_cast<void*>(static_cast<uintptr_t>(begin)),length,flags)!=0)return UNSET;
+    for(size_t i=first;i<=last;++i)e->protection[i]=protection;
+    status=true;return old;
+}
+}
+
+ScopedRegion::ScopedRegion(void* data,size_t size,ProtFlag protection,std::shared_ptr<const void> owner) {
+    if(!valid_protection(protection))throw std::invalid_argument("Unsupported owned region protection");
+    token_=add({0,reinterpret_cast<uintptr_t>(data),size,0,{protection},std::move(owner)});
+}
+ScopedRegion::~ScopedRegion() noexcept {remove(token_);}
+OwnedMapping::OwnedMapping(size_t bytes) {
+    const int actual=::getpagesize();
+    if(actual<=0 || actual>1048576 || (actual&(actual-1)))throw std::runtime_error("Invalid native page size");
+    const size_t page=static_cast<size_t>(actual);
+    if(!bytes || bytes>std::numeric_limits<size_t>::max()-(page-1))throw std::invalid_argument("Invalid mapping size");
+    const size_t rounded=(bytes+page-1)&~(page-1);
+    void* memory=::mmap(nullptr,rounded,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
+    if(memory==MAP_FAILED)throw std::runtime_error("Owned mmap refused");
+    auto owner=std::shared_ptr<const void>(memory,[rounded](const void* p) noexcept {
+        if(::munmap(const_cast<void*>(p),rounded)!=0)std::terminate();
+    });
+    token_=add({0,reinterpret_cast<uintptr_t>(memory),rounded,page,
+                std::vector<ProtFlag>(rounded/page,R|W),std::move(owner)});
+    data_=memory;size_=rounded;
+}
+OwnedMapping::~OwnedMapping() noexcept {remove(token_);}
+auto query(uint64_t address,uint64_t bytes) noexcept -> std::optional<RegionInfo> {
+    try {auto& s=state();std::lock_guard lock(s.mutex);auto* e=covering(s,address,bytes);if(!e)return {};
+        size_t first,last;page_indices(*e,address,bytes,first,last);const auto protection=e->protection[first];
+        for(size_t i=first;i<=last;++i)if(e->protection[i]!=protection)return {};
+        if(!e->page)return RegionInfo{e->base,e->bytes,protection,false,e->owner};
+        while(first && e->protection[first-1]==protection)--first;
+        while(last+1<e->protection.size() && e->protection[last+1]==protection)++last;
+        return RegionInfo{e->base+first*e->page,(last-first+1)*e->page,protection,true,e->owner};
+    }catch(...){return {};}
+}
+}
+
+bool PLH::MemAccessor::mem_copy(uint64_t dest,uint64_t src,uint64_t size) const {
+    return OwnedMemory::copy(dest,src,size);
+}
+bool PLH::MemAccessor::safe_mem_write(uint64_t dest,uint64_t src,uint64_t size,size_t& written) const noexcept {
+    written=0;try{if(!OwnedMemory::copy(dest,src,size))return false;written=static_cast<size_t>(size);return true;}catch(...){return false;}
+}
+bool PLH::MemAccessor::safe_mem_read(uint64_t src,uint64_t dest,uint64_t size,size_t& read) const noexcept {
+    read=0;try{if(!OwnedMemory::copy(dest,src,size))return false;read=static_cast<size_t>(size);return true;}catch(...){return false;}
+}
+PLH::ProtFlag PLH::MemAccessor::mem_protect(uint64_t dest,uint64_t size,PLH::ProtFlag newProtection,bool& status) const {
+    return OwnedMemory::protect(dest,size,newProtection,status);
+}
+#endif

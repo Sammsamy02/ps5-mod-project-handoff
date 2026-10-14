@@ -1,0 +1,44 @@
+{
+  "worker": "worker-bridge-r13-polish",
+  "date": "2026-10-04",
+  "gate": "prospero toolchain syntax gate + full -c compile of runtime_start_bridge_r13.cpp, replicating the composition-6 dry-build bridge TU argv",
+  "toolchain": "outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/bin/prospero-clang++ (wrapper resolved via LLVM-21.1.8-macOS-ARM64/bin on PATH)",
+  "overlay": {
+    "path": "outputs/2026-10-04-zcode-team/worker-bridge-r13-polish/staging/lineage-overlay-2-r13",
+    "method": "receipts/make_overlay_r13.py — replica of worker-comp6-driver build_overlay: symlinked lineage mirror + 30 staged headers from canonical current-vintage sources (DEFAULT_STAGE_HEADERS, Platform/NativeProgramContext.hpp from the port tree = the ODR default) + entry r4 and bridge r13 staged as packaging lifecycle units",
+    "manifest": "staging/overlay-manifest-r13.json",
+    "note": "the on-disk worker-comp6-driver rehearsal overlay is OLD vintage and cannot compile r12+ (fail-closed, per r12 review); the REAL driver restages current headers at run time, which this replica mirrors"
+  },
+  "steps": [
+    {
+      "step": "syntax-only",
+      "argv": "prospero-clang++ -fsyntax-only -std=c++20 -Wall -Wextra -Werror -I<ov>/generated -I<ov>/probe -I<ov>/lifecycle -I<ov> -I<UONB>/LuaRaw/include <ov>/lifecycle/runtime_start_bridge.cpp",
+      "result": "PASS (rc=0, zero diagnostics)"
+    },
+    {
+      "step": "full -c compile (exact dry-build bridge argv from worker-comp6-drybuild run-b.console.log:43)",
+      "argv": "prospero-clang++ -std=c++20 -Wall -Wextra -Werror -O1 -fPIC -fno-stack-protector -fvisibility=hidden -ffreestanding -fno-builtin -I<ov>/generated -I<ov>/probe -I<ov>/lifecycle -I<ov> -I<UONB>/LuaRaw/include -c <ov>/lifecycle/runtime_start_bridge.cpp -o build/runtime_start_bridge_r13.o",
+      "result": "PASS (rc=0)",
+      "object": "build/runtime_start_bridge_r13.o",
+      "object_sha256": "16331ebe299e514f8fa2b59e7a77673d920179c4c820eb53a652d5ee40d6c75a",
+      "format": "ELF 64-bit LSB relocatable x86-64"
+    },
+    {
+      "step": "import-set comparison vs the r12 preflight object (/tmp/r12-preflight/r12.o)",
+      "result": "IDENTICAL undefined sets: 44 == 44, zero new, zero dropped (receipts/undefined-r13.txt vs receipts/undefined-r12-ref.txt) — no import-contract regression"
+    },
+    {
+      "step": "entry coherence compile: entry r4 against the RENUMBERED runtime_start_bridge.h",
+      "argv": "prospero-clang -std=c11 -Wall -Wextra -Werror -O1 -fPIC -fno-stack-protector -fvisibility=hidden -ffreestanding -fno-builtin -I<ov>/generated -I<ov>/probe -I<ov>/lifecycle -I<ov> -c <ov>/lifecycle/runtime_module_entry.c",
+      "result": "PASS (rc=0)",
+      "object_sha256": "4567744d1fe82c7beb0ba8892fdff242fa25b0e1bfeb4c1c2e6113cd0c1c9fd5"
+    }
+  ],
+  "measured": {
+    "runtime_start_bridge_r13.cpp": "10385e2265af0a12236bc7f713ed343a7f13796644aac0de511f6663f579209a",
+    "runtime_start_bridge.h (renumbered)": "4bb024134385fd548e31fa736264ffc4014ddf12e3813137f140c4c6be88e930",
+    "runtime_start_bridge_r12.cpp (unchanged base)": "feed52544023360326c17f7015336f90c4906789b344a805cfb6debb67bdd7a9",
+    "runtime_module_entry_r4.c (unchanged)": "c97055f40f5a6dd94dd6360c4459538b8130e8b63a806a84d975d7c7604db470",
+    "host_test_r13/test_r13.cpp": "4b4c62c140625c5cf5d1a0b1cc713a3c6198a1c83dd419632e54a07e4526a378"
+  }
+}

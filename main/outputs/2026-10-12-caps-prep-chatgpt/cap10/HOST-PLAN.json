@@ -1,0 +1,101 @@
+{
+  "label": "design-only future Mono interpreter adapter; no host exists",
+  "source_receipt": "upstream/SOURCE-RECEIPT.json",
+  "required_apis": [
+    {
+      "file": "mono/metadata/assembly.h",
+      "symbol": "mono_set_dirs"
+    },
+    {
+      "file": "mono/mini/jit.h",
+      "symbol": "mono_jit_set_aot_mode"
+    },
+    {
+      "file": "mono/mini/jit.h",
+      "symbol": "mono_jit_init_version"
+    },
+    {
+      "file": "mono/metadata/threads.h",
+      "symbol": "mono_thread_attach"
+    },
+    {
+      "file": "mono/metadata/appdomain.h",
+      "symbol": "mono_domain_assembly_open"
+    },
+    {
+      "file": "mono/metadata/assembly.h",
+      "symbol": "mono_assembly_get_image"
+    },
+    {
+      "file": "mono/metadata/class.h",
+      "symbol": "mono_class_from_name"
+    },
+    {
+      "file": "mono/metadata/class.h",
+      "symbol": "mono_class_get_method_from_name"
+    },
+    {
+      "file": "mono/metadata/object.h",
+      "symbol": "mono_runtime_invoke"
+    },
+    {
+      "file": "mono/metadata/object.h",
+      "symbol": "mono_object_unbox"
+    },
+    {
+      "file": "mono/metadata/loader.h",
+      "symbol": "mono_dllmap_insert"
+    },
+    {
+      "file": "mono/utils/mono-dl-fallback.h",
+      "symbol": "mono_dl_fallback_register"
+    },
+    {
+      "file": "mono/metadata/object.h",
+      "symbol": "mono_object_get_class"
+    },
+    {
+      "file": "mono/metadata/appdomain.h",
+      "symbol": "mono_get_int32_class"
+    },
+    {
+      "file": "mono/metadata/object.h",
+      "symbol": "mono_gchandle_new"
+    },
+    {
+      "file": "mono/metadata/object.h",
+      "symbol": "mono_gchandle_get_target"
+    },
+    {
+      "file": "mono/metadata/object.h",
+      "symbol": "mono_gchandle_free"
+    }
+  ],
+  "import_allowlist": [
+    "modbridge_cap10_abi_version",
+    "modbridge_cap10_runtime_probe"
+  ],
+  "execution_mode": "MONO_AOT_MODE_INTERP: AOT-only with interpreter enabled; AOT code may be preferred; no native JIT fallback",
+  "target_ready": false,
+  "blockers": [
+    "target Mono platform/GC/thread/TLS/context/unwind port absent",
+    "matching mscorlib AOT exception trampolines and loader/relocations absent",
+    "Probe fast/generic native-call selection and int32/pointer ABI unverified",
+    "native bridge stage uncompiled/unintegrated; strict metadata/import-resolution policy absent",
+    "compiled Probe, matching corlib/dependency and reproducible target artifacts absent"
+  ],
+  "transition_audit": "transition-audit/TRANSITION-REQUIREMENTS.json",
+  "native_bridge_source_stage": {
+    "path": "bridge-stage/stage_bridge.py",
+    "source_only": true,
+    "runtime_integrated": false,
+    "managed_host_exists": false,
+    "admission": "Synchronous genuine on_engine_initialized callback thread only; real readiness/shutdown checked; native module lifetime retained by host",
+    "status_codes": {
+      "0": "success echo",
+      "-3": "not admitted/shutdown/not started",
+      "-4": "null reply (other addresses caller-valid)",
+      "-5": "unexpected native C++ exception"
+    }
+  }
+}

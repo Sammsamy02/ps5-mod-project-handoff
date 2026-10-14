@@ -1,0 +1,454 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch11-combined/units/UnrealInitializer.cpp	2026-10-05 23:58:31
++++ patched/UnrealInitializer.cpp	2026-10-06 14:54:31
+@@ -67,6 +67,16 @@
+ #include "SeedValidation.hpp"
+ #include <string>
+ #include <vector>
++// [kernel services r15] (worker-ue4ss-kernel, 2026-10-06): kekcall nr=7/8
++// client facade over the rebuilt kstuff module (ABI: worker-kernel-saferead
++// safe_read_client.h; ENOSYS=-78 = old resident module -> the facade latches
++// and every helper below becomes a no-op, keeping the pre-rebuild behavior
++// byte-for-byte). Same-dir quoted include, ships with the unit's
++// --replace-receipt file set like SeedTable.h/SeedValidation.hpp.
++#include "KekcallServices.hpp"
++#ifdef __PROSPERO__
++#include "KekcallConsoleShim.hpp"
++#endif
+ #endif
+ 
+ namespace RC::Unreal::UnrealInitializer
+@@ -710,7 +720,156 @@
+         // read consumes capture bytes — a capture miss REFUSES LOUDLY and
+         // never falls back to a direct block read.
+         extern "C" int bridge_write_copyin_capture(uint64_t addr, const uint8_t** out_bytes, uint32_t* out_len);
++
++        // ---- [kernel services r15] (worker-ue4ss-kernel, 2026-10-06) --------
++        // ---- kekcall nr=7 safe_read / nr=8 safe_probe integration.         --
++        // ---- Fallback law (assignment item 4): when the resident kstuff    --
++        // ---- module is OLD, the service answers ENOSYS (-78) and the facade --
++        // ---- latches it; every helper below then no-ops and the legacy     --
++        // ---- copyin/span/direct-read path runs byte-for-byte. No raw       --
++        // ---- syscall instruction exists here: the kekcall channel rides    --
++        // ---- SYS_getppid through the syscall gadget (safe_read_client.h    --
++        // ---- section 6), a different class from the FATAL mincore raw      --
++        // ---- syscall (0xa002030a, edits 13b/14). The first in-game kekcall --
++        // ---- is its own smoke evidence; the ksrv_* tags below make the     --
++        // ---- route observable per boot.
++        static void kekcall_console_init_once()
++        {
++#ifdef __PROSPERO__
++            static bool inited = false;
++            if (!inited)
++            {
++                ksrv::init(kekcall_console::vtable());
++                inited = true;
++            }
++#endif
++        }
++        static bool kernel_services_ready()
++        {
++            kekcall_console_init_once();
++            return ksrv::maybe_available();
++        }
++
++        // safe_probe before a seeded-address read (assignment item 2b).
++        // Returns kGuardProceed when the read may proceed under the legacy
++        // discipline (kernel service absent, BADARGS over-length, or any
++        // non-verdict code); returns the live KSR_PROBE_* verdict otherwise.
++        // Callers refuse terminally on NOREAD/UNMAPPED/FAULT — a live
++        // page-table refusal of a seed address is fresh terminal evidence,
++        // the same refusal class as the static classify_seed_address gate.
++        static constexpr int32_t kGuardProceed = 127;
++        static int32_t probe_seed_read(uint64_t addr, uint64_t len)
++        {
++            if (!kernel_services_ready()) { return kGuardProceed; }
++            // Chunk to the probe service's 64 KiB per-call budget: guarded
++            // windows can exceed it (the pool struct window is 0x14040
++            // bytes). A single BADARGS over a long window must never
++            // silently degrade the guard to proceed.
++            const uint64_t kChunk = ksrv::KSR_MAX_LEN;
++            uint64_t done = 0;
++            while (done < len)
++            {
++                const uint64_t seg = (len - done) < kChunk ? (len - done) : kChunk;
++                const int32_t verdict = ksrv::safe_probe(addr + done, seg);
++                switch (verdict)
++                {
++                case ksrv::KSR_PROBE_READABLE:
++                    break; // next segment
++                case ksrv::KSR_PROBE_NOREAD:
++                case ksrv::KSR_PROBE_UNMAPPED:
++                case ksrv::KSR_PROBE_FAULT:
++                    return verdict;
++                default:
++                    return kGuardProceed; // ENOSYS/NOCHANNEL latched or BADARGS: legacy path
++                }
++                done += seg;
++            }
++            return ksrv::KSR_PROBE_READABLE;
++        }
++
++        // Kernel-read capture store — the same 3-slot first-page law as the
++        // bridge's g_write_copyin_capture (R-4: on a kernel-safe-read-admitted
++        // boot, downstream pool bytes consume CAPTURED bytes; a capture miss
++        // or an entry beyond the captured first page refuses loudly, never a
++        // fallback to a direct block read).
++        static uint8_t kernel_capture[3][0x1000];
++        static uint64_t kernel_capture_addr[3];
++        static uint32_t kernel_capture_len[3];
++        static bool kernel_capture_valid[3];
++        static uint32_t kernel_capture_next = 0;
++        static void kernel_capture_register(uint64_t addr, const uint8_t* bytes, uint32_t len)
++        {
++            if (len > 0x1000) { len = 0x1000; }
++            const uint32_t slot = kernel_capture_next;
++            for (uint32_t i = 0; i < len; ++i) { kernel_capture[slot][i] = bytes[i]; }
++            kernel_capture_addr[slot] = addr;
++            kernel_capture_len[slot] = len;
++            kernel_capture_valid[slot] = true;
++            kernel_capture_next = (kernel_capture_next + 1u) % 3u;
++        }
++        static int kernel_capture_lookup(uint64_t addr, const uint8_t** out_bytes, uint32_t* out_len)
++        {
++            if (out_bytes == nullptr || out_len == nullptr) { return 0; }
++            for (uint32_t i = 0; i < 3; ++i)
++            {
++                if (kernel_capture_valid[i] && kernel_capture_addr[i] == addr)
++                {
++                    *out_bytes = kernel_capture[i];
++                    *out_len = kernel_capture_len[i];
++                    return 1;
++                }
++            }
++            return 0;
++        }
+ 
++        // The kernel-first listing-gap oracle (assignment item 2a): one
++        // chunked safe_read of the FULL required read range replaces the
++        // sink-file copyin round-trip when nr=7 is resident. The full range
++        // is read (all-or-nothing evidence, the copyin probe's
++        // write-return-accounting law); the FIRST PAGE lands in the capture
++        // store for the sink-fed anchor/entry validation.
++        struct KernelGapResult { ksrv::GapClass cls; int64_t rc; };
++        static KernelGapResult kernel_gap_probe(uint64_t addr, uint64_t len)
++        {
++            KernelGapResult r{ksrv::GapClass::Absent, 0};
++            if (!kernel_services_ready()) { return r; }
++            std::vector<uint8_t> bytes(static_cast<size_t>(len));
++            r.rc = ksrv::safe_read(addr, bytes.data(), len);
++            r.cls = ksrv::gap_class_from_read_rc(r.rc);
++            if (r.cls == ksrv::GapClass::Readable)
++            {
++                kernel_capture_register(addr, bytes.data(), static_cast<uint32_t>(len < 0x1000 ? len : 0x1000));
++            }
++            return r;
++        }
++        // Provenance-carrying resolution for the kernel route (same struct
++        // the pure resolver returns; conservative law preserved: Refused is
++        // never read as "unmapped").
++        static rc_seed::ListingGapResolution kernel_listing_gap_resolution(const KernelGapResult& kr)
++        {
++            if (kr.cls == ksrv::GapClass::Readable)
++            {
++                return {true, "kernel-safe-read",
++                        "kernel safe-read (kekcall nr=7) transferred the full required read range with every page "
++                        "validated in the caller's page tables before being read: authorization AND execution in one "
++                        "event; all downstream pool reads on this boot consume the kernel capture"};
++            }
++            if (kr.cls == ksrv::GapClass::Refused)
++            {
++                return {false, nullptr,
++                        "kernel safe-read REFUSED over the required read range (KSR_ERR_PROT/UNMAPPED/RANGE page-table "
++                        "verdict). Treated exactly like the copyin Refused class: the kernel refuses this source. "
++                        "This is NOT an unmapped proof. Refusing; no read happened"};
++            }
++            if (kr.cls == ksrv::GapClass::Unavailable)
++            {
++                return {false, nullptr,
++                        "kernel safe-read unavailable (KSR_ERR_STRUCT/NOENT/LEN oracle failure); nothing is proven "
++                        "about the range — listing gap unresolved, refuse honestly"};
++            }
++            return {false, nullptr, "kernel service absent"};
++        }
++
+         // Set only after the ctor was seed-bound AND behaviorally verified.
+         // While true, the detour-based VerifyFNameConstructor pass must not arm
+         // (FLAG-1 class: detour = code READ+WRITE, unproven on exec-only text;
+@@ -828,11 +987,23 @@
+         {
+             const auto location = rc_seed::entry_location(id);
+             const auto* pool = reinterpret_cast<const volatile uint8_t*>(pool_runtime);
++            // [kernel services r15] live page-table probes before the two
++            // direct reads on the span-admitted path (assignment item 2b):
++            // the Blocks[] pointer slot, then the entry bytes themselves.
++            const uint64_t slot_addr = pool_runtime + rc_seed::kPoolLayout.blocks_offset + location.block_index * 8;
++            if (const int32_t probe = probe_seed_read(slot_addr, 8); probe != kGuardProceed && probe != ksrv::KSR_PROBE_READABLE)
++            {
++                seed_refused(fmt::format("pool entry id 0x{:X}: Blocks[{}] slot 0x{:X}: kernel safe_probe verdict {}", id, location.block_index, slot_addr, probe));
++            }
+             const uint64_t block_ptr = read_u64(pool, rc_seed::kPoolLayout.blocks_offset + location.block_index * 8);
+             if (block_ptr == 0)
+             {
+                 seed_refused(fmt::format("pool entry id 0x{:X}: Blocks[{}] is null", id, location.block_index));
+             }
++            if (const int32_t probe = probe_seed_read(block_ptr + location.byte_offset, needed); probe != kGuardProceed && probe != ksrv::KSR_PROBE_READABLE)
++            {
++                seed_refused(fmt::format("pool entry id 0x{:X}: entry 0x{:X}: kernel safe_probe verdict {}", id, block_ptr + location.byte_offset, probe));
++            }
+             std::vector<uint8_t> bytes(needed, 0);
+             const auto* entry = reinterpret_cast<const volatile uint8_t*>(block_ptr + location.byte_offset);
+             for (size_t i = 0; i < needed; ++i)
+@@ -873,6 +1044,14 @@
+             {
+                 seed_refused(fmt::format("slot 0 g_uobject_array 0x{:X}: seed class {} (expected data-readable); refusing reads", gua_runtime, rc_seed::seed_class_name(cls)));
+             }
++            // [kernel services r15] live page-table probe before the seeded
++            // read (assignment 2b): the static classify check is phdr
++            // knowledge; this is the fresh per-boot verdict. No-ops to
++            // kGuardProceed on a pre-rebuild (ENOSYS) boot.
++            if (const int32_t probe = probe_seed_read(gua_runtime, 8); probe != kGuardProceed && probe != ksrv::KSR_PROBE_READABLE)
++            {
++                seed_refused(fmt::format("slot 0 g_uobject_array 0x{:X}: kernel safe_probe verdict {} (live page-table refusal); refusing bind", gua_runtime, probe));
++            }
+             if (const auto probe = rc_seed::check_pointer_probe(gua_runtime); !probe.ok)
+             {
+                 seed_refused(fmt::format("slot 0 g_uobject_array: {}", probe.failure));
+@@ -893,6 +1072,11 @@
+             {
+                 seed_refused(fmt::format("slot 3 gmalloc 0x{:X}: seed class {} (expected data-readable); refusing reads", gmalloc_runtime, rc_seed::seed_class_name(cls)));
+             }
++            // [kernel services r15] live page-table probe before [GMalloc].
++            if (const int32_t probe = probe_seed_read(gmalloc_runtime, 8); probe != kGuardProceed && probe != ksrv::KSR_PROBE_READABLE)
++            {
++                seed_refused(fmt::format("slot 3 gmalloc 0x{:X}: kernel safe_probe verdict {} (live page-table refusal); refusing reads", gmalloc_runtime, probe));
++            }
+             if (const auto probe = rc_seed::check_pointer_probe(gmalloc_runtime); !probe.ok)
+             {
+                 seed_refused(fmt::format("slot 3 gmalloc: {}", probe.failure));
+@@ -905,6 +1089,12 @@
+             {
+                 seed_refused(fmt::format("slot 3 gmalloc: [0x{:X}] is not a live aligned FMalloc*: {}", gmalloc_runtime, probe.failure));
+             }
++            // [kernel services r15] the vptr read dereferences the loaded
++            // instance pointer — probe that TARGET too before reading it.
++            if (const int32_t probe = probe_seed_read(malloc_ptr, 8); probe != kGuardProceed && probe != ksrv::KSR_PROBE_READABLE)
++            {
++                seed_refused(fmt::format("slot 3 gmalloc: instance 0x{:X}: kernel safe_probe verdict {} (live page-table refusal); refusing the vptr read", malloc_ptr, probe));
++            }
+             // GMalloc validators V1/V2 (worker-gmalloc-derivation
+             // GMALLOC-CANDIDATES.json rank-1 arming rule: the seed arms only
+             // if V1 AND V2 pass; any failure refuses the whole table —
+@@ -998,6 +1188,19 @@
+             {
+                 uint64_t env = 0;
+                 if (bridge_capture_envelope(&env) && env > capture_envelope) { capture_envelope = env; }
++            }
++            // [kernel services r15] live probe of the pool STRUCT extent
++            // (the fixed kPoolLayout word window every read_pool_words pass
++            // touches). Re-probed EVERY retry iteration below — the fresh
++            // per-read verdict is the point of nr=8 (the published-span
++            // snapshot is a boot-time constant and cannot see remaps).
++            {
++                const uint64_t lo = pool_runtime + rc_seed::kPoolLayout.current_block_offset;
++                const uint64_t hi = pool_runtime + rc_seed::kPoolLayout.byte_property_id_offset + 4;
++                if (const int32_t probe = probe_seed_read(lo, hi - lo); probe != kGuardProceed && probe != ksrv::KSR_PROBE_READABLE)
++                {
++                    seed_refused(fmt::format("FName pool at 0x{:X}: kernel safe_probe verdict {} on the pool struct window (live page-table refusal)", pool_runtime, probe));
++                }
+             }
+             PoolWords words{};
+             // v5.2 (worker-copyin-unit): set at loop exit when the admission
+@@ -1006,6 +1209,10 @@
+             // SINK-FED bytes (R-4) and the provenance line in the success
+             // message.
+             bool pool_admitted_via_copyin = false;
++            // [kernel services r15] loop-exit provenance twin (read by the
++            // success-message branch below): admission carried by the kernel
++            // safe-read oracle rather than the copyin probe.
++            bool pool_admitted_via_kernel = false;
+             const auto pool_wait_start = std::chrono::steady_clock::now();
+             for (;;)
+             {
+@@ -1049,6 +1256,10 @@
+                     gap_admitted_blocks0 = 0;
+                     gap_note_cached = "cached admission invalidated: blocks0 changed since probe";
+                 }
++                if (pool_admitted_via_kernel && words.blocks0 != gap_admitted_blocks0)
++                {
++                    pool_admitted_via_kernel = false; // [kernel services r15] same invalidation law
++                }
+                 // Audit fix 2: only RESCUABLE coverage classes may consume the
+                 // one probe attempt. Structural failures (null blocks0,
+                 // misaligned, None-entry-invariant) must NEVER spend it —
+@@ -1061,31 +1272,73 @@
+                 {
+                     if (!gap_probed_this_boot && shape_is_rescuable)
+                     {
+-                        // Session 1084 fix: Control D (io_ctrl_d at module_start)
+-                        // already probed and captured the pool bytes. Check the
+-                        // capture FIRST — only re-probe if no capture exists.
+-                        // (The re-probe after Control D's sink consumption
+-                        // returned 0x7ffdfffe; using the capture avoids that.)
++                        // [kernel services r15] KERNEL-FIRST oracle order
++                        // (assignment item 2a), preserving the once-per-boot
++                        // fresh-evidence law (gap_probed_this_boot covers the
++                        // kernel attempt AND the copyin attempt together):
++                        //   1. a KERNEL CAPTURE from an earlier this-boot
++                        //      kernel read (Control D r15 / an earlier entry
++                        //      block read),
++                        //   2. the session-1084 bridge sink capture (Control
++                        //      D v5.3) — order between the two captures is
++                        //      immaterial, both are this-boot owned reads,
++                        //   3. a FRESH kernel safe_read of the full block
++                        //      capacity (page-table-validated, no sink file),
++                        //   4. the legacy write-copyin probe — byte-for-byte
++                        //      the v5.2/v5.3 path, now reached only on a
++                        //      pre-rebuild (ENOSYS) boot or after an oracle
++                        //      failure, exactly the fallback law.
++                        bool resolved_by_capture = false;
+                         const uint8_t* cap = nullptr; uint32_t cap_len = 0;
+-                        if (bridge_write_copyin_capture(words.blocks0, &cap, &cap_len) == 1 && cap != nullptr)
++                        if (kernel_capture_lookup(words.blocks0, &cap, &cap_len) == 1 && cap != nullptr)
+                         {
+                             const auto resolution = rc_seed::resolve_listing_gap(
+                                 shape, rc_seed::CopyinProbeClass::Readable);
+                             gap_probed_this_boot = true;
+                             gap_note_cached = resolution.note;
+                             gap_admitted_via_copyin = resolution.ok;
++                            pool_admitted_via_kernel = resolution.ok; // capture came from a kernel read
+                             gap_admitted_blocks0 = words.blocks0;
++                            resolved_by_capture = true;
+                         }
+-                        else
++                        else if (bridge_write_copyin_capture(words.blocks0, &cap, &cap_len) == 1 && cap != nullptr)
+                         {
+-                            const auto copyin_class = static_cast<rc_seed::CopyinProbeClass>(
+-                                bridge_kernel_write_copyin_probe(words.blocks0, rc_seed::kFNameBlockCapacityBytes));
+-                            const auto resolution = rc_seed::resolve_listing_gap(shape, copyin_class);
++                            // Session 1084 fix: Control D (io_ctrl_d at module_start)
++                            // already probed and captured the pool bytes. Check the
++                            // capture FIRST — only re-probe if no capture exists.
++                            // (The re-probe after Control D's sink consumption
++                            // returned 0x7ffdfffe; using the capture avoids that.)
++                            const auto resolution = rc_seed::resolve_listing_gap(
++                                shape, rc_seed::CopyinProbeClass::Readable);
+                             gap_probed_this_boot = true;
+                             gap_note_cached = resolution.note;
+                             gap_admitted_via_copyin = resolution.ok;
+                             gap_admitted_blocks0 = words.blocks0;
++                            resolved_by_capture = true;
+                         }
++                        if (!resolved_by_capture)
++                        {
++                            const auto kr = kernel_gap_probe(words.blocks0, rc_seed::kFNameBlockCapacityBytes);
++                            if (kr.cls != ksrv::GapClass::Absent)
++                            {
++                                const auto resolution = kernel_listing_gap_resolution(kr);
++                                gap_probed_this_boot = true;
++                                gap_note_cached = resolution.note;
++                                gap_admitted_via_copyin = resolution.ok;
++                                pool_admitted_via_kernel = resolution.ok;
++                                gap_admitted_blocks0 = words.blocks0;
++                            }
++                            else
++                            {
++                                const auto copyin_class = static_cast<rc_seed::CopyinProbeClass>(
++                                    bridge_kernel_write_copyin_probe(words.blocks0, rc_seed::kFNameBlockCapacityBytes));
++                                const auto resolution = rc_seed::resolve_listing_gap(shape, copyin_class);
++                                gap_probed_this_boot = true;
++                                gap_note_cached = resolution.note;
++                                gap_admitted_via_copyin = resolution.ok;
++                                gap_admitted_blocks0 = words.blocks0;
++                            }
++                        }
+                     }
+                     else if (!gap_probed_this_boot && !shape_is_rescuable)
+                     {
+@@ -1097,6 +1350,7 @@
+                 if (pool_admitted && words.byte_property_id != 0) // audit fix 1: NoneId==0 is the legitimate UE5 default; ByteProperty id is the readiness signal
+                 {
+                     pool_admitted_via_copyin = !shape.ok; // shape ok ⇒ span membership carried it
++                    if (shape.ok) { pool_admitted_via_kernel = false; } // [kernel services r15] span membership carried it
+                     break;
+                 }
+                 if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - pool_wait_start).count() > validation_budget.count())
+@@ -1133,20 +1387,32 @@
+                 rc_seed::Check anchor{false, "anchor bytes unavailable"};
+                 if (pool_admitted_via_copyin)
+                 {
++                    // [kernel services r15] kernel capture first (the boot was
++                    // admitted through the kernel oracle), bridge sink capture
++                    // second: both satisfy the R-4 bytes-fed law; a miss of
++                    // BOTH refuses loudly, never a direct block read.
+                     const uint8_t* capture = nullptr;
+                     uint32_t capture_len = 0;
+-                    if (bridge_write_copyin_capture(words.blocks0, &capture, &capture_len) == 1 &&
++                    if ((kernel_capture_lookup(words.blocks0, &capture, &capture_len) == 1 ||
++                         bridge_write_copyin_capture(words.blocks0, &capture, &capture_len) == 1) &&
+                         capture != nullptr && capture_len >= 2 + rc_seed::kNoneString.size())
+                     {
+                         anchor = rc_seed::check_none_anchor(capture, capture_len);
+                     }
+                     else
+                     {
+-                        anchor = rc_seed::Check{false, "copyin sink capture unavailable or short for the 'None' anchor"};
++                        anchor = rc_seed::Check{false, "kernel/copyin capture unavailable or short for the 'None' anchor"};
+                     }
+                 }
+                 else
+                 {
++                    // [kernel services r15] live probe before the direct
++                    // anchor read on the span-admitted path (fresh evidence
++                    // of the same class as the published-span membership).
++                    if (const int32_t probe = probe_seed_read(words.blocks0, 2 + rc_seed::kNoneString.size()); probe != kGuardProceed && probe != ksrv::KSR_PROBE_READABLE)
++                    {
++                        seed_refused(fmt::format("FName pool at 0x{:X}: Blocks[0] 0x{:X}: kernel safe_probe verdict {} before the 'None' anchor read", pool_runtime, words.blocks0, probe));
++                    }
+                     const auto anchor_bytes = read_bytes_at(words.blocks0, 2 + rc_seed::kNoneString.size());
+                     anchor = rc_seed::check_none_anchor(anchor_bytes.data(), anchor_bytes.size());
+                 }
+@@ -1188,18 +1454,25 @@
+                         {
+                             return false; // bounded: >2 distinct entry blocks cannot be sink-fed
+                         }
+-                        if (bridge_kernel_write_copyin_probe(block_addr, rc_seed::kFNameBlockCapacityBytes) != 1)
++                        // [kernel services r15] kernel safe_read oracle first
++                        // (fills the kernel capture); the copyin probe is the
++                        // ENOSYS-or-oracle-failure fallback. Either oracle
++                        // succeeding satisfies the bounded once-per-block law.
++                        const auto kr = kernel_gap_probe(block_addr, rc_seed::kFNameBlockCapacityBytes);
++                        if (kr.cls != ksrv::GapClass::Readable &&
++                            bridge_kernel_write_copyin_probe(block_addr, rc_seed::kFNameBlockCapacityBytes) != 1)
+                         {
+-                            return false; // entry block not readable by the sole oracle: refuse
++                            return false; // entry block not readable by either oracle: refuse
+                         }
+                         probed_entry_block[slot] = block_addr;
+                     }
+                 }
+                 const uint8_t* capture = nullptr;
+                 uint32_t capture_len = 0;
+-                if (bridge_write_copyin_capture(block_addr, &capture, &capture_len) != 1 || capture == nullptr)
++                if (kernel_capture_lookup(block_addr, &capture, &capture_len) != 1 &&
++                    (bridge_write_copyin_capture(block_addr, &capture, &capture_len) != 1 || capture == nullptr))
+                 {
+-                    return false;
++                    return false; // [kernel services r15] kernel capture first, bridge sink second
+                 }
+                 if (entry_offset + needed > capture_len)
+                 {
+@@ -1252,7 +1525,13 @@
+             // listing-gap admission). Controller compile fix: split into
+             // two sends with all-wide args (the ternary produced a narrow
+             // std::string inside the WIDE Output::send).
+-            if (pool_admitted_via_copyin)
++            if (pool_admitted_via_copyin && pool_admitted_via_kernel)
++            {
++                Output::send(STR("[Seeds] FName pool validated at {} (CurrentBlock {}, Blocks[0] 0x{:X}; admitted via kernel-safe-read (kekcall nr=7 listing-gap oracle; all entry bytes capture-fed); 'None' anchor ok; 'None' id 0x{:X}, 'ByteProperty' id 0x{:X})\n"),
++                             reinterpret_cast<void*>(pool_runtime), words.current_block, words.blocks0,
++                             words.none_id, words.byte_property_id);
++            }
++            else if (pool_admitted_via_copyin)
+             {
+                 Output::send(STR("[Seeds] FName pool validated at {} (CurrentBlock {}, Blocks[0] 0x{:X}; admitted via kernel-write-copyin-read (listing-gap owned-read probe; all entry bytes sink-fed); 'None' anchor ok; 'None' id 0x{:X}, 'ByteProperty' id 0x{:X})\n"),
+                              reinterpret_cast<void*>(pool_runtime), words.current_block, words.blocks0,

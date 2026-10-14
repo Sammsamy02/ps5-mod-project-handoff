@@ -1,0 +1,31 @@
+--- a/main.c
++++ b/main.c
+@@ -111,6 +111,7 @@
+ 	int  modes[MAX_PLUGINS];
+ 	int  path_count;
+ 	int injected;
++	int dead[MAX_PLUGINS]; // per-invocation permanent failure (e.g. missing file)
+ } plugin_entry_t;
+ 
+ ////////// IMPORTS //////////
+@@ -776,6 +777,20 @@
+ 			for (int p = 0; p < entry->path_count; p++) {
+ 				const char* path = entry->paths[p];
+ 				int         mode = entry->modes[p];
++
++				if (entry->dead[p])
++					continue;
++
++				// missing files already fail access() instantly inside inject_prx;
++				// skip them BEFORE the expensive readiness wait + attach and never
++				// re-attempt the path within this invocation.
++				if (access(path, R_OK) != 0) {
++					notify("[%s] Missing file, skipping: %s", entry->title_id, get_filename(path));
++					entry->dead[p] = 1;
++					all_ok = 0;
++					continue;
++				}
++
+ 				int         max_ms = (mode == 2) ? 25000 : 18000;
+ 
+ 				char needs[MAX_DEPS][MAX_DEP_NAME_LEN];

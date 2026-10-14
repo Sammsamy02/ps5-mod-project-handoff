@@ -1,0 +1,42 @@
+--- outputs/2026-10-04-zcode-team/worker-comp6-driver/staging/comp6-program/UE4SSProgram.cpp	2026-10-04 21:40:57
++++ outputs/2026-10-04-zcode-team/worker-pad-defer/staging/program-wpd1/UE4SSProgram.cpp	2026-10-05 12:34:59
+@@ -725,6 +725,11 @@
+     }
+ 
+ #ifdef __PROSPERO__
++    // worker-pad-defer-1: shared composition diagnostic sink (diagnostic.c,
++    // in-link C symbol). Namespace-scope extern "C" declaration only; no new
++    // import, no new header dependency.
++    extern "C" void diagnostic_event(const char* tag, unsigned int value);
++
+     auto UE4SSProgram::validate_native_services() -> void
+     {
+         if (settings_manager.CrashDump.EnableDumping)
+@@ -745,9 +750,25 @@
+                 !m_input_handler.set_input_source(to_string(settings_manager.General.InputSource)))
+                 throw std::runtime_error("Native configured InputSource does not match the supplied provider");
+         }
+-        if (!m_input_handler.is_input_available() &&
+-            (settings_manager.General.EnableDebugKeyBindings || !settings_manager.General.InputSource.empty()))
++        // worker-pad-defer-1 (launch-10 pad-defer floor). On this target the
++        // composition defers (never aborts) when the pad is unavailable
++        // (NativePadInput.cpp pad_input_deferred), and General.InputSource is
++        // not parsed from any ini on __PROSPERO__ (SettingsManager never reads
++        // it), so its non-empty "Default" is a CONSTANT here, not a request:
++        // the gate below fired on every input-less boot and re-aborted startup
++        // after the pad-config deferral. Unavailable controller input must
++        // never abort native startup, so the InputSource clause is downgraded
++        // to a diagnostic on the shared supplier-diag channel (symbol defined
++        // in-link by diagnostic.c; declaration only, no new import). The
++        // explicit binding request (EnableDebugKeyBindings, default false,
++        // unset in the shipped ini) keeps its fatal refusal, and every other
++        // service gate above is unchanged.
++        if (!m_input_handler.is_input_available() && settings_manager.General.EnableDebugKeyBindings)
+             throw std::runtime_error("Native input service is unavailable; disable bindings and clear InputSource");
++        if (!m_input_handler.is_input_available())
++        {
++            diagnostic_event("pad_input_deferred_input_gate", 1u);
++        }
+ #else
+         if (m_native_context.input_source || settings_manager.General.EnableDebugKeyBindings || !settings_manager.General.InputSource.empty())
+             throw std::runtime_error("Native input support was not compiled");

@@ -1,0 +1,10 @@
+# B7 raw Lua callback baseline (check C): callbacks handed straight to Lua that allocate (std::string etc.) and have no TRY/try.
+# Not a regression from B7: today (Lua as C) a std::bad_alloc escaping them flies through Lua's C frames; in B7 it is caught by
+# Lua's catch(...) (status -1, unbalanced lock, abort at the next unlock). Both are crashes under memory exhaustion only.
+# Format: callback|file ## reason. Removing an entry = the callback now wraps its body in TRY(L, ...).
+pcall_error_handler|CAND/src/LuaMadeSimple/LuaMadeSimple.cpp ## message handler: std::string x2 + notify_error_callbacks; bad_alloc only; runs inside luaG_errormsg
+memfile_write|CAND/src/LuaPathShim.cpp ## shim memory file: std::string append; bad_alloc only (cap enforced before growth)
+io_open_wrapper|CAND/src/LuaPathShim.cpp ## shim: path strings; bad_alloc only; file states "never call lua_error"
+io_lines_wrapper|CAND/src/LuaPathShim.cpp ## shim: path strings; bad_alloc only
+os_remove_wrapper|CAND/src/LuaPathShim.cpp ## shim: path strings; bad_alloc only
+os_rename_wrapper|CAND/src/LuaPathShim.cpp ## shim: path strings; bad_alloc only

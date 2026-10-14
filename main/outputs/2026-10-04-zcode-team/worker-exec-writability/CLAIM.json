@@ -1,0 +1,63 @@
+{
+  "worker": "worker-exec-writability",
+  "date": "2026-10-04",
+  "task": "Exhaustive evidence synthesis on in-game mprotect of the exec-only span [0x400000,0x787c000) prot=0x4, plus THE definitive in-game probe design and the post-probe decision tree for the PLH hook architecture.",
+  "scope": {
+    "allowed": "read-only mining of retained checkpoint entries, console record copies, worker dirs, pinned SDK headers, and composed-runtime sources under the workspace root; design authoring under outputs/2026-10-04-zcode-team/worker-exec-writability/",
+    "forbidden": "console contact, nested subagents, execution of any probe, modification of any frozen or wiring file, replay of failed/reserved jobs"
+  },
+  "claims": [
+    {
+      "id": "EW-1",
+      "claim": "NO mprotect transition on the exec-only span has EVER been proven in-game. No rc, no errno, no restore behavior is recorded anywhere in the retained evidence. X->RX, X->R, X->RWX and restore are ALL UNKNOWN.",
+      "evidence": "igf5 (raw syscall-74 shim) is the only mprotect attempt ever staged; its recovered raw records end at seq3 (mapscan) with NO seq4 record of any kind (neither anchor result nor refusal); see EXEC-WRITABILITY-EVIDENCE.md section 2."
+    },
+    {
+      "id": "EW-2",
+      "claim": "The only in-game mprotect attempt (igf5-4186048a6dd6) is crash-correlated with CONSOLE+GAME loss, while the no-syscall probe (igf6-ad9bda1fc50a, 2 launches) died module-contained at its first exec-span read. The igf5 kernel-fault attribution is the LEADING hypothesis, never confirmed (user 20:49:22Z and checkpoint accurate_recording 21:17:12Z).",
+      "evidence": "transport-ledger.composition6-mirror.json zcode_igf5_diagnosis + zcode_igf6_RESULTS.accurate_recording; worker-console-safety/CONSOLE-SAFETY-PROCEDURE.md Appendix B."
+    },
+    {
+      "id": "EW-3",
+      "claim": "A 'zero records' igf5 narrative in checkpoint-derived reports is stale: the raw cumulative console log retains 3 igf5 records (entry/startup/mapscan), recovered after the console crash. igf6 likewise ran TWICE (mapscan totals 10047 and 10063). The precise fact is: both builds wrote exactly seq1-3 and died at/before their first exec-page-touching operation.",
+      "evidence": "outputs/2026-10-04-zcode-controller/console/igf6-results.jsonl and c2-alternative-results.jsonl raw lines (build_id igf5-4186048a6dd6 x3, igf6-ad9bda1fc50a x6 = two launches)."
+    },
+    {
+      "id": "EW-4",
+      "claim": "mprotect is UNAVAILABLE as an import: absent from the frozen 191-strong contract; no sceKernelMprotect declaration in pinned SDK v0.43; zero mprotect strings in observed libkernel exports; no mprotect NID in any SDK NID table; libc.a's mprotect() resolves its weak kernel_mprotect dependency to 0 in the composed PRX toolchain (Packager static resolution), so calling libc mprotect() in-game would jump to address 0. Only the raw syscall-74 inline shim exists as a mechanism.",
+      "evidence": "worker-import-audit-weakify/AUDIT-RESULTS.md section 2.4; worker-code-anchor-reads/REPORT.md section 3; .superpowers/.../ue4ss-original-libkernel-exports-1/strict-metadata.json (0 mprotect matches); SDK sys/syscall.h:82 (SYS_mprotect=74), sys/mman.h:52-55,263; nm libc.a (mprotect T, kernel_mprotect w)."
+    },
+    {
+      "id": "EW-5",
+      "claim": "The PolyHook platform port has NO Prospero implementation for the exact operations x64Detour::hook() needs: MemProtector.cpp translate/restore-protection, MemAccessor.cpp old-protection lookup, Misc.cpp near-address executable allocator are intentionally undefined (missing verified contracts). PLH hooking on this target is doubly unproven: the mprotect mechanism AND the port plumbing.",
+      "evidence": "ue4ss-polyhook-platform-port-1/report.md:20-22; polyhook sources/MemProtector.cpp (Windows/Linux/Apple branches only); x64Detour.cpp:322-408 (disassemble 100 bytes, MemoryProtector RWX at :398, writeEncoding, nop fill)."
+    },
+    {
+      "id": "EW-6",
+      "claim": "Kernel-side EACCES/EPERM expectations for PS5 BSD mprotect on exec-only pages: NO direct evidence exists in our records (mprotect never returned in-game). FreeBSD-13-style semantics (max_protection clamp, EACCES) are GENERAL BACKGROUND, marked speculation. The one hardware datapoint is igf6's module-contained death at its first direct exec-span read (leading hypothesis: exec-only is enforced, contradicting the build-time NX-gates-exec-only assumption); user amendment says the mechanism is NOT localized.",
+      "evidence": "zcode_igf6_RESULTS + accurate_recording; RISK-REGISTER-V2.md R-EXEC-01; no other mprotect rc source exists in the tree."
+    },
+    {
+      "id": "EW-7",
+      "claim": "The probe design (IGW-1) is PROPOSAL-ONLY: return-session, one module, no new imports (single inline syscall-74 helper), write-through per-attempt records persisted BEFORE each transition, incremental ladder X->RX read-test first (far page, no hook target), then X->RWX write-test on one far page past the file-image extent, restore + verify after every successful transition, distinct log path (single-writer discipline), riding the comp6 launch session as a mode-2 ploader.ini entry appended after the composition line.",
+      "evidence": "EXEC-WRITABILITY-PROBE-DESIGN.md (this directory); constraints derived from igf lessons (console-safety Appendix B, STAGE-PLAN-IGF6 section 6 matrix) and ridealongs law (worker-game-session-ridealongs/REPORT.md)."
+    },
+    {
+      "id": "EW-8",
+      "claim": "The probe retains the SAME residual risk class that igf5 carried: if raw syscall 74 is fatal in ring 0, the console+game crash recurs and CANNOT be excluded by design (no signal import in the frozen contract; a syscall fault is not trappable from ring 3). The design bounds and localizes the risk; it does not remove it. Launch is controller+user-coordinated only; the go/no-go is explicitly theirs.",
+      "evidence": "worker-code-anchor-reads/REPORT.md section 3 residual risk; igf5 crash correlate; frozen-contract import audit (no sigaction)."
+    }
+  ],
+  "non_claims": [
+    "No claim that mprotect works, fails, or returns at all on this firmware.",
+    "No claim about EACCES/EPERM values on this kernel beyond FreeBSD-generic background marked as speculation.",
+    "No promotion claim; PLH detour viability remains UNPROVEN either way.",
+    "Nothing was executed; no console was contacted; no frozen file modified."
+  ],
+  "deliverables": [
+    "CLAIM.json (this file, first)",
+    "EXEC-WRITABILITY-EVIDENCE.md (evidence synthesis)",
+    "EXEC-WRITABILITY-PROBE-DESIGN.md (the definitive probe design)",
+    "REPORT.md (last)"
+  ]
+}

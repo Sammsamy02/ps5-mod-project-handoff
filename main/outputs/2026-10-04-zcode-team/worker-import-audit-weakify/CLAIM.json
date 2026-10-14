@@ -1,0 +1,36 @@
+{
+  "worker": "worker-import-audit-weakify",
+  "date": "2026-10-04",
+  "scope": [
+    "Run import_fallback.py audit on: (a) actual composition-4 packaged artifact, (b) sdg2 import contract (worker-startup-checkpoint/diag/determinism/imp/run1/), (c) comp5 (worker-composition-5-minimal/composition-5/run-1/).",
+    "Classify each import: strong / weak / unproven-on-console, with emphasis on the 5 new strong imports (sceKernelDlsym, sceKernelGetModuleInfo, sceKernelLoadStartModule, sceKernelStopUnloadModule, qsort).",
+    "Prepare (NOT apply) weakify procedure outputs for the 5 unproven rows: STB_WEAK rewrite semantics, call-site zero-guards, and SharpProspero Packager (DynamicWriter.cs) STB_WEAK emission capability verified from source.",
+    "Write WEAKIFY-DECISION.md: evidence-based recommendation for composition-5 (weakify now vs stay strong pending sdg2 DIAG)."
+  ],
+  "non_goals": [
+    "No modification of any frozen artifact (composition-4 prx, sdg2 probe, comp5 outputs).",
+    "No execution of target code, no console contact, no nested subagents.",
+    "No new claim of in-game behavior; sdg2 remains the authoritative import-binding experiment."
+  ],
+  "claims": {
+    "audit_executed": "import_fallback.py audit will be executed read-only against the three named targets; exact verdicts recorded in AUDIT-RESULTS.md",
+    "packager_weak_support": "To be verified from DynamicWriter.cs source; if Packager cannot emit STB_WEAK, smallest patch is designed but not implemented",
+    "decision_basis": "WEAKIFY-DECISION.md decides using composition-4 ploader-OK evidence + sdg2 DIAG outcome dependency"
+  },
+  "inputs": {
+    "prior_findings": "outputs/2026-10-04-zcode-team/worker-ploader-imports/{PLOADER-IMPORT-ANALYSIS.md,REPORT.md}",
+    "audit_tool": "outputs/2026-10-04-zcode-team/worker-import-fallback/import_fallback.py",
+    "sdg2_contract": "outputs/2026-10-04-zcode-team/worker-startup-checkpoint/diag/determinism/imp/run1/",
+    "comp5": "outputs/2026-10-04-zcode-team/worker-composition-5-minimal/composition-5/run-1/"
+  },
+  "status": "completed",
+  "result_summary": {
+    "composition4_packaged_artifact": "196 UND imports, ALL STB_GLOBAL, 0 weak; = frozen proven 191 + exactly the 5 extension rows (sceKernelDlsym, sceKernelGetModuleInfo, sceKernelLoadStartModule, sceKernelStopUnloadModule, qsort); SELF bytes verified byte-identical dynstr+dynsym vs bare-sdk (sha de372302...)",
+    "sdg2_contract": "196 rows GLOBAL/0 weak; import-contract counts required_strong=196 covered=196 missing=0 conflicts=0; surface identity+bind-equal to composition-4",
+    "comp5": "192 UND all GLOBAL = frozen191 + sceKernelGetModuleInfo only; the other 4 targets structurally dropped",
+    "unproven_on_console": "exactly the 5 extension rows as strong binds; clock_gettime/getpid proven inside the frozen 191; the six dl*/kernel_mprotect 'weak rows' do not exist in any audited dynsym (Packager statically zero-binds weak-only references)",
+    "packager_weak_capability": "CANNOT emit STB_WEAK imports: DynamicWriter.cs:779 hardcodes GLOBAL; Linker.cs:249 drops weak-only names; smallest patch designed (4 edits, 2 files) in AUDIT-RESULTS.md section 4",
+    "weakify_prepared": "exact one-command contingency + zero-guard surface measured (0 JUMP_SLOTs; 5 import-table R_X86_64_64 slots 0x1c9dd58-78 + 5 GLOB_DAT GOT slots); NOT applied to any artifact",
+    "decision": "STAY STRONG for composition-5; sdg2 outcome decides; branch matrix in WEAKIFY-DECISION.md"
+  }
+}

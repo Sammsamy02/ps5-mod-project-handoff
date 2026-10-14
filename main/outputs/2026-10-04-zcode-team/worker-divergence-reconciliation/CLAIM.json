@@ -1,0 +1,39 @@
+{
+  "worker": "worker-divergence-reconciliation",
+  "date": "2026-10-04",
+  "claim": "Resolve the two divergences preserved by worker-post-spawn-closure-prep from local ground truth: (1) the dll8 JSONL append position (37-40 vs 41-44); (2) the r11 slot identity split (04869ab3 vs 0911af0c). Deliver RECONCILED.md + exact doc-notes; no other worker's docs edited; no console contact (read-only RETR not attempted — console expected down; local ground truth sufficed).",
+  "divergence_1_jsonl_append_position": {
+    "true_current_record_count_locally_known": 36,
+    "single_correct_answer": "dll8 (ALLFAM8_DLL_TEST.elf, c3aba79f968a492b849e5ece2f009e8e / sha 79281191..., 336552 B) appends at positions 37-40 in the recommended dll8-first batch order (dll7 not run this session); if the explicit dll7 fallback (ALLFAM7_DLL_TEST.elf, e72f5318... / sha 83ee2ae9) runs first, dll7 takes 37-40 and dll8 appends at 41-44.",
+    "bothways_rule_location_correction": "The exact both-ways rule is NOT in worker-dll-8fam-combined/EXPECTED-DELTA-8FAM.md (that file carries only per-record content expectations). It is in worker-8fam-console-prep/CONSOLE-STAGE-PLAN-8FAM.md, 'Step 5 - Readback', and implemented in worker-console-batch-runner/console_batch.py (~lines 124, 602-637, 2038): 'Hard invariant either way: assert only appended after ALL existing records, none modified; if the on-target file already differs (another authorized run landed in between), the positional expectation yields to the invariant.'",
+    "bothways_rule_confirmed_correct": true,
+    "evidence": {
+      "local_mirror_of_target_jsonl": "outputs/2026-10-04-zcode-controller/console/allfam-dll-console-result.jsonl",
+      "mirror_record_count": 36,
+      "mirror_composition": "db1c40e6 x4, f72faea5 x4, 6d295f56 x4, 1a6b37b7 x4, 6f5bf85a x4, 664f83a5 x8, 53808597 x4, 133c5e9e x4 (= 36)",
+      "last_four_records": "build_id 133c5e9e59f24c2fb57e7e3422c665a1 (console-PASSED 6-family ALLFAM_DLL_TEST; CONSOLE-LOG step 13: '+4 records, ledger match') at positions 33-36",
+      "count_independently_verified_by": "worker-dll-7fam-stage-prep CLAIM/REPORT ('console result JSONL currently holds 36 records (through 133c5e9e)'), console_batch.py DLL7/DLL8 existing_records=36, worker-batch-final-ini-adoption fixtures (dll8 fixture = 36 baseline + 4 at 37-40; selftest covers both orders), CONSOLE-STAGE-PLAN-8FAM Step 5 (36-record composition list matches the mirror 1:1)",
+      "docs_assuming_37_40": "CONSOLE-STAGE-PLAN-8FAM.md; CONTROLLER-DECISION-BRIEF (worker-controller-decision-brief and worker-session-docs-final-sync/as-found) line ~93; console_batch.py; USER-SESSION-GUIDE (console-batch-runner and batch-final-ini-adoption)",
+      "docs_assuming_41_44": "RETURN-SESSION-MASTER-PLAN (worker-session-docs-final-sync/as-found line 28 + patch line 33) — written in the dll7-first era; worker-dll-7fam-stage-prep ('7-family records must append at positions 37-40', i.e. 7fam-first with the same 36 baseline)"
+    }
+  },
+  "divergence_2_r11_slot_identity": {
+    "one_line_truth": "THE staged slot fself (/data/plugins/modbridge_supplier_composition.prx as of the last successful staging/readback; slot untouched since — console went down before comp6 staging) is 0911af0cd5b4a1f22eac49a79f8b3c9a3d9cac7358b246e16ae2a969b537cab9, 30,792,151 B (composition-5 r11); 04869ab3229bffe1991de3e3a6cd4f53ac03958d3a3ac1b96f9f45309373f1bf (30,786,775 B local / 30,786,663 B console-logged readback size) is the SUPERSEDED composition-5 r2-era upload (CONSOLE-LOG step 15), not a variant of r11 and not the slot identity.",
+    "hashes_re_traced": {
+      "0911af0c": "composition-5 r11 fself: cycle-receipt.json staged_sha256 (utc 2026-10-05T01:47:03Z); CONSOLE-LOG step 19 'r11 STAGED + verified (0911af0c)' / step 20 'slot still r11'; EVE-STATE S1; INDEX.md line 118; fresh-r11-gate live+v2 receipts (8/8 PASS both); re-hashed by me on BOTH candidate dirs today",
+      "04869ab3": "composition-5 r2-era fself, first composition-5 upload (CONSOLE-LOG step 15; INDEX.md track 1 'comp5 r2 (fself 04869ab3)' with launch-1 NoImageAnchor). No current local file matches it: the rollback runbook's own cited paths (prx-candidate-composition5-1/-2/modbridge_supplier_composition.prx) now hash 0911af0c / 30,792,151 B"
+    },
+    "task_prompt_hypothesis_corrections": [
+      "'04869ab3 = the r11 fself per the cycle receipts' is FALSE: the cycle receipt's staged_sha256 is 0911af0c.",
+      "The fresh-r11-gate variant-naming difference explains a DIFFERENT pair: bare-original 7774b663... (what the gates hash as 'bare') vs bare-sdk a0df5d9b... (the cycle receipt's bare_sha256). It does not explain 04869ab3 vs 0911af0c. Sizes prove 04869ab3 is not a bare/wrapped variant of r11: wrapped 30,792,151 vs bare 30,774,360 (delta 17,791); 04869ab3 is 30,786,775 — matches neither.",
+      "post-spawn-closure-prep's 'different artifact classes (staged plugin slot vs dispatchable payload)' framing is superseded: both surfaces converge on 0911af0c (INDEX.md line 118 for /data/plugins/; EVE-STATE S1 for the pldmgr payload slot). The real split is TIME (r2 upload superseded by the r11 restage), not artifact class."
+    ],
+    "verified_local_hashes_this_pass": {
+      "candidate1_fself": "0911af0cd5b4a1f22eac49a79f8b3c9a3d9cac7358b246e16ae2a969b537cab9 @ 30792151 B",
+      "candidate2_fself": "0911af0cd5b4a1f22eac49a79f8b3c9a3d9cac7358b246e16ae2a969b537cab9 @ 30792151 B",
+      "comp6_staged_fself_prx": "76ee6af39b407ab7... @ 30773943 B (never staged; console down)"
+    }
+  },
+  "scope": "read-only on all other workers' dirs; outputs only under worker-divergence-reconciliation/; no nested subagents; no console contact; no re-sends",
+  "deliverables": ["CLAIM.json", "RECONCILED.md", "REPORT.md"]
+}

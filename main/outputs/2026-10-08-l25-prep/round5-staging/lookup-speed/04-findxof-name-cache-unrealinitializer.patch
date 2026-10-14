@@ -1,0 +1,78 @@
+--- a/src/UnrealInitializer.cpp	2026-10-11 19:56:45
++++ b/src/UnrealInitializer.cpp	2026-10-11 21:20:01
+@@ -135,6 +135,18 @@
+     auto UKismetStringLibrary_Conv_NameToString(FName InName) -> FString;
+ }
+ #endif
++
++namespace RC::Unreal::UObjectGlobals
++{
++    // [IT lookup-speed 04] staged name-keyed FindXOf cache API. Definitions
++    // live in UObjectGlobals.cpp (this exact namespace); redeclared here so
++    // this TU needs no new header overlay (same TU-local declaration law as
++    // the bridges in this file).
++    void FindXOfCache_AddObjectToBuckets(UObject* Object);
++    void FindXOfCache_RemoveObjectFromBuckets(const FUObjectItem* Item, UObject* Object);
++    [[nodiscard]] bool FindXOfCache_IsActive();
++    void FindXOfCache_SetActive(bool bActive);
++}
+ 
+ namespace RC::Unreal::UnrealInitializer
+ {
+@@ -209,6 +221,10 @@
+         ObjectSearcherPool<AActor, AnySuperStruct>::Clear();
+         ObjectSearcherPool<AnyInstance, AnyInstance>::Clear();
+ 
++        // [IT lookup-speed 04] deactivate + clear the name-keyed FindXOf
++        // buckets with the rest of the cache structures.
++        UObjectGlobals::FindXOfCache_SetActive(false);
++
+         ClearGlobalObjectCache();
+ 
+         Output::send(STR("[HashTables] Searcher pools and GUObjectArray listeners retired\n"));
+@@ -596,12 +612,33 @@
+                     std::lock_guard<std::mutex> AllInstPoolLock(ObjectSearcherPool<AnyInstance, AnyInstance>::PoolMutex);
+                     ObjectSearcherPool<AnyInstance, AnyInstance>::Add(ObjectItem);
+                 }
++
++                // [IT lookup-speed 04] populate the name-keyed FindXOf buckets
++                // from the SAME single walk (one bucket per distinct class-name
++                // FName index in the class chain). Filters are evaluated inside
++                // the add, so queries later only re-check IsUnreachable.
++                UObjectGlobals::FindXOfCache_AddObjectToBuckets(Object);
+ 
+                 return LoopAction::Continue;
+             });
+ 
++            // Buckets complete: activate the FindFirstOf/FindAllOf fast path.
++            UObjectGlobals::FindXOfCache_SetActive(true);
++            Output::send(STR("[LookupCache] name-keyed FindXOf buckets populated and activated\n"));
++
+             Output::send(STR("Adding GUObjectArray listeners\n"));
+-            UObjectArray::AddUObjectCreateListener(&FClassCreateListener::ClassCreateListener);
++            // [IT lookup-speed 04] Engine create-listener registration SKIPPED:
++            // AddUObjectCreateListener is still the hand-rolled TArray Append
++            // (UObjectArray.cpp — the GMalloc virtual-call fault family that
++            // stalled every PS5 init while the cache was last enabled), and no
++            // engine-side create op has been pinned/admitted the way the
++            // variant-C delete pair was. Cache maintenance does NOT need it:
++            // this init walk + the StaticConstructObject post-hook below +
++            // the console-proven engine-side delete listener cover add/remove.
++            // FClassCreateListener::NotifyUObjectCreated is implemented
++            // (ClassListener.cpp) for the day an admitted engine create op
++            // replaces this skip with the same fail-closed call path.
++            Output::send(STR("[LookupCache] engine create-listener registration SKIPPED (engine op not admitted; maintenance = init walk + StaticConstructObject hook + delete listener)\n"));
+             // L25 (item 2): pre/post markers around the class-cache delete listener.
+             Output::send(STR("[L25][DeleteListener] class-delete-listener registration begin (pre-marker)\n"));
+             l25_dl_diag("l25_dl_class_begin", 0);
+@@ -671,6 +708,10 @@
+                     std::lock_guard<std::mutex> AllInstPoolLock(ObjectSearcherPool<AnyInstance, AnyInstance>::PoolMutex);
+                     ObjectSearcherPool<AnyInstance, AnyInstance>::Add(object->GetObjectItem());
+                 }
++                // [IT lookup-speed 04] keep the name-keyed FindXOf buckets
++                // current for newly constructed objects (idempotent add; a
++                // no-op while the cache is inactive/retired).
++                UObjectGlobals::FindXOfCache_AddObjectToBuckets(object);
+             }
+         }, {false, true, STR("UE4SS"), STR("ObjectSearcherPoolHook")});
+ 

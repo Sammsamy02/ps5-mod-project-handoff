@@ -1,0 +1,486 @@
+--- /dev/null
++++ b/loader/src/static_tls_bank.h
+@@ -0,0 +1,43 @@
++// Platform-neutral PE static TLS blocks. A guest TEB backend must publish
++// the returned pointer array at Windows GS:[0x58] before entering guest code.
++#ifndef CAP13_STATIC_TLS_BANK_H
++#define CAP13_STATIC_TLS_BANK_H
++
++#include <cstddef>
++#include <cstdint>
++#include <memory>
++#include <vector>
++
++namespace cap13 {
++
++class StaticTlsBank
++{
++  public:
++    struct ThreadArray
++    {
++        std::vector<void*> slots;
++        uint64_t epoch = 0;
++    };
++
++    StaticTlsBank();
++    ~StaticTlsBank();
++    StaticTlsBank(const StaticTlsBank&) = delete;
++    StaticTlsBank& operator=(const StaticTlsBank&) = delete;
++
++    // Retained PE modules receive monotonic indices. The caller writes the
++    // returned index to the mapped image's AddressOfIndex location.
++    uint32_t register_module(const std::vector<uint8_t>& initial, size_t zero_fill);
++
++    // Call on every host thread before it enters any guest code, including
++    // after late module registration. The caller owns the returned array and
++    // must publish it through a separate guest TEB backend.
++    ThreadArray attach_current_thread();
++    uint8_t* current_block(uint32_t index) const;
++
++  private:
++    struct Impl;
++    std::unique_ptr<Impl> m;
++};
++
++} // namespace cap13
++#endif
+--- /dev/null
++++ b/loader/src/static_tls_bank.cpp
+@@ -0,0 +1,89 @@
++#include "static_tls_bank.h"
++
++#include <atomic>
++#include <cstring>
++#include <limits>
++#include <mutex>
++#include <stdexcept>
++#include <unordered_map>
++#include <utility>
++
++namespace cap13 {
++
++namespace {
++
++struct ThreadState
++{
++    // Each allocation stays at a stable address even when this vector grows.
++    std::vector<std::unique_ptr<uint8_t[]>> blocks;
++};
++
++std::atomic<uint64_t> next_bank_id{1};
++thread_local std::unordered_map<uint64_t, ThreadState> thread_states;
++
++} // namespace
++
++struct StaticTlsBank::Impl
++{
++    struct Module
++    {
++        std::vector<uint8_t> initial;
++        size_t zero_fill;
++    };
++
++    const uint64_t id = next_bank_id.fetch_add(1, std::memory_order_relaxed);
++    std::mutex mu;
++    std::vector<Module> modules;
++    uint64_t epoch = 0;
++};
++
++StaticTlsBank::StaticTlsBank() : m(new Impl()) {}
++StaticTlsBank::~StaticTlsBank() = default;
++
++uint32_t StaticTlsBank::register_module(const std::vector<uint8_t>& initial,
++                                        size_t zero_fill)
++{
++    if (initial.size() > std::numeric_limits<size_t>::max() - zero_fill)
++        throw std::overflow_error("static TLS template plus zero fill overflows size_t");
++    std::lock_guard<std::mutex> guard(m->mu);
++    if (m->modules.size() >= std::numeric_limits<uint32_t>::max())
++        throw std::overflow_error("static TLS module index space exhausted");
++    const uint32_t index = static_cast<uint32_t>(m->modules.size());
++    m->modules.push_back(Impl::Module{initial, zero_fill});
++    ++m->epoch;
++    return index;
++}
++
++StaticTlsBank::ThreadArray StaticTlsBank::attach_current_thread()
++{
++    std::lock_guard<std::mutex> guard(m->mu);
++    ThreadState& state = thread_states[m->id];
++    while (state.blocks.size() < m->modules.size())
++    {
++        const Impl::Module& module = m->modules[state.blocks.size()];
++        const size_t size = module.initial.size() + module.zero_fill;
++        auto bytes = std::make_unique<uint8_t[]>(size ? size : 1);
++        std::memset(bytes.get(), 0, size ? size : 1);
++        if (!module.initial.empty())
++            std::memcpy(bytes.get(), module.initial.data(), module.initial.size());
++        state.blocks.push_back(std::move(bytes));
++    }
++    ThreadArray view;
++    view.epoch = m->epoch;
++    view.slots.reserve(state.blocks.size());
++    for (const auto& block : state.blocks)
++        view.slots.push_back(block.get());
++    return view;
++}
++
++uint8_t* StaticTlsBank::current_block(uint32_t index) const
++{
++    auto it = thread_states.find(m->id);
++    if (it == thread_states.end() || index >= it->second.blocks.size()) return nullptr;
++    return it->second.blocks[index].get();
++}
++
++// This class does not set GS, invoke TLS callbacks, or write AddressOfIndex.
++// The loader must keep refusing real TLS until those steps are integrated.
++
++}
+--- /dev/null
++++ b/loader/src/pe_tls_registration.h
+@@ -0,0 +1,31 @@
++// Prepare a relocated, writable mapped PE image's static TLS before guest
++// entry. This does not execute callbacks or provide a guest GS/TEB.
++#ifndef CAP13_PE_TLS_REGISTRATION_H
++#define CAP13_PE_TLS_REGISTRATION_H
++
++#include <cstddef>
++#include <cstdint>
++#include <string>
++#include <vector>
++
++#include "pe_types.h"
++#include "static_tls_bank.h"
++
++namespace cap13 {
++
++struct PeTlsRegistration
++{
++    bool ok = false;
++    uint32_t index = UINT32_MAX;
++    std::vector<uint64_t> callbacks;
++    std::string reason;
++};
++
++// The caller must hold the loader's module-registration lock, pass a mapped
++// image after base relocations, and keep it writable until this returns.
++PeTlsRegistration register_mapped_static_tls(StaticTlsBank& bank,
++                                             uint8_t* image, size_t image_size,
++                                             const PeTlsDirectory64& tls);
++
++} // namespace cap13
++#endif
+--- /dev/null
++++ b/loader/src/pe_tls_registration.cpp
+@@ -0,0 +1,110 @@
++#include "pe_tls_registration.h"
++
++#include <cstring>
++#include <exception>
++#include <new>
++#include <utility>
++
++namespace cap13 {
++
++namespace {
++
++bool mapped_offset(uint8_t* image, size_t image_size, uint64_t va,
++                   size_t bytes, size_t& offset)
++{
++    if (!image) return false;
++    const uint64_t base = reinterpret_cast<uint64_t>(image);
++    if (va < base) return false;
++    const uint64_t delta = va - base;
++    if (delta > image_size || bytes > image_size - delta) return false;
++    offset = static_cast<size_t>(delta);
++    return true;
++}
++
++} // namespace
++
++PeTlsRegistration register_mapped_static_tls(StaticTlsBank& bank,
++                                             uint8_t* image, size_t image_size,
++                                             const PeTlsDirectory64& tls)
++{
++    PeTlsRegistration result;
++    size_t template_off = 0;
++    size_t index_off = 0;
++    if (tls.EndAddressOfRawData < tls.StartAddressOfRawData ||
++        tls.EndAddressOfRawData - tls.StartAddressOfRawData > image_size ||
++        !mapped_offset(image, image_size, tls.StartAddressOfRawData,
++                       static_cast<size_t>(tls.EndAddressOfRawData - tls.StartAddressOfRawData),
++                       template_off))
++    {
++        result.reason = "TLS template lies outside relocated mapped image";
++        return result;
++    }
++    if (!mapped_offset(image, image_size, tls.AddressOfIndex,
++                       sizeof(uint32_t), index_off) ||
++        index_off % alignof(uint32_t) != 0)
++    {
++        result.reason = "TLS index target lies outside mapped image or is unaligned";
++        return result;
++    }
++
++    std::vector<uint64_t> callbacks;
++    if (tls.AddressOfCallBacks)
++    {
++        size_t table_off = 0;
++        if (!mapped_offset(image, image_size, tls.AddressOfCallBacks,
++                           sizeof(uint64_t), table_off) ||
++            table_off % alignof(uint64_t) != 0)
++        {
++            result.reason = "TLS callback table lies outside mapped image or is unaligned";
++            return result;
++        }
++        bool terminated = false;
++        for (size_t off = table_off; off <= image_size - sizeof(uint64_t);
++             off += sizeof(uint64_t))
++        {
++            uint64_t callback = 0;
++            std::memcpy(&callback, image + off, sizeof(callback));
++            if (!callback) { terminated = true; break; }
++            size_t callback_off = 0;
++            if (!mapped_offset(image, image_size, callback, 1, callback_off))
++            {
++                result.reason = "TLS callback target lies outside mapped image";
++                return result;
++            }
++            try { callbacks.push_back(callback); }
++            catch (const std::bad_alloc&)
++            {
++                result.reason = "TLS callback table allocation failed";
++                return result;
++            }
++        }
++        if (!terminated)
++        {
++            result.reason = "TLS callback table has no in-image terminator";
++            return result;
++        }
++    }
++
++    try
++    {
++        const size_t template_size =
++            static_cast<size_t>(tls.EndAddressOfRawData - tls.StartAddressOfRawData);
++        std::vector<uint8_t> initial(image + template_off, image + template_off + template_size);
++        result.index = bank.register_module(initial, tls.SizeOfZeroFill);
++    }
++    catch (const std::exception& error)
++    {
++        result.reason = std::string("TLS module registration failed: ") + error.what();
++        return result;
++    }
++    std::memcpy(image + index_off, &result.index, sizeof(result.index));
++    result.callbacks = std::move(callbacks);
++    result.ok = true;
++    return result;
++}
++
++// The caller still must prove callbacks point to executable code, bridge the
++// Win64 callback ABI, publish the thread array through a guest TEB, and handle
++// process/thread attachment order. Until then the loader refuses real TLS.
++
++}
+--- /dev/null
++++ b/loader/tests/static_tls_bank_test.cpp
+@@ -0,0 +1,76 @@
++#include "static_tls_bank.h"
++
++#include <atomic>
++#include <cstdint>
++#include <cstdio>
++#include <limits>
++#include <stdexcept>
++#include <thread>
++#include <vector>
++
++static int failures = 0;
++
++static void check(bool condition, const char* name)
++{
++    std::printf("%s %s\n", condition ? "PASS" : "FAIL", name);
++    if (!condition) ++failures;
++}
++
++int main()
++{
++    cap13::StaticTlsBank bank;
++    const uint32_t first_index = bank.register_module({0x11, 0x22, 0x33}, 3);
++    check(first_index == 0, "first static module receives index zero");
++    check(bank.current_block(first_index) == nullptr,
++          "guest thread must attach before reading a static TLS block");
++
++    auto main_view = bank.attach_current_thread();
++    auto* main_block = bank.current_block(first_index);
++    check(main_view.slots.size() == 1 && main_view.slots[0] == main_block && main_block,
++          "attach exposes module block through the thread pointer array");
++    check(main_block && main_block[0] == 0x11 && main_block[1] == 0x22 &&
++          main_block[2] == 0x33 && main_block[3] == 0 && main_block[4] == 0 &&
++          main_block[5] == 0, "template bytes copy and zero fill are correct");
++    if (main_block) main_block[0] = 0x77;
++
++    std::atomic<bool> worker_saw_template{false};
++    std::atomic<bool> worker_pointer_distinct{false};
++    std::thread worker([&] {
++        auto worker_view = bank.attach_current_thread();
++        auto* worker_block = bank.current_block(first_index);
++        worker_saw_template = worker_view.slots.size() == 1 && worker_block &&
++                              worker_block[0] == 0x11 && worker_block[3] == 0;
++        worker_pointer_distinct = worker_block && worker_block != main_block;
++        if (worker_block) worker_block[0] = 0x99;
++    });
++    worker.join();
++    check(worker_saw_template && worker_pointer_distinct && main_block && main_block[0] == 0x77,
++          "different threads receive independent initialized blocks");
++
++    const uint32_t second_index = bank.register_module({0x44}, 1);
++    check(second_index == 1, "late registration receives monotonic index");
++    check(bank.current_block(second_index) == nullptr,
++          "late module is unavailable until the thread refreshes its array");
++    auto late_view = bank.attach_current_thread();
++    auto* second_block = bank.current_block(second_index);
++    check(late_view.epoch > main_view.epoch && late_view.slots.size() == 2 &&
++          late_view.slots[0] == main_block && late_view.slots[1] == second_block &&
++          second_block && second_block[0] == 0x44 && second_block[1] == 0 &&
++          main_block && main_block[0] == 0x77,
++          "late attach adds new block without replacing existing state");
++
++    cap13::StaticTlsBank other;
++    const uint32_t other_index = other.register_module({}, 0);
++    auto other_view = other.attach_current_thread();
++    check(other_index == 0 && other_view.slots.size() == 1 &&
++          other_view.slots[0] && other_view.slots[0] != main_block,
++          "separate banks have independent index spaces and non-null empty blocks");
++
++    bool overflow_refused = false;
++    try { bank.register_module({0xAA}, std::numeric_limits<size_t>::max()); }
++    catch (const std::overflow_error&) { overflow_refused = true; }
++    check(overflow_refused, "template-size overflow refuses before allocation");
++
++    std::printf("TOTAL: %d failed\n", failures);
++    return failures ? 1 : 0;
++}
+--- /dev/null
++++ b/loader/tests/pe_tls_registration_test.cpp
+@@ -0,0 +1,97 @@
++#include "pe_tls_registration.h"
++
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <thread>
++#include <vector>
++
++static int failures = 0;
++static void check(bool condition, const char* name)
++{
++    std::printf("%s %s\n", condition ? "PASS" : "FAIL", name);
++    if (!condition) ++failures;
++}
++
++static cap13::PeTlsDirectory64 make_directory(std::vector<uint8_t>& image)
++{
++    const uint64_t base = reinterpret_cast<uint64_t>(image.data());
++    image[0x100] = 0x21;
++    image[0x101] = 0x43;
++    const uint32_t marker = 0xDEADBEEF;
++    std::memcpy(image.data() + 0x200, &marker, sizeof(marker));
++    const uint64_t callback = base + 0x400;
++    std::memcpy(image.data() + 0x300, &callback, sizeof(callback));
++    return {base + 0x100, base + 0x102, base + 0x200,
++            base + 0x300, 2, 0};
++}
++
++int main()
++{
++    std::vector<uint8_t> image(0x1000, 0);
++    auto dir = make_directory(image);
++    cap13::StaticTlsBank bank;
++    auto result = cap13::register_mapped_static_tls(bank, image.data(), image.size(), dir);
++    uint32_t written = 0xFFFFFFFF;
++    std::memcpy(&written, image.data() + 0x200, sizeof(written));
++    check(result.ok && result.index == 0 && written == 0,
++          "mapped image receives its assigned TLS module index");
++    check(result.callbacks.size() == 1 && result.callbacks[0] == dir.AddressOfCallBacks + 0x100,
++          "callback table is bounded and its target is returned in order");
++    auto view = bank.attach_current_thread();
++    auto* block = bank.current_block(result.index);
++    check(view.slots.size() == 1 && view.slots[0] == block && block &&
++          block[0] == 0x21 && block[1] == 0x43 && block[2] == 0 && block[3] == 0,
++          "registered mapped template initializes the current thread");
++    image[0x100] = 0x99;
++    bool worker_kept_original = false;
++    std::thread worker([&] {
++        bank.attach_current_thread();
++        auto* worker_block = bank.current_block(result.index);
++        worker_kept_original = worker_block && worker_block[0] == 0x21 &&
++                               worker_block != block;
++    });
++    worker.join();
++    check(worker_kept_original, "template is copied before mapped image can change");
++
++    std::vector<uint8_t> bad_image(0x1000, 0);
++    auto bad_dir = make_directory(bad_image);
++    cap13::StaticTlsBank bad_bank;
++    bad_dir.AddressOfIndex = reinterpret_cast<uint64_t>(bad_image.data()) + bad_image.size() - 3;
++    auto bad = cap13::register_mapped_static_tls(bad_bank, bad_image.data(), bad_image.size(), bad_dir);
++    uint32_t untouched = 0;
++    std::memcpy(&untouched, bad_image.data() + 0x200, sizeof(untouched));
++    check(!bad.ok && untouched == 0xDEADBEEF && bad_bank.attach_current_thread().slots.empty(),
++          "out-of-bounds index target refuses before any registration or write");
++
++    bad_dir = make_directory(bad_image);
++    const uint64_t outside = reinterpret_cast<uint64_t>(bad_image.data()) + bad_image.size();
++    std::memcpy(bad_image.data() + 0x300, &outside, sizeof(outside));
++    bad = cap13::register_mapped_static_tls(bad_bank, bad_image.data(), bad_image.size(), bad_dir);
++    check(!bad.ok && bad_bank.attach_current_thread().slots.empty(),
++          "callback target outside mapped image refuses before registration");
++
++    bad_dir = make_directory(bad_image);
++    const uint64_t first_valid = reinterpret_cast<uint64_t>(bad_image.data()) + 0x400;
++    std::memcpy(bad_image.data() + 0x308, &outside, sizeof(outside));
++    bad = cap13::register_mapped_static_tls(bad_bank, bad_image.data(), bad_image.size(), bad_dir);
++    check(!bad.ok && bad.callbacks.empty() && bad.index == UINT32_MAX &&
++          bad_bank.attach_current_thread().slots.empty(),
++          "partial callback scan leaves no callable work or assigned index");
++
++    bad_dir = make_directory(bad_image);
++    std::memcpy(bad_image.data() + bad_image.size() - 8, &first_valid, sizeof(first_valid));
++    bad_dir.AddressOfCallBacks = reinterpret_cast<uint64_t>(bad_image.data()) + bad_image.size() - 8;
++    bad = cap13::register_mapped_static_tls(bad_bank, bad_image.data(), bad_image.size(), bad_dir);
++    check(!bad.ok && bad_bank.attach_current_thread().slots.empty(),
++          "unterminated callback table refuses at mapped image boundary");
++
++    bad_dir = make_directory(bad_image);
++    bad_dir.EndAddressOfRawData = reinterpret_cast<uint64_t>(bad_image.data()) + bad_image.size() + 1;
++    bad = cap13::register_mapped_static_tls(bad_bank, bad_image.data(), bad_image.size(), bad_dir);
++    check(!bad.ok && bad_bank.attach_current_thread().slots.empty(),
++          "template outside mapped image refuses before registration");
++
++    std::printf("TOTAL: %d failed\n", failures);
++    return failures ? 1 : 0;
++}
+--- /dev/null
++++ b/loader/tests/run_static_tls.py
+@@ -0,0 +1,19 @@
++#!/usr/bin/env python3
++"""Build and execute only the isolated host static-TLS state tests."""
++
++import subprocess
++from pathlib import Path
++
++root = Path(__file__).resolve().parents[1]
++for source, extra in [
++    ('static_tls_bank_test.cpp', []),
++    ('pe_tls_registration_test.cpp', [str(root / 'src/pe_tls_registration.cpp')]),
++]:
++    out = root / 'tests' / (source.replace('_test.cpp', '-host'))
++    subprocess.run([
++        'clang++', '-arch', 'x86_64', '-std=c++17', '-O1', '-g', '-Wall', '-Wextra',
++        '-Werror', '-pthread', '-I' + str(root / 'src'),
++        str(root / 'tests' / source), str(root / 'src/static_tls_bank.cpp'),
++        *extra, '-o', str(out),
++    ], check=True, timeout=30)
++    subprocess.run(['arch', '-x86_64', str(out)], check=True, timeout=20)

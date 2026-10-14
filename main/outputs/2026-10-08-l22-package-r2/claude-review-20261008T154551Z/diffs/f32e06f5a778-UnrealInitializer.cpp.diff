@@ -1,0 +1,79 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-r5-thread-final-integration/thread/UnrealInitializer.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l22-runtime/profile/units/UnrealInitializer.cpp
+@@ -81,6 +81,8 @@
+ #include "CopyinStartup.hpp"
+ #include "FNameAbiProfile.hpp"
+ #include "RuntimeBuildProfile.hpp"
++#include "JoinedLayoutPreflight.hpp"
++#include "CodeSignatureProfile.hpp"
+ #include <string>
+ #include <vector>
+ #endif
+@@ -1144,21 +1146,24 @@
+             Output::send(STR("[Seeds] slot 2 FName ctor bound at {} and behaviorally verified (ByteProperty probe id == pool id 0x{:X}); detour verification skipped\n"),
+                          reinterpret_cast<void*>(ctor_runtime), words.byte_property_id);
+ 
+-            // ---- Phase 5: static_construct_object_internal (code constant; no
+-            // data-side validation exists — assigned at the consumer, bypassing
+-            // the mapped pipeline's permits_code admission per SLOTS-FEASIBILITY
+-            // section 4b) ----
++            // ---- Phase 5: SCO static identity plus empty-callback ABI admission.
++            // l21 official/source + pinned image evidence; target ABI assertions
++            // live in UObjectGlobals.hpp. A successful native call is not claimed.
+             require_present(SeedTableNS::kStaticConstructObject);
+             const uint64_t sco_runtime = base + SeedTableNS::kStaticConstructObject.label;
+-            // Read-path guard: SCO is a code constant, call-only by design;
+-            // identity/ABI stay unverified precisely because text reads are
+-            // refused on exec-only pages.
++            // Code remains call-only. Identity uses the already authenticated
++            // startup cache; this does not read the live executable mapping.
+             if (const auto cls = rc_seed::classify_seed_address(sco_runtime, base); cls != rc_seed::SeedAddressClass::CodeCallOnly)
+             {
+                 seed_refused(fmt::format("slot 4 static_construct_object 0x{:X}: seed class {} (expected exec-only call-only); refusing bind", sco_runtime, rc_seed::seed_class_name(cls)));
+             }
++            if(admission_budget.expired(admission_ops.now_ms()))
++                seed_refused("SCO shared admission deadline expired before binding");
++            if(!admission_ops.code_identity(sco_runtime,sizeof(rc::codeprofile::kScoPrefix))||
++               !admission_ops.cached_code_signature(sco_runtime,rc::codeprofile::kScoPrefix,sizeof(rc::codeprofile::kScoPrefix)))
++                seed_refused("slot 4 static_construct_object: authenticated cached image/signature admission failed");
+             UObjectGlobals::SetupStaticConstructObjectInternalAddress(reinterpret_cast<void*>(sco_runtime));
+-            Output::send(STR("[Seeds] slot 4 static_construct_object_internal bound at {} (code; identity and ABI unverified)\n"),
++            Output::send(STR("[Seeds] slot 4 static_construct_object_internal bound at {} (code; statically_verified_empty_callback; native success not observed)\n"),
+                          reinterpret_cast<void*>(sco_runtime));
+         }
+     }
+@@ -1301,9 +1306,11 @@
+                     results.engine_version.minor=static_cast<uint16_t>(rc::runtimeprofile::kProfile.minor);
+                 }
+                 for(const auto& pin:rc::runtimeprofile::kRequiredMembers)
+-                    rc::buildfacts::require_layout(facts,"member",pin,staged?&staged->members:nullptr);
++                    if(!rc::joinedlayout::conditional_absent(rc::joinedlayout::Kind::Member,pin.name,staged?&staged->members:nullptr))
++                        rc::buildfacts::require_layout(facts,"member",pin,staged?&staged->members:nullptr);
+                 for(const auto& pin:rc::runtimeprofile::kRequiredVtables)
+-                    rc::buildfacts::require_layout(facts,"vtable",pin,staged?&staged->vtables:nullptr);
++                    if(!rc::joinedlayout::conditional_absent(rc::joinedlayout::Kind::Vtable,pin.name,staged?&staged->vtables:nullptr))
++                        rc::buildfacts::require_layout(facts,"vtable",pin,staged?&staged->vtables:nullptr);
+                 for(const auto* key:rc::runtimeprofile::kUnknownRequiredStaticFacts)
+                     rc::buildfacts::require_static_fact(facts,key,false,"target fact remains unproved in retained evidence; no template inference");
+                 Output::send(STR("[BuildProfile] digest={} image={} base=0x{:X} build_configuration={} stats={} configuration_source={} stats_source={}\n"),
+@@ -1316,7 +1323,19 @@
+                                  ensure_str(fact.ok?"PASS":"REFUSE"),ensure_str(fact.detail));
+                     if(!fact.ok) failures+=fact.name+"; ";
+                 }
+-                if(!facts.ok) throw std::runtime_error("[BuildProfile] collect-all preflight refused: "+failures);
++                // L22 JOINED PREFLIGHT: the staged maps are loaded, but engine maps
++                // are not yet published. Run once before any seeded engine call.
++                const auto joined=rc::joinedlayout::evaluate(staged?&staged->members:nullptr,staged?&staged->vtables:nullptr);
++                for(const auto& check:joined.checks)
++                {
++                    Output::send(STR("[LayoutPreflight] key={} kind={} disposition={} status={} detail={}\n"),
++                        ensure_str(check.key->name),ensure_str(rc::joinedlayout::kind(check.key->kind)),
++                        ensure_str(rc::joinedlayout::disposition(check.key->disposition)),ensure_str(check.status),ensure_str(check.detail));
++                    if(!check.accepted) failures+=std::string("joined.")+check.key->name+"; ";
++                }
++                Output::send(STR("[LayoutPreflight] checked={} startup-required={} conditional-map={} runtime-deferred={} missing-required={}\n"),
++                    joined.checks.size(),joined.required,joined.conditional,joined.deferred,joined.missing_required);
++                if(!facts.ok||!joined.ok) throw std::runtime_error("[BuildProfile] collect-all preflight refused: "+failures);
+                 NativeNameThread::prepare_runtime(UnrealConfig,profile_image,NativeNameThread::kCandidateBindingData,rc::runtimeprofile::kDigest,now_ms,NativeNameThread::exact_import_admitted());
+             }
+             catch(...)

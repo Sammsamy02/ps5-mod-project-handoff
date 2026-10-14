@@ -1,0 +1,29 @@
+{
+  "slug": "worker-mapping-recovery",
+  "claimed_by": "ZCode team worker (GLM-5.3), offline, no subagents",
+  "claimed_at": "2026-10-04T12:35:00-05:00",
+  "task": "Offline recovery of corrupted v2 in-game VMMAP span records from ingame-v2-facts-2026-10-04.jsonl (48 v1_vmmap_page records + v1_vmmap_full histogram), cross-checked against the earlier partial v1 view.",
+  "inputs_readonly": [
+    "outputs/2026-10-04-zcode-controller/console/ingame-v2-facts-2026-10-04.jsonl",
+    "outputs/2026-10-04-zcode-controller/console/ingame-v1-facts-2026-10-04.jsonl"
+  ],
+  "deliverables": [
+    "recovered-spans.json (classified: trusted / plausible / rejected, with admitting constraint)",
+    "ANALYSIS.md (map picture, 0x787c000-0x8018c000 gap question, candidate-base implications under base+vaddr and span_start+vaddr)",
+    "v3-format span records for drop-in cross-validation",
+    "REPORT.md (last)"
+  ],
+  "constraints_honored": [
+    "no network, no console access, read-only inputs",
+    "no nested subagents",
+    "budget <=30 tool calls",
+    "never invent spans: an entry is recovered only if it satisfies a stated structural constraint",
+    "no writes outside outputs/2026-10-04-zcode-team/worker-mapping-recovery/"
+  ],
+  "structural_constraints_planned": [
+    "kinfo_vmentry layout: kve_start < kve_end, kve_protection in 0..7 (+ plausible reservation prots), 36-bit address space",
+    "16KiB page alignment for real mappings; reservation entries may be unaligned",
+    "monotonic non-overlapping ordering where present in the record stream",
+    "cross-record v1/v2 corroboration for same mappings seen twice"
+  ]
+}

@@ -1,0 +1,73 @@
+# fl-wiring-unrealinitializer.patch — round-5 addition (agent II staging)
+# GT's first-launch TU call-site wiring (agent-GT-firstlaunch-tu.md section 3,
+# "WIRING REQUIREMENT (root, at build staging — exact slot)").
+#
+# Slot: UnrealInitializer.cpp ScanGame(), #if defined(__PROSPERO__) +
+# if (bSeedsArmed) branch, IMMEDIATELY BEFORE
+#   SeedArming::consume_required_slot_seeds(std::chrono::seconds(UnrealConfig.SecondsToScanBeforeGivingUp));
+# (the admission whose input source the profile ladder becomes).
+#
+# Grounding verified by agent II against the round-4 tree (2026-10-11):
+# - UE4SSProgram::get_program() is an inline static on the header ALREADY on
+#   this TU's -I path (native-coherent-runtime-1 .../port/ue4ss/include/
+#   UE4SSProgram.hpp:443; the same header LuaMod.cpp:44 includes). It THROWs
+#   (never UB) if the program is not up; the program is constructed and
+#   m_mods_directories set (UE4SSProgram.cpp:429-431, native mode pins
+#   "ue4ss/Mods") before ScanGame() runs (called from UE4SSProgram.cpp:1346
+#   inside a program member), so the accessor is live at this point.
+# - Root derivation mirrors the GA LuaMod insertion law (Rule 10: runtime
+#   mods directory, never a title-id): weakly_canonical -> strip trailing
+#   "Mods" -> strip "ue4ss".
+# - SeedArming::module_view_base() is the same file's static (UnrealInitializer.cpp:836).
+# - The extern "C" declaration matches GT's TU definition
+#   (FirstLaunchProfile.cpp, RC_first_launch_try_profile(const char*, uint64_t)).
+# - <filesystem> added explicitly (UE4SSProgram.hpp does not guarantee it).
+#
+# Scope honesty (GT section 3 protocol): this wiring runs the ladder
+# (slot load/re-verify -> DETECT -> TABLE ROW -> GENERATE -> [verify REQUESTS]
+# -> COMMIT -> PERSIST) and exposes pins via RC_first_launch_pin_at; the
+# initializer-side verify/report/commit follow-on (PendingVerify probe loop)
+# and the pin-registry retarget of consume_required_slot_seeds are FOLLOW-ON
+# rungs, not part of this patch. Outcome handling here matches GT's minimal
+# contract: Refused -> today's compiled-in pinned-profile admission continues
+# unchanged below (the generator never partially arms).
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp
+@@ -1,5 +1,7 @@
+ #include "ThreadNameRuntime.hpp"
+ #include "NativePropertyPointerGuard.hpp"
++#include <UE4SSProgram.hpp>
++#include <filesystem>
+ #include "CandidateBindingData.hpp"
+ #include "ThreadNamePackageAdmission.hpp"
+ #include "../include/BuildStamp.hpp"
+@@ -1679,6 +1679,28 @@
+             // G4 permits_code admission). Armed seeds are consumed directly;
+             // the retry loop below would only ever end in "PS scan timed out".
+             // Pool validation retries inside the same budget.
++            #if defined(__PROSPERO__)
++            // [FL] first-launch profile generator (agent GT, Claude round-5
++            // addenda A1/A5): run the slot/detect/table/generate ladder
++            // BEFORE the pinned-profile admission that follows, so a
++            // committed profile becomes its input source (verify/report/
++            // commit loop + pin-registry retarget = follow-on rungs per GT
++            // section 3; Refused -> the compiled-in pinned-profile admission
++            // below continues unchanged — the generator never partially arms).
++            // GA root law (Rule 10): derive the modbridge root from the
++            // RUNTIME-resolved mods directory — never a title-id.
++            {
++                extern "C" int RC_first_launch_try_profile(const char* modbridge_root, uint64_t image_base);
++                std::filesystem::path fl_mods_dir = std::filesystem::weakly_canonical(
++                    std::filesystem::path(UE4SSProgram::get_program().get_mods_directory()));
++                if (fl_mods_dir.filename() == "Mods")
++                {
++                    fl_mods_dir = fl_mods_dir.parent_path(); // <root>/ue4ss/Mods
++                }
++                fl_mods_dir = fl_mods_dir.parent_path();     // <root>/ue4ss -> <root>
++                RC_first_launch_try_profile(fl_mods_dir.string().c_str(), SeedArming::module_view_base());
++            }
++            #endif
+             SeedArming::consume_required_slot_seeds(std::chrono::seconds(UnrealConfig.SecondsToScanBeforeGivingUp));
+         }
+         else
+         {

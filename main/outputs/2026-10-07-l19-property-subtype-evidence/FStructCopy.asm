@@ -1,0 +1,26 @@
+0x437400 (file 0x43b400) 55 push rbp
+0x437401 (file 0x43b401) 4889e5 mov rbp, rsp
+0x437404 (file 0x43b404) 488b7f70 mov rdi, qword ptr [rdi + 0x70]
+0x437408 (file 0x43b408) e8f31fedff call 0x309400
+0x43740d (file 0x43b40d) 5d pop rbp
+0x43740e (file 0x43b40e) c3 ret 
+0x43740f (file 0x43b40f) cc int3 
+0x437410 (file 0x43b410) 55 push rbp
+0x437411 (file 0x43b411) 4889e5 mov rbp, rsp
+0x437414 (file 0x43b414) 488b4770 mov rax, qword ptr [rdi + 0x70]
+0x437418 (file 0x43b418) 8b572c mov edx, dword ptr [rdi + 0x2c]
+0x43741b (file 0x43b41b) 488b08 mov rcx, qword ptr [rax]
+0x43741e (file 0x43b41e) 4889c7 mov rdi, rax
+0x437421 (file 0x43b421) ff9100030000 call qword ptr [rcx + 0x300]
+0x437427 (file 0x43b427) 5d pop rbp
+0x437428 (file 0x43b428) c3 ret 
+0x437429 (file 0x43b429) cc int3 
+0x43742a (file 0x43b42a) cc int3 
+0x43742b (file 0x43b42b) cc int3 
+0x43742c (file 0x43b42c) cc int3 
+0x43742d (file 0x43b42d) cc int3 
+0x43742e (file 0x43b42e) cc int3 
+0x43742f (file 0x43b42f) cc int3 
+0x437430 (file 0x43b430) 55 push rbp
+0x437431 (file 0x43b431) 4889e5 mov rbp, rsp
+0x437434 (file 0x43b434) 488b7f70 mov rdi, qword ptr [rdi + 0x70]

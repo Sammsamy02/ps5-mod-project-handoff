@@ -1,0 +1,136 @@
+== admission table ==
+  pass rule order matches family 1
+  pass rule order matches family 2
+  pass rule order matches family 3
+  pass rule order matches family 4
+  pass rule order matches family 5
+  pass rule order matches family 6
+  pass rule order matches family 7
+  pass rule order matches family 8
+  pass rule order matches family 9
+  pass rule order matches family 10
+  pass rule order matches family 11
+  pass rule order matches family 12
+  pass rule order matches family 13
+  pass rule order matches family 14
+  pass rule order matches family 15
+  pass rule order matches family 16
+  pass rule order matches family 17
+  pass seven code-detour-only families (PE/PI/PLSF/CFBN/PCE/LPE/CODE_ADDRESS)
+  pass code-detour family stays refused with all facts: 5
+  pass code-detour family stays refused with all facts: 6
+  pass code-detour family stays refused with all facts: 7
+  pass code-detour family stays refused with all facts: 13
+  pass code-detour family stays refused with all facts: 14
+  pass code-detour family stays refused with all facts: 15
+  pass code-detour family stays refused with all facts: 17
+  pass pending-value family not admitted: 4
+  pass pending-value family not admitted: 8
+  pass pending-value family not admitted: 16
+  pass ufunction refused while thunk registry not ready
+  pass ufunction admitted as data-only partial
+  pass game-thread tick admitted before pump live (queued)
+  pass game-thread tick not live before pump
+  pass engine tick refused without VMT pump (launch-14 state)
+  pass engine tick admitted with VMT pump
+  pass unknown families refused
+  pass register_hook delivers tick families only
+== table validation ==
+  pass bad magic refused
+  pass refused mod never receives callbacks
+  pass bad abi version refused
+  pass refused mod never receives callbacks
+  pass short table refused
+  pass refused mod never receives callbacks
+  pass null destroy refused
+  pass refused mod never receives callbacks
+  pass entry failure refused
+  pass refused mod never receives callbacks
+  pass registrations made in a failed constructor are revoked
+  pass missing entry export refused
+== lifecycle + fault isolation ==
+  pass valid mod attaches
+  pass attach logged once
+  pass lifecycle events delivered in order
+  pass game-thread tick registered
+  pass global ProcessEvent registration refused
+  pass refusal logged with route name
+  pass engine tick refused when VMT pump not armed
+  pass tick delivered once per frame
+  pass tasks not run synchronously
+  pass queued tasks run on the next game-thread frame
+  pass ufunction hook refused while thunk registry not ready
+  pass ufunction hook admitted when thunks ready
+  pass pre hook fired once per call (post null)
+  pass engine install failure propagates and leaves no record
+  pass call_function refused off the game thread
+  pass call_function allowed on the game thread
+  pass faulting callback marks the mod faulted
+  pass fault logged once with the SDK error text
+  pass no callback of any kind after the fault
+  pass fault revoked every registration
+  pass fault removed the engine-side hook
+  pass faulted mod is still destroyed at stop
+  pass stopped mod gets nothing
+== revoke -> drain -> destroy (cross-thread) ==
+  pass stop waits while a callback runs on another thread
+  pass mod is Stopping (revoked) during the drain
+  pass destroy ran after the callback returned
+  pass running callback finished before destroy, and only once
+== deferred stop from inside a callback ==
+  pass stop from inside returns Stopping
+  pass mod not destroyed while its own callback runs
+  pass deferred destroy ran when the callback returned
+== drain timeout -> retained, never destroyed ==
+  pass drain timeout retains the mod without destroy
+  pass drain timeout logged
+  pass retained mod is never destroyed later
+== limits ==
+  pass mod limit enforced
+  pass per-mod registration limit
+  pass unregister ok
+  pass unregister checks the owner token
+  pass slot reusable after unregister
+  pass task queue bounded
+  pass queue drains and accepts again
+  pass host table header
+  pass unknown token / null out rejected
+  pass shutdown stops every mod
+== ENGINE_TICK only from the VMT pump ==
+  pass engine tick only from VMT drain; game-thread tick from both
+  pass admission query reports route and live
+== [B2] per-thread callback stack: trivially destructible, bounded ==
+  pass 32 nested callback scopes on one thread are admitted
+  pass the 33rd nested scope is refused (counted), not grown
+  pass stack unwinds fully; next scope admitted
+  pass the stack is per thread
+== [F4] revoked / unregistered registrations are erased (bounded per-pump walk) ==
+  pass 1000 register/unregister cycles leave an empty table (got 0)
+  pass ufunction unregister: engine hook removed, then the entry erased
+  pass second unregister of the same id: not found (no reuse, ids are never recycled)
+  pass a late engine call with an erased record id reaches nothing
+  pass 11 live registrations in the table
+  pass fault: engine hook removed, then every entry of the mod erased
+  pass a key bind the input handler still holds resolves to nothing after the erase
+== [F6] host services refuse a mod that is not running ==
+  pass running mod: services work
+  pass faulted mod: every service returns MBM_E_STATE
+  pass faulted mod's property write did not reach the object
+  pass faulted mod's log calls are dropped
+  pass unknown token stays MBM_E_INVALID
+  pass stopped mod: refused
+  pass log allowed inside destroy (Stopping)
+== [F3] stop/attach cycles never exhaust max_mods ==
+  pass 40 attach/stop cycles with max_mods=2 all succeed
+  pass stopped records are pruned (records now 1)
+  pass the limit still counts mods that are not stopped
+== [F5] FrameGate: at most one GUI frame per engine frame ==
+  pass 2000 marshal calls/s -> 125 frames (8 ms floor, <= 126)
+  pass dt = time since the previous frame that ran
+  pass both pumps live: only the VMT Tick pump drives the frame (61 frames, 61 ticks)
+  pass marshal pump yields while the VMT pump was seen recently
+  pass marshal pump takes over 250 ms after the VMT pump went quiet
+  pass VMT pump keeps a 4 ms floor
+  pass gate counts calls and frames
+  pass one pump call per 60 Hz frame: every frame drawn (no frame lost)
+[host_core] checks=122 failed=0

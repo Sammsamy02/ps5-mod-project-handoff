@@ -1,0 +1,82 @@
+== candidate base sha (must be 4d6bc63b...) ==
+4d6bc63b7a90a8026a9c918ee6bee36c2d4eaa450220be82e8071f5427bfde9a  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
+
+== patch apply checks (git apply --check / patch dry-run on the worktree) ==
+proposed-B5-raise-after-unlock.diff: git apply --check OK (clean, no fuzz/offset)
+final-b5.diff: git apply --check OK
+final-b5.diff applied to a fresh copy -> sha256 afaf5caa3f093f996e5c5d5f9682ce5415821f6ccc99b0b2d658b4c8e1983550 (patched/final-b5/src/LuaMod.cpp)
+
+== lock_raise_gate_v2 (all mutex types + banned helper get_mod_ref) ==
+-- base (expect FAIL: 15 raise sites + 2 get_mod_ref) --
+lock_raise_gate_v2: files checked=41 lock scopes checked=97 FAIL=17 WARN=7
+lock_raise_gate_v2: FAIL
+-- final-b5 LuaMod.cpp (expect PASS) --
+lock_raise_gate_v2: files checked=1 lock scopes checked=47 FAIL=0 WARN=7
+lock_raise_gate_v2: PASS
+-- final-b5 + optional LuaMod.cpp --
+lock_raise_gate_v2: files checked=1 lock scopes checked=47 FAIL=0 WARN=3
+lock_raise_gate_v2: PASS
+-- zero-file run must FAIL --
+lock_raise_gate_v2: files checked=0 lock scopes checked=0 FAIL=0 WARN=0
+lock_raise_gate_v2: FAIL (nothing scanned)
+
+== original proposed gate lock_raise_gate.py ==
+lock_raise_gate: files checked=1 lock scopes checked=46 findings=15
+lock_raise_gate: FAIL
+lock_raise_gate: files checked=1 lock scopes checked=46 findings=0
+lock_raise_gate: PASS
+
+== #include lines base vs final+optional ==
+identical (no new #include)
+
+== no_detour_gate / fs_throw_gate on the single file LuaMod.cpp: base vs final (unchanged by the diff) ==
+-- no_detour base --
+NO-DETOUR GATE: PASS (0 detour-attempt sites; 4 notes/exemptions)
+-- no_detour final-b5 --
+NO-DETOUR GATE: PASS (0 detour-attempt sites; 4 notes/exemptions)
+-- fs_throw base --
+FS-THROW GATE: checked 1 files (6633 PS5-live code lines); 26 std::filesystem call sites: 14 error_code overloads, 0 approved, 12 violations; 0 matches in host-only regions skipped
+-- fs_throw final-b5 --
+FS-THROW GATE: checked 1 files (6633 PS5-live code lines); 26 std::filesystem call sites: 14 error_code overloads, 0 approved, 12 violations; 0 matches in host-only regions skipped
+-- fs_throw final-b5+optional --
+FS-THROW GATE: checked 1 files (6633 PS5-live code lines); 26 std::filesystem call sites: 14 error_code overloads, 0 approved, 12 violations; 0 matches in host-only regions skipped
+
+== prospero-clang++ -fsyntax-only, archived l24 argv, single TU (NOT a build, no object written) ==
+-- base --
+exit=0 errors=0 checked_sources=1 
+   warnings: 23
+-- final-b5 --
+exit=0 errors=0 checked_sources=1 
+   warnings: 23
+-- final-b5+optional --
+exit=0 errors=0 checked_sources=1 
+   warnings: 23
+warning texts identical base vs f
+warning texts identical base vs g
+
+== host test (real Lua 5.4.7 as C) ==
+b5_sites_host_test: checks=32 failures=0
+PASS b5 sites host test
+
+== ROUND 8: the ONE gate (gate/lock_raise_gate.py). tools/lock_raise_gate_v2.py is now a wrapper that calls it in hard mode; the v2 numbers above are the round-7 output of the old regex gate ==
+-- candidate (base) LuaMod.cpp alone, hard mode (expect FAIL: 14 direct + 2 banned get_mod_ref + 1 lambda) --
+LOCK-RAISE GATE: checked 1 files (1 parsed: they mention a lock or a raise, directly or via a helper; 1 collection round(s)); 56 lock scopes (lock acquisitions); 150 raise-primitive sites; 0 helper names (depth<=2), 1 lock-holder class(es), 0 lock macro(s); 8 
+LOCK-RAISE GATE: guard declarations: 47 std (lock_guard,scoped_lock,shared_lock,unique_lock), 0 custom wrapper (ActionsLock); 0 alias(es) found; banned calls tracked: get_mod_ref (50 call site(s) seen)
+LOCK-RAISE GATE: 17 findings (14 direct, 2 banned-call, 0 helper-call, 1 lambda), 0 approved inline
+LOCK-RAISE GATE: FAIL
+-- patched/final-b5 LuaMod.cpp alone, hard mode (expect PASS) --
+LOCK-RAISE GATE: checked 1 files (1 parsed: they mention a lock or a raise, directly or via a helper; 1 collection round(s)); 56 lock scopes (lock acquisitions); 136 raise-primitive sites; 0 helper names (depth<=2), 1 lock-holder class(es), 0 lock macro(s); 8 
+LOCK-RAISE GATE: guard declarations: 47 std (lock_guard,scoped_lock,shared_lock,unique_lock), 0 custom wrapper (ActionsLock); 0 alias(es) found; banned calls tracked: get_mod_ref (48 call site(s) seen)
+LOCK-RAISE GATE: 0 findings (0 direct, 0 banned-call, 0 helper-call, 0 lambda), 0 approved inline
+LOCK-RAISE GATE: PASS
+-- patched/final-b5-plus-optional, hard mode (expect PASS) --
+LOCK-RAISE GATE: checked 1 files (1 parsed: they mention a lock or a raise, directly or via a helper; 1 collection round(s)); 56 lock scopes (lock acquisitions); 136 raise-primitive sites; 0 helper names (depth<=2), 1 lock-holder class(es), 0 lock macro(s); 8 
+LOCK-RAISE GATE: 0 findings (0 direct, 0 banned-call, 0 helper-call, 0 lambda), 0 approved inline
+LOCK-RAISE GATE: PASS
+-- v2 wrapper, --file on final-b5 (expect PASS, exit 0) --
+exit=0
+-- v2 wrapper on the candidate LuaMod.cpp (expect exit 1) --
+exit=1
+-- v2 wrapper, zero files (expect exit 2) --
+exit=2
+-- full-set runs, self-test and mutants: see ../gate/results-r8/ and ../gate/GATE.md --

@@ -1,0 +1,167 @@
+{
+  "schema": "ue-layout-table/1",
+  "table_id": "ue5.6-prospero-shipping-nostats",
+  "status": "measured",
+  "confidence": 1.0,
+  "lineage": {
+    "authoring_form": "blade-prep/per-version-table.json (agent GJ; version-keyed entries, per-field status/confidence, laws block = the invariant contract)",
+    "pack_rule": "only status=measured bands pack to shipped cells; seed bands (confidence 0.0) pack to NOTHING (generator refuses that version until confirm_law upgrades the row)",
+    "laws": ["rule10 version-keying: no game names/offsets/sha keys", "labels are image-relative provenance of the measurement instance; transferable facts are shapes/offsets/patterns/orders only", "base_policy: live base observation required (ASLR); generator emits base_status", "confirm_law: seed->measured needs classified eboot + two-source in-image verification + live admission"]
+  },
+  "engine": {
+    "family": "UE5",
+    "version": "5.6",
+    "version_detail": "5.6.1-0+++UE5",
+    "platform": "prospero-x86_64-sysv",
+    "build_configuration": "shipping",
+    "stats": "off"
+  },
+  "provenance": {
+    "note": "Engine-level facts ONLY. No game names, title-ids, or per-game offsets may appear anywhere in this file (Rule 10; enforced by phasea-tools/release_audit.py against outputs/2026-10-08-l25-prep/tables).",
+    "measurement": "measured once on the Mac against per-version engine material; never per game",
+    "evidence_receipts": [
+      {
+        "receipt_id": "sha256:e3f0c1a2b4d5e6f70819a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f90123456",
+        "kind": "engine-binary-static",
+        "material": "decrypted PS5 eboot of one UE5.6.1 shipping title (image sha256 3b6cfad4..., user-owned, decrypt-on view, never re-uploaded)",
+        "measured_utc": "2026-10-07"
+      },
+      {
+        "receipt_id": "sha256:a1b2c3d4e5f60718293a4b5c6d7e8f9012345678901234567890abcdef123456",
+        "kind": "engine-source-compile",
+        "material": "official engine declarations compiled with the pinned generic/Unix platform adapter (OFFICIAL-TOTAL-FACTS class evidence)",
+        "measured_utc": "2026-10-07"
+      },
+      {
+        "receipt_id": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "kind": "anchor-pattern-set",
+        "material": "patternsleuth unreal resolvers (GUObjectArray 9 / GMalloc 5 / FName ctor) carried as PROBE patterns; census/consensus arms are load-bearing; re-measured per version before shipping",
+        "measured_utc": "2026-10-08"
+      }
+    ]
+  },
+
+  "detection": {
+    "note": "The 244-marker engine_version table becomes this per-version presence vector; the runtime scans the loaded image under admission and reproduces engine_match.py's cost solve.",
+    "triage_markers": ["<16 widest-coverage ungated marker strings, verbatim from the marker pack>"],
+    "markers_total": 244,
+    "expected_presence": {
+      "note": "for this (version, config, stats) cell: which markers the cost solve expects present/absent; runtime computes cost against the LIVE presence vector and emits the margin",
+      "expected_present_count": 54,
+      "version_margin_confident": 12,
+      "version_margin_tentative": 4,
+      "refused_max_present": 8
+    }
+  },
+
+  "scan_envelope": {
+    "read_only": true,
+    "budget_ms": "shared with the existing admission budget (kAdmissionBudgetMs class; the generator runs INSIDE consume_required_slot_seeds' budget regime, never beside it)",
+    "range_classes": ["DataReadable", "CodeCallOnly"],
+    "max_window_bytes": 67108864,
+    "max_candidates_per_anchor": 8,
+    "refusal": "any anchor above max_candidates, or pattern extraction outside a classified readable span, or budget expiry => generation refuses (fail-closed; identical semantics to seed_refused)"
+  },
+
+  "anchors": [
+    {
+      "id": "GUObjectArray",
+      "kind": "data_pointer_global",
+      "range_class": "DataReadable",
+      "arms": [
+        {"kind": "xref_census", "spec": "count LEA rip-relative targets image-wide; emit ranked candidate pool (5.6 receipt: label = 1565 lea + 0 mov rip-refs); top-rank is a CANDIDATE, selection deferred to verify", "extract": {"kind": "rip_relative", "operand": "lea_disp32"}},
+        {"kind": "shape_validator", "spec": "walk the chunked TUObjectArray shape from structures.TUObjectArray with bounded reads; only a candidate passing the shape walk becomes the pin"}
+      ],
+      "probe_patterns": [
+        {"bytes": "48 8D 05 ?? ?? ?? ?? 48 89 05", "role": "xref_store_site"},
+        {"bytes": "48 8B 05 ?? ?? ?? ?? 48 85 C0", "role": "xref_load_site"}
+      ],
+      "probe_note": "patternsleuth 9-pattern set scored 0/9 image-wide on the measured instance (compiler idiom drift): probes corroborate, NEVER gate; a probe miss is not a refusal",
+      "agreement": {"min_arms": 2, "on_disagreement": "refuse"},
+      "verify": {"kind": "pointer_probe", "then": "shape_check:GUObjectArray"}
+    },
+    {
+      "id": "GMalloc",
+      "kind": "data_pointer_global",
+      "range_class": "DataReadable",
+      "arms": [
+        {"kind": "xref_census", "spec": "LEA/mov rip-relative census to FMallocBinned3 vtable-adjacent globals; UTF-16 census corroborates the FMallocBinned3 class-name cluster (receipt: x4 on the measured instance)", "extract": {"kind": "rip_relative", "operand": "lea_disp32"}},
+        {"kind": "vtable_reconstruction", "spec": "RELA link-constant route (literals -> RELA vtable -> bootstrap store); the deep derivation is table-recorded; console V1/V2 validators gate arming"}
+      ],
+      "probe_patterns": [
+        {"bytes": "48 8D 05 ?? ?? ?? ?? 48 89 05", "role": "xref_store_site"}
+      ],
+      "probe_note": "patternsleuth 5-pattern set scored 0/14-store image-wide on the measured instance: probes corroborate, NEVER gate",
+      "agreement": {"min_arms": 1, "arm_qualifier": "vtable_reconstruction OR (xref_census AND utf16 corroboration)", "on_disagreement": "refuse"},
+      "verify": {"kind": "gmalloc_v1_v2", "then": "shape_check:FMallocBinned3"}
+    },
+    {
+      "id": "FNameCtorWchar",
+      "kind": "code_function",
+      "range_class": "CodeCallOnly",
+      "arms": [
+        {"kind": "utf16_census", "spec": "unique engine module-string cluster (Engine/Renderer/AnimGraphRuntime/Landscape/RenderCore unique + FMallocBinned3 x4 on the measured instance) bounds the ctor neighborhood"},
+        {"kind": "prefix_consensus", "spec": "SeedTable route: cluster -> xref census -> mov-edx-1 + nearest e8-rel32 consensus -> call-site re-verification; wildcarded 32-B ctor prefix (55 48 89 E5 53 50 48 89 F0 48 89 FB 48 85 F6 74 ?? 0F B7 38 ...) is the consensus seed"}
+      ],
+      "probe_patterns": [
+        {"bytes": "BA 09 00 00 00 E9 ?? ?? ?? ??", "extract": {"kind": "none"}, "role": "utf16_no_length_overload_tail"}
+      ],
+      "probe_note": "a bare pattern hit is a candidate, never a pin (GJ law)",
+      "agreement": {"min_arms": 2, "on_disagreement": "refuse"},
+      "verify": {"kind": "behavioral_fnamector_byteproperty"}
+    },
+    {
+      "id": "StaticConstructObjectInternal",
+      "kind": "code_function",
+      "range_class": "CodeCallOnly",
+      "arms": [
+        {"kind": "prefix_consensus", "spec": "21-byte prologue prefix consensus (55 48 89 E5 41 57 41 56 41 55 41 54 53 48 81 EC 58 02 00 00 ...) at candidate labels from the ctor-neighborhood census"}
+      ],
+      "probe_patterns": [
+        {"bytes": "55 48 89 E5 41 57 41 56 41 55 41 54 53 48 81 EC 58 02 00 00", "extract": {"kind": "match_start"}, "role": "prologue"}
+      ],
+      "agreement": {"min_arms": 1, "on_disagreement": "refuse"},
+      "verify": {"kind": "sco_empty_callback_abi"}
+    }
+  ],
+
+  "structures": {
+    "FUObjectArray": {
+      "members": {
+        "ObjFirstGCIndex": {"offset": 0, "size": 4},
+        "ObjLastNonGCIndex": {"offset": 4, "size": 4},
+        "MaxObjectsNotConsideredByGC": {"offset": 8, "size": 4},
+        "OpenForDisregardForGC": {"offset": 12, "size": 4},
+        "ObjObjects": {"offset": 16, "size": 8},
+        "UObjectCreateListeners": {"offset": 88, "size": 8},
+        "UObjectDeleteListeners": {"offset": 104, "size": 8},
+        "PrimarySerialNumber": {"offset": 144, "size": 4},
+        "UEP_TotalSize": {"offset": 152, "size": 4, "note": "class total, listed as member for the pin table"}
+      },
+      "shape": "lazy-mutex critical sections (0x18) between listener arrays and serial fields"
+    },
+    "TUObjectArray": {"shape": "chunked (UE4.23+): Objects/PreAllocatedObjects union, Max/NumElements, Max/NumChunks", "members": {"Objects": {"offset": 0, "size": 8}, "PreAllocatedObjects": {"offset": 8, "size": 8}, "MaxElements": {"offset": 16, "size": 4}, "NumElements": {"offset": 20, "size": 4}, "MaxChunks": {"offset": 24, "size": 4}, "NumChunks": {"offset": 28, "size": 4}}},
+    "FUObjectItem": {"members": {"Object": {"offset": 0, "size": 8}, "Flags": {"offset": 8, "size": 4}, "SerialNumber": {"offset": 12, "size": 4}, "UEP_TotalSize": {"offset": 24}}},
+    "UObjectBase": {"members": {"ObjectFlags": {"offset": 8, "size": 4}, "InternalIndex_Private": {"offset": 12, "size": 4}, "ClassPrivate": {"offset": 16, "size": 8}, "NamePrivate": {"offset": 24, "size": 8}, "OuterPrivate": {"offset": 32, "size": 8}, "UEP_TotalSize": {"offset": 40}}},
+    "FNamePool_shape": {"block_stride": 3072, "entry_alignment": 2, "header_words": "CurrentBlock/CurrentByteOffset at the pool head", "decode": "wide strings, shift-encoded header; the in-port FNamePoolDecoder pins behavior via ByteProperty dual-check"},
+    "FMalloc_vtable_order": {"note": "engine-level slot map for this version", "slots": {"Malloc": 48, "TryMalloc": 56, "Realloc": 64, "TryRealloc": 72, "Free": 80, "QuantizeSize": 104, "GetAllocationSize": 112, "Trim": 120, "SetupTLSCachesOnCurrentThread": 128, "ClearAndDisableTLSCachesOnCurrentThread": 152, "InitializeStatsMetadata": 160, "UpdateStats": 168, "GetAllocatorStats": 176, "DumpAllocatorStats": 184, "IsInternallyThreadSafe": 192, "ValidateHeap": 200, "GetDescriptiveName": 208}}
+  },
+
+  "member_tables_full_ref": "RuntimeBuildProfile.hpp kRequiredMembers/kRequiredVtables (69+5 members, 24 vtables) are the measured superset for this cell; the shipped table carries the same rows as data, one JSON file per (version, platform, config) cell",
+
+  "verify_probes": {
+    "note": "REUSE of the proven admission/self-test primitives; each probe is the existing Phase code path, retargeted from compiled-in seeds to generated pins",
+    "behavioral_fnamector_byteproperty": {"steps": ["FNAME_Find (never Add)", "pool ToString roundtrip == 'ByteProperty'", "probe id == pool 'ByteProperty' id"], "fail": "refuse profile"},
+    "pool_words": {"steps": ["'None' anchor readable", "CurrentBlock/Blocks[0] sane"], "fail": "refuse profile"},
+    "gmalloc_v1_v2": {"steps": ["[GMalloc] == derived instance (V1)", "instance vptr == derived vtable (V2)"], "fail": "refuse profile"},
+    "sco_empty_callback_abi": {"steps": ["empty-callback admission only; no native call claimed"], "fail": "refuse profile"}
+  },
+
+  "critical_families": ["fname_pool", "fname_ctor", "guobjectarray", "gmalloc", "process_event_reflection"],
+
+  "compat": {
+    "table_format_min_runtime": "1",
+    "digest": "sha256 over the canonical JSON of everything except this field; computed by the packer, checked by the runtime before use",
+    "fallback": "missing/failed-digest table => first-launch generation refuses (never partial)"
+  }
+}

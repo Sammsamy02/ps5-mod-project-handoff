@@ -1,0 +1,44 @@
+{
+  "worker": "worker-game-session-ridealongs",
+  "team": "2026-10-04-zcode-team",
+  "date": "2026-10-04",
+  "mission": "Prepare (staging-only, NO console contact) the next UE4SS game session so it carries BOTH ridealong PRXs alongside composition-5: qdrv1 (modbridge_qh_driver.prx) and the runtime-aligned observer (modbridge_runtime_aligned_observer.prx), via one reconciled 6-entry ploader.ini, with a verified interaction audit and a combined stage plan consumable by worker-console-batch-runner's stage-qdrv1 step.",
+  "artifacts_verified": {
+    "qdrv1": {
+      "path": "outputs/2026-10-04-zcode-team/worker-record-sink-addon/modbridge_qh_driver.prx",
+      "bytes": 26157,
+      "sha256": "52c3221665a423ddd2b22faddd4ac59ea8fd0ab8c1880c61e225d32a43df70a4",
+      "receipt_match": "STAGE-PLAN-QDRV1.md sec 1 and build-receipt.json final_sha256/final_bytes: EXACT MATCH",
+      "checker": "check_qdrv_artifact.py run on determinism/run1 AND run2: LOCAL_PACKAGE_CHECKS_PASSED rc=0 both (fself container law, init/fini 1/1, SDK 0x11000000, DT_INIT/DT_FINI, 11-row decoded import equality, forbidden-identity gate)",
+      "byte_identity": "top-level delivered copy cmp-equal to determinism/run1 staged copy (run1==run2 per worker determinism)"
+    },
+    "observer": {
+      "path": "outputs/2026-10-04-zcode-team/worker-observer-packaging/modbridge_runtime_aligned_observer.prx",
+      "bytes": 30152151,
+      "sha256": "1afa0997682cc6ecc14fd9f82961d68755edfacb36b36a4135203e37b1011e30",
+      "receipt_match": "worker-observer-packaging/CLAIM.json observer_packaged: EXACT MATCH",
+      "checker": "check_observer_artifact.py run on build-1 AND build-2: LOCAL_PACKAGE_CHECKS_PASSED rc=0 both (fself law, init/fini 232/2 == frozen lineage, SDK 0x11000000, 191-row frozen contract exact equality, combined object 225f6d68... = frozen recipe, build2 byte-identical)",
+      "byte_identity": "top-level delivered copy cmp-equal to build-1 copy"
+    }
+  },
+  "ini_reconciliation": {
+    "combined_entries": 6,
+    "registered_plugins_at_mode_2": 5,
+    "limits": "pinned ploader main.c: MAX_PLUGINS=10 per title, MAX_TITLES=10, path<=255; parse_mode accepts only 0/1/2; mode<=0 SKIPPED at parse (L672) so ingame_facts=0 registers nothing and consumes no slot; 5/10 registered (6/10 even if igf were re-enabled) — within limits with >=4 slots spare",
+    "decisions": [
+      "ingame_facts line STAYS = 0: parser-inert (never registered, never PT_ATTACHed); keeps qdrv1's /data/modbridge-ingame-facts.jsonl single-writer, satisfying STAGE-PLAN-QDRV1 sec 1's only-staged-C2-writer concern; line preserved byte-identical per append-only law",
+      "path_test line STAYS = 2: one-shot freshness oracle (appends PATH_TEST + ACTIVATION_TEST lines to /data/plugins/UE4SS.log at module_start, returns 0 always, no threads); confirmed non-interfering (see audit); its appends double as observer growth-event cross-check",
+      "BOTH new lines APPENDED = 2 AFTER the composition line (file order == registration order == ploader injection order): composition ladder starts first, ridealongs load last"
+    ],
+    "verification": "simulate_ploader_ini.py (parser-faithful port of pinned read_ini/parse_mode/normalize_path/register_plugin) SIMULATION_PASSED on 8 variants: canonical, no-trailing-newline, CRLF, comments/blank-lines, ridealongs-first order, igf-flipped-to-2, invalid-mode-3 (dropped), duplicate-line hazard (registers 2x — ploader does NOT dedupe: append-only edit + count check is mandatory)"
+  },
+  "interaction_audit": "NO interference found; per-module I/O cited from sources. UE4SS.log: writers are UE4SS itself + path_test (2 lines, once, O_APPEND) + composition (failure-path lines only, O_APPEND, pre-thread); sole reader is the observer (stat + fresh O_RDONLY fd + pread<=512B, shrink re-baseline, truncation-tolerant, never writes, no lseek). /data/modbridge-ingame-facts.jsonl: sole active writer is qdrv1 (igf6 probe =0 skipped; composition provably never writes it). runtime-status.txt, aligned-entry log, observer log: disjoint single-writer paths. Threads: observer 1 worker (30x2s) + qdrv1 1 driver (30x4s), both nanosleep-cadence, no mutex imports on either surface, qdrv1 admission gate refuses until GUA header admits so early start is by-design; bounded windows are honest (if engine-ready lands late, windows close with honest negatives — new launch required). ploader: sequential mode-2 injections add ~10-15 s, far inside the 120 s INJECTOR_TIMEOUT_S; pre-existing all_ok re-injection quirk noted, unchanged by 2 more entries.",
+  "deliverables": [
+    "CLAIM.json (this file, first)",
+    "simulate_ploader_ini.py (verification receipt, runnable)",
+    "STAGE-PLAN-COMBINED.md (upload+readback law for both PRXs, ini edit+verify, rollback, 5 expected evidence files, combined-staging section for worker-console-batch-runner)",
+    "VERIFICATION-RECEIPTS.json (hashes, checker outputs, readback law constants, simulation results)",
+    "REPORT.md (last)"
+  ],
+  "bounds": "No console contact, no nested subagents, no writes outside outputs/2026-10-04-zcode-team/worker-game-session-ridealongs/; other workers' files read-only (worker-console-batch-runner NOT edited). CLAIM.json first, REPORT.md last."
+}

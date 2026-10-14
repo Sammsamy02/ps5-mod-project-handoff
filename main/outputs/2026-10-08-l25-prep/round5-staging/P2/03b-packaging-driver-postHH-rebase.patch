@@ -1,0 +1,60 @@
+# REBASE ADAPTATION (agent IH, 2026-10-10, /tmp staging) of FX P2/03's two
+# rejected hunks (authored against pre-HH 086e5149+P1). The live driver gained
+# agent HH's symbols-sidecar changes AFTER FX's authoring: docstring item 6
+# (P12/P13 sidecar) now sits between FX's item-5 anchor and the module tail,
+# and the plan expected-gates list gained P12/P13 lines. ADAPTATIONS (pure
+# re-anchoring + explicit HH/P2 composition; FX semantics unchanged):
+#   HUNK A: FX's item-5 docstring edit re-anchored on the CURRENT item-5 text
+#     (which HH had re-terminated from ').' to ');'); the same FX replacement
+#     lines are used with the ';' terminator preserved. FX's 'import os'
+#     addition applies unchanged at the current import line.
+#   HUNK B: FX's conditional pair_gates (P10/P11 only when B active) composed
+#     WITH HH's unconditional P12/P13 sidecar gate list entries: the gates
+#     list becomes [...P5..P9]+pair_gates+[P12,P13] and FX's pair_gates_note
+#     is kept verbatim. P10/P11 conditionality is byte-identical to FX.
+# Apply AFTER 03-packaging-driver.patch (its hunks 1,3,4 apply clean at
+# fuzz=0; hunks 2 (@22) and 5 (@353) reject on the post-HH driver).
+# Reverse with -R. P1's packaging hunk (lineage_overlays ~line 156 region)
+# is disjoint from every P2/03 hunk - composition order P1->P2 is unaffected.
+--- a/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py
++++ b/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py
+@@ -25,9 +25,11 @@
+      then enforces the l24 acceptance set: 20/20 static checks, preserved
+      constructor arrays (.init_array 238 / .fini_array 2), exactly 207
+      exact ELF import identities, identical pass-1/pass-2 PRX twins;
+-  5. writes FINAL-RECEIPT-VARIANT-{A,B}.json plus a cross-variant
++  5. writes FINAL-RECEIPT-VARIANT-<key>.json per ACTIVE variant plus, when
++     both A and B were packaged, a cross-variant
+      VARIANT-PAIR-PACKAGING-RECEIPT.json (A and B PRXes must differ; both
+-     must carry the identical 207-name import set);
++     must carry the identical 207-name import set). Default runs package A
++     only and skip the pair receipt (P2);
+   6. [agent HH 2026-10-08] at final-receipt time emits the PRX SYMBOLS
+      SIDECAR <package-dir>/<prx-name>.symbols.json (PHASEA-PLANS #5 BUILD
+      GAP closure; consumer contract = phasea-tools/symbolize_crash.py
+@@ -43,7 +45,7 @@
+ No console/network operations. Requires build_variants.py --execute to have
+ completed (runtime twin variants) before --prepare/--execute.
+ """
+-import argparse,hashlib,json,shutil,subprocess,sys
++import argparse,hashlib,json,os,shutil,subprocess,sys
+ from pathlib import Path
+ HERE=Path(__file__).resolve().parent;ROOT=HERE.parents[1]
+ sys.dont_write_bytecode=True
+@@ -515,10 +517,13 @@
+             record('P2-frozen-source-pin',p.exists() and (expected is None or sha(p)==expected),{'path':str(p),'sha256':sha(p) if p.exists() else None,'manifest_pinned':expected is not None})
+         cand,_=l26_profile_candidates()
+         record('P2-l26-profile-candidates',len(cand)>=3,{'candidates':sorted(cand)})
++        pair_gates=([] if not any(v['key']=='B' for v in VARIANTS)
++                    else ['P10 variant A/B PRX differ','P11 variant import name sets equal (207)'])
+         steps.append({'step':'verify-expected-gates','static_checks_each_pass':20,'exact_import_identities':207,'init_array_slots':238,'fini_array_slots':2,
+-                      'gates':['P5 build receipt MAC_PACKAGE_CHECKS_PASS','P6 20/20 static checks all pass','P7 exactly 207 exact ELF import identities','P8 constructor arrays preserved 238/2','P9 pass-1/pass-2 PRX twins identical','P10 variant A/B PRX differ','P11 variant import name sets equal (207)',
+-                               'P12 per-variant symbols sidecar <pkg>/<prx>.symbols.json valid (JSON + required keys + prx_sha256 == packaged pass-1 PRX)',
+-                               'P13 symbols sidecar prx_sha256 matches BOTH packaging twins']})
++                      'gates':['P5 build receipt MAC_PACKAGE_CHECKS_PASS','P6 20/20 static checks all pass','P7 exactly 207 exact ELF import identities','P8 constructor arrays preserved 238/2','P9 pass-1/pass-2 PRX twins identical']+pair_gates+
++                               ['P12 per-variant symbols sidecar <pkg>/<prx>.symbols.json valid (JSON + required keys + prx_sha256 == packaged pass-1 PRX)',
++                                'P13 symbols sidecar prx_sha256 matches BOTH packaging twins'],
++                      'pair_gates_note':('A/B pair gates active (B opted in)' if pair_gates else 'P10/P11 skipped: variant B not in the active packaging set (agent-FX P2 drop)')})
+     manifests={}
+     for variant in VARIANTS:
+         manifests[variant['key']]=prepare_variant(variant,record,steps,args.prepare or args.execute)

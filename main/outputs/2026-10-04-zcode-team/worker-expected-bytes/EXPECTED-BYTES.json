@@ -1,0 +1,119 @@
+{
+  "task": "expected-prologue-bytes",
+  "generated": "2026-10-04",
+  "worker": "worker-expected-bytes",
+  "source_binary": {
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+    "size": 194241424,
+    "size_hex": "0xb93e390",
+    "sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+    "format": "ELF64 LSB x86-64, type 65040 (0xFE10 Orbis/PS4 eboot), OS ABI FreeBSD",
+    "provenance": "static survey input per .superpowers/native-dependency-spike/ue4ss-native-file-core-survey-1/run-release-1/receipt.json argv[0-input]"
+  },
+  "elf_verification": {
+    "magic_at_offset_0": "7f454c46",
+    "magic_ok": true,
+    "class": "ELF64 little-endian, machine 62 (x86-64)",
+    "program_headers": {
+      "e_phoff": "0x40",
+      "e_phentsize": 56,
+      "e_phnum": 14
+    },
+    "load_segments": [
+      {"index": 0, "flags": "R+E", "p_offset": "0x4000",    "p_vaddr": "0x0",       "p_filesz": "0x7479b1c", "p_memsz": "0x7479b1c", "p_align": "0x4000", "note": "executable code segment (LOAD0)"},
+      {"index": 1, "flags": "R",   "p_offset": "0x7480000", "p_vaddr": "0x747c000", "p_filesz": "0xa3e918",  "p_memsz": "0xa3e918"},
+      {"index": 2, "flags": "RW",  "p_offset": "0x7ec0000", "p_vaddr": "0x7ebc000", "p_filesz": "0x127e4e8", "p_memsz": "0x1280000"},
+      {"index": 3, "flags": "RW",  "p_offset": "0x9140000", "p_vaddr": "0x913c000", "p_filesz": "0x1cc5f2",  "p_memsz": "0x4f7418", "note": "BSS tail 0x93085f2..0x9633418 is runtime-only"},
+      {"index": 4, "flags": "R--", "p_offset": "0x930f420", "p_vaddr": "0x9633420", "p_filesz": "0x262cea8", "p_memsz": "0x262cea8"}
+    ],
+    "offset_formula": "file_offset = p_offset + (vaddr - p_vaddr); for LOAD0 p_vaddr=0x0, p_offset=0x4000 => file_offset = vaddr + 0x4000",
+    "boundary_check": "every anchor vaddr lies in [0x0, 0x7479b1c) of LOAD0 and computed file_offset+32 <= 0x4000+0x7479b1c = 0x747db1c < file size 0xb93e390; ELF magic verified at file start",
+    "guobject_array_note": "survey-linked GUObjectArray vaddr 0x93ba110 lies beyond LOAD3 p_filesz end (0x93085f2) but within p_memsz => BSS; expected bytes for it are runtime-only and CANNOT be read from this file. Structure template below is the comparison target."
+  },
+  "anchors": [
+    {
+      "symbol": "UGameEngine::Tick",
+      "vaddr": "0x2fac8c0",
+      "file_offset": "0x2fb08c0",
+      "segment": "LOAD0 (R+E)",
+      "bytes_hex": "554889e54157415641554154534881ec880000004c8b2d2d561806c5f057c9c5",
+      "bytes_hex_spaced": "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec 88 00 00 00 4c 8b 2d 2d 56 18 06 c5 f0 57 c9 c5",
+      "disassembly_summary": "push rbp; mov rbp,rsp; push r15; push r14; push r13; push r12; push rbx; sub rsp,0x88; mov r13,[rip+0x618562d]; vxorps xmm1,xmm1,xmm1 — canonical frame-setup prologue, confirmed function entry",
+      "prologue_valid": true
+    },
+    {
+      "symbol": "StaticConstructObject",
+      "vaddr": "0x490aa0",
+      "file_offset": "0x494aa0",
+      "segment": "LOAD0 (R+E)",
+      "bytes_hex": "554889e54157415641554154534881ec58020000488b054d14ca084889fb488b",
+      "bytes_hex_spaced": "55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec 58 02 00 00 48 8b 05 4d 14 ca 08 48 89 fb 48 8b",
+      "disassembly_summary": "push rbp; mov rbp,rsp; push r15; push r14; push r13; push r12; push rbx; sub rsp,0x258; mov rax,[rip+0x8ca144d]; mov rbx,rdi; mov ... — canonical frame-setup prologue (0x258 stack frame), confirmed function entry",
+      "prologue_valid": true
+    },
+    {
+      "symbol": "FName ctor call-site candidate",
+      "vaddr": "0x23d590",
+      "file_offset": "0x241590",
+      "segment": "LOAD0 (R+E)",
+      "bytes_hex": "554889e553504889f04889fb4885f674330fb7384889c631c96685ff742a6690",
+      "bytes_hex_spaced": "55 48 89 e5 53 50 48 89 f0 48 89 fb 48 85 f6 74 33 0f b7 38 48 89 c6 31 c9 66 85 ff 74 2a 66 90",
+      "disassembly_summary": "push rbp; mov rbp,rsp; push rbx; push rax; mov rax,rsi; mov rbx,rdi; test rsi,rsi; je +0x33; movzx edi,word[rax]; mov rsi,rax; xor ecx,ecx; test di,di; je +0x2a; nop — entry with frame pointer plus null/EName early-outs consistent with an FName constructor; confirmed function entry (call-site candidate resolves to a real function start)",
+      "prologue_valid": true
+    }
+  ],
+  "fuobject_array_template": {
+    "note": "Expected structure of the GUObjectArray target (FUObjectArray) for comparison against live reads. Generated member offsets from the port's per-version layout setters (native-coherent-runtime-1/source/port/unreal/generated_include/FunctionBodies/*_MemberVariableLayout_DefaultSetter_FUObjectArray.cpp and *_TUObjectArray.cpp / *_FUObjectItem.cpp). Both candidate versions agree on the first 0x30 bytes; they diverge after 0x30. The binary self-reports engine 5.6; the 4.25 template is included per task request.",
+    "common_first_32_bytes": {
+      "0x00": {"name": "ObjFirstGCIndex", "type": "int32", "expected": "small index, typically 0"},
+      "0x04": {"name": "ObjLastNonGCIndex", "type": "int32", "expected": "index (< NumElements), grows during startup then stabilizes"},
+      "0x08": {"name": "MaxObjectsNotConsideredByGC", "type": "int32", "expected": "small constant or 0"},
+      "0x0C": {"name": "OpenForDisregardForGC", "type": "bool (1 byte, padded to 4)", "expected": "0 or 1"},
+      "0x10": {"name": "ObjObjects.Objects", "type": "FUObjectItem** (chunk-table pointer)", "expected": "non-null readable pointer into RW memory"},
+      "0x18": {"name": "ObjObjects.PreAllocatedObjects", "type": "FUObjectItem*", "expected": "usually NULL"},
+      "0x20": {"name": "ObjObjects.MaxElements", "type": "int32", "expected": "constant capacity (e.g. chunks*65536)"},
+      "0x24": {"name": "ObjObjects.NumElements", "type": "int32", "expected": "live count, 0 < NumElements <= MaxElements, grows during load"},
+      "0x28": {"name": "ObjObjects.MaxChunks", "type": "int32", "expected": "constant >= NumChunks"},
+      "0x2C": {"name": "ObjObjects.NumChunks", "type": "int32", "expected": ">= 1 at runtime"}
+    },
+    "TUObjectArray": {
+      "size": "0x20 (UEP_TotalSize, identical in 4.25 and 5.06 templates)",
+      "fields": {"0x00": "Objects FUObjectItem**", "0x08": "PreAllocatedObjects FUObjectItem*", "0x10": "MaxElements int32", "0x14": "NumElements int32", "0x18": "MaxChunks int32", "0x1C": "NumChunks int32"}
+    },
+    "FUObjectItem_425": {"size": "0x18", "fields": {"0x00": "Object (UObjectBase*)", "0x08": "Flags int32", "0x0C": "ClusterRootIndex int32", "0x10": "SerialNumber int32"}},
+    "FUObjectItem_506": {"size": "0x18", "fields": {"0x00": "Object (UObjectBase*)", "0x08": "Flags int32", "0x0C": "ClusterRootIndex int32", "0x10": "SerialNumber int32", "0x14": "RefCount int32"}},
+    "layout_425": {
+      "ObjFirstGCIndex": "0x00", "ObjLastNonGCIndex": "0x04", "MaxObjectsNotConsideredByGC": "0x08",
+      "OpenForDisregardForGC": "0x0C", "ObjObjects": "0x10", "UObjectCreateListeners": "0xE0",
+      "UObjectDeleteListeners": "0xF0", "MasterSerialNumber": "0x128", "UEP_TotalSize": "0x130",
+      "caveat": "port 4.25 model leaves 0x30..0xE0 unnamed after the 0x20-byte TUObjectArray (stock UE 4.25 would place ObjAvailable TArray<int32> at 0x30 and listeners at 0x40/0x50); treat port offsets as authoritative for this game's accessor layer and flag the discrepancy if live reads disagree"
+    },
+    "layout_506": {
+      "ObjFirstGCIndex": "0x00", "ObjLastNonGCIndex": "0x04", "MaxObjectsNotConsideredByGC": "0x08",
+      "OpenForDisregardForGC": "0x0C", "ObjObjects": "0x10", "ObjAvailableList": "0x58",
+      "UObjectCreateListeners": "0x68", "UObjectDeleteListeners": "0x78", "PrimarySerialNumber": "0xB0",
+      "bShouldRecycleObjectIndices": "0xB4", "UEP_TotalSize": "0xB8",
+      "caveat": "0x30..0x58 likewise unnamed beyond the 0x20-byte TUObjectArray in the port model"
+    },
+    "validity_criteria_first_96_bytes": [
+      "u32@0x04 (ObjLastNonGCIndex) <= u32@0x24 (NumElements) once GC pool is open",
+      "u32@0x24 (NumElements) > 0 at gameplay time and <= MaxElements",
+      "u32@0x2C (NumChunks) in [1, MaxChunks]",
+      "ptr@0x10 non-null and aligned; ptr@0x18 typically NULL",
+      "bytes@0x0C..0x0F: bool plus 3 zero pad bytes",
+      "first element slot: chunk-table[0][0] must dereference to an FUObjectItem whose Object ptr@0x00 is a valid UObjectBase* with Flags at +0x8"
+    ]
+  },
+  "raw_evidence": ["bytes_tick.bin", "bytes_sco.bin", "bytes_fname.bin"],
+  "disassembler": "capstone 5.0.x CS_ARCH_X86/CS_MODE_64 (llvm-mc unavailable in Xcode toolchain)",
+  "survey_cross_check": {
+    "source": ".superpowers/native-dependency-spike/ue4ss-native-file-core-survey-1/run-release-1/stdout.txt",
+    "lines": {
+      "gameengine_tick": "status=0 linked=0x2fac8c0",
+      "static_construct_object": "status=0 linked=0x490aa0",
+      "fname_ctor_call_candidate": "status=0 linked=0x23d590",
+      "guobject_original": "status=0 linked=0x93ba110 (BSS, runtime-only)",
+      "engine_version": "major=5 minor=6"
+    }
+  }
+}

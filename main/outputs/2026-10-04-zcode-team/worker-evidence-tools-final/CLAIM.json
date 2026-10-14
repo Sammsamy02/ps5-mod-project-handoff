@@ -1,0 +1,62 @@
+{
+  "worker": "worker-evidence-tools-final",
+  "date": "2026-10-04",
+  "task": "Final cross-format audit of the three evidence tools (post_launch_check.py, rung_check.py, console_batch.py) after all accumulated patches (freshness gates, r4-prefix regex fix, ninth-slot adoption, tick correction): (1) verify every parser against the REAL r4 entry source line formats and the bridge r13/probe outputs; (2) verify ALL THREE tools classify the launch-9 [Seeds] refusal correctly (not a bridge failure line per the fixed regex; status shows failed runtime_start; CP gates per the brief); (3) re-run the full rehearsal suite with the final tool bytes — five scenarios + both freshness refusals must still discriminate.",
+  "ownership": {
+    "mode": "read-only audit + minimal fixes; the three tools' owners all delivered (inherited)",
+    "edited_in_place": [
+      "worker-post-launch-tools/post_launch_check.py — as-found 801258fc46498c3c… -> e6cea9ee42d43519…: stage_hint extended (GAP-2 family) so launch-9 ack-path init-thread throws route correctly: '[Seeds]' -> new stage seeds_refused; 'GMalloc is uninitialized' / 'initializer callback registration failed' -> init_thread_failed; plus STAGE_GUIDANCE['seeds_refused'] entry. Verdict logic, precedence, freshness and all prior routes byte-equivalent (regression table in AUDIT-RECEIPTS §F-2).",
+      "worker-console-batch-runner/console_batch.py — as-found 456f9372f7c59a41… (identical to the worker-ninth-slot-ini-adoption copy) -> 5ca8d1c70f4d3349…: ONE label word, ge.2 step title 'eight evidence sinks' -> 'seven' (fetch_fn fetches exactly 7 files: S, L, D1, C2, XWP, FC1, CC1). No classifier/parser/flow change; selftest 405/0 and fake drive 92/0 unchanged.",
+      "worker-rung-evidence-reader/host-test/run_host_tests.sh — mk_status \"$(( $+1 ))\" invalid-arithmetic fix (proper seq counter). rung_check.py itself UNTOUCHED (sha 287a2684… before and after)."
+    ],
+    "not_edited": [
+      "worker-controller-decision-brief/CONTROLLER-DECISION-BRIEF.md §4.1 ge.2 'eight evidence sinks' list (double-counts C2 as 'the igf facts jsonl') — another worker's deliverable, flagged for reconciliation only",
+      "worker-ninth-slot-ini-adoption REPORT 'ge.2 fetches eight evidence sinks' — same slip, flagged only",
+      "worker-evidence-pipeline-rehearsal/fixtures + runs + rehearsal-results.json — byte-preserved (md5 rehearsal-results.json 6bc8e743…, s01 UE4SS.log 23456f69…)"
+    ]
+  },
+  "cross_format_audit": {
+    "receipt": "AUDIT-RECEIPTS.md (9-row parser-vs-writer matrix, every row traced to the emitter source)",
+    "verified_matches": [
+      "r4 entry failure line [t=<ms>ms pid=<pid>] modbridge module_start failed: … — post_launch_check FAILURE_LINE_RE (the controller's optional-prefix regex) AND console_batch classify_l_log both parse prefixed/legacy/empty-detail/truncated shapes identically (runs/r4-prefix-regex-check-BEFORE.txt)",
+      "D1 diagnostic grammar (8-digit lowercase hex, fixed-width) — classify_d1_log 0x00000000 literals valid; OBSERVER_EVENT_RE matches",
+      "mfa status tab grammar — all three parsers agree; put_text control-char sanitize forbids column-shifting tabs/newlines",
+      "NQH1 record keys (counts.first/second/recorded, ticks.accepted/refusals_between, identity_checks, threshold, gate_source, monotonic) — rung_check reads exactly FormatRecordJsonLine's keys",
+      "cc1 census oracle — census_result verdict/reason_code/controls{None_id_zero,ByteProperty_ascii_ok}/negative_hits{PostRender,ZZZNotARealFunctionQQ}/census_truncated, startup polls=30/poll_s=4, summary write_failures/polls_run, ONE 'CC1: build=cc1-… verdict=' line: all present in the carrier probe emitter",
+      "tick line 0x33ac8c0 (corrected convention), ninth-slot ini law (9 entries/8 registered, EXACTLY 8 OK lines), freshness oracle 8866785 identical in all three tools"
+    ],
+    "findings": {
+      "F1_label_ge2_eight_vs_seven": "FIXED (one word); brief + ninth-slot REPORT carry the same slip, flagged not edited",
+      "F2_seeds_misroute_to_bridge_conversion": "REAL + FIXED: pre-fix FAILED_STATUS guidance routed the launch-9 [Seeds] terminal to 'bridge stage 1 CONVERSION … vm-scan' triage (BEFORE receipt runs/seeds_BEFORE_post_launch_check.json); post-fix routes to seeds_refused family guidance; stage_hint regression table proves all prior routes unchanged (runs/stage_hint-regression-AFTER.txt)",
+      "F3_rung_host_test_shell_bug": "FIXED in the harness only: '$(( $+1 ))' syntax error under bash silently dropped all status fixture rows (12/2), silent seq=0 under zsh; now 14/0 under BOTH shells"
+    }
+  },
+  "seeds_refusal_case": {
+    "fixture": "fixtures/seeds_refusal_launch9/from-dir — built ONLY from real source shapes: UnrealInitializer.cpp:898-905 throw text; status failed(1,<what>) per runtime_owner.cpp:111-118 + RuntimeAckSink::failed; D1 per the entry r4 MRS_OK path (runtime_start_ok 0x0 + module_start_return 0x0; start() returns before the init thread throws)",
+    "post_launch_check": "verdict FAILED_STATUS; ZERO bridge failure lines ([Seeds] correctly NOT matched per the fixed regex; line visible in new_lines); guidance now seeds_refused family",
+    "rung_check": "honest CANNOT_ASSERT exit 3; RUNG1 conditions record 'session failed (code=1 detail=[Seeds]…)'; UNVERIFIED_DRIVER is honest (G2) — matches brief §4.3 CP7 table",
+    "console_batch_cp_gates": "entry_failure_lines empty (agrees with post_launch_check); CP0 PASS + CP1 PASS (PRX ran, activation consumed) + CP2/CP3 FAIL(no engine-ready / no mods-started; F7/F8 shapes) + CP4 FAIL(F9/no banner); overall INCOMPLETE — exactly the brief §4.2 CP3-F7 row (init-thread throw, read what)"
+  },
+  "verification": {
+    "full_re_rehearsal": "run_rerun_final.py (step-for-step mirror of worker-evidence-pipeline-rehearsal/run_rehearsal.py, writes only under this worker) over TWO fixture trees: corrected/ (regenerated with the corrected 0x33ac8c0 tick line per CORRECTION-REGISTER A5; diff vs committed = tick lines only) and committed/ (byte-preserved originals). All five scenarios + probe_gap4_stale_driver discriminate: s01 all-green on corrected (and CP2 PARTIAL(G7) on committed = the documented tick-correction delta, never a PASS); s02 vs s03 early-failure shapes separated (s03 CP0 FAIL(F3/F4/F5 runtime_start_failed: ['00000002']), s02 init_thread guidance); s04 trap caught at CP4; s05 NOT_STARTED + 3 probe repeats + rung exit 5 + CP cells INCONCLUSIVE-STALE; probe tree rung exit 5. --discover (s03), --baseline-file variant, CP7 RUNG2 delegation and CP5/CP6 L-diff all exercised (runs/rerun-results.json, rerun-corrected/, rerun-committed/)",
+    "owner_suites": "console_batch selftest 405 ok / 0 failed; fake_console_drive 92 green / 0 failed; post_launch host tests 20/20; rung host tests 14/14 under bash AND zsh (after F-3); py_compile + shell -n clean",
+    "receipts": "AUDIT-RECEIPTS.md; receipts-as-found-sha256.txt / receipts-post-fix-sha256.txt / receipts-final-sha256.txt; runs/ BEFORE-AFTER pairs; diffs/fixture-tick-delta.diff"
+  },
+  "non_goals": [
+    "NO console contact; no nested subagents; all evidence host/fixture only",
+    "no replay of failed jobs; no claim that rungs advance, the console is certified, or any acceptance threshold is met",
+    "the Seeds fixture is a source-derived prediction of launch-9's expected terminal (LAUNCH9-PREDICTION §4-#2 / LAUNCH10-MATRIX T-A), not an observed launch",
+    "committed rehearsal artifacts and other workers' docs left byte-identical"
+  ],
+  "pinned_inputs": {
+    "entry_source": "worker-module-start-wiring/runtime_module_entry_r4.c (write_ue4ss_log_line :184-222)",
+    "diagnostic_writer": "worker-aligned-entry-observer/source/diagnostic.c (diagnostic_event :148-157, hex :31-37)",
+    "status_writer": "worker-f-r2-fix/composition/vendored/modforge_activation.c (mfa_status_write :626-650, put_text sanitize)",
+    "nqh_emitter": "worker-record-sink-addon/src/NativeQueryHarness.cpp:459-500",
+    "carrier_emitter": "worker-carrier-probe-build/src/carrier_driver.c:730-800 + module_entry.c:70-96 + record_sink.c:151",
+    "seeds_throw": "worker-initializer-integration/staging/UnrealInitializer.cpp:883-905",
+    "ack_path": "outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/runtime_owner.cpp:100-131,174-181 + ue4ss_backend.cpp:59-71",
+    "tick_correction": "worker-tick-correction-propagation/CORRECTION-REGISTER.md (0x33ac8c0)"
+  },
+  "status": "complete"
+}

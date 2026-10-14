@@ -1,0 +1,31 @@
+{
+  "worker": "worker-spawner-itemdb-audit",
+  "date": "2026-10-04",
+  "scope": "Audit TownfallItemSpawner main.lua item database and its UClass/asset resolution chain against the composed runtime (LoadAsset) and in-game evidence; produce SPAWN-READINESS.md with first-spawn recommendation and failure-mode log signatures.",
+  "claim": {
+    "items_database_source": "Hybrid: embedded 6-entry extraPickupClasses table (main.lua:72-79) + 24-entry legacyItems enum table (main.lua:83-109) live-resolved via ItemDatabaseSubsystem UFunctions GetItemIDFromDeprecatedEnum (IS:163) and GetInteractablePickupIDActorPath (IS:168). HARD GATE: FindFirstOf(ItemDatabaseSubsystem) (IS:64,147) must succeed or items stays empty (IS:185 assignment ordering) even for the static entries.",
+    "resolution_chain": "normalizeClassPath (IS:122-136: strip quotes, add .Asset, append _C) -> StaticFindObject (IS:283) -> if invalid LoadAsset (IS:285) -> StaticFindObject retry (IS:286) -> error IS:289-291 -> BeginDeferredActorSpawnFromClass (IS:295) + FinishSpawningActor (IS:303) -> post-spawn gates PickupInteractable + PickupInventoryItem.ItemId (+ id match for DB entries) IS:306-323.",
+    "runtime_loadasset_status": "Registered and implemented, engine-backed purely by reflection, never executed live: PORT LuaMod.cpp:3618-3665. Gates: game-thread only (:3626); GetAssetRegistry reflected fn (BIND UAssetRegistryHelpers.hpp:21 via ProcessEvent ReflectedFunction.hpp:34), LOUD throw if null (:3636-3639); GetAssetByObjectPath reflected fn (BIND UAssetRegistry.hpp:18) SILENTLY returns empty FAssetData on missing UFunction (BIND UAssetRegistry.cpp:38-40) -> LoadAsset returns (nil,false,false) with no log. Layout risk: FAssetData assumed 0x50 (UAssetRegistryHelpers.hpp:31-36) and header itself flags version sensitivity (FAssetData.hpp:34-39). Registry population on SHIPPING 5.6.1 unevidenced.",
+    "first_spawn_candidate": "Antibiotics (main.lua:75; normalized /Game/Townfall/AlwaysCook/Items/Collectable_Items/BP_Item_Antibiotics.BP_Item_Antibiotics_C). Requirements: loaded save with DB present, FName/GObjects path resolution live, class resident (StaticFindObject first-try hit observed host-side, f7-save-dump.txt:618), flat ground trace, PickupInteractable with non-empty ItemId. No zero-asset-load fallback exists (post-spawn gates reject generic actors, IS:306-318).",
+    "evidence_backed_entries": "ZERO of 30 entries are evidence-backed against our runtime. No in-game record contains any mod-referenced class/asset/property name (searched checkpoint, ingame probes, GUA records, acceptance docs). Closest provenance: MOD-CENSUS.md:119,126 shows the same class names in the retained PC (Windows proxy) intake of the same game mod. GUA is live-validated (0x97ba110, 71959 objects, CURRENT-STATE.md:7) but contains no name-level evidence. First spawn attempt is itself the cheapest evidence generator."
+  },
+  "inputs": [
+    "outputs/2026-10-04-zcode-team/worker-loadlist-final/final-package/ue4ss/Mods/TownfallItemSpawner/Scripts/main.lua",
+    ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/Mod/LuaMod.cpp",
+    ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/include/Unreal/{UAssetRegistry,UAssetRegistryHelpers,FAssetData,ReflectedFunction}.hpp",
+    ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/UAssetRegistry.cpp",
+    "outputs/2026-10-04-zcode-team/worker-itemspawner-lua-audit/LUA-API-MATRIX.md",
+    "outputs/2026-10-04-zcode-team/worker-lua-mod-smoke/SMOKE-RESULTS.md + REPORT.md + harness/PHASE-LOGS/f7-save-dump.txt",
+    "outputs/2026-10-04-zcode-team/worker-checkpoint-reconcile/CURRENT-STATE.md",
+    "outputs/2026-10-04-zcode-team/worker-modreqs/MOD-CENSUS.md",
+    "outputs/2026-10-04-zcode-team/worker-fname-runtime-probe/REPORT.md",
+    "outputs/2026-10-04-zcode-team/worker-acceptance-evidence/EVIDENCE-SPEC.md",
+    "outputs/2026-10-04-zcode-team/worker-real-input/VISIBILITY-TEST.md"
+  ],
+  "outputs": [
+    "SPAWN-READINESS.md",
+    "REPORT.md"
+  ],
+  "constraints": "No console contact, no nested subagents, citation file:line everywhere, evidence-backed claims only; unevidenced items marked as such.",
+  "honest_limits": "Host smoke evidence (Spawned Antibiotics x1) is stub-backed, not engine-backed. Asset residency, registry population, ProcessEvent param layouts, and FName construction on the PS5 SHIPPING build are all unverified; nothing here predicts a successful spawn, only what each failure will look like in UE4SS.log."
+}

@@ -1,0 +1,46 @@
+--- previous-native/UnrealInitializer.cpp
++++ native-shared-ABI/UnrealInitializer.cpp
+@@ -7,6 +7,9 @@
+ #include <SigScanner/SinglePassSigScanner.hpp>
+ #include <DynamicOutput/Output.hpp>
+ #include <Unreal/UnrealInitializer.hpp>
++#if defined(__PROSPERO__)
++#include <PsScanAbi.h>
++#endif
+ #include <Unreal/PlatformModuleSnapshot.hpp>
+ #include <Unreal/VersionedContainer/Container.hpp>
+ #include <Unreal/VersionedContainer/UnrealVirtualImpl/UnrealVirtualBaseVC.hpp>
+@@ -414,6 +417,12 @@
+         Output::send(STR("FName Alignment: 0x{:X}\n"), FName::StaticAlignment());
+     }
+ 
++#if defined(__PROSPERO__)
++    using PsScanConfig = ::PsScanConfig;
++    using PsCtx = ::PsCtx;
++    using PsEngineVersion = ::PsEngineVersion;
++    using PsScanResults = ::PsScanResults;
++#else
+     struct PsScanConfig
+     {
+         bool g_uobject_array{};
+@@ -470,6 +479,8 @@
+         bool ps_scan(PsCtx& ctx, PsScanResults& results);
+     }
+ 
++#endif
++
+     auto ScanGame() -> void
+     {
+         enum class OutputErrorsByThrowing { Yes, No };
+@@ -508,7 +519,11 @@
+         {
+             Output::send<LogLevel::Verbose>(STR("PS Scan attempt {} (Phase {})\n"), scan_count + 1, UnrealConfig.bIsForcedPreScan ? 1 : 2);
+ 
++#if defined(__PROSPERO__)
++            if (::ps_scan(&ctx, &results))
++#else
+             if (ps_scan(ctx, results))
++#endif
+             {
+                 // All of the requested resolvers were found so break and continue
+                 Output::send<LogLevel::Default>(STR("PS scan successful\n"));

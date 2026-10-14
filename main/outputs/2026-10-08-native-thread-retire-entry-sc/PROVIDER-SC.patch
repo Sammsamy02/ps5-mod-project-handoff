@@ -1,0 +1,48 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-native-thread-retire-entry/candidate/ThreadNameRuntime.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-native-thread-retire-entry-sc/candidate/ThreadNameRuntime.cpp
+@@ -7,6 +7,7 @@
+ namespace NativeNameThread {
+ namespace {
+ // Trivial, constant-initialized guards outlive the managed owner state.
++// Both phase and entry count use one SC order; see SC-ORDERING.md.
+ enum : unsigned { BeforeConstruction, Ready, Closing, AfterDestruction };
+ constinit std::atomic<unsigned> constructor_phase{BeforeConstruction};
+ constinit std::atomic<unsigned> retire_entries{0};
+@@ -15,14 +16,14 @@
+ std::mutex owner_mutex;
+ std::shared_ptr<Binding> current_binding;
+ struct RuntimeLifetime final {
+- RuntimeLifetime() noexcept {constructor_phase.store(Ready,std::memory_order_release);}
++ RuntimeLifetime() noexcept {constructor_phase.store(Ready,std::memory_order_seq_cst);}
+  ~RuntimeLifetime() noexcept {
+-  constructor_phase.store(Closing,std::memory_order_release);
++  constructor_phase.store(Closing,std::memory_order_seq_cst);
+   // Root must retire successfully before fini. This only protects C entries
+   // already admitted while ready from managed owner-state destruction.
+-  while(retire_entries.load(std::memory_order_acquire))
++  while(retire_entries.load(std::memory_order_seq_cst))
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+-  constructor_phase.store(AfterDestruction,std::memory_order_release);
++  constructor_phase.store(AfterDestruction,std::memory_order_seq_cst);
+  }
+ } runtime_lifetime;
+ }
+@@ -41,13 +42,13 @@
+ namespace NativeNameThread {
+ namespace {
+ int retire_entry() noexcept {
+- if(constructor_phase.load(std::memory_order_acquire)!=Ready)return -1;
+- retire_entries.fetch_add(1,std::memory_order_acq_rel);
+- if(constructor_phase.load(std::memory_order_acquire)!=Ready){
+-  retire_entries.fetch_sub(1,std::memory_order_release);return -1;
++ if(constructor_phase.load(std::memory_order_seq_cst)!=Ready)return -1;
++ retire_entries.fetch_add(1,std::memory_order_seq_cst);
++ if(constructor_phase.load(std::memory_order_seq_cst)!=Ready){
++  retire_entries.fetch_sub(1,std::memory_order_seq_cst);return -1;
+  }
+  const int status=retire_runtime()?0:1;
+- retire_entries.fetch_sub(1,std::memory_order_release);
++ retire_entries.fetch_sub(1,std::memory_order_seq_cst);
+  return status;
+ }
+ }

@@ -1,0 +1,57 @@
+{
+  "worker": "worker-l11-marshal-integration",
+  "date": "2026-10-05",
+  "mission": "Design + deliver the DIFF-1 drain-consumer linkage (the missing caller of arm_funcptr_marshal_drain) as staged, host-proven artifacts on top of the variant-B LuaMod.cpp, plus the launch-11 integration runbook.",
+  "read_order_honored": [
+    "TEAM:worker-r3-zerosyscall-tier/R3-TIER-DESIGN.md (R3D) — read in full; its 4.2/4.4a/5.2 define the consumer",
+    "TEAM:worker-r3-carrier-prep/CARRIER-CANDIDATES.md — ranked candidate space + exclusions",
+    "TEAM:worker-r3-diffs-authoring/diffs/*.diff + REPORT.md — DIFF-1/DIFF-2 contract and the declared missing driver",
+    "TEAM:worker-executedrain-trace/DRAIN-TRACE.md — the enqueue/drain chain and the detour pump the marshal replaces",
+    "TEAM:worker-luamod-rebase/REBASE.md + REPORT.md — variant-B derivation discipline this revision mirrors",
+    "TEAM:worker-luamod-l11-dryrun/VERDICT.md — 6: the link-inert finding this task resolves"
+  ],
+  "claims": [
+    {
+      "id": "L11MI-1",
+      "claim": "The drain cluster's elimination is a missing-CALLER problem, exactly as the dry-run VERDICT 6 stated: in the variant-B control object (reproduced byte-identically this session, 5595feb785206c0057eb29af0ccdcd53a8898d86629db0b10debc4a17aa08dea) the cluster arm_funcptr_marshal_drain / funcptr_marshal_hook / r3_marshal_carrier_precheck is absent even at -O0 — this toolchain eliminates unused file-static functions — while is_funcptr_marshal_armed survives only because the (non-ifdef'd) FuncPtrMarshal ladder branch calls it.",
+      "evidence": "receipts/nm-control-all.txt vs worker-luamod-l11-dryrun/logs/dryrunB-all-symbols.txt; control object sha match"
+    },
+    {
+      "id": "L11MI-2",
+      "claim": "The designed consumer is the DIFF-1 5.2-item-4 arming-service driver, and it belongs in LuaMod.cpp: worker-r3-diffs-authoring REPORT 4 declares arm_funcptr_marshal_drain file-static by design and 'the enumeration/trial/selection protocol's driver ... the only intended caller'; R3D 4.4a places it post-setup_unreal(), before/parallel-with mods-started. The program-side lifecycle seam that satisfies this is LuaMod::on_program_start() (called from UE4SSProgram::on_program_start() line 1504, which runs after setup_unreal() line 628 and immediately before start_lua_mods() line 1506).",
+      "evidence": "worker-comp6-driver/staging/comp6-program/UE4SSProgram.cpp lines 628/1503-1506/1532"
+    },
+    {
+      "id": "L11MI-3",
+      "claim": "The delivered consumer (r3_marshal_calibration_consumer + one guarded call at the top of LuaMod::on_program_start, BEFORE the LoadMap pre-callback registration that is this function's first eager detour arm) makes the drain cluster PRESENT and REACHABLE in the unit object under the frozen 172-token argv: control exit 0 reproducing 5595feb7... byte-identically; consumer exit 0 producing 854a476bdd4f998581f206af9faaa10b64eba8814fc590350c9565dce47f9565 with all four marshal symbols emitted and a complete relocation chain on_program_start -> r3_marshal_calibration_consumer -> arm_funcptr_marshal_drain -> {r3_marshal_carrier_precheck, &funcptr_marshal_hook, UFunction::RegisterPostHook}.",
+      "evidence": "receipts/compile-gate.json; receipts/nm-consumer-all.txt; receipts/disasm-{on-program-start,consumer,arm}.txt"
+    },
+    {
+      "id": "L11MI-4",
+      "claim": "The consumer preserves both worlds' behavior contracts: it arms ONLY when the DIFF-2 initializer declared the pump deferral (R3MarshalPumpPending, i.e. kR3MarshalMode=true refused the EngineTick registrations and set pump_pending); in the W-works world it performs no store and logs one line. In the R3 world it is a bounded ranked stand-in for the in-game calibration (R3D 4.2 steps 2-4 remain the F-1 falsifier): data-side StaticFindObject resolution only (the Lua RegisterHook native route), DIFF-1's own precheck as the sole arm gate, loud refusals, rank-3 'Tick' deliberately excluded (owner ambiguous offline per CARRIER-CANDIDATES 3).",
+      "evidence": "staging source; worker-r3-carrier-prep/CARRIER-CANDIDATES.md 3/7.3; receipts/disasm-consumer.txt (pump_pending gate)"
+    },
+    {
+      "id": "L11MI-5",
+      "claim": "The consumer-revised unit's cross-unit link contract grows by exactly three undefined symbols vs the control: RC::Unreal::R3MarshalPumpPending, RC::Unreal::R3MarshalPublishGameThreadIdentity (defined by the DIFF-2'd initializer ONLY in the ARMED fold — initializer rev-B fold contract: #if defined(__PROSPERO__) && UE4SS_R3_MARSHAL_MODE; the staged launch-11 initializer has the in-file flip UE4SS_R3_MARSHAL_MODE=1 at line 179, so the L10LM world resolves them; declared at LuaMod.cpp:91-93 since DIFF-1), and RC::Unreal::UFunction::GetFuncPtr (defined by the untouched unreal-ufunction unit at UFunction.cpp:28). Zero removed, zero changed. A link against a mode-0 (fallback) initializer fails LOUDLY on the first bridge symbol — the rev-B pairing law, linker-enforced, which this consumer inherits deliberately.",
+      "evidence": "receipts/undefined-{control,consumer}.txt diff; worker-luamod-rebase/staging/initializer-l10-r3/UnrealInitializer.cpp"
+    }
+  ],
+  "non_claims": [
+    "No composition run: the composed-object sha 633a8c82... (dry-run, as-authored variant-B) is NOT the comparator for a consumer-integrated candidate; packaging, gate v2, determinism double-pass and canonical-path receipts remain controller steps.",
+    "No in-game claim of any kind: no marshal has armed anywhere; carrier resolution (interning, FUNC_Native, FuncPtr non-null, game-thread cadence C-3/C-4) is unmeasured and F-1 remains OPEN.",
+    "No claim the consumer fixes the R3 world's other eager registrations: LuaMod::on_program_start's OWN LoadMap pre-callback registration (and the program/initializer registrations outside DIFF-2's compiled-out set) still throw under BOTH_FAIL after the consumer runs; that is a separate revision with distinct IDs (RUNBOOK 6).",
+    "No exec-page access was added: the consumer performs data-side object lookup + one heap FuncPtr-class store path via DIFF-1's existing RegisterPostHook route only.",
+    "Originals untouched: worker-luamod-rebase staging, the port tree, launch10-build/ and all canonical receipts were not modified; everything lives under worker-l11-marshal-integration/."
+  ],
+  "pins": {
+    "base_variant_B": "4540593ac9e66cdc0a62e56736f05c05a23ca897881a902cae55e1d51bb79b25",
+    "staged_consumer": "04c9d91664dd82c7831cfc7eff79b6c20c62df9e6fd6eced60d419310966ad9f",
+    "consumer_diff": "f595c57fb8f3ca10458d4581974fa79532167c7449d3da5cbc5fa2a45117b44f",
+    "control_object": "5595feb785206c0057eb29af0ccdcd53a8898d86629db0b10debc4a17aa08dea",
+    "consumer_object": "854a476bdd4f998581f206af9faaa10b64eba8814fc590350c9565dce47f9565",
+    "argv_receipt": "worker-luamod-l11-dryrun/scratch/staging/luamod-argv.json (172 tokens, LLVM_CONFIG recorded)",
+    "initializer_l10_r3": "8b0c7e9905ce4a857ec1eca0de6c5437862118207922b101122b0819c50badc0",
+    "initializer_r3fallback0": "72247480be0567b9270aae6847f7432a1043bb3be9dbf88a4efc212797337f8e"
+  }
+}

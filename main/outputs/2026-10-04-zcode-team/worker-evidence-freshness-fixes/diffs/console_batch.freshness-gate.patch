@@ -1,0 +1,136 @@
+--- diffs/console_batch.py.asfound-c691cdd4cb8b.py	2026-10-04 21:57:09
++++ shadow/console_batch.py	2026-10-04 22:01:56
+@@ -804,35 +804,94 @@
+     }
+ 
+ 
+-def cp01234_verdict(s_info, l_info, d1_info):
+-    """CP0-CP4 file-based checks from the runbook §3. Returns (verdict, per_cp, next_hint)."""
++# O2 freshness oracle — SAME constant as post_launch_check.py
++# (MONO_NS_AT_PATH_TEST 8866785633337 // 1_000_000). A status session ms at or
++# below this predates the PATH_TEST ledger row: S/D1/L are PRIOR-launch
++# evidence and can ground no PASS (REHEARSAL-RECEIPTS.md GAP 1a false-PASS).
++FRESH_SESSION_MS_THRESHOLD = 8866785
++
++
++def cp_session_fresh(s_info):
++    """O2 gate: True iff the parsed status S carries a session ms above the
++    freshness threshold (i.e. the evidence postdates the PATH_TEST baseline)."""
++    sess = s_info.get("session")
++    try:
++        ms = int(sess[1])
++    except (TypeError, ValueError, IndexError):
++        return False, None
++    if ms > FRESH_SESSION_MS_THRESHOLD:
++        return True, ms
++    return False, ms
++
++
++def cp01234_verdict(s_info, l_info, d1_info, d1_entered_before=0):
++    """CP0-CP4 file-based checks from the runbook §3. Returns (verdict, per_cp, next_hint).
++
++    d1_entered_before: module_start_entered count observed in D1 BEFORE this
++    launch (O1 'exactly one NEW module_start_entered per launch'). Callers
++    that fetch D1 pre-launch must pass it; default 0 preserves the raw-count
++    reading for sessions whose D1 starts empty.
++    Stale-session evidence (O2) is labelled INCONCLUSIVE-STALE per CP and can
++    never yield PASS cells (GAP 1a), and a D1 lifecycle failure with
++    runtime_start_failed present labels F3/F4/F5, not F1 (GAP 1b)."""
+     per = {}
+     ok_all = True
++    fresh, session_ms = cp_session_fresh(s_info)
++    stale_lbl = ("INCONCLUSIVE-STALE(session ms %s <= %d — prior-launch "
++                 "evidence; do not rate, re-run in a fresh window)"
++                 % (session_ms, FRESH_SESSION_MS_THRESHOLD))
+     # CP0
+-    cp0 = d1_info["module_start_entered"] >= 1 and d1_info["module_start_return_ok"] >= 1 and d1_info["probe_lifecycle_ok"]
+-    per["CP0"] = ("PASS" if cp0 else
+-                  ("FAIL(F1 probe lifecycle)" if d1_info["module_start_entered"] >= 1 else
+-                   "FAIL(F0 PRX never ran — check loadlist/staging + ploader arm; game running unmodded is by-design safe)"))
++    entered = d1_info["module_start_entered"] - d1_entered_before
++    cp0 = (fresh and entered >= 1 and d1_info["module_start_return_ok"] >= 1
++           and d1_info["probe_lifecycle_ok"])
++    if not fresh:
++        per["CP0"] = stale_lbl
++    elif cp0:
++        per["CP0"] = "PASS"
++    elif entered < 1:
++        per["CP0"] = ("FAIL(F0 no NEW module_start_entered this launch "
++                      "(count %d <= pre-launch baseline %d) — check "
++                      "loadlist/staging + ploader arm; game running unmodded "
++                      "is by-design safe)"
++                      % (d1_info["module_start_entered"], d1_entered_before))
++    elif d1_info["runtime_start_failed"]:
++        # GAP 1b: probe lifecycle fine but return-0x0 absent with a
++        # runtime_start_failed row is the F3/F4/F5 family, not F1.
++        per["CP0"] = ("FAIL(F3/F4/F5 runtime_start_failed: %s)"
++                      % d1_info["runtime_start_failed"])
++    else:
++        per["CP0"] = "FAIL(F1 probe lifecycle)"
+     ok_all &= cp0
+-    # CP1
++    # CP1 (O2: a stale session cannot ground an activation PASS)
+     cp1 = bool(s_info["last_state"] and any(st["state"] == "activated" for st in s_info["states"]))
+     cp1 = cp1 and l_info["banner_setup"] and not l_info["entry_failure_lines"]
+-    per["CP1"] = "PASS" if cp1 else (
+-        "FAIL(entry failure line: %s)" % l_info["entry_failure_lines"] if l_info["entry_failure_lines"]
+-        else "FAIL(activation/banner — F2-F6; see runbook CP1 failure list)")
++    if not fresh:
++        per["CP1"] = stale_lbl
++        cp1 = False
++    else:
++        per["CP1"] = "PASS" if cp1 else (
++            "FAIL(entry failure line: %s)" % l_info["entry_failure_lines"] if l_info["entry_failure_lines"]
++            else "FAIL(activation/banner — F2-F6; see runbook CP1 failure list)")
+     ok_all &= cp1
+-    # CP2
++    # CP2 (O2: a stale engine-ready row is NOT this launch's engine-ready)
+     eng_ready = bool(s_info["last_state"] and any(st["state"] == "engine-ready" for st in s_info["states"]))
+-    per["CP2"] = ("PASS" if (eng_ready and l_info["tick_line"]) else
+-                  ("PARTIAL(engine-ready yes, Tick line absent — G7; scan-fallback=%s)"
+-                   % l_info["tick_scan_fallback"] if eng_ready else
+-                   "FAIL(no engine-ready — see CP2 outcome table; fatal shape = 'Native game-thread initializer "
+-                   "callback registration failed')"))
+-    ok_all &= (eng_ready and l_info["tick_line"])
+-    # CP3
++    if not fresh:
++        per["CP2"] = stale_lbl
++    else:
++        per["CP2"] = ("PASS" if (eng_ready and l_info["tick_line"]) else
++                      ("PARTIAL(engine-ready yes, Tick line absent — G7; scan-fallback=%s)"
++                       % l_info["tick_scan_fallback"] if eng_ready else
++                       "FAIL(no engine-ready — see CP2 outcome table; fatal shape = 'Native game-thread initializer "
++                       "callback registration failed')"))
++    ok_all &= (fresh and eng_ready and l_info["tick_line"])
++    # CP3 (O2: a stale mods-started row is NOT this launch's mods-started)
+     mods_started = bool(s_info["last_state"] and any(st["state"] == "mods-started" for st in s_info["states"]))
+-    per["CP3"] = "PASS(mods-started; rung-1 liveness delegated to rung_check — UNVERIFIED_DRIVER is honest, gap G2)" \
+-        if mods_started else "FAIL(no mods-started; F7/F8 shapes)"
++    if not fresh:
++        per["CP3"] = stale_lbl
++        mods_started = False
++    else:
++        per["CP3"] = "PASS(mods-started; rung-1 liveness delegated to rung_check — UNVERIFIED_DRIVER is honest, gap G2)" \
++            if mods_started else "FAIL(no mods-started; F7/F8 shapes)"
+     ok_all &= mods_started
+     # CP4
+     cp4 = l_info["mod_banners"] == 1 and mods_started
+@@ -844,9 +903,15 @@
+     else:
+         per["CP4"] = "PASS"
+     ok_all &= (l_info["mod_banners"] >= 1)
+-    return ("PASS" if ok_all else "INCOMPLETE"), per, (
+-        "gate CP5: user must load a save and press OPTIONS once" if ok_all else
+-        "fix the failing CP above before any pad interaction (runbook §6 triage: S -> D1 -> L)")
++    if ok_all:
++        hint = "gate CP5: user must load a save and press OPTIONS once"
++    elif any(v.startswith("INCONCLUSIVE-STALE") for v in per.values()):
++        hint = ("stale session: S/D1 evidence predates this launch — no CP may "
++                "PASS from it; re-run in a fresh launch window (~60 s after "
++                "launch) before any rating or pad interaction")
++    else:
++        hint = "fix the failing CP above before any pad interaction (runbook §6 triage: S -> D1 -> L)"
++    return ("PASS" if ok_all else "INCOMPLETE"), per, hint
+ 
+ 
+ def cp56_verdict(l_before_open, l_after_open, l_after_cross):

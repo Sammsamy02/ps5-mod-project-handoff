@@ -1,0 +1,11 @@
+# Nexus sign-in prerequisites
+
+The requested browser sign-in flow is implemented with OAuth state/PKCE, callback validation, live identity verification and private token renewal. It needs a valid application client identity and an accepted callback; a website login cookie alone does not authorize our API client. Nexus's [official OAuth demo](https://github.com/Nexus-Mods/oauth2-demo-app) documents the authorization-code flow and loopback or custom-protocol return options. Its public README does not explain a self-service client-registration procedure. OAuth client issuance for this private application therefore remains unverified; no demo identity is reused.
+
+For this personal tool, a personal API key can provide API access without treating the app as a public release. The [API Acceptable Use Policy](https://help.nexusmods.com/article/114-api-acceptable-use-policy) permits personal keys for private/testing applications. It separately describes public application registration and SSO issuance. The current CLI validates a caller-provided private key against Nexus before saving it; the local UI host uses that same store. This works as an implementation path, but live credentials have not been supplied or tested.
+
+The older [official SSO example](https://github.com/Nexus-Mods/sso-integration-demo) says the application reference must come from Nexus staff. No staff message or registration request has been sent. Private API-key access and staff-issued one-click SSO are separate prerequisites; the private-use decision does not itself create an application identity.
+
+Next evidence needed: Nexus's supported procedure for issuing this app's OAuth client/callback, or user-entered personal-key validation for the private development path. The UI must keep its own login form away from Nexus passwords. Premium/free download entitlement is a separate question and does not establish console translation.
+
+For native PS5 use, HTTPS/browser behavior, a supported return URI and private credential storage still require console validation. The computer's `127.0.0.1` callback cannot receive a request directed to the PS5's own loopback address. Current hosting is explicitly desktop-only; a native listener or supported protocol bridge must be built and verified before claiming the same sign-in on the console.

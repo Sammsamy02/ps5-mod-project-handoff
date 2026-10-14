@@ -1,0 +1,5671 @@
+{
+ "generated": "2026-10-07 (rev 3: catalog v4 Key/ModifierKey TYPE entries mapped to the static suite's existing constant spot-checks; scripts unchanged since rev 2. Rev 2: conformance_live.lua name-mismatch fixes + hooking/scheduling coverage + 6 catalog additions)",
+ "mac_only": true,
+ "sources": {
+  "catalog_globals": "catalog/globals.json",
+  "catalog_types": "catalog/types.json",
+  "static": "conformance/conformance_static.lua",
+  "live": "conformance/conformance_live.lua"
+ },
+ "call_count_reconciliation": {
+  "static_source_sites": 86,
+  "static_loop_expanded": 279,
+  "static_either_or_branch_correction": -2,
+  "static_emitted": 353,
+  "live_rows": 86,
+  "total": 439,
+  "note": "86 literal run_call sites minus 10 loop templates = 76 direct; 2 of those are an if/else pair (EGameThreadMethod) of which only one branch runs; loops expand to 279 rows (presence 58 + string-ctor 63 + enums 47 + key spot-checks 19 + PropertyTypes 92; Key.count is a direct site). 74+279=353 emitted CALL rows. Live (2026-10-07 revision) has 72 literal call() sites; on every run path (in-game or degraded) the battery emits exactly 86 CALL-format rows (call() and skip() each emit one row; branch alternatives swap call<->skip 1:1). 353+86=439 total. Live rev-2 figures are host-mock-verified (2026-10-07): a full-battery mock run emits exactly 86 CALL rows (82 PASS / 1 FAIL [the intentional string.toFName absence probe] / 3 SKIP).",
+  "live_literal_call_sites": 72
+ },
+ "mock_limitation_statement": "Pass under mock only proves the scripts run against our own stand-ins, not against the real runtime.",
+ "globals": {
+  "count": 106,
+  "summary": {
+   "any_call_row": {
+    "static": 48,
+    "both": 12,
+    "not-covered": 23,
+    "live": 23
+   },
+   "invoked": 70,
+   "presence_only": 13,
+   "none": 23
+  },
+  "entries": [
+   {
+    "name": "CreateInvalidObject",
+    "category": "object-management",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "CreateInvalidObject (+ :type/:IsValid/:GetAddress) L835-849"
+   },
+   {
+    "name": "FindAllOf",
+    "category": "object-management",
+    "covered_by": "both",
+    "how": "static=presence-only; live=invoked",
+    "reason_if_not": "",
+    "evidence": "live: class=Engine, class=Pawn"
+   },
+   {
+    "name": "FindFirstOf",
+    "category": "object-management",
+    "covered_by": "both",
+    "how": "static=presence-only; live=invoked",
+    "reason_if_not": "",
+    "evidence": "live: Engine/Pawn/PlayerController probes + PREQ rows"
+   },
+   {
+    "name": "FindObject",
+    "category": "object-management",
+    "covered_by": "static",
+    "how": "presence-only",
+    "reason_if_not": "script author missed it — flag for follow-up (live covered equivalent finders FindFirstOf/FindAllOf/StaticFindObject)",
+    "evidence": "presence:FindObject (global_presence section, L314-351)"
+   },
+   {
+    "name": "FindObjects",
+    "category": "object-management",
+    "covered_by": "static",
+    "how": "presence-only",
+    "reason_if_not": "script author missed it — flag for follow-up (same shape as the covered finders)",
+    "evidence": "presence:FindObjects (global_presence section, L314-351)"
+   },
+   {
+    "name": "ForEachUObject",
+    "category": "object-management",
+    "covered_by": "static",
+    "how": "presence-only",
+    "reason_if_not": "needs specific game state (iterates every live UObject; static excludes it by design) — flag for follow-up",
+    "evidence": "presence:ForEachUObject (global_presence section, L314-351)"
+   },
+   {
+    "name": "LoadAsset",
+    "category": "object-management",
+    "covered_by": "static",
+    "how": "presence-only",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (asset load)",
+    "evidence": "presence:LoadAsset (global_presence section, L314-351)"
+   },
+   {
+    "name": "StaticConstructObject",
+    "category": "object-management",
+    "covered_by": "static",
+    "how": "presence-only",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (spawns a UObject)",
+    "evidence": "presence:StaticConstructObject (global_presence section, L314-351)"
+   },
+   {
+    "name": "StaticFindObject",
+    "category": "object-management",
+    "covered_by": "both",
+    "how": "static=presence-only; live=invoked",
+    "reason_if_not": "",
+    "evidence": "live: UClass, UFunction, negative probe (3 rows)"
+   },
+   {
+    "name": "RegisterCustomProperty",
+    "category": "reflection",
+    "covered_by": "static",
+    "how": "presence-only",
+    "reason_if_not": "script author missed it — flag for follow-up (must run at mod startup with a property-list builder; no no-op form authored)",
+    "evidence": "presence:RegisterCustomProperty (global_presence section, L314-351)"
+   },
+   {
+    "name": "FAnsiString",
+    "category": "string",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "21-row ctor/method/error battery (section 'fansistring')"
+   },
+   {
+    "name": "FString",
+    "category": "string",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: 21-row battery; live: ctor + tostring + concat"
+   },
+   {
+    "name": "FUtf8String",
+    "category": "string",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "21-row ctor/method/error battery (section 'futf8string')"
+   },
+   {
+    "name": "CreateLogicModsDirectory",
+    "category": "file-io",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (host-side mkdir into the mod tree; safe to test)",
+    "evidence": ""
+   },
+   {
+    "name": "dofile",
+    "category": "file-io",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (arbitrary-file Lua execution; also may be sandboxed away in UE4SS)",
+    "evidence": ""
+   },
+   {
+    "name": "IterateGameDirectories",
+    "category": "file-io",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "heavy IO / full-game dump — excluded by design (static header lines 40-49)",
+    "evidence": ""
+   },
+   {
+    "name": "loadfile",
+    "category": "file-io",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (arbitrary-file Lua load)",
+    "evidence": ""
+   },
+   {
+    "name": "IsKeyBindRegistered",
+    "category": "input",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: Key.F6 + 999 error path; live: combo query"
+   },
+   {
+    "name": "Key",
+    "category": "input",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "19-constant spot-check list (LEFT_MOUSE_BUTTON..RIGHT_SHIFT) + Key.count row (constants section L765-783); catalog v4 TYPE entry (165 constants, pc_only_input)"
+   },
+   {
+    "name": "ModifierKey",
+    "category": "input",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "SHIFT/CONTROL/ALT constant reads (constants section L722-728); catalog v4 TYPE entry (3 active constants, pc_only_input)"
+   },
+   {
+    "name": "RegisterKeyBind",
+    "category": "input",
+    "covered_by": "both",
+    "how": "static=presence-only; live=invoked",
+    "reason_if_not": "",
+    "evidence": "live: CTRL+SHIFT+F8 no-op combo, never triggered"
+   },
+   {
+    "name": "RegisterKeyBindAsync",
+    "category": "input",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (sync RegisterKeyBind is covered live; async variant overlooked)",
+    "evidence": ""
+   },
+   {
+    "name": "NotifyOnNewObject",
+    "category": "hooking",
+    "covered_by": "both",
+    "how": "static=presence-only; live=invoked",
+    "reason_if_not": "",
+    "evidence": "live: no-op callback for a class name that never spawns ('/Script/Engine.ConformanceNeverSpawned'); no unregister API exists -- registration lives for the mod lifetime but the callback can never fire"
+   },
+   {
+    "name": "RegisterBeginPlayPostHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "RegisterBeginPlayPreHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "RegisterCallFunctionByNameWithArgumentsPostHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "RegisterCallFunctionByNameWithArgumentsPreHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "RegisterConsoleCommandGlobalHandler",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "RegisterConsoleCommandHandler",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op handler for 'conformance.noop' (validator fixed 2026-10-07: port returns no value)"
+   },
+   {
+    "name": "RegisterCustomEvent",
+    "category": "hooking",
+    "covered_by": "both",
+    "how": "static=presence-only; live=invoked",
+    "reason_if_not": "",
+    "evidence": "live: 'ConformanceNoopEvent' no-op handler (validator fixed 2026-10-07: port returns no value)"
+   },
+   {
+    "name": "RegisterEndPlayPostHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "RegisterEndPlayPreHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "RegisterHook",
+    "category": "hooking",
+    "covered_by": "both",
+    "how": "static=presence-only; live=invoked",
+    "reason_if_not": "",
+    "evidence": "live: no-op pass-through on GetAllActorsOfClass; FIXED 2026-10-07 to capture BOTH returned ids (pre, post)"
+   },
+   {
+    "name": "RegisterInitGameStatePostHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "RegisterInitGameStatePreHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "RegisterLoadMapPostHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (validator fixed 2026-10-07: port returns NO value, success-without-error is the criterion)"
+   },
+   {
+    "name": "RegisterLoadMapPreHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "RegisterProcessConsoleExecPostHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "RegisterProcessConsoleExecPreHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "RegisterULocalPlayerExecPostHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "RegisterULocalPlayerExecPreHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "no-op callback registration (returns without error; port returns no value)"
+   },
+   {
+    "name": "UnregisterCustomEvent",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "unregisters the suite's own ConformanceNoopEvent right after RegisterCustomEvent"
+   },
+   {
+    "name": "UnregisterHook",
+    "category": "hooking",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "FIXED 2026-10-07: called as UnregisterHook(path, pre_id, post_id) per port signature (was single-id)"
+   },
+   {
+    "name": "CancelDelayedAction",
+    "category": "threading",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "cancels the suite's own delayed/looping actions (port: only the calling mod's own actions are cancellable); 4 rows"
+   },
+   {
+    "name": "ClearAllDelayedActions",
+    "category": "threading",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (would cancel OTHER mods' delayed actions)",
+    "evidence": ""
+   },
+   {
+    "name": "ExecuteAsync",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "presence-only",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (spawns async work; static header excludes Execute*/Loop*)",
+    "evidence": "presence:ExecuteAsync (global_presence section, L314-351)"
+   },
+   {
+    "name": "ExecuteInGameThread",
+    "category": "threading",
+    "covered_by": "both",
+    "how": "static=presence-only; live=invoked",
+    "reason_if_not": "",
+    "evidence": "live: queued no-op + deferred-flag verification (2 rows)"
+   },
+   {
+    "name": "ExecuteInGameThreadAfterFrames",
+    "category": "threading",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up",
+    "evidence": ""
+   },
+   {
+    "name": "ExecuteInGameThreadWithDelay",
+    "category": "threading",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "self-owned cycle: 30s no-op action (never fires) -> handle -> CancelDelayedAction"
+   },
+   {
+    "name": "ExecuteWithDelay",
+    "category": "threading",
+    "covered_by": "both",
+    "how": "static=presence-only; live=invoked",
+    "reason_if_not": "",
+    "evidence": "live: explicit 50ms no-op CALL row (sets deferred flag, verified later) + used as the bootstrap delay mechanism"
+   },
+   {
+    "name": "GetAsyncThreadId",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "GetAsyncThreadId() + :type (section 'threads')"
+   },
+   {
+    "name": "GetCurrentThreadId",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "GetCurrentThreadId() + :type (section 'threads')"
+   },
+   {
+    "name": "GetDelayedActionRate",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "invalid-handle"
+   },
+   {
+    "name": "GetDelayedActionTimeElapsed",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "invalid-handle"
+   },
+   {
+    "name": "GetDelayedActionTimeRemaining",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "invalid-handle (expect -1)"
+   },
+   {
+    "name": "GetGameThreadId",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "GetGameThreadId() + :type (section 'threads')"
+   },
+   {
+    "name": "GetMainModThreadId",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "GetMainModThreadId() + :type (section 'threads')"
+   },
+   {
+    "name": "IsDelayedActionActive",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "invalid-handle (expect false)"
+   },
+   {
+    "name": "IsDelayedActionPaused",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "invalid-handle (expect false)"
+   },
+   {
+    "name": "IsInAsyncThread",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "expect false"
+   },
+   {
+    "name": "IsInGameThread",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "expect false"
+   },
+   {
+    "name": "IsInMainModThread",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "expect true"
+   },
+   {
+    "name": "IsValidDelayedActionHandle",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "invalid-handle + error path"
+   },
+   {
+    "name": "LoopAsync",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "presence-only",
+    "reason_if_not": "unsafe by design, NOT 'not written yet': LoopAsync schedules a callback repeating FOREVER on the shared async thread (ActionType::Loop, port LuaMod.cpp:3390); returns no handle and has NO cancellation API (CancelDelayedAction only searches delayed-action containers, never m_pending_actions) -- calling it would leave permanent background work for the mod's lifetime",
+    "evidence": "presence:LoopAsync (global_presence section, L314-351)"
+   },
+   {
+    "name": "LoopInGameThreadAfterFrames",
+    "category": "threading",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "self-owned cycle: 100000-frame no-op loop (never fires) -> handle -> immediate CancelDelayedAction"
+   },
+   {
+    "name": "LoopInGameThreadWithDelay",
+    "category": "threading",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "self-owned cycle: 30s no-op loop (is_looping, never fires) -> handle -> immediate CancelDelayedAction; no loop survives the battery"
+   },
+   {
+    "name": "MakeActionHandle",
+    "category": "threading",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: MakeActionHandle x2 + uniqueness; live: fresh self-owned handle for the retriggerable cycle"
+   },
+   {
+    "name": "PauseDelayedAction",
+    "category": "threading",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs an actively scheduled action — script author missed it — flag for follow-up",
+    "evidence": ""
+   },
+   {
+    "name": "ResetDelayedActionTimer",
+    "category": "threading",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs an actively scheduled action — script author missed it — flag for follow-up",
+    "evidence": ""
+   },
+   {
+    "name": "RetriggerableExecuteInGameThreadWithDelay",
+    "category": "threading",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "self-owned cycle: MakeActionHandle -> 30s no-op retriggerable -> CancelDelayedAction"
+   },
+   {
+    "name": "SetDelayedActionTimer",
+    "category": "threading",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs an actively scheduled action — script author missed it — flag for follow-up",
+    "evidence": ""
+   },
+   {
+    "name": "UnpauseDelayedAction",
+    "category": "threading",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs an actively scheduled action — script author missed it — flag for follow-up",
+    "evidence": ""
+   },
+   {
+    "name": "DerefToInt32",
+    "category": "debug",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (raw memory deref of a valid live address)",
+    "evidence": ""
+   },
+   {
+    "name": "dereftoint32",
+    "category": "debug",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (lowercase alias, same)",
+    "evidence": ""
+   },
+   {
+    "name": "DumpAllActors",
+    "category": "debug",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "heavy IO / full-game dump — excluded by design (static header lines 40-49)",
+    "evidence": ""
+   },
+   {
+    "name": "DumpAllObjects",
+    "category": "debug",
+    "covered_by": "static",
+    "how": "presence-only",
+    "reason_if_not": "heavy IO / full-game dump — excluded by design (static header lines 40-49)",
+    "evidence": "presence:DumpAllObjects (global_presence section, L314-351)"
+   },
+   {
+    "name": "DumpJMAP",
+    "category": "debug",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "heavy IO / full-game dump — excluded by design (static header lines 40-49)",
+    "evidence": ""
+   },
+   {
+    "name": "DumpStaticMeshes",
+    "category": "debug",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "heavy IO / full-game dump — excluded by design (static header lines 40-49)",
+    "evidence": ""
+   },
+   {
+    "name": "DumpUSMAP",
+    "category": "debug",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "heavy IO / full-game dump — excluded by design (static header lines 40-49)",
+    "evidence": ""
+   },
+   {
+    "name": "GenerateLuaTypes",
+    "category": "debug",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "heavy IO / full-game dump — excluded by design (static header lines 40-49)",
+    "evidence": ""
+   },
+   {
+    "name": "GenerateSDK",
+    "category": "debug",
+    "covered_by": "static",
+    "how": "presence-only",
+    "reason_if_not": "heavy IO / full-game dump — excluded by design (static header lines 40-49)",
+    "evidence": "presence:GenerateSDK (global_presence section, L314-351)"
+   },
+   {
+    "name": "GenerateUHTCompatibleHeaders",
+    "category": "debug",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "heavy IO / full-game dump — excluded by design (static header lines 40-49)",
+    "evidence": ""
+   },
+   {
+    "name": "print",
+    "category": "debug",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "print smoke call"
+   },
+   {
+    "name": "Print",
+    "category": "debug",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (uppercase variant; static covers lowercase print only)",
+    "evidence": ""
+   },
+   {
+    "name": "UE4SS.GetVersion",
+    "category": "debug",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "UE4SS.GetVersion -> 3 ints (also types.json UE4SS:GetVersion)"
+   },
+   {
+    "name": "UnrealVersion.GetMajor",
+    "category": "debug",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "GetMajor variants incl. error path (7/7 methods)"
+   },
+   {
+    "name": "UnrealVersion.GetMinor",
+    "category": "debug",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "GetMinor variants incl. error path (7/7 methods)"
+   },
+   {
+    "name": "UnrealVersion.IsAbove",
+    "category": "debug",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "IsAbove variants incl. error path (7/7 methods)"
+   },
+   {
+    "name": "UnrealVersion.IsAtLeast",
+    "category": "debug",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "IsAtLeast variants incl. error path (7/7 methods)"
+   },
+   {
+    "name": "UnrealVersion.IsAtMost",
+    "category": "debug",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "IsAtMost variants incl. error path (7/7 methods)"
+   },
+   {
+    "name": "UnrealVersion.IsBelow",
+    "category": "debug",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "IsBelow variants incl. error path (7/7 methods)"
+   },
+   {
+    "name": "UnrealVersion.IsEqual",
+    "category": "debug",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "IsEqual variants incl. error path (7/7 methods)"
+   },
+   {
+    "name": "FPackageName.IsShortPackageName",
+    "category": "other",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "2 positives/negatives + error path"
+   },
+   {
+    "name": "FPackageName.IsValidLongPackageName",
+    "category": "other",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "2 positives/negatives"
+   },
+   {
+    "name": "LoadExport",
+    "category": "other",
+    "covered_by": "static",
+    "how": "presence-only",
+    "reason_if_not": "by design: call emits [Fatal] log noise; presence-checked only (static header line 48-49)",
+    "evidence": "presence:LoadExport (global_presence section, L314-351)"
+   },
+   {
+    "name": "loadexport",
+    "category": "other",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (lowercase alias of LoadExport)",
+    "evidence": ""
+   },
+   {
+    "name": "RestartCurrentMod",
+    "category": "other",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (restarts the running conformance mod itself)",
+    "evidence": ""
+   },
+   {
+    "name": "RestartMod",
+    "category": "other",
+    "covered_by": "static",
+    "how": "presence-only",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (restarts a running mod)",
+    "evidence": "presence:RestartMod (global_presence section, L314-351)"
+   },
+   {
+    "name": "UninstallCurrentMod",
+    "category": "other",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (would remove the running mod)",
+    "evidence": ""
+   },
+   {
+    "name": "UninstallMod",
+    "category": "other",
+    "covered_by": "static",
+    "how": "presence-only",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (removes a mod)",
+    "evidence": "presence:UninstallMod (global_presence section, L314-351)"
+   },
+   {
+    "name": "EGameThreadMethod",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "EGameThreadMethod.EngineTick/ProcessEvent rows (if/else pair; 2 of 4 sites per run) + presence row"
+   },
+   {
+    "name": "EngineTickAvailable",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "EngineTickAvailable read row (boolean capability global; reading is the invocation)"
+   },
+   {
+    "name": "ProcessEventAvailable",
+    "category": "threading",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "ProcessEventAvailable read row (boolean capability global; reading is the invocation)"
+   },
+   {
+    "name": "ue4ss_loaded_modules",
+    "category": "file-io",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "misc section run_call: reads the table and reports table(n=..) + presence row"
+   },
+   {
+    "name": "__OriginalReturnValue",
+    "category": "hooking",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "misc section run_call: read expecting nil (nil-initialized in both trees, never runtime-written) + presence row"
+   },
+   {
+    "name": "NAME_None",
+    "category": "string",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "NAME_None:ToString / :GetComparisonIndex / FName(0)==NAME_None rows + presence row"
+   }
+  ]
+ },
+ "types": {
+  "count": 476,
+  "method_entries": 456,
+  "metamethod_entries": 20,
+  "summary": {
+   "any_call_row": {
+    "both": 12,
+    "static": 45,
+    "live": 23,
+    "not-covered": 396
+   },
+   "invoked": 80,
+   "presence_only": 0,
+   "none": 396
+  },
+  "entries": [
+   {
+    "type": "RemoteObjectBase",
+    "category": "other",
+    "api": "RemoteObjectBase.GetAddress",
+    "kind": "method",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: CreateInvalidObject:GetAddress (expect 0); live: engine:GetAddress()"
+   },
+   {
+    "type": "RemoteObjectBase",
+    "category": "other",
+    "api": "RemoteObjectBase.IsValid",
+    "kind": "method",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: CreateInvalidObject:IsValid (false); live: engine:IsValid (true)"
+   },
+   {
+    "type": "RemoteObjectBase",
+    "category": "other",
+    "api": "RemoteObjectBase.type",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "CreateInvalidObject:type() (also FName:type / FText:type / ModRef:type / ThreadId:type rows)"
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.GetAddress",
+    "kind": "method",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: CreateInvalidObject:GetAddress; live: UObject.GetAddress"
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.GetFullName",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "engine:GetFullName()"
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an Engine/Pawn receiver was already in hand in the live battery)",
+    "evidence": ""
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.GetClass",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "engine:GetClass() -> IsA dependency"
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.GetOuter",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "engine:GetOuter()"
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.IsAnyClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an Engine/Pawn receiver was already in hand in the live battery)",
+    "evidence": ""
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.Reflection",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an Engine/Pawn receiver was already in hand in the live battery)",
+    "evidence": ""
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.GetPropertyValue",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "engine:GetPropertyValue('bUseFixedFrameRate')"
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.SetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (property write)",
+    "evidence": ""
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.IsClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an Engine/Pawn receiver was already in hand in the live battery)",
+    "evidence": ""
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.GetWorld",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an Engine/Pawn receiver was already in hand in the live battery)",
+    "evidence": ""
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.CallFunction",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (invokes a UFunction)",
+    "evidence": ""
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.IsA",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "IsA(userdata) + IsA(string) x2 on Pawn"
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.HasAllFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an Engine/Pawn receiver was already in hand in the live battery)",
+    "evidence": ""
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.HasAnyFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an Engine/Pawn receiver was already in hand in the live battery)",
+    "evidence": ""
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.HasAnyInternalFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an Engine/Pawn receiver was already in hand in the live battery)",
+    "evidence": ""
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.ProcessConsoleExec",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an Engine/Pawn receiver was already in hand in the live battery)",
+    "evidence": ""
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.IsValid",
+    "kind": "method",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: CreateInvalidObject:IsValid; live: engine:IsValid"
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.__index",
+    "kind": "metamethod",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "3 read-only property reads (Engine/Pawn/PlayerController)"
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.__newindex",
+    "kind": "metamethod",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (property write)",
+    "evidence": ""
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.__call",
+    "kind": "metamethod",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (invokes a UFunction)",
+    "evidence": ""
+   },
+   {
+    "type": "UObject",
+    "category": "reflection",
+    "api": "UObject.__eq",
+    "kind": "metamethod",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (invalid==invalid was one line away in static)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.GetOuter",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.IsAnyClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.Reflection",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.GetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.SetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (property write)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.IsClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.GetWorld",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.CallFunction",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.HasAllFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.HasAnyFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.HasAnyInternalFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.ProcessConsoleExec",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.GetSuperStruct",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "UClass(Actor) -> super struct (non-nil validated)"
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.ForEachFunction",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "UClass(Actor) receiver, immediate-stop callback (returns true on first UFunction; bounded, read-only)"
+   },
+   {
+    "type": "UStruct",
+    "category": "reflection",
+    "api": "UStruct.ForEachProperty",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "UClass(Actor) receiver, discovery callback that stops at the first ArrayProperty (also drives the TArray battery)"
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.GetOuter",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.IsAnyClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.Reflection",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.GetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.SetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.IsClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.GetWorld",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.CallFunction",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.HasAllFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.HasAnyFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.HasAnyInternalFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.ProcessConsoleExec",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UClass-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.GetSuperStruct",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "via UClass(Actor) receiver; metatable chain as above"
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.ForEachFunction",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "UClass metatable chains UStruct member functions (LuaUClass.cpp UClass::construct calls UStruct::construct); immediate-stop callback"
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.ForEachProperty",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "rev 2: via the UStruct-chained metatable; discovery callback for the TArray battery (stops at first ArrayProperty)"
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.GetCDO",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "UClass(Actor):GetCDO() non-nil"
+   },
+   {
+    "type": "UClass",
+    "category": "reflection",
+    "api": "UClass.IsChildOf",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "UClass(Actor):IsChildOf(itself) -> true"
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.GetOuter",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.IsAnyClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.Reflection",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.GetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.SetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (property write)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.IsClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.GetWorld",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.CallFunction",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.HasAllFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.HasAnyFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.HasAnyInternalFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.ProcessConsoleExec",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.GetSuperStruct",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.ForEachFunction",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.ForEachProperty",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.GetCDO",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UInterface",
+    "category": "reflection",
+    "api": "UInterface.IsChildOf",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UInterface-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.GetOuter",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.IsAnyClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.Reflection",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.GetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.SetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (property write)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.IsClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.GetWorld",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.CallFunction",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.HasAllFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.HasAnyFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.HasAnyInternalFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.ProcessConsoleExec",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.GetSuperStruct",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.ForEachFunction",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.ForEachProperty",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.GetFunctionFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.SetFunctionFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UFunction",
+    "category": "reflection",
+    "api": "UFunction.__call",
+    "kind": "metamethod",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UFunction-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.GetOuter",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.IsAnyClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.Reflection",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.GetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.SetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (property write)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.IsClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.GetWorld",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.CallFunction",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.HasAllFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.HasAnyFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.HasAnyInternalFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.ProcessConsoleExec",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.GetNameByValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.ForEachName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.GetEnumNameByIndex",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.InsertIntoNames",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.EditNameAt",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.EditValueAt",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UEnum",
+    "category": "reflection",
+    "api": "UEnum.RemoveFromNamesAt",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UEnum-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.GetOuter",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.IsAnyClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.Reflection",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.GetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.SetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (property write)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.IsClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.GetWorld",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.CallFunction",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.HasAllFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.HasAnyFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.HasAnyInternalFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.ProcessConsoleExec",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.GetSuperStruct",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.ForEachFunction",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.ForEachProperty",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.GetBaseAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.GetStructAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.GetPropertyAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.IsMappedToObject",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.IsMappedToProperty",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.GetProperty",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.__index",
+    "kind": "metamethod",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UScriptStruct",
+    "category": "reflection",
+    "api": "UScriptStruct.__newindex",
+    "kind": "metamethod",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UScriptStruct-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.GetOuter",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.IsAnyClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.Reflection",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.GetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.SetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.IsClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.GetWorld",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.CallFunction",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.HasAllFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.HasAnyFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.HasAnyInternalFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.ProcessConsoleExec",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UWorld-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UWorld",
+    "category": "other",
+    "api": "UWorld.SpawnActor",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (spawns an actor)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.GetOuter",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.IsAnyClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.Reflection",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.GetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.SetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.IsClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.GetWorld",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (a Pawn receiver was in hand)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.CallFunction",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.HasAllFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.HasAnyFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.HasAnyInternalFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.ProcessConsoleExec",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no AActor-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.GetWorld",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (a Pawn receiver was in hand)",
+    "evidence": ""
+   },
+   {
+    "type": "AActor",
+    "category": "other",
+    "api": "AActor.GetLevel",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (a Pawn receiver was in hand)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.GetOuter",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.IsAnyClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.Reflection",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.GetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.SetPropertyValue",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (property write)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.IsClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.GetWorld",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.CallFunction",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.HasAllFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.HasAnyFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.HasAnyInternalFlags",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.ProcessConsoleExec",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.GetRowStruct",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.GetRowMap",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.FindRow",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.AddRow",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.RemoveRow",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.EmptyTable",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.GetRowNames",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.GetAllRows",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.ForEachRow",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "UDataTable",
+    "category": "reflection",
+    "api": "UDataTable.__len",
+    "kind": "metamethod",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no UDataTable-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "FName",
+    "category": "string",
+    "api": "FName.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (FName instances are constructed throughout static)",
+    "evidence": ""
+   },
+   {
+    "type": "FName",
+    "category": "string",
+    "api": "FName.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (same)",
+    "evidence": ""
+   },
+   {
+    "type": "FName",
+    "category": "string",
+    "api": "FName.ToString",
+    "kind": "method",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: FName:ToString x2 + NAME_None:ToString; live: FName.ToString"
+   },
+   {
+    "type": "FName",
+    "category": "string",
+    "api": "FName.GetComparisonIndex",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "FName:GetComparisonIndex + NAME_None:GetComparisonIndex (expect 0)"
+   },
+   {
+    "type": "FName",
+    "category": "string",
+    "api": "FName.Equals",
+    "kind": "method",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: same-name/different-name; live: FName.Equals"
+   },
+   {
+    "type": "FName",
+    "category": "string",
+    "api": "FName.__call",
+    "kind": "metamethod",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: ctor battery (string/int/error paths); live: FName.new"
+   },
+   {
+    "type": "FName",
+    "category": "string",
+    "api": "FName.__eq",
+    "kind": "metamethod",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: 3 rows incl. FName(0)==NAME_None; live: FName.__eq(==)"
+   },
+   {
+    "type": "FString",
+    "category": "string",
+    "api": "FString.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (instances are constructed throughout the static battery)",
+    "evidence": ""
+   },
+   {
+    "type": "FString",
+    "category": "string",
+    "api": "FString.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (instances are constructed throughout the static battery)",
+    "evidence": ""
+   },
+   {
+    "type": "FString",
+    "category": "string",
+    "api": "FString.ToString",
+    "kind": "method",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: roundtrip expect 'Hello Conformance'; live: FString('conformance_fstring') roundtrip + post-Append roundtrip (replaced bogus tostring() row -- string types have NO __tostring in the port)"
+   },
+   {
+    "type": "FString",
+    "category": "string",
+    "api": "FString.Empty",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "then IsEmpty/Len/ToString"
+   },
+   {
+    "type": "FString",
+    "category": "string",
+    "api": "FString.Clear",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "then IsEmpty/Len"
+   },
+   {
+    "type": "FString",
+    "category": "string",
+    "api": "FString.Len",
+    "kind": "method",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: expect #sample; live: expect #'conformance_fstring'"
+   },
+   {
+    "type": "FString",
+    "category": "string",
+    "api": "FString.IsEmpty",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "false/true after Empty"
+   },
+   {
+    "type": "FString",
+    "category": "string",
+    "api": "FString.Append",
+    "kind": "method",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: string/userdata/error x4; live: Append('_suffix') on the Lua-owned in-memory copy, then ToString cross-check (replaced bogus '..' concat row -- FString has NO __concat in the port)"
+   },
+   {
+    "type": "FString",
+    "category": "string",
+    "api": "FString.Find",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "hit at 7 / nil miss / error path"
+   },
+   {
+    "type": "FString",
+    "category": "string",
+    "api": "FString.StartsWith",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "true/false"
+   },
+   {
+    "type": "FString",
+    "category": "string",
+    "api": "FString.EndsWith",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "true"
+   },
+   {
+    "type": "FString",
+    "category": "string",
+    "api": "FString.ToUpper",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "'HELLO CONFORMANCE'"
+   },
+   {
+    "type": "FString",
+    "category": "string",
+    "api": "FString.ToLower",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "roundtrip"
+   },
+   {
+    "type": "FUtf8String",
+    "category": "string",
+    "api": "FUtf8String.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (instances are constructed throughout the static battery)",
+    "evidence": ""
+   },
+   {
+    "type": "FUtf8String",
+    "category": "string",
+    "api": "FUtf8String.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (instances are constructed throughout the static battery)",
+    "evidence": ""
+   },
+   {
+    "type": "FUtf8String",
+    "category": "string",
+    "api": "FUtf8String.ToString",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "roundtrip expect 'Hello Conformance'"
+   },
+   {
+    "type": "FUtf8String",
+    "category": "string",
+    "api": "FUtf8String.Empty",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "then IsEmpty/Len/ToString"
+   },
+   {
+    "type": "FUtf8String",
+    "category": "string",
+    "api": "FUtf8String.Clear",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "then IsEmpty/Len"
+   },
+   {
+    "type": "FUtf8String",
+    "category": "string",
+    "api": "FUtf8String.Len",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "expect #sample"
+   },
+   {
+    "type": "FUtf8String",
+    "category": "string",
+    "api": "FUtf8String.IsEmpty",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "false/true after Empty"
+   },
+   {
+    "type": "FUtf8String",
+    "category": "string",
+    "api": "FUtf8String.Append",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "string/userdata/error x4"
+   },
+   {
+    "type": "FUtf8String",
+    "category": "string",
+    "api": "FUtf8String.Find",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "hit at 7 / nil miss / error path"
+   },
+   {
+    "type": "FUtf8String",
+    "category": "string",
+    "api": "FUtf8String.StartsWith",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "true/false"
+   },
+   {
+    "type": "FUtf8String",
+    "category": "string",
+    "api": "FUtf8String.EndsWith",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "true"
+   },
+   {
+    "type": "FUtf8String",
+    "category": "string",
+    "api": "FUtf8String.ToUpper",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "'HELLO CONFORMANCE'"
+   },
+   {
+    "type": "FUtf8String",
+    "category": "string",
+    "api": "FUtf8String.ToLower",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "roundtrip"
+   },
+   {
+    "type": "FAnsiString",
+    "category": "string",
+    "api": "FAnsiString.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (instances are constructed throughout the static battery)",
+    "evidence": ""
+   },
+   {
+    "type": "FAnsiString",
+    "category": "string",
+    "api": "FAnsiString.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (instances are constructed throughout the static battery)",
+    "evidence": ""
+   },
+   {
+    "type": "FAnsiString",
+    "category": "string",
+    "api": "FAnsiString.ToString",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "roundtrip expect 'Hello Conformance'"
+   },
+   {
+    "type": "FAnsiString",
+    "category": "string",
+    "api": "FAnsiString.Empty",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "then IsEmpty/Len/ToString"
+   },
+   {
+    "type": "FAnsiString",
+    "category": "string",
+    "api": "FAnsiString.Clear",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "then IsEmpty/Len"
+   },
+   {
+    "type": "FAnsiString",
+    "category": "string",
+    "api": "FAnsiString.Len",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "expect #sample"
+   },
+   {
+    "type": "FAnsiString",
+    "category": "string",
+    "api": "FAnsiString.IsEmpty",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "false/true after Empty"
+   },
+   {
+    "type": "FAnsiString",
+    "category": "string",
+    "api": "FAnsiString.Append",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "string/userdata/error x4"
+   },
+   {
+    "type": "FAnsiString",
+    "category": "string",
+    "api": "FAnsiString.Find",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "hit at 7 / nil miss / error path"
+   },
+   {
+    "type": "FAnsiString",
+    "category": "string",
+    "api": "FAnsiString.StartsWith",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "true/false"
+   },
+   {
+    "type": "FAnsiString",
+    "category": "string",
+    "api": "FAnsiString.EndsWith",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "true"
+   },
+   {
+    "type": "FAnsiString",
+    "category": "string",
+    "api": "FAnsiString.ToUpper",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "'HELLO CONFORMANCE'"
+   },
+   {
+    "type": "FAnsiString",
+    "category": "string",
+    "api": "FAnsiString.ToLower",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "roundtrip"
+   },
+   {
+    "type": "FText",
+    "category": "string",
+    "api": "FText.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (minor)",
+    "evidence": ""
+   },
+   {
+    "type": "FText",
+    "category": "string",
+    "api": "FText.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (minor)",
+    "evidence": ""
+   },
+   {
+    "type": "FText",
+    "category": "string",
+    "api": "FText.ToString",
+    "kind": "method",
+    "covered_by": "both",
+    "how": "static=invoked; live=invoked",
+    "reason_if_not": "",
+    "evidence": "static: global default instance; live: FText('ConformanceLiveText'):ToString() (replaced bogus tostring() row -- no __tostring metamethod)"
+   },
+   {
+    "type": "FText",
+    "category": "string",
+    "api": "FText.__call",
+    "kind": "metamethod",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "FText.new('ConformanceLiveText')"
+   },
+   {
+    "type": "FText",
+    "category": "string",
+    "api": "FText.__eq",
+    "kind": "metamethod",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (minor: two FTexts were constructible in live)",
+    "evidence": ""
+   },
+   {
+    "type": "TArray",
+    "category": "container",
+    "api": "TArray.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it -- flag for follow-up (the live TArray view was in hand)",
+    "evidence": ""
+   },
+   {
+    "type": "TArray",
+    "category": "container",
+    "api": "TArray.GetArrayAddress",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "live array view: address > 0"
+   },
+   {
+    "type": "TArray",
+    "category": "container",
+    "api": "TArray.GetArrayNum",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "live array view (Pawn.<discovered array property>): GetArrayNum() >= 0"
+   },
+   {
+    "type": "TArray",
+    "category": "container",
+    "api": "TArray.GetArrayMax",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "live array view: Max >= Num cross-check"
+   },
+   {
+    "type": "TArray",
+    "category": "container",
+    "api": "TArray.GetArrayDataAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it -- flag for follow-up (the live TArray view was in hand)",
+    "evidence": ""
+   },
+   {
+    "type": "TArray",
+    "category": "container",
+    "api": "TArray.Empty",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "excluded by the read-only contract: Empty() clears live game memory",
+    "evidence": ""
+   },
+   {
+    "type": "TArray",
+    "category": "container",
+    "api": "TArray.ForEach",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "live array view: immediate-stop callback (returns true) -- also dodges the known large-array stack-corruption TODO"
+   },
+   {
+    "type": "TArray",
+    "category": "container",
+    "api": "TArray.IsValid",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "live array view: true"
+   },
+   {
+    "type": "TArray",
+    "category": "container",
+    "api": "TArray.__index",
+    "kind": "metamethod",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "two rows: (1) array-typed UObject property read creates the TArray view; (2) in-bounds element read arr[1] when #arr>=1 (OOB reads AddZeroed-grow live memory, so reads are length-guarded)"
+   },
+   {
+    "type": "TArray",
+    "category": "container",
+    "api": "TArray.__newindex",
+    "kind": "metamethod",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "excluded by the read-only contract: NO in-memory TArray constructor exists in either tree (TArray userdata is only a view of live game memory), so an element write (__newindex, auto-grows) always mutates the game",
+    "evidence": ""
+   },
+   {
+    "type": "TArray",
+    "category": "container",
+    "api": "TArray.__len",
+    "kind": "metamethod",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "#arr must equal GetArrayNum()"
+   },
+   {
+    "type": "TMap",
+    "category": "container",
+    "api": "TMap.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TMap",
+    "category": "container",
+    "api": "TMap.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TMap",
+    "category": "container",
+    "api": "TMap.Find",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TMap",
+    "category": "container",
+    "api": "TMap.Add",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TMap",
+    "category": "container",
+    "api": "TMap.Contains",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TMap",
+    "category": "container",
+    "api": "TMap.Remove",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TMap",
+    "category": "container",
+    "api": "TMap.Empty",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TMap",
+    "category": "container",
+    "api": "TMap.ForEach",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TMap",
+    "category": "container",
+    "api": "TMap.__len",
+    "kind": "metamethod",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TSet",
+    "category": "container",
+    "api": "TSet.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TSet",
+    "category": "container",
+    "api": "TSet.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TSet",
+    "category": "container",
+    "api": "TSet.Add",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TSet",
+    "category": "container",
+    "api": "TSet.Contains",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TSet",
+    "category": "container",
+    "api": "TSet.Remove",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TSet",
+    "category": "container",
+    "api": "TSet.Empty",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TSet",
+    "category": "container",
+    "api": "TSet.ForEach",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "TSet",
+    "category": "container",
+    "api": "TSet.__len",
+    "kind": "metamethod",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (an in-memory battery like the (mis-named) TArray one was possible)",
+    "evidence": ""
+   },
+   {
+    "type": "FWeakObjectPtr",
+    "category": "object-lifecycle",
+    "api": "FWeakObjectPtr.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (requires a live object handle / soft path)",
+    "evidence": ""
+   },
+   {
+    "type": "FWeakObjectPtr",
+    "category": "object-lifecycle",
+    "api": "FWeakObjectPtr.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (requires a live object handle / soft path)",
+    "evidence": ""
+   },
+   {
+    "type": "FWeakObjectPtr",
+    "category": "object-lifecycle",
+    "api": "FWeakObjectPtr.Get",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (requires a live object handle / soft path)",
+    "evidence": ""
+   },
+   {
+    "type": "FWeakObjectPtr",
+    "category": "object-lifecycle",
+    "api": "FWeakObjectPtr.get",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (requires a live object handle / soft path)",
+    "evidence": ""
+   },
+   {
+    "type": "FSoftObjectPath",
+    "category": "object-lifecycle",
+    "api": "FSoftObjectPath.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (requires a live object handle / soft path)",
+    "evidence": ""
+   },
+   {
+    "type": "FSoftObjectPath",
+    "category": "object-lifecycle",
+    "api": "FSoftObjectPath.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (requires a live object handle / soft path)",
+    "evidence": ""
+   },
+   {
+    "type": "FSoftObjectPath",
+    "category": "object-lifecycle",
+    "api": "FSoftObjectPath.GetAssetPathName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (requires a live object handle / soft path)",
+    "evidence": ""
+   },
+   {
+    "type": "FSoftObjectPath",
+    "category": "object-lifecycle",
+    "api": "FSoftObjectPath.GetSubPathString",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (requires a live object handle / soft path)",
+    "evidence": ""
+   },
+   {
+    "type": "TSoftObjectPtr",
+    "category": "object-lifecycle",
+    "api": "TSoftObjectPtr.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (requires a live object handle / soft path)",
+    "evidence": ""
+   },
+   {
+    "type": "TSoftObjectPtr",
+    "category": "object-lifecycle",
+    "api": "TSoftObjectPtr.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (requires a live object handle / soft path)",
+    "evidence": ""
+   },
+   {
+    "type": "TSoftObjectPtr",
+    "category": "object-lifecycle",
+    "api": "TSoftObjectPtr.GetWeakPtr",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (requires a live object handle / soft path)",
+    "evidence": ""
+   },
+   {
+    "type": "TSoftObjectPtr",
+    "category": "object-lifecycle",
+    "api": "TSoftObjectPtr.GetTagAtLastTest",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (requires a live object handle / soft path)",
+    "evidence": ""
+   },
+   {
+    "type": "TSoftObjectPtr",
+    "category": "object-lifecycle",
+    "api": "TSoftObjectPtr.GetObjectID",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (not testable without a running game) (requires a live object handle / soft path)",
+    "evidence": ""
+   },
+   {
+    "type": "FOutputDevice",
+    "category": "other",
+    "api": "FOutputDevice.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no FOutputDevice-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "FOutputDevice",
+    "category": "other",
+    "api": "FOutputDevice.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no FOutputDevice-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "FOutputDevice",
+    "category": "other",
+    "api": "FOutputDevice.Log",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (Engine's output device was reachable from the live battery)",
+    "evidence": ""
+   },
+   {
+    "type": "FURL",
+    "category": "other",
+    "api": "FURL.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no FURL-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "FURL",
+    "category": "other",
+    "api": "FURL.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (no FURL-typed receiver was ever exercised; only Engine/Pawn/PlayerController UObjects and one UClass(Actor) appear in live)",
+    "evidence": ""
+   },
+   {
+    "type": "FURL",
+    "category": "other",
+    "api": "FURL.__call",
+    "kind": "metamethod",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "catalog itself marks this metamethod a stub ('todo in source')",
+    "evidence": ""
+   },
+   {
+    "type": "ThreadId",
+    "category": "other",
+    "api": "ThreadId.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (minor: ThreadId instances were in hand)",
+    "evidence": ""
+   },
+   {
+    "type": "ThreadId",
+    "category": "other",
+    "api": "ThreadId.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (minor: ThreadId instances were in hand)",
+    "evidence": ""
+   },
+   {
+    "type": "ThreadId",
+    "category": "other",
+    "api": "ThreadId.ToString",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "ThreadId:ToString non-empty check on GetCurrentThreadId()"
+   },
+   {
+    "type": "ThreadId",
+    "category": "other",
+    "api": "ThreadId.__eq",
+    "kind": "metamethod",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "ThreadId.__eq self-comparison"
+   },
+   {
+    "type": "XProperty",
+    "category": "reflection",
+    "api": "XProperty.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XProperty",
+    "category": "reflection",
+    "api": "XProperty.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XProperty",
+    "category": "reflection",
+    "api": "XProperty.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XProperty",
+    "category": "reflection",
+    "api": "XProperty.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XProperty",
+    "category": "reflection",
+    "api": "XProperty.GetFName",
+    "kind": "method",
+    "covered_by": "live",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "first ArrayProperty on UClass(Actor) -> GetFName():ToString() names the property the TArray battery reads"
+   },
+   {
+    "type": "XProperty",
+    "category": "reflection",
+    "api": "XProperty.GetOffset_Internal",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XProperty",
+    "category": "reflection",
+    "api": "XProperty.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XProperty",
+    "category": "reflection",
+    "api": "XProperty.ContainerPtrToValuePtr",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XProperty",
+    "category": "reflection",
+    "api": "XProperty.ImportText",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XArrayProperty",
+    "category": "reflection",
+    "api": "XArrayProperty.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XArrayProperty",
+    "category": "reflection",
+    "api": "XArrayProperty.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XArrayProperty",
+    "category": "reflection",
+    "api": "XArrayProperty.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XArrayProperty",
+    "category": "reflection",
+    "api": "XArrayProperty.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XArrayProperty",
+    "category": "reflection",
+    "api": "XArrayProperty.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XArrayProperty",
+    "category": "reflection",
+    "api": "XArrayProperty.GetOffset_Internal",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XArrayProperty",
+    "category": "reflection",
+    "api": "XArrayProperty.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XArrayProperty",
+    "category": "reflection",
+    "api": "XArrayProperty.ContainerPtrToValuePtr",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XArrayProperty",
+    "category": "reflection",
+    "api": "XArrayProperty.ImportText",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XArrayProperty",
+    "category": "reflection",
+    "api": "XArrayProperty.GetInner",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XBoolProperty",
+    "category": "reflection",
+    "api": "XBoolProperty.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XBoolProperty",
+    "category": "reflection",
+    "api": "XBoolProperty.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XBoolProperty",
+    "category": "reflection",
+    "api": "XBoolProperty.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XBoolProperty",
+    "category": "reflection",
+    "api": "XBoolProperty.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XBoolProperty",
+    "category": "reflection",
+    "api": "XBoolProperty.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XBoolProperty",
+    "category": "reflection",
+    "api": "XBoolProperty.GetOffset_Internal",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XBoolProperty",
+    "category": "reflection",
+    "api": "XBoolProperty.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XBoolProperty",
+    "category": "reflection",
+    "api": "XBoolProperty.ContainerPtrToValuePtr",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XBoolProperty",
+    "category": "reflection",
+    "api": "XBoolProperty.ImportText",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XBoolProperty",
+    "category": "reflection",
+    "api": "XBoolProperty.GetByteMask",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XBoolProperty",
+    "category": "reflection",
+    "api": "XBoolProperty.GetByteOffset",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XBoolProperty",
+    "category": "reflection",
+    "api": "XBoolProperty.GetFieldMask",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XBoolProperty",
+    "category": "reflection",
+    "api": "XBoolProperty.GetFieldSize",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XEnumProperty",
+    "category": "reflection",
+    "api": "XEnumProperty.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XEnumProperty",
+    "category": "reflection",
+    "api": "XEnumProperty.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XEnumProperty",
+    "category": "reflection",
+    "api": "XEnumProperty.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XEnumProperty",
+    "category": "reflection",
+    "api": "XEnumProperty.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XEnumProperty",
+    "category": "reflection",
+    "api": "XEnumProperty.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XEnumProperty",
+    "category": "reflection",
+    "api": "XEnumProperty.GetOffset_Internal",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XEnumProperty",
+    "category": "reflection",
+    "api": "XEnumProperty.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XEnumProperty",
+    "category": "reflection",
+    "api": "XEnumProperty.ContainerPtrToValuePtr",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XEnumProperty",
+    "category": "reflection",
+    "api": "XEnumProperty.ImportText",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XEnumProperty",
+    "category": "reflection",
+    "api": "XEnumProperty.GetEnum",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XInterfaceProperty",
+    "category": "reflection",
+    "api": "XInterfaceProperty.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XInterfaceProperty",
+    "category": "reflection",
+    "api": "XInterfaceProperty.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XInterfaceProperty",
+    "category": "reflection",
+    "api": "XInterfaceProperty.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XInterfaceProperty",
+    "category": "reflection",
+    "api": "XInterfaceProperty.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XInterfaceProperty",
+    "category": "reflection",
+    "api": "XInterfaceProperty.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XInterfaceProperty",
+    "category": "reflection",
+    "api": "XInterfaceProperty.GetOffset_Internal",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XInterfaceProperty",
+    "category": "reflection",
+    "api": "XInterfaceProperty.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XInterfaceProperty",
+    "category": "reflection",
+    "api": "XInterfaceProperty.ContainerPtrToValuePtr",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XInterfaceProperty",
+    "category": "reflection",
+    "api": "XInterfaceProperty.ImportText",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XInterfaceProperty",
+    "category": "reflection",
+    "api": "XInterfaceProperty.GetInterfaceClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XObjectProperty",
+    "category": "reflection",
+    "api": "XObjectProperty.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XObjectProperty",
+    "category": "reflection",
+    "api": "XObjectProperty.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XObjectProperty",
+    "category": "reflection",
+    "api": "XObjectProperty.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XObjectProperty",
+    "category": "reflection",
+    "api": "XObjectProperty.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XObjectProperty",
+    "category": "reflection",
+    "api": "XObjectProperty.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XObjectProperty",
+    "category": "reflection",
+    "api": "XObjectProperty.GetOffset_Internal",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XObjectProperty",
+    "category": "reflection",
+    "api": "XObjectProperty.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XObjectProperty",
+    "category": "reflection",
+    "api": "XObjectProperty.ContainerPtrToValuePtr",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XObjectProperty",
+    "category": "reflection",
+    "api": "XObjectProperty.ImportText",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XObjectProperty",
+    "category": "reflection",
+    "api": "XObjectProperty.GetPropertyClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XStructProperty",
+    "category": "reflection",
+    "api": "XStructProperty.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XStructProperty",
+    "category": "reflection",
+    "api": "XStructProperty.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XStructProperty",
+    "category": "reflection",
+    "api": "XStructProperty.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XStructProperty",
+    "category": "reflection",
+    "api": "XStructProperty.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XStructProperty",
+    "category": "reflection",
+    "api": "XStructProperty.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XStructProperty",
+    "category": "reflection",
+    "api": "XStructProperty.GetOffset_Internal",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XStructProperty",
+    "category": "reflection",
+    "api": "XStructProperty.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XStructProperty",
+    "category": "reflection",
+    "api": "XStructProperty.ContainerPtrToValuePtr",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XStructProperty",
+    "category": "reflection",
+    "api": "XStructProperty.ImportText",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XStructProperty",
+    "category": "reflection",
+    "api": "XStructProperty.GetStruct",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XFieldClass",
+    "category": "reflection",
+    "api": "XFieldClass.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XFieldClass",
+    "category": "reflection",
+    "api": "XFieldClass.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XFieldClass",
+    "category": "reflection",
+    "api": "XFieldClass.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XDelegateProperty",
+    "category": "reflection",
+    "api": "XDelegateProperty.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XDelegateProperty",
+    "category": "reflection",
+    "api": "XDelegateProperty.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XDelegateProperty",
+    "category": "reflection",
+    "api": "XDelegateProperty.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XDelegateProperty",
+    "category": "reflection",
+    "api": "XDelegateProperty.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XDelegateProperty",
+    "category": "reflection",
+    "api": "XDelegateProperty.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XDelegateProperty",
+    "category": "reflection",
+    "api": "XDelegateProperty.GetOffset_Internal",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XDelegateProperty",
+    "category": "reflection",
+    "api": "XDelegateProperty.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XDelegateProperty",
+    "category": "reflection",
+    "api": "XDelegateProperty.ContainerPtrToValuePtr",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XDelegateProperty",
+    "category": "reflection",
+    "api": "XDelegateProperty.ImportText",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.GetOffset_Internal",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.ContainerPtrToValuePtr",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.ImportText",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.Add",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.Remove",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.Broadcast",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (fires the delegate)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.GetBindings",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastDelegateProperty.Clear",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.IsValid",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.GetClass",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.GetFullName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.GetFName",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.GetOffset_Internal",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.IsA",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.ContainerPtrToValuePtr",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.ImportText",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.Add",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.Remove",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.Broadcast",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "destructive / mutates game state — excluded by the suites' read-only contract (fires the delegate)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.GetBindings",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "XMulticastSparseDelegateProperty",
+    "category": "reflection",
+    "api": "XMulticastSparseDelegateProperty.Clear",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "needs specific game state (reflected FProperty receiver required; note the PropertyTypes constant table IS covered statically — the X* method tables are not)",
+    "evidence": ""
+   },
+   {
+    "type": "RemoteUnrealParam",
+    "category": "reflection",
+    "api": "RemoteUnrealParam.Get",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "by design — Remote/LocalUnrealParam values only reach Lua inside hook or UFunction callbacks, which the read-only suites deliberately never trigger",
+    "evidence": ""
+   },
+   {
+    "type": "RemoteUnrealParam",
+    "category": "reflection",
+    "api": "RemoteUnrealParam.get",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "by design — Remote/LocalUnrealParam values only reach Lua inside hook or UFunction callbacks, which the read-only suites deliberately never trigger",
+    "evidence": ""
+   },
+   {
+    "type": "RemoteUnrealParam",
+    "category": "reflection",
+    "api": "RemoteUnrealParam.set",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "by design — Remote/LocalUnrealParam values only reach Lua inside hook or UFunction callbacks, which the read-only suites deliberately never trigger",
+    "evidence": ""
+   },
+   {
+    "type": "RemoteUnrealParam",
+    "category": "reflection",
+    "api": "RemoteUnrealParam.Set",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "by design — Remote/LocalUnrealParam values only reach Lua inside hook or UFunction callbacks, which the read-only suites deliberately never trigger",
+    "evidence": ""
+   },
+   {
+    "type": "RemoteUnrealParam",
+    "category": "reflection",
+    "api": "RemoteUnrealParam.type",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "by design — Remote/LocalUnrealParam values only reach Lua inside hook or UFunction callbacks, which the read-only suites deliberately never trigger",
+    "evidence": ""
+   },
+   {
+    "type": "LocalUnrealParam",
+    "category": "reflection",
+    "api": "LocalUnrealParam.Get",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "by design — Remote/LocalUnrealParam values only reach Lua inside hook or UFunction callbacks, which the read-only suites deliberately never trigger",
+    "evidence": ""
+   },
+   {
+    "type": "LocalUnrealParam",
+    "category": "reflection",
+    "api": "LocalUnrealParam.get",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "by design — Remote/LocalUnrealParam values only reach Lua inside hook or UFunction callbacks, which the read-only suites deliberately never trigger",
+    "evidence": ""
+   },
+   {
+    "type": "LocalUnrealParam",
+    "category": "reflection",
+    "api": "LocalUnrealParam.Set",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "by design — Remote/LocalUnrealParam values only reach Lua inside hook or UFunction callbacks, which the read-only suites deliberately never trigger",
+    "evidence": ""
+   },
+   {
+    "type": "LocalUnrealParam",
+    "category": "reflection",
+    "api": "LocalUnrealParam.set",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "by design — Remote/LocalUnrealParam values only reach Lua inside hook or UFunction callbacks, which the read-only suites deliberately never trigger",
+    "evidence": ""
+   },
+   {
+    "type": "LocalUnrealParam",
+    "category": "reflection",
+    "api": "LocalUnrealParam.type",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "by design — Remote/LocalUnrealParam values only reach Lua inside hook or UFunction callbacks, which the read-only suites deliberately never trigger",
+    "evidence": ""
+   },
+   {
+    "type": "ModRef",
+    "category": "other",
+    "api": "ModRef.GetAddress",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (minor)",
+    "evidence": ""
+   },
+   {
+    "type": "ModRef",
+    "category": "other",
+    "api": "ModRef.SetSharedVariable",
+    "kind": "method",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "by design: persists across mods (static header line 48 documents 'Set intentionally not called')",
+    "evidence": ""
+   },
+   {
+    "type": "ModRef",
+    "category": "other",
+    "api": "ModRef.GetSharedVariable",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "ModRef:GetSharedVariable('...Unset') -> nil"
+   },
+   {
+    "type": "ModRef",
+    "category": "other",
+    "api": "ModRef.__newindex",
+    "kind": "metamethod",
+    "covered_by": "not-covered",
+    "how": "",
+    "reason_if_not": "script author missed it — flag for follow-up (mod.OnUnload registration was one line away)",
+    "evidence": ""
+   },
+   {
+    "type": "UE4SS",
+    "category": "other",
+    "api": "UE4SS.GetVersion",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "UE4SS.GetVersion -> major|minor|hotfix"
+   },
+   {
+    "type": "UnrealVersion",
+    "category": "other",
+    "api": "UnrealVersion.GetMajor",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "GetMajor variants incl. error path"
+   },
+   {
+    "type": "UnrealVersion",
+    "category": "other",
+    "api": "UnrealVersion.GetMinor",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "GetMinor variants incl. error path"
+   },
+   {
+    "type": "UnrealVersion",
+    "category": "other",
+    "api": "UnrealVersion.IsEqual",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "IsEqual variants incl. error path"
+   },
+   {
+    "type": "UnrealVersion",
+    "category": "other",
+    "api": "UnrealVersion.IsAtLeast",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "IsAtLeast variants incl. error path"
+   },
+   {
+    "type": "UnrealVersion",
+    "category": "other",
+    "api": "UnrealVersion.IsAtMost",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "IsAtMost variants incl. error path"
+   },
+   {
+    "type": "UnrealVersion",
+    "category": "other",
+    "api": "UnrealVersion.IsBelow",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "IsBelow variants incl. error path"
+   },
+   {
+    "type": "UnrealVersion",
+    "category": "other",
+    "api": "UnrealVersion.IsAbove",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "IsAbove variants incl. error path"
+   },
+   {
+    "type": "FPackageName",
+    "category": "other",
+    "api": "FPackageName.IsShortPackageName",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "IsShortPackageName positives/negatives (+error path for IsShort)"
+   },
+   {
+    "type": "FPackageName",
+    "category": "other",
+    "api": "FPackageName.IsValidLongPackageName",
+    "kind": "method",
+    "covered_by": "static",
+    "how": "invoked",
+    "reason_if_not": "",
+    "evidence": "IsValidLongPackageName positives/negatives (+error path for IsShort)"
+   }
+  ]
+ },
+ "grand_total": {
+  "distinct_entries": 582,
+  "with_any_call_row": 163,
+  "invoked": 150,
+  "not_covered": 419,
+  "pct_with_any_row": 28.0,
+  "pct_invoked": 25.8
+ }
+}

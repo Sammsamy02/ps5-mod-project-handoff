@@ -1,0 +1,22 @@
+You now own the complete mod backend for our private PS5 Nexus app. Codex is switching to the app: controller UI, Nexus sign-in, game selection, mod browsing/sorting, multi-selection, download queue and app packaging. Do not duplicate that UI work. Continue your composer/installer work, and take ownership of the real runtime ports and converters too.
+
+Our finished product must operate entirely on PS5. The user selects one or several original Nexus mods; the console downloads prerequisites, prepares compatible content, installs it, and activates the required runtime. No PC, phone, remote conversion service or AI is required during normal use. A computer is allowed to build the product. Your current prebuilt-bundle workflow can be a development intermediate, but the final app must handle original Nexus archives on the PS5.
+
+Start with the existing native source port and checkpoint, not a new port from scratch. Authoritative Codex workspace: /WORKSPACE/.codex/worktrees/translation-core/what. If your environment is separate, use the accompanying source handoff and identify any missing dependencies precisely. Existing native runtime sources are under .superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/port/; the reusable owner is outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/. Read .superpowers/native-observations/transport-experiments-progress.json and the attached reports.
+
+Latest actual console result: Townfall PPSA33286, OnionHEN 13.60, diagnostic Ploader, SDK 0x11000000: OK 1288 ms. All 232 compiled C++ constructors completed, and the delayed worker ran buffered Lua successfully. The module needed stack realignment at its entry. This supersedes the old constructor-index-11 failure. UE4SSProgram::init, engine hooks and Item Spawner have NOT been demonstrated in the game.
+
+New local work already implemented: the real UE4SSProgram bootstrap owner, deferred mod startup, an engine-ready callback, cooperative startup cancellation/deadlines and preserved error reporting. These sources compile with the PS5 SDK. Rebuild every consumer of changed NativeProgramContext/UE4SSProgram headers before composing a full module; do not splice the new object into an old-layout binary. Keep the successful frozen PRX intact.
+
+Build in this order:
+1. Finish the real PS5 game-context/engine binding and game-thread delivery for UE4SS. Connect the existing Lua APIs and demonstrate the unchanged Townfall Item Spawner in-game. Preserve the proven startup path.
+2. Connect your load-list/composer output to runtime activation and startup-owned script/config data, including lifetime, cancellation, errors and teardown.
+3. Implement actual format/asset converters and modding runtimes for the additional engines you are researching. Engine JSON entries, script roles and PRX metadata checks are useful, but they do not replace executable backends. Keep unavailable capabilities clearly identified until implemented.
+4. Handle native C++/DLL mod compatibility using real ABI/API adaptation or source ports where feasible. Renaming or SDK-stamping a Windows DLL is not conversion. Prioritize working reusable subsets; report unsupported cases honestly.
+5. Finish on-console original-archive processing, prerequisite acquisition planning, FOMOD options, conflict/load-order resolution, reversible install/uninstall and restart recovery. Mod Engine remains deferred until UE4SS and the next practical native-code path work.
+
+Keep shared handlers generic by format/runtime/engine. Store game paths, versions and build facts in profiles. No hand-editing individual downloaded mods, hidden per-mod recipes or AI at installation time. One working game establishes that result, not every game using its engine.
+
+Publish a small versioned contract for Codex's app: capability queries; prepare/install/cancel/uninstall commands; dependency requirements; progress, errors and durable installed records. The app needs to distinguish downloaded, prepared, installed and running. Keep provider credentials/account ownership in the app's existing account/download services. Return exact integration headers, build artifacts and reproducible results so Codex can wire the app without reimplementing your backend.
+
+Actively build and test. Use focused checks for experiments and preserve original files. Report concrete completed implementations and the next actual execution milestone, not research coverage alone.

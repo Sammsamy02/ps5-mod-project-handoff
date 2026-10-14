@@ -1,0 +1,118 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/USER-SESSION-GUIDE.md.asfound	2026-10-04 22:24:28
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-console-batch-runner/USER-SESSION-GUIDE.md	2026-10-04 22:46:30
+@@ -3,7 +3,9 @@
+ Tool: `outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py`
+ Built 2026-10-04 from the frozen plans (8FAM DLL, E2E installer, qdrv1 stage, CP0-CP7 runbook);
+ extended the same day by worker-batch-runner-8fam-patch for the 8-family stage
+-(`CONSOLE-STAGE-PLAN-8FAM.md` + `EXPECTED-DELTA-8FAM.md`).
++(`CONSOLE-STAGE-PLAN-8FAM.md` + `EXPECTED-DELTA-8FAM.md`), by worker-evidence-freshness-fixes
++(freshness gates), and by worker-observer-staging-extension for the COMBINED ridealong staging
++(`worker-game-session-ridealongs/STAGE-PLAN-COMBINED.md` — qdrv1 + observer in ONE ploader.ini).
+ **The tool runs only when YOU return and authorize it. Nothing in this guide has executed on the console yet.**
+ 
+ Recommended: run everything as ONE session —
+@@ -14,9 +16,13 @@
+ python3 console_batch.py all           # the full session in the recommended order
+ ```
+ 
+-`all` = **dll8 → e2e → stage-qdrv1 → game-evidence**: both payload-only stages first in ONE
+-game-closed window, then the qdrv1 staging, then a SINGLE game launch with evidence collection.
+-You can also run each subcommand separately (`dll8`, `e2e`, `stage-qdrv1`, `game-evidence`).
++`all` = **dll8 → e2e → stage-ridealongs → game-evidence**: both payload-only stages first in ONE
++game-closed window, then the COMBINED ridealong staging (qdrv1 + observer PRXs + the combined
++6-entry ploader.ini), then a SINGLE game launch with evidence collection.
++You can also run each subcommand separately (`dll8`, `e2e`, `stage-ridealongs`, `stage-observer`,
++`stage-qdrv1`, `rollback-ridealongs`, `game-evidence`).
++Note: the settings+loadlist restage (NEW-SETTINGS §3) is NOT part of `all` — per the master plan,
++land it separately between staging and launch when the session needs it.
+ 
+ **Exactly ONE DLL stage runs per session.** `dll8` (ALLFAM8_DLL_TEST) is the PREFERRED single
+ run per CONSOLE-STAGE-PLAN-8FAM: it proves a strict superset of the 7-family run (all six
+@@ -58,14 +64,44 @@
+ If anything mismatches: the tool halts, preserves every byte it fetched, and tells you what
+ diverged. Do not re-run a dispatch manually — reconcile first; the tool will not re-send on its own.
+ 
+-## Phase 2 — qdrv1 staging (tool does everything; game stays CLOSED)
++## Phase 2 — ridealong staging (tool does everything; game stays CLOSED)
+ 
+-`stage-qdrv1` backs up your current `ploader.ini` (`.bak` on console + local pre-image copy),
+-uploads `modbridge_qh_driver.prx` (sha `52c32216…` verified by readback), appends the module as the
+-next free index (`2=/data/plugins/modbridge_qh_driver.prx`) without touching the composition entry,
+-and re-reads the ini to prove nothing else changed. If your live ploader.ini has an unexpected
+-shape, the tool STOPS and shows you the pre-image instead of blind-editing.
++`stage-ridealongs` (the COMBINED staging, STAGE-PLAN-COMBINED §8 SC-0..SC-7 — this is what `all`
++runs) backs up your current `ploader.ini` (`.bak` on console + local pre-image copy), then:
+ 
++1. Uploads BOTH ridealong PRXs under their OWN names — `modbridge_qh_driver.prx`
++   (sha `52c32216…` / 26157 B) and `modbridge_runtime_aligned_observer.prx` (sha `1afa0997…` /
++   30152151 B). Because the console's ftpsrv returns the SHT-stripped fself readback (the
++   segment-covered prefix of the bare-sdk ELF — full-file hash equality is IMPOSSIBLE through
++   this channel by construction), the tool verifies each readback against the §3 law instead:
++   exact length (87112 / 30143976 bytes) + body hash (`71406d3c…` / `3f89a5b6…`) + header
++   exception (only e_shoff/e_shentsize/e_shnum/e_shstrndx may differ; e_shnum must be zeroed).
++   A failed readback re-STORs from the verified local file EXACTLY ONCE, then aborts.
++2. Checks the pre-launch baselines: UE4SS.log size, observer log must be ABSENT (it is created
++   fresh by the module), igf jsonl baseline recorded if present (owned evidence is never deleted).
++3. Appends ONLY the missing `= 2` lines to the ini (append-only law; existing lines are never
++   rewritten or reordered; the ini edit is idempotent — a line already staged exactly-once is a
++   no-op). The end-state gate demands the combined 6-entry layout: header once, the 4 expected
++   existing lines with their pinned modes, both ridealongs at `= 2`, and EXACTLY 5 registered
++   plugins (the mode-0 ingame_facts line is skipped by the parser and consumes no slot).
++   Anything ambiguous — duplicate lines (ploader does NOT dedupe and would inject twice),
++   missing expected lines, unexpected modes — STOPS and shows the pre-image instead of editing.
++4. STORs the edited ini and re-reads it; the readback must be byte-identical.
++5. Prints the arm + launch handoff (Phase 3).
++
++`stage-observer` is the observer-ONLY staging: same SHT-strip readback law, but it appends ONLY
++the observer line to whatever the ini currently is — if `stage-qdrv1` (or a prior ridealongs run)
++already staged the qdrv1 line, it is left untouched (idempotent coordination). A re-run on a
++fully-staged ini changes nothing and re-uploads nothing; it still re-verifies the on-console
++PRX against the readback law. `stage-qdrv1` remains available unchanged as the legacy
++qdrv1-only path.
++
++`rollback-ridealongs` (STAGE-PLAN-COMBINED §7) is the recovery path: with the game CLOSED and
++the ploader NOT armed it flips BOTH ridealong lines to `= 0` — two single-character edits,
++verified byte-level (mode 0 is skipped at parse: no attach, no FAIL notify, no timeout) —
++with a fresh `.bak` and a byte-verified readback. It is an honest no-op when nothing is staged
++at `= 2`. The observer/qdrv1 LOGS are owned evidence and are never deleted by the tool.
++
+ ## Phase 3 — the launch (this is the part only you can do)
+ 
+ The tool prints this prompt and waits for you:
+@@ -112,7 +148,10 @@
+ 
+ - Evidence: every run writes a timestamped run dir (default
+   `worker-console-batch-runner/runs/<ts>-<flow>/`) with `receipt.json`, `events.log`, every fetched
+-  file, per-step verdict JSONs, and the plan-canonical console receipts
++  file, per-step verdict JSONs (including `qdrv1-readback-verdict.json` /
++  `observer-readback-verdict.json` and the `ploader-edit-decision.json` /
++  `ploader-rollback-decision.json` audit trail), the pre-image + `.bak` copies, and the
++  plan-canonical console receipts
+   (`allfam8-console-receipt.json`, `allfam7-console-receipt.json` if the fallback ran,
+   `MODBRIDGE_INST_E2E-receipt.json`, `game-evidence-receipt.json`).
+   To write directly into the plans' canonical controller dir instead, pass
+@@ -126,13 +165,18 @@
+   in the receipt; nothing is ever re-dispatched automatically.
+ - If your window only fits part of the session: run the subcommands in the same order
+   (`dll8` first — smallest, fastest, cleanest attribution, and the superset; `e2e` next;
+-  `stage-qdrv1` + `game-evidence` only when a full launch window exists). Never interleave a game
++  `stage-ridealongs` + `game-evidence` only when a full launch window exists). Never interleave a game
+   session with the payload window. If the console is already inside a game session when the window
+-  opens, defer all payload stages until it ends.
++  opens, defer all payload stages until it ends. After the launch, read the ploader notification
++  lines (SC-5b): expect EXACTLY 5 `OK (<ms>): <file>` lines and ZERO FAIL lines — any FAIL means
++  STOP and `rollback-ridealongs`, never a relaunch of an identical rejected layout.
+ - If the 8-family run fails SEH64-specifically and budget remains: run
+   `python3 console_batch.py dll7` — the frozen fallback attribution path. It then appends at file
+   positions 41-44 (dll8 having taken 37-40). Record which you ran; the verdicts are per-build.
+-- Host-tested, not console-proven: the tool's logic passed 162 selftest checks + a full simulated
+-  engine drive including the dll8 flow and a stale-artifact halt scenario (`selftest`,
+-  `tests/fake_console_drive.py`). Console timings and on-target behavior remain [TARGET] until
+-  this session runs.
++- Host-tested, not console-proven: the tool's logic passed 271 selftest checks + a full simulated
++  engine drive including the dll8 flow, a stale-artifact halt scenario, and the combined
++  ridealong staging/rollback flows with the §3 SHT-strip readback law exercised both ways
++  (`selftest`, `tests/fake_console_drive.py`). Console timings and on-target behavior remain
++  [TARGET] until this session runs. The §3 readback constants were additionally recomputed on
++  host from the pinned bare-sdk ELFs and match the plan's table exactly
++  (qdrv1 87112 B / `71406d3c…`; observer 30143976 B / `3f89a5b6…`).

@@ -1,0 +1,32 @@
+--- a/configure.ac
++++ b/configure.ac
+@@ -1025,7 +1025,28 @@
+ 
+ # Enable support for fast thread-local storage
+ # Some systems have broken support, so we allow to disable it.
+-AC_ARG_WITH(tls, [  --with-tls=__thread,pthread    select Thread Local Storage implementation (defaults to __thread)],[],[with_tls=__thread])
++mono_tls_explicit=no
++AC_ARG_WITH(tls, [  --with-tls=__thread,pthread    select Thread Local Storage implementation (defaults to __thread; pthread on Prospero)], [mono_tls_explicit=yes], [with_tls=__thread])
++
++AC_MSG_CHECKING([whether the compiler targets Prospero])
++AC_COMPILE_IFELSE([AC_LANG_SOURCE([[
++#ifndef __PROSPERO__
++#error not a Prospero compiler
++#endif
++int main (void) { return 0; }
++]])], [host_prospero=yes], [host_prospero=no])
++AC_MSG_RESULT([$host_prospero])
++
++# Prospero TLS policy: begin
++if test "x$host_prospero" = "xyes"; then
++    # The public target wrapper uses emulated TLS, which has no FS-relative
++    # offsets. Use Mono's existing pthread-key implementation instead.
++    if test "x$mono_tls_explicit" = "xyes" -a "x$with_tls" != "xpthread"; then
++        AC_MSG_ERROR([Prospero requires --with-tls=pthread])
++    fi
++    with_tls=pthread
++fi
++# Prospero TLS policy: end
+ 
+ # Enable support for using sigaltstack for SIGSEGV and stack overflow handling
+ # This does not work on some platforms (bug #55253)

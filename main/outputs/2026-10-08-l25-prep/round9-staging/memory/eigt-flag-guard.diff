@@ -1,0 +1,82 @@
+--- candidate/src/LuaMod.cpp
++++ staged/src/LuaMod.cpp
+@@ -4713,6 +4713,22 @@
+     }
+ #endif
+ 
++    // [R9-EIGT] One exception that escapes TRY (e.g. std::bad_alloc thrown by
++    // TRY's own "Error: {}" log line once the heap is exhausted) used to skip
++    // the "= false" below and leave m_is_currently_executing_game_action TRUE
++    // forever: from then on every ExecuteInGameThread / delayed / loop action is
++    // only deferred, never run (launch 2: pump alive to the end, depth 2 -> 41,
++    // no drain after decoded:3473). The guard restores the flag on every exit,
++    // including unwinding. Normal-path behavior is unchanged (PC semantics).
++    class GameActionExecutingGuard
++    {
++      public:
++        GameActionExecutingGuard() noexcept { LuaMod::m_is_currently_executing_game_action = true; }
++        ~GameActionExecutingGuard() { LuaMod::m_is_currently_executing_game_action = false; }
++        GameActionExecutingGuard(const GameActionExecutingGuard&) = delete;
++        auto operator=(const GameActionExecutingGuard&) -> GameActionExecutingGuard& = delete;
++    };
++
+     static auto process_simple_actions(std::vector<LuaMod::SimpleLuaAction>& actions) -> void
+     {
+         std::vector<LuaMod::SimpleLuaAction> to_run{};
+@@ -4735,21 +4751,22 @@
+                 continue;
+             }
+ 
+-            LuaMod::m_is_currently_executing_game_action = true;
+-            TRY([&]() {
+-                lua_data.lua->registry().get_function_ref(lua_data.lua_action_function_ref);
+-                L22Diagnostics::observe([&]() {
+-                    Output::send(STR("[l22] ExecuteInGameThread drained state={} ref={} (callback entry)\n"),
+-                                 static_cast<void*>(lua_data.lua->get_lua_state()), lua_data.lua_action_function_ref);
+-                });
+-                lua_data.lua->call_function(0, 0);
+-                L22Diagnostics::observe([&]() {
+-                    Output::send(STR("[l22] ExecuteInGameThread callback returned state={} ref={}\n"),
+-                                 static_cast<void*>(lua_data.lua->get_lua_state()), lua_data.lua_action_function_ref);
++            {
++                const GameActionExecutingGuard executing_guard{};
++                TRY([&]() {
++                    lua_data.lua->registry().get_function_ref(lua_data.lua_action_function_ref);
++                    L22Diagnostics::observe([&]() {
++                        Output::send(STR("[l22] ExecuteInGameThread drained state={} ref={} (callback entry)\n"),
++                                     static_cast<void*>(lua_data.lua->get_lua_state()), lua_data.lua_action_function_ref);
++                    });
++                    lua_data.lua->call_function(0, 0);
++                    L22Diagnostics::observe([&]() {
++                        Output::send(STR("[l22] ExecuteInGameThread callback returned state={} ref={}\n"),
++                                     static_cast<void*>(lua_data.lua->get_lua_state()), lua_data.lua_action_function_ref);
++                    });
+                 });
+-            });
+-            luaL_unref(lua_data.lua->get_lua_state(), LUA_REGISTRYINDEX, lua_data.lua_action_function_ref);
+-            LuaMod::m_is_currently_executing_game_action = false;
++                luaL_unref(lua_data.lua->get_lua_state(), LUA_REGISTRYINDEX, lua_data.lua_action_function_ref);
++            }
+         }
+ 
+         if (!deferred.empty())
+@@ -4966,12 +4983,13 @@
+                 continue;
+             }
+ 
+-            LuaMod::m_is_currently_executing_game_action = true;
+-            TRY([&]() {
+-                exec.lua->registry().get_function_ref(exec.lua_action_function_ref);
+-                exec.lua->call_function(0, 0);
+-            });
+-            LuaMod::m_is_currently_executing_game_action = false;
++            {
++                const GameActionExecutingGuard executing_guard{};
++                TRY([&]() {
++                    exec.lua->registry().get_function_ref(exec.lua_action_function_ref);
++                    exec.lua->call_function(0, 0);
++                });
++            }
+         }
+ 
+         {

@@ -1,0 +1,218 @@
+--- a/loader/include/guest_virtual_memory.h
++++ b/loader/include/guest_virtual_memory.h
+@@ -26,6 +26,11 @@
+     bool ready() const;
+     void* allocate(void* base, size_t bytes, uint32_t type,
+                    uint32_t protect, uint32_t* error);
++    using WriteGuest = bool (*)(void* user, void* destination,
++                                const void* source, size_t bytes);
++    bool protect(void* base, size_t bytes, uint32_t new_protect,
++                 void* old_protect_output, WriteGuest write_guest,
++                 void* write_user, uint32_t* error);
+     bool release(void* base, size_t bytes, uint32_t type, uint32_t* error);
+ 
+   private:
+@@ -53,6 +58,7 @@
+ constexpr uint32_t kInvalidParameter = 87;
+ constexpr uint32_t kNotEnoughMemory = 8;
+ constexpr uint32_t kInvalidAddress = 487;
++constexpr uint32_t kNoAccess = 998;
+ #if defined(MAP_ANONYMOUS)
+ constexpr int kAnonymousMap = MAP_ANONYMOUS;
+ #elif defined(MAP_ANON)
+@@ -222,5 +228,69 @@
+     return true;
+ }
+ 
++inline bool GuestVirtualMemory::protect(void* base, size_t bytes,
++                                        uint32_t new_protect,
++                                        void* old_protect_output,
++                                        WriteGuest write_guest,
++                                        void* write_user, uint32_t* error)
++{
++    using namespace virtual_memory_detail;
++    if (error) *error = kInvalidParameter;
++    if (!base || !bytes || !old_protect_output || !write_guest ||
++        (new_protect != kReadOnly && new_protect != kReadWrite))
++        return false;
++    const long page_value = sysconf(_SC_PAGESIZE);
++    if (page_value <= 0) return false;
++    const size_t page = static_cast<size_t>(page_value);
++    if (bytes > SIZE_MAX - (page - 1)) return false;
++    const size_t length = ((bytes + page - 1) / page) * page;
++    std::lock_guard guard(mu_);
++    auto found = regions_.find(base);
++    if (found == regions_.end() || !found->second.committed ||
++        found->second.mapped != length)
++    {
++        if (error) *error = kInvalidAddress;
++        return false;
++    }
++    const uint32_t previous = found->second.protect;
++    if (!write_guest(write_user, old_protect_output,
++                     &previous, sizeof(previous)))
++    {
++        if (error) *error = kNoAccess;
++        return false;
++    }
++    if (previous == new_protect) return true;
++    if (previous == kReadWrite)
++    {
++        if (!writes_->remove(base))
++        {
++            if (error) *error = kInvalidAddress;
++            return false;
++        }
++        if (mprotect(base, length, PROT_READ) != 0)
++        {
++            writes_->add(base, base, length);
++            if (error) *error = kNotEnoughMemory;
++            return false;
++        }
++    }
++    else
++    {
++        if (mprotect(base, length, PROT_READ | PROT_WRITE) != 0)
++        {
++            if (error) *error = kNotEnoughMemory;
++            return false;
++        }
++        if (!writes_->add(base, base, length))
++        {
++            mprotect(base, length, PROT_READ);
++            if (error) *error = kNotEnoughMemory;
++            return false;
++        }
++    }
++    found->second.protect = new_protect;
++    return true;
++}
++
+ } // namespace cap13
+ #endif
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -124,7 +124,8 @@
+ {
+     return dll == "kernel32.dll" && symbol &&
+            (!std::strcmp(symbol, "VirtualAlloc") ||
+-            !std::strcmp(symbol, "VirtualFree"));
++            !std::strcmp(symbol, "VirtualFree") ||
++            !std::strcmp(symbol, "VirtualProtect"));
+ }
+ 
+ } // namespace
+@@ -544,6 +545,25 @@
+     return 1;
+ }
+ 
++static uint32_t impl_VirtualProtect(WinApiShim::Impl* m, void* base,
++                                    size_t size, uint32_t protect,
++                                    void* old_protect)
++{
++    uint32_t error = ERROR_INVALID_PARAMETER;
++    const auto writer = [](void* user, void* destination,
++                           const void* source, size_t bytes) -> bool {
++        auto* impl = static_cast<WinApiShim::Impl*>(user);
++        return impl->owner->write_guest_bytes(destination, source, bytes);
++    };
++    if (!m->virtual_memory.protect(base, size, protect, old_protect,
++                                   writer, m, &error))
++    {
++        win32_set_last_error(error);
++        return 0;
++    }
++    return 1;
++}
++
+ static uint32_t impl_Sleep(WinApiShim::Impl* m, uint32_t ms)
+ {
+ #if CAP13_POSIX
+@@ -1218,6 +1238,7 @@
+         // The other raw bodies are catalogued but remain unresolved imports.
+         {"kernel32.dll", "VirtualAlloc", (void*)&impl_VirtualAlloc, 4, true},
+         {"kernel32.dll", "VirtualFree", (void*)&impl_VirtualFree, 3, true},
++        {"kernel32.dll", "VirtualProtect", (void*)&impl_VirtualProtect, 4, true},
+         {"kernel32.dll", "GetProcessHeap", (void*)&impl_GetProcessHeap, 0, true},
+         {"kernel32.dll", "HeapAlloc", (void*)&impl_HeapAlloc, 3, true},
+         {"kernel32.dll", "HeapFree", (void*)&impl_HeapFree, 3, true},
+--- a/loader/tests/guest_virtual_memory_test.cpp
++++ b/loader/tests/guest_virtual_memory_test.cpp
+@@ -66,7 +66,8 @@
+     shim.register_builtin_exports();
+     void* alloc_slot = slot(page);
+     void* free_slot = slot(page);
+-    if (!alloc_slot || !free_slot) return 2;
++    void* protect_slot = slot(page);
++    if (!alloc_slot || !free_slot || !protect_slot) return 2;
+     check(shim.install_builtin_integer_wrapper("kernel32.dll", "VirtualAlloc",
+                                                alloc_slot, page, seal, nullptr) ==
+               cap13::BuiltinInstallStatus::Unsupported,
+@@ -81,8 +82,11 @@
+             cap13::BuiltinInstallStatus::Ok &&
+         shim.install_builtin_integer_wrapper("kernel32.dll", "VirtualFree",
+                                              free_slot, page, seal, nullptr) ==
++            cap13::BuiltinInstallStatus::Ok &&
++        shim.install_builtin_integer_wrapper("kernel32.dll", "VirtualProtect",
++                                             protect_slot, page, seal, nullptr) ==
+             cap13::BuiltinInstallStatus::Ok;
+-    check(installed, "VirtualAlloc and VirtualFree publish sealed Win64 wrappers");
++    check(installed, "virtual-memory trio publishes sealed Win64 wrappers");
+     if (!installed) return 1;
+ 
+     const uint64_t block = cap13_win64_call4(
+@@ -142,6 +146,46 @@
+     check(direct && cap13_win64_call3(free_slot, direct, 0, MEM_RELEASE) == 1,
+           "null-address direct commit allocates and releases a region");
+ 
++    const uint64_t protected_block = cap13_win64_call4(
++        alloc_slot, 0, 2 * page, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
++    uint32_t old_protection = 0;
++    check(protected_block &&
++          writes.add(&old_protection, &old_protection,
++                     sizeof(old_protection)),
++          "old-protection output is a separately owned writable guest range");
++    check(cap13_win64_call4(protect_slot, protected_block, 2 * page,
++                            PAGE_READONLY,
++                            reinterpret_cast<uint64_t>(&old_protection)) == 1 &&
++          old_protection == PAGE_READWRITE &&
++          reads.read(reinterpret_cast<void*>(protected_block), output, 1) &&
++          !writes.write(reinterpret_cast<void*>(protected_block), &mark, 1),
++          "read/write to read-only transition returns old protection and revokes writes");
++    check(cap13_win64_call4(protect_slot, protected_block, 2 * page,
++                            PAGE_READWRITE,
++                            reinterpret_cast<uint64_t>(&old_protection)) == 1 &&
++          old_protection == PAGE_READONLY &&
++          writes.write(reinterpret_cast<void*>(protected_block), &mark, 1),
++          "read-only to read/write transition restores guarded writes");
++    check(cap13_win64_call4(protect_slot, protected_block, page,
++                            PAGE_READONLY,
++                            reinterpret_cast<uint64_t>(&old_protection)) == 0 &&
++          cap13_win64_call4(protect_slot, protected_block, 2 * page,
++                            PAGE_EXECUTE_READWRITE,
++                            reinterpret_cast<uint64_t>(&old_protection)) == 0 &&
++          writes.write(reinterpret_cast<void*>(protected_block), &mark, 1),
++          "partial and executable protection refuse without changing access");
++    check(cap13_win64_call4(protect_slot, protected_block, 2 * page,
++                            PAGE_READONLY, 0) == 0 &&
++          cap13_win64_call4(protect_slot,
++                            reinterpret_cast<uint64_t>(&old_protection),
++                            2 * page, PAGE_READONLY,
++                            reinterpret_cast<uint64_t>(&old_protection)) == 0 &&
++          writes.write(reinterpret_cast<void*>(protected_block), &mark, 1),
++          "invalid output and unowned address refuse without changing access");
++    check(writes.remove(&old_protection) &&
++          cap13_win64_call3(free_slot, protected_block, 0, MEM_RELEASE) == 1,
++          "protected region releases after output registration is revoked");
++
+     cap13::WinApiShim lazy;
+     lazy.register_builtin_exports();
+     BackendState state{};
+@@ -175,6 +219,7 @@
+         if (p) munmap(p, page);
+     munmap(alloc_slot, page);
+     munmap(free_slot, page);
++    munmap(protect_slot, page);
+     std::printf("TOTAL: checks=%d failures=%d\n", checks, failures);
+     return failures ? 1 : 0;
+ }

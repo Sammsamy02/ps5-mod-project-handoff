@@ -1,0 +1,21 @@
+#if defined(__PROSPERO__)
+            // [SHIM] io/require logical->physical path resolver (agent-GA,
+            // Claude round-5 item 4). Registration only — implementation:
+            // candidate/src/LuaPathShim.cpp (+ include/LuaPathShim.hpp).
+            // Runs AFTER setup_lua_require_paths on purpose: native mode
+            // blanks package.path there, and the shim republishes logical
+            // entries. Declared at block scope so this stays the ONE
+            // insertion in this file (no #include edit higher up).
+            {
+                extern auto LuaPathShim_install(lua_State*, const char* mod_name, const char* modbridge_root) -> void;
+                // Rule 10: derive the modbridge root from the RUNTIME-resolved
+                // mods directory (<root>/ue4ss[/Mods]) — never a title-id.
+                std::filesystem::path shim_root = std::filesystem::weakly_canonical(m_program.get_mods_directory());
+                if (shim_root.filename() == "Mods")
+                {
+                    shim_root = shim_root.parent_path(); // <root>/ue4ss
+                }
+                shim_root = shim_root.parent_path(); // <root> (the modbridge game root)
+                LuaPathShim_install(lua.get_lua_state(), to_utf8_string(m_mod_name).c_str(), shim_root.string().c_str());
+            }
+#endif

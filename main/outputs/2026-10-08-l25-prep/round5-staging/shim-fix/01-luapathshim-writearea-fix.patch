@@ -1,0 +1,327 @@
+--- a/src/LuaPathShim.cpp
++++ b/src/LuaPathShim.cpp
+@@ -25,6 +25,36 @@
+ //
+ // Everything below is inert unless compiled for the target: the whole TU is
+ // __PROSPERO__-guarded, mirroring how the port keeps non-PS5 builds clean.
++//
++// -----------------------------------------------------------------------------
++// Agent IQ revision, Claude round-12 items 1-2, 2026-10-12: write-area
++// hardening after the two install-time crashes (builds d971cd2f/1c48239d,
++// both logs END at the "[SHIM] write-area" marker; see
++// IQ-SHIM-AUDIT.md for the full return-value audit). Changes:
++//   1. install() performs ZERO filesystem work and NEVER creates
++//      directories (module_start/mod-prepare does nothing to /data; the
++//      only pre-first-write fs call remains load_pinned_set's fopen of
++//      loadlist.txt, which was always NULL-checked and runs BEFORE the
++//      write-area marker, so it is proven-safe by the crash logs).
++//   2. Directory creation is LAZY, ONE-SHOT per parent dir, on FIRST WRITE
++//      only — checked std::filesystem error_code overload, result recorded
++//      (budgeted marker) and NEVER fatal. Deploy-time pre-creation
++//      (prep_modded_launch step 5.6, deploy-precreate-writable.py) makes
++//      the dirs exist beforehand so the common path is a plain fopen.
++//   3. Write order: physical fopen (pre-created dir) -> one-shot lazy
++//      create + one retry -> in-memory spill. Every failure is liolib
++//      semantics (handle works in-process, or nil + message); no code path
++//      can fault the process on an fs refusal.
++//   4. FIXED install-time bug: the os.remove/os.rename wrappers captured
++//      a STALE absolute stack index as their context upvalue (the old io
++//      table was popped between capture and use — LuaPathShim.cpp:1592
++//      pre-fix), binding the OS TABLE where the ShimContext userdata was
++//      expected. lua_touserdata on a table returns NULL (checked — the
++//      old code degraded to a permanent refusal, not a crash). ALL
++//      wrappers now source the context from the REGISTRY anchor, so no
++//      stack-shift can ever misbind again, and install() leaves the Lua
++//      stack exactly as it found it.
++// -----------------------------------------------------------------------------
+ 
+ #if defined(__PROSPERO__)
+ 
+@@ -123,10 +153,17 @@
+             // proved it for the mod root). Reads fall back to it after the
+             // mod-root and sandbox physical misses.
+             std::unordered_map<std::string, std::string> spill;
++            // One-shot lazy directory creation (IQ, round-12): parent dirs
++            // whose create_directories was ATTEMPTED (success or refusal —
++            // the console refuses post-module_start /data creates by
++            // contract, so a refusal is remembered exactly like a success
++            // and the spill serves every later write to that dir).
++            std::unordered_set<std::string> ensured_parents;
+             std::mutex mutex;                             // threads share the io table (globals)
+             int resolved_markers = 0;
+             int rejected_markers = 0;
+             int write_area_markers = 0;
++            int dir_markers = 0;
+         };
+ 
+         auto shim_context_gc(lua_State* L) -> int
+@@ -570,18 +607,44 @@
+             return true;
+         }
+ 
+-        // Best-effort parent-directory creation for a sandbox write target
+-        // (helps wherever the OS does permit creates — host tests, and a
+-        // console where the reachability window turns out wider than the
+-        // documented contract; failures are ignored, the spill still works).
+-        auto ensure_parent_dirs(const std::string& physical) -> void
++        // LAZY, ONE-SHOT parent-directory creation for a sandbox write
++        // target (IQ, Claude round-12): attempted on FIRST WRITE to a given
++        // parent only — never at install()/module_start time. CHECKED
++        // std::filesystem error_code overload: ec clear means the parent is
++        // usable (deploy-time pre-created, or created now — host tests and
++        // any console whose reachability window is wider than the
++        // documented contract); ec set means the OS refused and the spill
++        // serves every write to that dir. Either way the attempt is
++        // remembered (refusal == success for scheduling purposes) and the
++        // return value is consumed by the caller — a refusal can NEVER
++        // reach an unchecked-use path, because the only use is a retry that
++        // itself falls back to the spill.
++        auto ensure_parent_dirs_once(ShimContext& context, const std::string& physical) -> bool
+         {
+-            std::error_code ec;
+             const std::filesystem::path parent = std::filesystem::path(physical).parent_path();
+-            if (!parent.empty())
++            if (parent.empty())
+             {
+-                std::filesystem::create_directories(parent, ec);
++                return false;
+             }
++            const std::string key = parent.string();
++            {
++                std::lock_guard<std::mutex> guard{context.mutex};
++                if (context.ensured_parents.count(key) != 0)
++                {
++                    return false; // already attempted (pre-created, created, or refused)
++                }
++                context.ensured_parents.insert(key);
++            }
++            std::error_code ec;
++            const bool created = std::filesystem::create_directories(parent, ec); // checked below
++            const bool usable = !ec; // created==false + !ec == already existed (deploy pre-create)
++            if (context.dir_markers < kMaxMarkers)
++            {
++                ++context.dir_markers;
++                Output::send(STR("[SHIM] write-area dir {} created={} usable={}\n"),
++                             ensure_str(key), created, usable);
++            }
++            return usable;
+         }
+ 
+         // ---------------------------------------------------------------------------
+@@ -668,12 +731,14 @@
+         }
+ 
+         // Physical write target for a CONFINED key: the per-mod sandbox,
+-        // path-shape preserving, parent dirs best-effort created, final
+-        // component's literal casing kept for new files.
++        // path-shape preserving, final component's literal casing kept for
++        // new files. PURE RESOLUTION (IQ, round-12): creates NOTHING —
++        // directory creation is deploy-time or lazy-on-first-write
++        // (ensure_parent_dirs_once at the single call site in
++        // io_open_wrapper), never a side effect of path resolution.
+         auto sandbox_target(ShimContext& context, const std::string& key) -> std::string
+         {
+             const std::string target = sandbox_of_key(context, key);
+-            ensure_parent_dirs(target);
+             return case_resolve(context, context.writable_root, target, true);
+         }
+ 
+@@ -743,9 +808,21 @@
+             {
+                 // Writes land ONLY in the per-mod writable sandbox (outside
+                 // admission; the admitted mod root is never a write target).
+-                // Physical attempt first: on a console where the sandbox
+-                // path is openable the bytes persist; otherwise the spill
+-                // keeps the file working in-process.
++                // Lazy order (IQ, Claude round-12 fix design):
++                //   1. physical fopen of the target — deploy-time
++                //      pre-creation (prep step 5.6) makes the common path a
++                //      plain, checked open that persists and is
++                //      ftpsrv-visible;
++                //   2. on refusal: ONE lazy create_directories attempt for
++                //      that parent dir (checked error_code overload,
++                //      budgeted marker, never fatal) + ONE retry;
++                //   3. on refusal again: the in-memory spill (the
++                //      documented console reality), so the handle always
++                //      works in-process.
++                // Every step's failure is consumed here; no fs refusal can
++                // reach an unchecked use, and the worst case for Lua is
++                // liolib semantics (working spill handle, or nil+message
++                // when even the spill cap is exceeded) — never a crash.
+                 const std::string target = sandbox_target(*context, key);
+                 if (context->resolved_markers < kMaxMarkers)
+                 {
+@@ -756,6 +833,13 @@
+                 {
+                     return results;
+                 }
++                if (ensure_parent_dirs_once(*context, target))
++                {
++                    if (const int results = try_original(L, argc, target); results > 0)
++                    {
++                        return results;
++                    }
++                }
+                 return push_memfile(L, context, target, mode);
+             }
+             // Read order: mod-root physical -> sandbox physical -> spill.
+@@ -1373,12 +1457,48 @@
+             return 1;
+         }
+ 
+-        // Wrap `name` in the table at absolute index `table_index`, with
++        // Registry idempotence sentinel (namespace scope: install() and
++        // push_context() must agree on ONE address; it was a function-local
++        // static before, which worked, but the shared helper needs it here).
++        const char g_sentinel = 0;
++
++        // Idempotence probe: true when a context is ALREADY anchored for
++        // this state (install already ran). Pushes nothing (balanced).
++        auto context_is_anchored(lua_State* L) -> bool
++        {
++            lua_pushlightuserdata(L, const_cast<char*>(&g_sentinel));
++            lua_gettable(L, LUA_REGISTRYINDEX);
++            const bool anchored = !lua_isnil(L, -1);
++            lua_pop(L, 1);
++            return anchored;
++        }
++
++        // Pushes the registry-anchored ShimContext userdata (IQ, round-12).
++        // Wrappers MUST source their context upvalue ONLY through this
++        // lookup: absolute stack indices go STALE the moment any pop shifts
++        // the stack (the pre-fix os.remove/os.rename wrappers captured the
++        // OS TABLE this way — LuaPathShim.cpp:1592 pre-fix). The registry
++        // anchor is immutable for the state's lifetime, so a misbind is
++        // structurally impossible. Returns true when a userdata was pushed.
++        auto push_context(lua_State* L) -> bool
++        {
++            lua_pushlightuserdata(L, const_cast<char*>(&g_sentinel));
++            lua_gettable(L, LUA_REGISTRYINDEX);
++            if (lua_isuserdata(L, -1))
++            {
++                return true;
++            }
++            lua_pop(L, 1);
++            return false;
++        }
++
++        // Wrap `name` in the table at ABSOLUTE index `table_index`, with
+         // upvalues [original][context]: lua_pushcclosure binds the last n
+-        // pushed values as upvalue(1..n) in push order, so the original goes
+-        // first (wrappers read upvalue(1) as the backend, upvalue(2) as the
+-        // context userdata at absolute index `context_index`).
+-        auto wrap_into(lua_State* L, int table_index, int context_index, const char* name, lua_CFunction wrapper) -> void
++        // pushed values as upvalue(1..n) in push order, so the original
++        // goes first (wrappers read upvalue(1) as the backend, upvalue(2)
++        // as the context userdata). The context comes from the REGISTRY
++        // (push_context), never from a caller-captured stack index.
++        auto wrap_into(lua_State* L, int table_index, const char* name, lua_CFunction wrapper) -> void
+         {
+             lua_getfield(L, table_index, name); // upvalue 1: original
+             if (!lua_isfunction(L, -1))
+@@ -1386,7 +1506,11 @@
+                 lua_pop(L, 1);
+                 return; // nothing to wrap; the field stays as-is (or absent)
+             }
+-            lua_pushvalue(L, context_index); // upvalue 2: context
++            if (!push_context(L)) // upvalue 2: context (registry-sourced)
++            {
++                lua_pop(L, 1);
++                return; // no anchored context: leave the stock function in place
++            }
+             lua_pushcclosure(L, wrapper, 2);
+             lua_setfield(L, table_index, name);
+         }
+@@ -1499,13 +1623,9 @@
+             }
+             const int io_old = lua_gettop(L);
+ 
+-            // Idempotence: one install per state (registry sentinel).
+-            static const char sentinel = 0;
+-            lua_pushlightuserdata(L, const_cast<char*>(&sentinel));
+-            lua_gettable(L, LUA_REGISTRYINDEX);
+-            const bool already = !lua_isnil(L, -1);
+-            lua_pop(L, 1);
+-            if (already)
++            // Idempotence: one install per state (registry sentinel — the
++            // SAME namespace-scope g_sentinel push_context() resolves).
++            if (context_is_anchored(L))
+             {
+                 lua_pop(L, 1); // the io table; the stack is balanced again
+                 return;
+@@ -1541,6 +1661,12 @@
+                 ? g_writable_root_override
+                 : derive_writable_root(context->modbridge_root);
+             context->mod_name = mod;
++            // The ONLY filesystem call before the first write: a checked
++            // fopen of <root>/loadlist.txt (returns NULL post-module_start
++            // per contract; built-in defaults then back the pinned set).
++            // Runs BEFORE the write-area marker — the crash logs proving
++            // both processes died AT/AFTER the marker therefore also prove
++            // this call survived on console (it cannot be the crash site).
+             context->pinned_lower = load_pinned_set(context->modbridge_root, mod);
+             if (context->write_area_markers < kMaxMarkers && !mod.empty() && mod.find('/') == std::string::npos)
+             {
+@@ -1556,15 +1682,24 @@
+             }
+             lua_setmetatable(L, context_index);
+ 
+-            // Registry anchor (closures also hold their own upvalue reference).
+-            lua_pushlightuserdata(L, const_cast<char*>(&sentinel));
++            // Registry anchor FIRST (IQ, round-12): from this point the
++            // userdata's lifetime is the registry + closure upvalues, so
++            // every later section can pop freely without endangering it,
++            // and wrap_into re-fetches it by lookup (no stale indices).
++            lua_pushlightuserdata(L, const_cast<char*>(&g_sentinel));
+             lua_pushvalue(L, context_index);
+             lua_settable(L, LUA_REGISTRYINDEX);
++            lua_pop(L, 1); // the stack copy; the registry owns the context now
++            // Stack here: [io_old] exactly — install-time invariant for the
++            // whole table-swap section below (every index absolute).
+ 
+             // Replace the io table (the patched liolib has NO path hook:
+             // io_open calls fopen directly — ue4ss-stdio-consumer-adaptation-1/
+             // patched/liolib.c:270-277). Copy every field (stdout/stderr/stdin
+             // passthrough included), then wrap the path-taking entries.
++            // NOTHING in this section touches the filesystem; a failure can
++            // only throw bad_alloc (caught below, stock io still in place —
++            // setglobal is the section's LAST global mutation).
+             lua_newtable(L);
+             const int io_new = lua_gettop(L);
+             lua_pushnil(L);
+@@ -1575,24 +1710,28 @@
+                 lua_settable(L, io_new);
+                 lua_pop(L, 1); // original value; keep the key for lua_next
+             }
+-            wrap_into(L, io_new, context_index, "open", io_open_wrapper);
+-            wrap_into(L, io_new, context_index, "lines", io_lines_wrapper);
++            wrap_into(L, io_new, "open", io_open_wrapper);
++            wrap_into(L, io_new, "lines", io_lines_wrapper);
+             lua_pushcfunction(L, io_popen_stub);
+             lua_setfield(L, io_new, "popen");
+             lua_pushcfunction(L, io_tmpfile_stub);
+             lua_setfield(L, io_new, "tmpfile");
+-            lua_setglobal(L, "io");
+-            lua_pop(L, 1); // old io table; the context userdata stays anchored
++            lua_setglobal(L, "io"); // the ONLY global mutation of the section
++                                    // (pops the new table)
++            lua_pop(L, 1);          // old io table -> stack EMPTY (balanced)
+ 
+             // os library: same resolver treatment for the destructive pair;
+             // os.execute is stubbed (no system() passthrough, section 5 plan).
++            // Absolute index for the table (the pre-fix relative -1 +
++            // stale context_index pair is what misbound remove/rename).
+             lua_getglobal(L, "os");
+             if (lua_istable(L, -1))
+             {
+-                wrap_into(L, -1, context_index, "remove", os_remove_wrapper);
+-                wrap_into(L, -1, context_index, "rename", os_rename_wrapper);
++                const int os_index = lua_gettop(L);
++                wrap_into(L, os_index, "remove", os_remove_wrapper);
++                wrap_into(L, os_index, "rename", os_rename_wrapper);
+                 lua_pushcfunction(L, os_execute_stub);
+-                lua_setfield(L, -2, "execute");
++                lua_setfield(L, os_index, "execute");
+             }
+             lua_pop(L, 1);
+ 

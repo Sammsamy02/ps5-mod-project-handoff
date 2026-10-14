@@ -1,0 +1,39 @@
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  writer=failline pid=317 t=60004266ms (first stamp for this pid)
+  writer=pathtest stamp=60076100108227ns (first stamp)
+  writer=failline pid=341 t=60249877ms (first stamp for this pid)
+  writer=pathtest stamp=60320585374436ns delta=+244485266209ns (vs previous pathtest stamp)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 2 (diag_channel_open_failed/-22: 0) [r4-prefixed: 2]
+  failure lines by session (r4 pid): pid=317 x1  pid=341 x1  — window note (G6): the UE4SS.log window is CUMULATIVE across this boot's launches; failure lines carry r4 pid prefixes (per-session above), PATH_TEST/ACTIVATION_TEST stamps carry none (positional attribution only); verdict precedence = LAST failure line (append-only ordering discipline)
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=2 open_failed=0 activation_test=2; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  ue4ss-text:    S9_START_REFUSED -> S2_ACTIVATION
+terminal/attributed stage hits:
+  [S9_START_REFUSED] E2 EXPECTED-REFUSAL — START-stage refusal (post-conversion: prepare/start threw; pad profile / mod source / sink open); verdict FAILED_E2_START, >= MINIMAL-ACCEPT where the session conversion quartet holds
+     modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad.ini must be ASCII text without control bytes
+  [S2_ACTIVATION] B7 EXPECTED-REFUSAL — MFA activation refused (Phase B; loadlist/roots drifted; the named offending file is in the detail); NOTHING downstream ran
+     modbridge module_start failed: mfa_activate_failed code=-8 detail=size file is shorter than the load list says ue4ss/PS5Pad.ini
+
+notable lines (verbatim, capped):
+  [ue4ss] modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad.ini must be ASCII text without control bytes
+  [ue4ss] modbridge module_start failed: mfa_activate_failed code=-8 detail=size file is shorter than the load list says ue4ss/PS5Pad.ini
+
+other new lines (raw, capped):
+  [ue4ss] PATH_TEST: /data/plugins/UE4SS.log writable at 60076100108227 monotonic-ns
+  [ue4ss] ACTIVATION_TEST: loadlist.txt readable, first 16 bytes: 6d6f64666f7267652d6c6f61646c6973
+  [ue4ss] PATH_TEST: /data/plugins/UE4SS.log writable at 60320585374436 monotonic-ns
+  [ue4ss] ACTIVATION_TEST: loadlist.txt readable, first 16 bytes: 6d6f64666f7267652d6c6f61646c6973
+
+VERDICT: FAILED_B7_MFA
+ORACLE-CLASS: B7 EXPECTED-REFUSAL - FAIL with named cause; nothing downstream ran (oracle section 1 row B7)
+NEXT: Oracle B7 EXPECTED-REFUSAL: MFA activation refused (Phase B) — NOTHING downstream ran (no bridge walk/lease/conversion events exist for this session; its PIDSUM/chain shows the prologue only). The named offending file is in the detail; game continues UNMODDED; loadlist/roots drifted. FAIL-with-named-cause per the oracle; no rung claim.

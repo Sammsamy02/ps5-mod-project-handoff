@@ -1,0 +1,218 @@
+--- a/TOOL/pe_analyzer.py
++++ b/TOOL/pe_analyzer.py
+@@ -140,6 +140,7 @@
+         self.delay_imports: List[Dict[str, Any]] = []
+         self.exports: Dict[str, Any] = {}
+         self.tls: Dict[str, Any] = {"status": "none"}
++        self.gs_access: Dict[str, Any] = {"status": "not_scanned", "candidate_count": 0, "sites": []}
+         self.debug: Dict[str, Any] = {"status": "none", "codeview": []}
+         self.managed: Optional[Dict[str, Any]] = None
+ 
+@@ -945,6 +946,7 @@
+             "managed": bool(self.managed and self.managed.get("is_managed")),
+             "ue4ss": self.ue4ss_report(),
+             "tls": self.tls,
++            "gs_access": self.gs_access,
+             "debug": self.debug,
+             "diagnostics": list(self.diagnostics),
+             "warnings": list(self.warnings),
+@@ -979,6 +981,8 @@
+         img.parse_tls()
+         img.parse_debug()
+         img.parse_exports()
++        from gs_audit import audit_gs_access
++        img.gs_access = audit_gs_access(img)
+     return img, img.to_dict(full=True)
+ 
+ 
+--- a/TOOL/admission_dossier.py
++++ b/TOOL/admission_dossier.py
+@@ -16,7 +16,7 @@
+ 
+ FEATURES = (
+     "native_x64_pe32_plus", "metadata_integrity", "managed_clr", "real_static_tls",
+-    "tls_callback_table_pointer", "delay_import_directory", "rwx_partition",
++    "tls_callback_table_pointer", "direct_gs_access", "delay_import_directory", "rwx_partition",
+     "windows_import_abi", "dynamic_loadlibrary", "target_binding",
+     "console_behavior",
+ )
+@@ -109,6 +109,13 @@
+             tls.get("callback_count", 0)))
+     if tls.get("callback_table_present") and features["tls_callback_table_pointer"] != "preflight_only":
+         block("tls_callback_table_pointer", "callback table pointer present")
++    gs_access = report.get("gs_access", {"status": "not_scanned"})
++    if gs_access.get("status") != "scanned" and report.get("classification") == "native-x64":
++        block("direct_gs_access", "GS instruction audit unavailable: " +
++              gs_access.get("reason", gs_access.get("status", "unknown")))
++    elif gs_access.get("candidate_count", 0):
++        block("direct_gs_access", "%d candidate direct GS memory operands" %
++              gs_access["candidate_count"])
+ 
+     delay_dir = directories.get(13, {})
+     if (delay_dir.get("rva") or delay_dir.get("size")) and \
+@@ -150,12 +157,14 @@
+         "observed": {
+             "classification": report.get("classification"),
+             "tls": tls,
++            "gs_access": gs_access,
+             "debug": report.get("debug"),
+             "proxy_hint": report.get("ue4ss", {}).get("looks_like_proxy_dll"),
+             "import_dlls": [row.get("dll") for row in report.get("imports", [])],
+             "delay_import_dlls": [row.get("dll") for row in report.get("delay_imports", [])],
+         },
+         "unverified_gates": ["loader_preflight", "relocation_and_slide",
++                             "gs_access_scan_completeness", "loader_runtime_gs_enforcement",
+                              "windows_import_abi", "dynamic_loadlibrary",
+                              "target_binding", "console_behavior"],
+         "warnings": report.get("warnings", []),
+--- a/TOOL/loader_capabilities.json
++++ b/TOOL/loader_capabilities.json
+@@ -19,6 +19,7 @@
+     "managed_clr": "refused",
+     "real_static_tls": "refused",
+     "tls_callback_table_pointer": "refused",
++    "direct_gs_access": "refused",
+     "delay_import_directory": "refused",
+     "rwx_partition": "refused",
+     "windows_import_abi": "unverified",
+--- /dev/null
++++ b/TOOL/gs_audit.py
+@@ -0,0 +1,56 @@
++"""Read-only x64 PE executable-section sweep for direct GS memory operands.
++
++This is a candidate detector, not a reachability proof or a proof of absence.
++Linear disassembly can interpret embedded data as instructions and miss code
++entered at a different offset. The loader must not treat a clean sweep as safe.
++"""
++
++from typing import Any, Dict
++
++
++def audit_gs_access(image: Any) -> Dict[str, Any]:
++    if image.coff.get("machine") != 0x8664 or image.optional.get("format") != "PE32+":
++        return {"status": "not_applicable", "candidate_count": 0, "sites": []}
++    try:
++        from capstone import Cs, CS_ARCH_X86, CS_MODE_64
++        from capstone.x86_const import X86_OP_MEM, X86_REG_GS
++    except ImportError:
++        return {"status": "unavailable", "reason": "Python Capstone is required for the GS audit",
++                "candidate_count": 0, "sites": []}
++
++    decoder = Cs(CS_ARCH_X86, CS_MODE_64)
++    decoder.detail = True
++    decoder.skipdata = True
++    counts: Dict[str, int] = {}
++    sites = []
++    scanned_bytes = 0
++    try:
++        for section in image.sections:
++            if not section["executable"]:
++                continue
++            raw = section["raw_size"]
++            off = section["raw_ptr"]
++            if off < 0 or raw < 0 or off + raw > len(image.data):
++                return {"status": "unavailable", "reason": "executable section is not file-backed",
++                        "candidate_count": 0, "sites": []}
++            scanned_bytes += raw
++            for insn in decoder.disasm(image.data[off:off + raw], section["virtual_address"]):
++                if insn.id == 0 or insn.mnemonic == "lea":
++                    continue
++                for operand in insn.operands:
++                    if operand.type != X86_OP_MEM or operand.mem.segment != X86_REG_GS:
++                        continue
++                    disp = operand.mem.disp
++                    key = "0x%X" % disp if disp >= 0 else "-0x%X" % -disp
++                    counts[key] = counts.get(key, 0) + 1
++                    if len(sites) < 32:
++                        sites.append({"rva": insn.address, "displacement": disp,
++                                      "bytes": insn.bytes.hex(),
++                                      "instruction": "%s %s" % (insn.mnemonic, insn.op_str)})
++    except Exception as error:
++        return {"status": "unavailable", "reason": "instruction decoder failed: %s" % error,
++                "candidate_count": 0, "sites": []}
++    return {"status": "scanned", "candidate_count": sum(counts.values()),
++            "candidate_count_by_displacement": counts, "sites": sites,
++            "executable_file_bytes_scanned": scanned_bytes,
++            "limitation": "linear sweep: candidates may be data; zero candidates does not prove absence"}
+--- /dev/null
++++ b/TOOL/test_teb_audit.py
+@@ -0,0 +1,79 @@
++"""Direct GS access must be noticed regardless of PE TLS-directory status."""
++
++import hashlib
++import sys
++import unittest
++from pathlib import Path
++from unittest.mock import patch
++
++from admission_dossier import load_registry, make_dossier
++from gs_audit import audit_gs_access
++from pe_analyzer import analyze_file
++
++
++ROOT = Path(__file__).resolve().parent.parent
++TREE = ROOT.parent
++REGISTRY = ROOT / 'TOOL/loader_capabilities.json'
++PROBE = TREE / 'cap13/SAMPLE/cap13-feature-probe.dll'
++PROXY = Path('/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/windows-image-original-inputs-1/dwmapi.dll')
++CONTROL = TREE / 'cap13/SAMPLE/real-worker-standard.dll'
++
++
++class TebAuditTests(unittest.TestCase):
++    def test_empty_tls_directory_does_not_hide_gs58(self):
++        before = hashlib.sha256(PROBE.read_bytes()).hexdigest()
++        _, report = analyze_file(str(PROBE))
++        self.assertEqual(report['tls']['status'], 'empty')
++        audit = report.get('gs_access')
++        self.assertIsNotNone(audit)
++        self.assertEqual(audit['status'], 'scanned')
++        self.assertGreaterEqual(audit['candidate_count'], 3)
++        self.assertTrue(any(site['rva'] == 0x101c and site['displacement'] == 0x58
++                            for site in audit['sites']))
++        dossier = make_dossier(report, load_registry(REGISTRY))
++        self.assertIn('direct_gs_access', [b['feature'] for b in dossier['blockers']])
++        self.assertEqual(hashlib.sha256(PROBE.read_bytes()).hexdigest(), before)
++
++    def test_no_tls_directory_does_not_hide_gs30(self):
++        before = hashlib.sha256(PROXY.read_bytes()).hexdigest()
++        _, report = analyze_file(str(PROXY))
++        self.assertEqual(report['tls']['status'], 'none')
++        audit = report.get('gs_access')
++        self.assertIsNotNone(audit)
++        self.assertEqual(audit['status'], 'scanned')
++        self.assertTrue(any(site['rva'] == 0x161dd and site['displacement'] == 0x30
++                            for site in audit['sites']))
++        dossier = make_dossier(report, load_registry(REGISTRY))
++        self.assertIn('direct_gs_access', [b['feature'] for b in dossier['blockers']])
++        self.assertEqual(hashlib.sha256(PROXY.read_bytes()).hexdigest(), before)
++
++    def test_candidate_free_result_does_not_claim_execution_safe(self):
++        _, report = analyze_file(str(CONTROL))
++        audit = report.get('gs_access')
++        self.assertIsNotNone(audit)
++        self.assertEqual(audit['status'], 'scanned')
++        self.assertEqual(audit['candidate_count'], 0)
++        dossier = make_dossier(report, load_registry(REGISTRY))
++        self.assertIn('gs_access_scan_completeness', dossier['unverified_gates'])
++
++    def test_executable_raw_tail_is_scanned_even_if_virtual_size_is_shorter(self):
++        class Image:
++            coff = {'machine': 0x8664}
++            optional = {'format': 'PE32+'}
++            sections = [{'executable': True, 'raw_size': 9, 'virtual_size': 1,
++                         'raw_ptr': 0, 'virtual_address': 0x1000}]
++            data = bytes.fromhex('65488b042560000000')
++        audit = audit_gs_access(Image())
++        self.assertEqual(audit['candidate_count'], 1)
++        self.assertEqual(audit['sites'][0]['displacement'], 0x60)
++
++    def test_missing_decoder_blocks_offline_dossier(self):
++        with patch.dict(sys.modules, {'capstone': None}):
++            _, report = analyze_file(str(CONTROL))
++        self.assertEqual(report['gs_access']['status'], 'unavailable')
++        dossier = make_dossier(report, load_registry(REGISTRY))
++        self.assertIn('direct_gs_access', [b['feature'] for b in dossier['blockers']])
++
++
++if __name__ == '__main__':
++    unittest.main()

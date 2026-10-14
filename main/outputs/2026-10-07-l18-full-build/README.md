@@ -1,0 +1,7 @@
+The l18 cleanup + XOM code-verification pipeline completed two fresh local builds on the Mac. Both wrapped PRXs and composed objects are byte-identical; the final offline gate passed 11/11 checks. Upload remains HOLD. No console or network contact occurred.
+
+Read [BUILD-REPORT.md](/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l18-full-build/BUILD-REPORT.md) and the pinned [FINAL-RECEIPT.json](/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l18-full-build/FINAL-RECEIPT.json) for the reviewable artifact, stable per-pass manifests, source selection, audit/settings provenance and limits.
+
+The private launcher received parent BUILD-GO, bound all 26 reviewed source/header files and admitted the l18 owner/initializer/bridge/helper snapshot. Inherited launch11 PLACEHOLDER comments and historical l16 provenance are explained in the report. PREP-RECEIPT.json and FILE-MANIFEST.json describe the initial preparation; PREP-MANIFEST.json records current completed status. Both initial finalizer failures, local path/prose repairs and the successful resumed stages are preserved.
+
+The wrapped PRX is 30,959,143 bytes, SHA256 444e3ff5d65a76dec046b856f76b44274bcc5f917865603bd77ec37f652c4c4a, magic 4f153d1d, SDK 0x11000000. Engine behavior, target import resolution, exact current settings content and PC parity remain unproved. A separately approved launch requires read-only verification that HookProcessInternal and HookProcessLocalScriptFunction are both 0.

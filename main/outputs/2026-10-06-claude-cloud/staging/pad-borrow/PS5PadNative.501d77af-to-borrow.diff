@@ -1,0 +1,61 @@
+--- outputs/2026-10-04-zcode-team/worker-pad-coexist/staging/ue4ss-native-pad-provider-coexist/port/PS5PadNative.cpp	2026-10-06 15:47:01.528708106 +0000
++++ outputs/2026-10-06-claude-cloud/staging/pad-borrow/port/PS5PadNative.borrow.cpp	2026-10-06 16:14:22.809425760 +0000
+@@ -1,9 +1,13 @@
+ #include "PS5PadSource.hpp"
+ #include "PadServiceLease.hpp"
++#include <atomic>
+ #ifndef __PROSPERO__
+ #error Native pad provider requires real PS5 target
+ #endif
+ extern "C" int sceUserServiceTerminate(void); // Retained SDK samples/browser/main.c:27.
++// Shared composition diagnostic sink (diagnostic.c), the same in-link C symbol
++// PS5PadSource.cpp / NativePadInput.cpp already declare; adds no import.
++extern "C" void diagnostic_event(const char* tag, unsigned int value);
+ static_assert(sizeof(PS5_PadData)==120);
+ static_assert(offsetof(PS5_PadData,buttons)==0 && offsetof(PS5_PadData,connected)==76);
+ static_assert(offsetof(PS5_PadData,timestamp)==80 && offsetof(PS5_PadData,count)==104);
+@@ -11,12 +15,42 @@
+ RC::Input::Detail::PadServiceLease user_service(sceUserServiceInitialize,sceUserServiceTerminate);
+ int acquire_service(void* arg) { return user_service.acquire(arg); }
+ int release_service() { return user_service.release(); }
++
++// [claude-cloud 2026-10-06] Borrowed-handle open (ROUTE P3 of worker-pad-defer
++// PROPOSAL-ALTERNATE-COEXIST-ROUTE). Live evidence: the game already holds the
++// standard port in THIS process, so scePadOpen(user, STANDARD, 0) returns
++// PS5_PAD_ERROR_ALREADY_OPENED (runs 3/4). scePadGetHandle(user, type, index)
++// (SDL_ps5joystick.h:106) returns the handle already opened for that tuple; reading
++// it with scePadReadState is a non-consuming snapshot, so the game's own reads are
++// unaffected. Adds ONE import row (scePadGetHandle, libScePad); the import audit
++// expectation moves by exactly +1. A borrowed handle is never closed by us.
++// Evidence: pad_open_class=1 (borrowed) or the raw GetHandle error in
++// pad_borrow_failed; pad_available/pad_first_state_read are unchanged downstream.
++constexpr int kPadAlreadyOpened = static_cast<int>(PS5_PAD_ERROR_ALREADY_OPENED);
++std::atomic<int> borrowed_handle{-1};
++int open_or_borrow(int user, int type, int index, void* param) {
++    const int handle=scePadOpen(user,type,index,param);
++    if (handle!=kPadAlreadyOpened) return handle;
++    const int game_handle=scePadGetHandle(user,type,index);
++    if (game_handle<0) {
++        diagnostic_event("pad_borrow_failed",static_cast<unsigned int>(game_handle));
++        return handle; // Keep the original ALREADY_OPENED as the recorded open failure.
++    }
++    diagnostic_event("pad_open_class",1u);
++    borrowed_handle.store(game_handle,std::memory_order_release);
++    return game_handle;
++}
++int close_owned(int handle) {
++    int expected=handle;
++    if (borrowed_handle.compare_exchange_strong(expected,-1,std::memory_order_acq_rel)) return 0;
++    return scePadClose(handle);
++}
+ }
+ namespace RC::Input {
+ std::shared_ptr<PS5PadSource> make_native_ps5_pad_source(std::vector<PadBinding> bindings, int user) {
+     auto source=std::make_shared<PS5PadSource>(std::move(bindings),PadBackend{
+-        acquire_service,scePadInit,sceUserServiceGetLoginUserIdList,scePadOpen,
+-        scePadReadState,scePadClose,release_service},user);
++        acquire_service,scePadInit,sceUserServiceGetLoginUserIdList,open_or_borrow,
++        scePadReadState,close_owned,release_service},user);
+     source->activate();
+     return source;
+ }

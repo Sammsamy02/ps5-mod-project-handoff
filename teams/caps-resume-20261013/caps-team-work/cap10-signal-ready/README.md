@@ -1,0 +1,34 @@
+# #10 signal lifecycle readiness
+
+This private Mac packet closes a demonstrated signal-state loss in the exact Mono owner after successful initialization, real managed execution, and cleanup. It is a source/build/host result. There was no console contact, target execution, game PRX build, or production admission.
+
+Root independently reviewed and accepted the final owner/runtime pair. `INTEGRATION-INPUTS.json` selects only the final v2 runtime plus the reviewed owner/header; `evidence/ROOT-REVIEW-ACCEPTANCE.json` records that review and exact hashes. V1 binaries are historical diagnostics and are unselected for integration.
+
+The unchanged owner resets existing FPE, QUIT, ILL, BUS, SYS, ABRT and SEGV actions to defaults, replaces PIPE with IGN, and leaves the owning thread's FPE/CHLD/PIPE mask unblocked. The baseline preserves actual setup/query output and still passes the genuine managed Run → deliberate exception → recovery sequence. No signal was raised and no OS fault was induced.
+
+Calling public `mono_set_signal_chaining(true)` alone exposed another genuine defect in the pinned Mono source. `get_saved_signal_handler(..., TRUE)` removes its value from a hash table with a `g_free` destructor and returns the freed action to `sigaction`. The private runtime patch transfers the action with `g_hash_table_steal`, restores it, and frees it exactly once. It also respects a saved `SIG_IGN` without calling its special pointer, returns false for default/absent actions, and preserves ordinary and SA_SIGINFO dispatch. A runtime-only test isolates preservation of the seven standard actions while PIPE and the thread mask still change.
+
+The updated owner enables chaining only with the corrected runtime, snapshots PIPE and its own thread mask through genuine POSIX APIs, observes Mono's installed IGN action, then restores the saved PIPE action and thread mask after actual `mono_jit_cleanup`. Every query/restore return is checked. An identifiable replacement of Mono's PIPE action is left alone; the owner reports `completed=false` and `Stage::SignalStateFailed`. Entry failures and failed or fatal partial Mono initialization are not claimed recoverable. Cleanup is never called on a null domain.
+
+The caller must exclusively control changes to Mono-affected process signal dispositions from entry through cleanup, and independent changes to the same init thread's mask are unsupported. Standard Mono cleanup itself restores saved actions without checking for intervening replacements. POSIX `sigaction` has no atomic compare-and-set; the PIPE comparison does not provide synchronization, cannot detect an identical reinstallation, and does not remove the admission requirement. This remains the sole process-wide Mono owner, initialized and cleaned up on the same native thread. Other Mono users, profiling or crash-handler installations during the call, and concurrent changes to affected handlers are unsupported.
+
+| Evidence | Actual result |
+|---|---|
+| `baseline.json` | Expected lifecycle failure with unchanged actual owner; managed 2 runs / 1 exception pass |
+| `chaining.json` | Expected lifecycle failure with API-only change; saved-action use-after-free is exposed |
+| `runtime-fixed.json` | Seven standard actions preserve handlers, flags and masks; expected PIPE/thread-mask failure |
+| `fixed-v2.json` | Custom PIPE and all tested actions plus exact thread mask preserve through successful cleanup |
+| `default-pipe-v2.json` / `ignore-pipe-v2.json` | Original default and ignored PIPE actions, flags and masks preserve |
+| `pipe-replaced-v2.json` | An identifiable PIPE replacement is retained; managed calls pass; completion is refused |
+| `runtime-build-v2.json` | Genuine changed unit compiles for host and target, host dylib relinks, target archive updates |
+| `runtime-archive-audit-v2.json` | Only mini-posix changes: host 56/57 and target 321/322 other members byte-identical |
+| `dispatch-v2.json` | Genuine statically linked Mono dispatch while initialized: IGN handled without callback, saved default/absent unhandled, ordinary and SA_SIGINFO callbacks each once with exact arguments; managed sequence and cleanup pass |
+| `target-owner-compile.json` | Actual target-header owner compile with warnings as errors; no target execution |
+
+Each successful or expected-failure process used the actual owner, the strict source-built host runtime, matching statically linked corlib registration in the owner, and the real invocation boundary. All seven initial cases and the four final-runtime lifecycle cases execute two genuine managed runs and one deliberate managed exception. The separate final-runtime direct dispatch process also executes the same real managed sequence and cleanup. No unchanged suite was rerun; the final four cases were refreshed once after the reviewed runtime dispatch change. The fixtures contain only a host observation/provider, harmless signal setup/query, and (in one separate process) a deliberate identifiable PIPE replacement. They do not prove game readiness.
+
+The final source changes are `native/MonoOwner.cpp`, `native/MonoOwner.hpp` and `runtime-source/mono/mini/mini-posix.c`, with exact integration diffs in `evidence/owner-signal-lifecycle.patch` and `evidence/mono-signal-lifecycle.patch`. Final integration uses `runtime-target-v2/libmonosgen-2.0.a` together with the unchanged final owner/header; v1 artifacts and evidence remain historical. The archive and owner must be integrated together. The host runtime relink preserves the original actual link recipe and all other genuine frozen archives. Both original and replacement archive members were extracted and hashed independently. The target configuration and ABI layout were unchanged.
+
+Actual OS signal delivery, native-fault chaining, alternate signal stacks, target GC suspend/restart signal behavior, profiler interactions, and console continuation remain unproven. The direct dispatch test calls the actual hidden Mono symbol linked from all genuine strict runtime archives while the real owner is initialized. It verifies saved special dispositions and ordinary/SA_SIGINFO callback dispatch without inducing any fault or delivering any signal; it is not a native fault handling or generic process-signal coexistence proof.
+
+The selected manifest preserves baseline, diagnostic and final source/log/receipt evidence. Historical runtime v1 source is retained in `runtime-source-v1`; historical chaining-only owner source is retained as `native/MonoOwner.chaining.cpp`; its receipt records the original path before the final owner replaced that private file. Raw archive-audit extraction trees and intermediate object trees remain private diagnostics outside the selected handoff. Existing cap10, Mono, target/main and prior delivery folders were read-only throughout.

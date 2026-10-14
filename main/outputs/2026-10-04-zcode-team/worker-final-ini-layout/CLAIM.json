@@ -1,0 +1,57 @@
+{
+  "worker": "worker-final-ini-layout",
+  "date": "2026-10-04",
+  "task": "Own THE definitive return-session ploader.ini layout: full ordered 8-entry list (IGW write probe, fc1 validator probe, composition, qdrv1, observer, aligned_entry, path_test; ingame_facts=0 inert) with per-line order rationale; ordering-contract doc (reorder consequences incl. the initializer safe-default degraded path; content-anchored idempotent append rules so the final file is byte-for-byte identical regardless of staging order); verifier + simulator receipts; console_batch constants brief (brief only, no edits).",
+  "ownership": {
+    "created": [
+      "FINAL-INI-LAYOUT.md (definitive layout + ORDERING CONTRACT)",
+      "ploader.ini.canonical (the exact target bytes)",
+      "simulate_ploader_ini_final.py (extended ridealongs parser-faithful simulator: 8-entry variants + staging-order commutativity proof via content-anchored ensure ops)",
+      "verify_final_ini_layout.py (final-layout verifier: byte-exact canonical hash + parser-law checks)",
+      "CONSOLE-BATCH-CONSTANTS-BRIEF.md (adoptions for worker-observer-staging-extension; its files NOT touched)",
+      "receipts/ (simulator + verifier run receipts)"
+    ],
+    "not_touched": [
+      "worker-console-batch-runner/** and worker-observer-staging-extension/** (delivered as-is; constants brief only)",
+      "worker-game-session-ridealongs/** (simulator extended as a NEW file in this dir, original left byte-identical)",
+      "worker-fc1-validator-probe/**, worker-writability-probe-build/**, worker-exec-writability/**, worker-initializer-integration/** (read-only law/inputs)"
+    ]
+  },
+  "definitive_layout": {
+    "file": "/data/plugins/ploader.ini",
+    "header": "[PPSA33286]",
+    "entries_in_order": [
+      {"line": "/data/plugins/modbridge_exec_write_probe_armed.prx = 2", "role": "IGW writability probe (xwp-armed), verdict before composition init"},
+      {"line": "/data/plugins/modbridge_fc1pool.prx = 2", "role": "fc1 validator probe, evidence before composition start"},
+      {"line": "/data/plugins/modbridge_supplier_composition.prx = 2", "role": "composition-5 + folded initializer (consumer of xwp verdict when gating arms)"},
+      {"line": "/data/plugins/modbridge_qh_driver.prx = 2", "role": "qdrv1 record-sink ridealong"},
+      {"line": "/data/plugins/modbridge_runtime_aligned_observer.prx = 2", "role": "observer ridealong"},
+      {"line": "/data/plugins/modbridge_runtime_aligned_entry.prx = 2", "role": "frozen standalone aligned-entry module (late diagnostic)"},
+      {"line": "/data/plugins/modbridge_path_test.prx = 2", "role": "freshness-oracle terminator (last active)"},
+      {"line": "/data/plugins/modbridge_ingame_facts.prx = 0", "role": "inert provenance line (skipped at parse, consumes no slot)"}
+    ],
+    "registered_active": 7,
+    "max_plugins": 10,
+    "headroom": 3
+  },
+  "pinned_inputs": {
+    "parser_law": "pinned ploader main.c (.superpowers/native-dependency-spike/ploader-cleanup-candidate-1/original/main.c) via worker-game-session-ridealongs: MAX_PLUGINS=10 L26-29/L658, parse_mode 0/1/2-only L605, mode-0 SKIPPED at parse L672 (no slot, no attach), register order == file order L776-820, NO path dedupe, per-plugin mode-2 wait cap 25 s L471-476/L779, INJECTOR_TIMEOUT_S 120 L735, all_ok retry quirk L775-822",
+    "xwp_armed_fself": "worker-writability-probe-build/modbridge_exec_write_probe_armed.prx sha256 48949316821b574bc0738b965ec0ab01500a870e34540e44568b65490704402e, 20013 B (re-hashed on disk this session); build_id igd1-6ebab07f2111; deterministic run1==run2",
+    "xwp_armed_bare_sdk": "determinism/run-armed-{1,2}/bare-sdk/modbridge_exec_write_probe.prx sha256 cfed5e3d7e62100649fe1221cd4eaaf7554df421f08792264ae5238acb6d0830, 69464 B (recomputed, matches receipt inner_elf_sha256)",
+    "fc1_fself": "worker-fc1-validator-probe/modbridge_fc1pool.prx sha256 d2431bf842fdba85321a6a08b2c1b6fdc9426c971fbc7cddfcd2b14fb49f0d96, 22733 B (re-hashed on disk this session); build_id fc1pool1-78508a2e2940; deterministic run1==run2",
+    "fc1_bare_sdk": "determinism/run{1,2}/bare-sdk/modbridge_fc1pool.prx sha256 54f8335e6ed476a64e5bc0d65741c83808e52f79b55631a0803a410bd2b3f8a2, 69408 B (recomputed, matches receipt inner_elf_sha256)",
+    "qdrv1_observer": "unchanged from STAGE-PLAN-COMBINED §0 (qdrv1 52c32216.../26157 B; observer 1afa0997.../30152151 B)",
+    "initializer_consumer": "worker-initializer-integration/staging/UnrealInitializer.cpp SeedArming::kExecWritabilityVerdictGating = false 'DESIGNED, NOT ARMED' — flips on when ploader.ini ordering + verdict schema are pinned (this document pins the ordering half); verdict file /data/modbridge-exec-write-probe.jsonl (compiled IG_LOG_PATH, build_exec_write_probe.py L70); absent/unreadable verdict = SHAPE A safe default (no walk, no detour)"
+  },
+  "readback_law_constants_host_recomputed": {
+    "note": "same SHT-strip law as STAGE-PLAN-COMBINED §3: readback = segment-covered prefix of the bare-sdk ELF (max p_offset+p_filesz), body = bytes 64..end; computed this session from both bare-sdk ELFs, run1==run2",
+    "xwp_armed": {"readback_bytes": 67832, "readback_body_sha256": "daea2ff4a6533fa9006efeeb1b24913a586b72c0f68826f563b9479bf6ef561b"},
+    "fc1pool": {"readback_bytes": 67848, "readback_body_sha256": "7e2dce27e415bea80c3100d74e6f58c9a2cd8697bc87e03b67226fba09646ed3"}
+  },
+  "verification": {
+    "simulator": "simulate_ploader_ini_final.py: all 11 variants PASSED (canonical 8-entry -> 7 registered in exact order; mode-0 igf never registered; staging-order permutations via ensure ops converge byte-for-byte to canonical; duplicate-line hazard re-confirmed; igf=2 counterfactual -> 8; CRLF/comments/trailing-NL tolerated; mode-3 rejected; probes-at-mode-1 order-invariant)",
+    "verifier": "verify_final_ini_layout.py: FINAL-INI-OK on canonical bytes (sha256 printed); rejects every reorder/mode-flip/duplicate/extra-line case tested",
+    "honesty": "host-side layout design only; no console contact; on-console bytes remain [TARGET] until a Step-0 RETR + final STOR/RETR diff; ordering guarantees are parser-source facts, not console observations"
+  },
+  "status": "complete"
+}

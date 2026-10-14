@@ -1,0 +1,72 @@
+== TEST-RECEIPT — worker-evidence-gap-fix-2, 2026-10-05, LOCAL ONLY ==
+script under test: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/evidence.sh
+  sha256 BEFORE: 76559126074c28dad936905a8d9c2c3c3d7fffedc47907cc7f0f356616ae858a (pre-patch snapshot kept as evidence.sh.pre-patch; equals worker-evidence-gap-fix's recorded post sha — no upstream drift)
+  sha256 AFTER:  7b03ca9503a2cd229d391e3f116d27e308b9de39124ee438711319554412d7ee  (the new recorded sha)
+
+== THE THREE REAL RUNS ARE THE REGRESSION CORPUS — rerun after patching ==
+command per run: sh evidence.sh --from-dir worker-verdict-first-real/fixtures/<run> \
+                   --baseline-dir <2026-10-04-zcode-controller>/launch10-prep \
+                   --out rerun/<run>-summary.txt --json-tail > rerun/<run>-full.txt
+fixtures: worker-verdict-first-real/fixtures/run{1,2,3} with the documented
+sdiag placement rename (modbridge-supplier-diag.jsonl). Fixture shas AFTER the
+reruns still match LAUNCH10-RESULTS §6 provenance (immutability proven):
+  run1 UE4SS.log 4a4e0cf7280b66ff / run1 sdiag d5ad9fa05e9bf4f7
+  run2 UE4SS.log e40bf151b3a921ad
+  run3 UE4SS.log 9aeeceeb709f9f04 / run3 sdiag 264ba150325dbe28 / run3 status f5ba12265b77c918
+
+  run1: rc=0 stderr_bytes=0 WARN=0  verdict PRE=FAILED_code3   POST=FAILED_E2_START            (BETTER-labeled; E4/NO-CRASH unevidenced — no status capture for run1, rung claim reserved)
+  run2: rc=0 stderr_bytes=0 WARN=0  verdict PRE=FAILED_code-8  POST=FAILED_B7_MFA              (BETTER-labeled; oracle B7 FAIL-with-named-cause, nothing downstream ran)
+  run3: rc=0 stderr_bytes=0 WARN=0  verdict PRE=FAILED_code3   POST=MINIMAL_ACCEPT_E2_REFUSAL  (BETTER-labeled; matches LAUNCH10-RESULTS §2 DECLARATION, E4 caveat printed)
+
+All three: SAME-or-BETTER-labeled as required; classification substance unchanged
+(the same refusal lines, same last-failure-line precedence, same pinned-detail arms).
+
+== SUITE 1 — host fixture suite (94 checks) ==
+command: sh host-test/run_fixture_tests.sh   (receipt: receipts/fixture-test-pass.txt)
+POST-PATCH: rc=0, 94 passed / 0 failed  — every pre-existing assertion still green
+  incl. case 1 not_started NOT_STARTED zero-WARN, case 2 l9_terminal FAILED_S6_CONVERSION,
+  case 3/17 MODS_STARTED chains + SDIAGSUM substrings + STIME formats, case 4
+  timing_two_writers per-pid sequences, all drift/guard cases.
+
+== SUITE 2 — rehearsal five sets (verdict-stability corpus, fixtures UNMODIFIED) ==
+command per set: sh evidence.sh --from-dir worker-verdict-rehearsal/fixtures/<S>/from-dir \
+                   --baseline-dir worker-verdict-rehearsal/fixtures/_baselines --json-tail \
+                   --out rerun-rehearsal/<S>.summary.txt
+  set A: rc=0 stderr_bytes=0 WARN_lines=0 verdict=VERDICT: MODS_STARTED         (pre=post)
+  set B: rc=0 stderr_bytes=0 WARN_lines=0 verdict=VERDICT: FAILED_STATUS        (pre=post)
+  set C: rc=0 stderr_bytes=0 WARN_lines=0 verdict=VERDICT: FAILED_STATUS        (pre=post)
+  set D: rc=0 stderr_bytes=0 WARN_lines=0 verdict=VERDICT: FAILED_S6_CONVERSION (pre=post)
+  set E: rc=0 stderr_bytes=0 WARN_lines=0 verdict=VERDICT: MODS_STARTED         (pre=post)
+
+== GAP EVIDENCE on the real-run corpus (post-patch) ==
+  run1: sessions=1 (pid 317): events=548 start_failed=1 runtime_start_failed=3 extent_events=4 anchor_count=7 intervals_found=1 lease_spans=6 vmentry=22761 walk_stop=0
+        diag-notes: G7 fired (22761 > 16384 with stop=0), G8 fired (exepath_source=0 + stat_ownmod=1), G9 fired (cap=1, env 0x409d0000/16, 16/119)
+        verdict FAILED_E2_START, quartet=yes but fresh=unknown -> rung reserved (honest)
+  run2: no sdiag fixture; failure lines by session pid=317 x1 pid=341 x1; verdict FAILED_B7_MFA (mfa_activate_failed code=-8, int32 displayed)
+  run3: sessions=3 (317/341/355) split correctly out of the one cumulative jsonl:
+        pid 317: events=548 rsf=3 quartet 7/1/6   pid 341: events=495 mfa=-8 prologue-only   pid 355 (current): events=548 rsf=3 quartet 7/1/6 vmentry=10028
+        session chains shown per pid; pid 341 chain ends S2_ACTIVATION (nothing bridge-side ran — B7)
+        G6 failure-lines-by-session line; G4 S11_STOP-after-refusal note; verdict MINIMAL_ACCEPT_E2_REFUSAL with E4 O_TRUNC caveat + status-detail-match
+
+== NEW-FLAG functional tests ==
+  --sdiag FILE (G5): run1 sdiag under its ORIGINAL documented name run1-sdiag.jsonl found via
+    --sdiag; classified identically (events=548 sessions=1, verdict FAILED_E2_START)
+  --baseline-sdiag-bytes 80000 (G2): run3 cumulative sdiag cut to the tail (events=1591 -> 1054,
+    baseline_cut=yes), per-pid split still applied
+  same cut via --baseline-dir/modbridge-supplier-diag-baseline.txt ref file: identical result
+  session-boundary delta guard: synthetic two-pid sdiag -> "(first t_ms)" + "-- session pid=901
+    (delta base resets) --" marker; NO cross-session delta computed
+
+== JSON tail validation (G3) ==
+  python3 json.loads on the tail line of run1/run2/run3-full.txt + rehearsal A-E stdout: ALL VALID.
+  run3: refusal_class=E2-EXPECTED-REFUSAL-MINIMAL-ACCEPT, sdiag.current_pid=355, sdiag.quartet=yes,
+  sdiag.current {anchor_count=7, intervals_found=1, lease_spans=6, vmentry=10028, walk_stop=0},
+  sessions[317/341/355] carry the per-pid records; vm_capacity {pinned 16384, run3 10028, exceeds=false}.
+
+== no-re-baselining check ==
+  diff of pre-patch vs patched script filtered for baseline constants/guard: NONE
+  (BASE_UE4SS/ENTRY/STATUS/XWP, PIN_*_SHA, BASE_SESS_PID/MS untouched; new BASE_SDIAG defaults 0 = cut OFF)
+
+RESULT: BOTH SUITES GREEN + REAL-RUN CORPUS RERUN CLEAN (same-or-better verdicts).
+Raw outputs: rerun/run{1,2,3}-{full,summary,stderr}.txt, rerun-rehearsal/{A..E}.{summary,stdout,stderr}.txt,
+host receipt receipts/fixture-test-pass.txt (in worker-launch10-evidence-upgrade).

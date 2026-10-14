@@ -1,0 +1,181 @@
+--- a/staging/UnrealInitializer.cpp	2026-10-05 02:23:35
++++ b/staging/UnrealInitializer.cpp	2026-10-05 02:23:35
+@@ -149,7 +149,41 @@
+ 
+     static Hook::GlobalCallbackId FNameConstructedHookId{};
+ 
+-    auto HookedEngineTick([[maybe_unused]] Hook::TCallbackIterationData<void>& CallbackIterationData, UEngine*, float, bool) -> void
++    // =====================================================================================
++    // [R3] FuncPtr-marshal mode switch (DIFF 2, worker-r3-diffs-authoring 2026-10-04;
++    // R3-TIER-DESIGN 4.4/5.3; LAUNCH10-MATRIX R9 consumes the armed build). Preferred
++    // sourcing: the build define (-DUE4SS_R3_MARSHAL_MODE=1) recorded in the run
++    // manifest; the in-file fallback default 0 keeps THIS unit behavior-identical to
++    // the staged initializer until a controller arms it (constexpr pattern per
++    // TEAM:worker-no-exec-mode-gate, including its SETTINGS-V3 trap-2 rationale).
++    // kR3MarshalMode=true compiles OUT the registrations that are FATAL under BOTH_FAIL
++    // (the FName-ctor PLH detour verifier and the two __PROSPERO__ EngineTick detour
++    // registrations) and routes the game-thread identity publication + query-harness
++    // dispatch onto the R3 FuncPtr-marshal via the exported bridges at the bottom of
++    // this file (consumed by LuaMod DIFF 1). There is no runtime re-arm path.
++    // =====================================================================================
++#ifndef UE4SS_R3_MARSHAL_MODE
++#define UE4SS_R3_MARSHAL_MODE 0
++#endif
++    namespace R3MarshalGate
++    {
++        static constexpr bool kR3MarshalMode = UE4SS_R3_MARSHAL_MODE != 0;
++
++        // Refusals run on the serialized startup thread (no atomics needed for the
++        // counter). pump_pending is the cross-TU pending-pump state DIFF 1 consumes;
++        // the marshal drain reads it from the game thread while startup wrote it once.
++        static std::atomic_bool pump_pending{false};
++        [[maybe_unused]] static unsigned refused_site_count{0};
++
++        // One named line per refused detour-registration site (no-exec-gate shape).
++        [[maybe_unused]] static auto refuse_registration_site(const CharType* site) -> void
++        {
++            ++refused_site_count;
++            Output::send<LogLevel::Warning>(STR("[R3] refused: {} (detour registration compiled out under R3 marshal mode)\n"), site);
++        }
++    }
++
++    [[maybe_unused]] auto HookedEngineTick([[maybe_unused]] Hook::TCallbackIterationData<void>& CallbackIterationData, UEngine*, float, bool) -> void
+     {
+ #ifdef __PROSPERO__
+         const auto& StartupWait = StaticStorage::GlobalConfig.StartupWait;
+@@ -214,7 +248,7 @@
+ #ifdef __PROSPERO__
+     // Per-tick entry for RC::Platform::QueryHarness: noexcept, no
+     // allocation, no I/O; all refusals are counted internally.
+-    static auto QueryHarnessEngineTickDispatch([[maybe_unused]] Hook::TCallbackIterationData<void>& CallbackIterationData, [[maybe_unused]] UEngine*, [[maybe_unused]] float, [[maybe_unused]] bool) -> void
++    [[maybe_unused]] static auto QueryHarnessEngineTickDispatch([[maybe_unused]] Hook::TCallbackIterationData<void>& CallbackIterationData, [[maybe_unused]] UEngine*, [[maybe_unused]] float, [[maybe_unused]] bool) -> void
+     {
+         RC::Platform::QueryHarness::Global().OnEngineTickDispatch();
+     }
+@@ -940,6 +974,22 @@
+             FName::ConstructorInternal.assign_temp_address(AddressOverride);
+         }
+ 
++#ifdef __PROSPERO__
++        if constexpr (R3MarshalGate::kR3MarshalMode)
++        {
++            // [R3] BOTH_FAIL (DIFF 2; R3D 4.4c/5.3): RegisterFNameConstructorPostCallback
++            // arms a PLH detour (exec write) whose ERROR_ID path throws at startup before
++            // any Lua loads. Compiled out under R3 mode. Honest labels: the constructor
++            // is NOT verified by this unit; verification is delegated to the FC-1
++            // read-only validator (VSD 5 C1) when that lands. The data-side address
++            // override binding above is kept, and the verification latch is settled so
++            // the detour path's blocking wait can never be reached, let alone deadlock.
++            StaticStorage::FNameVerificationStatus.store(true, std::memory_order_release);
++            StaticStorage::FNameVerificationStatus.notify_all();
++            R3MarshalGate::refuse_registration_site(STR("FName constructor verification detour (verification delegated to the FC-1 read-only validator, VSD 5 C1)"));
++            return;
++        }
++#endif
+         // To ensure we don't use the FName constructor too early, hook it until something uses it.
+         Output::send(STR("Phase 2: Verifying FName constructor...\n"));
+         FNameConstructedHookId = Hook::RegisterFNameConstructorPostCallback([](const auto&, const CharType* String, EFindName) {
+@@ -1378,6 +1428,22 @@
+                 }
+             }
+ #ifdef __PROSPERO__
++            if constexpr (R3MarshalGate::kR3MarshalMode)
++            {
++                // [R3] BOTH_FAIL (DIFF 2; R3D 4.4a/4.4b/5.3): RegisterEngineTickPreCallback
++                // arms a forwarding detour whose only installable backends (PLH / D-1
++                // mprotect) are dead on this world; arming would throw here before any Lua
++                // loads. The game-thread pump - identity publication + query-harness
++                // dispatch - is DEFERRED to the R3 FuncPtr-marshal drain (LuaMod DIFF 1).
++                // The deferral stays loud and counted; the runtime status never silently
++                // proceeds as if the pump were armed.
++                R3MarshalGate::refuse_registration_site(STR("EngineTick pre-callback registrations (GameThreadInitializer + QueryHarnessDispatch)"));
++                Output::send(STR("[R3] EngineTick detour unavailable; deferring game-thread pump to R3 marshal\n"));
++                R3MarshalGate::pump_pending.store(true, std::memory_order_release);
++                R3MarshalGate::refused_site_count += 1; // the second refused site of this block
++            }
++            else
++            {
+             // Native publication/verification retirement may fail transiently.
+             // HookedEngineTick invalidates itself after those steps succeed.
+             const auto initializer_callback = Hook::RegisterEngineTickPreCallback(HookedEngineTick, {false, false, STR("UE4SS"), STR("GameThreadInitializer")});
+@@ -1396,6 +1462,7 @@
+             {
+                 throw std::runtime_error("Query harness tick dispatch callback registration failed");
+             }
++            }
+ #else
+             Hook::RegisterEngineTickPreCallback(HookedEngineTick, {true, false, STR("UE4SS"), STR("GameThreadInitializer")});
+ #endif
+@@ -1624,4 +1691,72 @@
+         return IsGameThreadInitialized() && std::this_thread::get_id() == GetGameThreadId();
+ #endif
+     }
++
++#ifdef __PROSPERO__
++    // =====================================================================================
++    // [R3] FuncPtr-marshal bridges (DIFF 2; R3D 4.4a/4.4b). Called from the LuaMod
++    // marshal drain (DIFF 1) once the calibration-selected carrier is armed. Declared by
++    // the consumer locally (namespace Unreal in LuaMod.cpp) - no shared header change,
++    // since a header edit would force a tree-wide recompile; the signatures are the
++    // DIFF 1/DIFF 2 contract. Defined only under __PROSPERO__; the consumer references
++    // them only under __PROSPERO__ as well.
++    // =====================================================================================
++    auto R3MarshalPublishGameThreadIdentity() -> bool
++    {
++        if constexpr (UnrealInitializer::R3MarshalGate::kR3MarshalMode)
++        {
++            // HookedEngineTick publication logic (SINI:152-180), reused, not re-invented:
++            // cancellation check first, then publish_current; the first published ID is
++            // immutable and publication never manufactures a worker identity.
++            const auto& StartupWait = UnrealInitializer::StaticStorage::GlobalConfig.StartupWait;
++            if (StartupWait && StartupWait->IsCancelled && StartupWait->IsCancelled())
++            {
++                // Startup refused/cancelled: never publish; the marshal drain gates on
++                // this false return and drains nothing (refusal, not degradation).
++                return false;
++            }
++            const auto publication = UnrealInitializer::NativeGameThreadIdentity.publish_current();
++            if (publication == NativeThreadDetail::Publication::Unavailable)
++            {
++                static std::atomic<bool> logged_unavailable{false};
++                if (!logged_unavailable.exchange(true))
++                {
++                    Output::send<LogLevel::Error>(STR("[R3] Unable to retrieve or synchronize ID of game thread\n"));
++                }
++                return false;
++            }
++            // Published and AlreadyCurrent both mean this caller IS the game thread;
++            // DifferentThread refuses. (NativeThreadDetail::Publication order:
++            // Published, AlreadyCurrent, DifferentThread, Unavailable.)
++            return publication != NativeThreadDetail::Publication::DifferentThread;
++        }
++        else
++        {
++            static std::atomic<bool> logged_disarmed{false};
++            if (!logged_disarmed.exchange(true))
++            {
++                Output::send<LogLevel::Warning>(STR("[R3] publish bridge called while R3 marshal mode is disarmed; refusing\n"));
++            }
++            return false;
++        }
++    }
++
++    auto R3MarshalQueryHarnessDispatch() -> void
++    {
++        if constexpr (UnrealInitializer::R3MarshalGate::kR3MarshalMode)
++        {
++            // QueryHarnessEngineTickDispatch body (SINI:215-219) unchanged: per-
++            // observation entry for the query harness; refusals are counted inside the
++            // harness and never thrown. Semantic change declared per R3D 4.4b: the
++            // harness's "two consecutive accepted reads" now count CARRIER invocations,
++            // not engine ticks; rung instruments must be relabeled.
++            RC::Platform::QueryHarness::Global().OnEngineTickDispatch();
++        }
++    }
++
++    auto R3MarshalPumpPending() -> bool
++    {
++        return UnrealInitializer::R3MarshalGate::pump_pending.load(std::memory_order_acquire);
++    }
++#endif
+ }

@@ -1,0 +1,78 @@
+FINISH pass receipt 2026-10-04 (worker-aligned-entry-observer, no console contact)
+
+PRIOR PARTIAL STATE FOUND (all verified intact):
+- receipts/host-test-result.txt (2026-10-04T23:28:26Z): HOST_TEST_PASSED, exit=0;
+  its four sha256 values re-hashed and matched byte-for-byte before any rework.
+- receipts/frozen-copy-identity.txt: 12 shared files IDENTICAL to frozen
+  native-full-runtime-aligned-entry-1 sources (diagnostic, import machinery,
+  lifecycle, probe_api.h).
+- source/: 15 files present; only defects were in source/probe/probe.c (below).
+
+REPAIR APPLIED (new-revision file only; frozen module never touched):
+- source/probe/probe.c: added `#include "../import_table.h"` and
+  `extern void __cxa_finalize(void *);` — both are required by the frozen
+  recipe's -Wall -Wextra -Werror (frozen probe/probe.c carried the same two
+  lines; the observer revision had dropped them, so target compilation of
+  probe_imports_validate/__cxa_finalize use would have failed).
+  New probe.c sha256:
+  83bc6de50b462aba76dd96408978b4c9e377477716ebd65042e943cd935ad2c7
+- No other source file changed. Frozen lineage directory
+  .superpowers/native-dependency-spike/native-full-runtime-aligned-entry-1/
+  was read but never written.
+
+HOST TEST RE-RUN (independent rebuild, macOS host, no target execution):
+  cc -Wall -Wextra -O1 -I source/probe -o host-test/host_test \
+     host-test/host_test.c host-test/shim_drain.c source/probe/observer.c
+  ./host-test/host_test -> HOST_TEST_PASSED all observer logic cases, exit=0
+  (note: the observer.c translation unit itself must be linked; shim_drain.c
+  only carries the renamed pread-fail drain-fallback variants.)
+
+TARGET-COMPILE SMOKE (local compile only; toolchain from the frozen recipe):
+  LLVM-21.1.8 dist : outputs/ps5-mod-bridge/native-probe/build/deps/llvm/
+                     LLVM-21.1.8-macOS-ARM64/bin  (LLVM_CONFIG env, as in the
+                     frozen build_local.py)
+  SDK              : outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/
+                     ps5-payload-sdk (prospero-clang / prospero-clang++)
+  Flags (exact frozen recipe): -Wall -Wextra -Werror -O1 -fPIC
+    -fno-stack-protector -fvisibility=hidden -ffreestanding -fno-builtin
+  All 9 units compile CLEAN (0 errors, 0 warnings under -Werror):
+    import_references.S, probe/probe.c, probe/observer.c, diagnostic.c,
+    import_check.c, lifecycle/lifecycle.c, lifecycle/module_entry.c,
+    lifecycle/constructor_boundary.cpp, lifecycle/sentinels.c
+  Objects: host-test/target-smoke/*.o (9 files)
+  Relocatable link (frozen ld.lld invocation):
+    ld.lld -r -m elf_x86_64 -o host-test/target-smoke/combined-observer.o
+        <9 objects> .superpowers/native-dependency-spike/
+        native-ffield-registration-trace-1/build-1/native-stage27-local-deps.o
+    (pinned full object sha256
+     3cbde16051daf30294dfe23c8aff04980757beb742f8b859ea0eef3f69e67fb9 verified
+     before use)
+    -> LD-R OK; combined-observer.o sha256:
+     7fa9f3f12ca19d88dddf766d639e7922f1c29890d9279b72a72682ad473f0dfd
+
+PACKAGING NOT RUN (honest gap):
+- `dotnet` is not installed on this Mac right now, so the SharpProspero.Link
+  packaging step (source/harness/Program.cs -> modbridge_runtime_aligned_observer.prx)
+  could not be executed. Program.cs was verified by diff against the frozen
+  harness Program.cs: the ONLY difference is
+  moduleName/exportLibraryName "modbridge_runtime_aligned_entry" ->
+  "modbridge_runtime_aligned_observer" (moduleFileName still derives from the
+  output path). Recipe and exact command documented in OBSERVER-DESIGN.md
+  section 7 and build_local.py (worker dir root).
+
+CONTRACT FACTS VERIFIED THIS PASS:
+- Frozen contract import-contract.json (sha256
+  58d94bc65997d1a9fac839cf126dc323806214893df7a20d3e435341aceab86c):
+  191 strong rows, 0 missing, 0 conflicts; 187 FUNC + 4 OBJECT
+  (__mb_cur_max, __stderrp, __stdinp, __stdoutp); 6 weak unresolved names
+  (__dladdr __dlclose __dlerror __dlopen __dlsym kernel_mprotect).
+- Observer call surface rows all present in those 191: stat, open, pread,
+  read, close, nanosleep, pthread_create, pthread_join, pthread_self
+  (libkernel/libScePosix), __error (libkernel/libkernel), plus the four
+  direct-bound rows sceKernelOpen/sceKernelWrite/sceKernelClose
+  (libkernel/libkernel) and __cxa_finalize (libSceLibcInternal) carried in
+  diagnostic_logging_imports.
+- lseek is NOT in the contract and NOT referenced anywhere in observer source
+  (grep verified). No observed path is ever opened for writing.
+- generated/import_names.h carries 187 names = the 191 contract rows minus the
+  4 direct-bound rows; order preserved.

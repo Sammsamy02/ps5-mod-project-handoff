@@ -1,0 +1,178 @@
+{
+  "worker": "worker-post-popup-evidence",
+  "date": "2026-10-05",
+  "scope": "Post-popup (post-OPTIONS) evidence set for the launch-10 Townfall Item Spawner acceptance ladder: every runtime print/log line the unchanged mod can emit, the pad input flow, per-rung log evidence, and the mod-own failure taxonomy. Read-and-derive only; no canonical edits.",
+  "sources": {
+    "main_lua": {
+      "path": "outputs/2026-10-04-zcode-team/worker-settings-v3-package/package-v3/ue4ss/Mods/TownfallItemSpawner/Scripts/main.lua",
+      "bytes": 21415,
+      "md5": "4f15f2c79955c636eeaa38d0bf49433d",
+      "note": "Canonical staged copy. All 22 other 21,415 B TownfallItemSpawner main.lua copies under outputs/** are byte-identical (same MD5); the single 21,414 B outlier (worker-itemspawner-bundle/host-test/root-badsize) is a deliberately corrupted loadlist fixture, not a candidate. All line pins below hold for every staged tree."
+    },
+    "uehelpers_lua": {
+      "path": "outputs/2026-10-04-zcode-team/worker-settings-v3-package/package-v3/ue4ss/Mods/shared/UEHelpers/UEHelpers.lua",
+      "bytes": 9962,
+      "md5": "d6eb453d019b8dcd1a156b1efbe6ab5b",
+      "note": "All 9,962 B copies byte-identical. UEHelpers emits ZERO runtime prints (grep: no print/log calls). Its failure mode is silent by design: GetPlayerController returns CreateInvalidObject() (UEHelpers.lua:81), which main.lua isValid() rejects (main.lua:8-12) and falls back to FindFirstOf (main.lua:21-22)."
+    },
+    "ps5pad_ini": {
+      "path": "outputs/2026-10-04-zcode-team/worker-settings-v3-package/package-v3/ue4ss/PS5Pad.ini",
+      "bytes_staged_equal_to_worker_real_input_pad": true,
+      "md5": "c0d3592e80c993bddc41de883ec660d7"
+    },
+    "luamod_cpp": {
+      "path": ".superpowers/native-dependency-spike/ue4ss-native-notify-cancel-1/src/LuaMod.cpp",
+      "role": "composed luamod unit (same pin as API-GAP.md)"
+    },
+    "lua_library_cpp": {
+      "path": ".superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/port/ue4ss/src/LuaLibrary.cpp",
+      "role": "print implementation: global_print prefixes '[Lua] ' once per call (LuaLibrary.cpp:39,45), sends the whole argument as one Output::send string"
+    },
+    "cross_checked_docs": [
+      "outputs/2026-10-04-zcode-team/worker-launch10-acceptance-criteria/ORACLE.md",
+      "outputs/2026-10-04-zcode-team/worker-mod-load-readiness/READINESS.md",
+      "outputs/2026-10-04-zcode-team/worker-mod-load-readiness/API-GAP.md",
+      "outputs/2026-10-04-zcode-team/worker-real-input-pad/PS5Pad.ini"
+    ]
+  },
+  "log_rendering": {
+    "prefix": "every mod print renders as '[Lua] [TownfallItemSpawner] <msg>' (print prefix LuaLibrary.cpp:39; MOD_TAG main.lua:5, log() main.lua:6)",
+    "trailing_newline_artifact": "log() embeds '\\n' inside the print argument (main.lua:6); Output::send receives it verbatim, so UE4SS.log may show a trailing blank or '[Lua] '-only artifact line after each mod log line. Count MOD-TAGGED lines, not line breaks. Exact artifact rendering unpinned."
+  },
+  "runtime_print_inventory_lifecycle_order": [
+    {
+      "phase": "load",
+      "line_verbatim": "[Lua] [TownfallItemSpawner] Loaded v1.0. Clean pickup-only release. F7 opens the menu.",
+      "emitted_by": "main.lua:746 log() at chunk end, unconditional",
+      "lua_log_line": "Loaded v1.0. Clean pickup-only release. F7 opens the menu.",
+      "pin": "main.lua:746",
+      "note": "THE load oracle line (READINESS.md section 6). Emitted once per mod start; also re-emitted after a runtime restart, never per map load."
+    },
+    {
+      "phase": "first_OPTIONS_press_or_menu_refresh (scanItems success)",
+      "line_verbatim": "[Lua] [TownfallItemSpawner] <N> spawnable pickups found. Pages=<M>",
+      "emitted_by": "scanItems success: status built at main.lua:188, logged at main.lua:189; scanItems runs at menu open when #items==0 (main.lua:651) or from the 'Refresh pickup list' row (main.lua:401)",
+      "lua_log_line": "<N> spawnable pickups found. Pages=<M>",
+      "pin": "main.lua:188-189",
+      "note": "N = 6 AlwaysCook classes (main.lua:72-79) + legacy items whose DB path resolves (main.lua:161-179). M = ceil(N/8) (PAGE_SIZE main.lua:115). Proves: ItemDatabaseSubsystem FindFirstOf (main.lua:64) + both DB getter UFunction calls (main.lua:163,168) succeeded."
+    },
+    {
+      "phase": "first_OPTIONS_press_or_menu_refresh (scanItems failure)",
+      "line_verbatim": "[Lua] [TownfallItemSpawner] Scan failed: <err>",
+      "emitted_by": "scanItems pcall catcher main.lua:192-195; typical err = 'Item database not ready. Load a save first.' (main.lua:66)",
+      "lua_log_line": "Scan failed: <err>",
+      "pin": "main.lua:194 (err text main.lua:66)",
+      "note": "Pre-save OPTIONS press still proves the game-thread drain ran (scanItems executes inside the ExecuteInGameThread body)."
+    },
+    {
+      "phase": "menu_open_success",
+      "line_verbatim": "[Lua] [TownfallItemSpawner] Menu created.",
+      "emitted_by": "buildUI success tail main.lua:643; first build only — later opens early-return true (main.lua:489-491) and are SILENT",
+      "lua_log_line": "Menu created.",
+      "pin": "main.lua:643",
+      "note": "Proves: PlayerController valid (main.lua:493), WidgetBlueprintLibrary found (main.lua:499), UserWidget/WidgetTree/Canvas/Border/VBox construction + all UMG reflected setters + AddToViewport(9999) ran without error (main.lua:505-633)."
+    },
+    {
+      "phase": "menu_open_failure (widget library missing)",
+      "line_verbatim": "[Lua] [TownfallItemSpawner] WidgetBlueprintLibrary not found.",
+      "emitted_by": "buildUI early-out main.lua:500-503",
+      "lua_log_line": "WidgetBlueprintLibrary not found.",
+      "pin": "main.lua:501"
+    },
+    {
+      "phase": "menu_open_failure (UI construction threw)",
+      "line_verbatim": "[Lua] [TownfallItemSpawner] UI creation failed: <err>",
+      "emitted_by": "buildUI pcall catcher main.lua:635-641; err can be 'Unable to create root UserWidget.' (main.lua:520), 'Could not find class: /Script/UMG.UserWidget' (main.lua:45 via :506), 'Could not construct: /Script/UMG.TextBlock as TownfallItemSpawnerRow<i>' (main.lua:52 via :455), or any reflected-setter Lua error",
+      "lua_log_line": "UI creation failed: <err>",
+      "pin": "main.lua:636"
+    },
+    {
+      "phase": "spawn_success",
+      "line_verbatim": "[Lua] [TownfallItemSpawner] Spawned <name> x<Q> ID=<actualID>",
+      "emitted_by": "spawnSelected success tail: status main.lua:334, log main.lua:335",
+      "lua_log_line": "Spawned <name> x<Q> ID=<actualID>",
+      "pin": "main.lua:334-335",
+      "note": "Q = quantities[quantityIndex] (main.lua:114,325). actualID read from pickup.PickupInventoryItem.ItemId (main.lua:313) and mismatch-checked against the DB-resolved entry.id (main.lua:321-323)."
+    },
+    {
+      "phase": "spawn_failure (all stages)",
+      "line_verbatim": "[Lua] [TownfallItemSpawner] Failed at <stage>. See UE4SS.log. <err>",
+      "emitted_by": "spawnSelected pcall catcher main.lua:340-347; status main.lua:341, log main.lua:342; invalid partial actor destroyed main.lua:344-346",
+      "lua_log_line": "Failed at <stage>. See UE4SS.log. <err>",
+      "pin": "main.lua:341-342",
+      "note": "<stage> is exactly one of: player (main.lua:224), ground trace (:240), load pickup class (:279), spawn actor (:293), configure pickup (:305). The full err catalog is in FAILURE-TAXONOMY.md."
+    }
+  ],
+  "on_screen_status_only_strings_never_logged": [
+    {"text": "Load a save, then open with F7.", "pin": "main.lua:118", "context": "initial status"},
+    {"text": "<N> spawnable pickups found.", "pin": "main.lua:188", "context": "same string is also logged via :189"},
+    {"text": "Could not build pickup list. Load a save first.", "pin": "main.lua:193", "context": "STATUS row after scan failure; log carries 'Scan failed: ...' instead"},
+    {"text": "Wait for the previous spawn.", "pin": "main.lua:217", "context": "busy gate, no log, no sound — a CROSS press during a spawn in flight"},
+    {"text": "Spawned <name> x<Q>", "pin": "main.lua:334", "context": "STATUS row mirror of the log line"},
+    {"text": "Failed at <stage>. See UE4SS.log.", "pin": "main.lua:341", "context": "STATUS row mirror of the log line"},
+    {"text": "Load a save first.", "pin": "main.lua:495", "context": "buildUI when PlayerController invalid — SILENT in UE4SS.log; menu simply never appears"},
+    {"text": "Load complete. Open with F7.", "pin": "main.lua:743", "context": "RegisterLoadMapPreHook reset (main.lua:731-744), no log line"}
+  ],
+  "input_flow": {
+    "bind_registration": "main.lua:694-729 — 6 RegisterKeyBind calls, every callback body wrapped in ExecuteInGameThread (drain on the game thread)",
+    "pad_mapping_source": "PS5Pad.ini [Bindings] lines 35-40, User=-1 line 32",
+    "bindings": [
+      {"pad": "OPTIONS", "key": "F7", "mod_action": "toggleMenu (main.lua:694-696) — open/close menu", "ini_pin": "PS5Pad.ini:35"},
+      {"pad": "UP (D-pad)", "key": "UP_ARROW", "mod_action": "moveSelection(-1) (main.lua:698-701)", "ini_pin": "PS5Pad.ini:36"},
+      {"pad": "DOWN (D-pad)", "key": "DOWN_ARROW", "mod_action": "moveSelection(1) (main.lua:703-706)", "ini_pin": "PS5Pad.ini:37"},
+      {"pad": "CROSS (X)", "key": "RETURN", "mod_action": "activateSelection (main.lua:708-711) — spawn on pickup rows, cycle Quantity/Page, Refresh list", "ini_pin": "PS5Pad.ini:38"},
+      {"pad": "LEFT (D-pad)", "key": "LEFT_ARROW", "mod_action": "page -1 (main.lua:713-720)", "ini_pin": "PS5Pad.ini:39"},
+      {"pad": "RIGHT (D-pad)", "key": "RIGHT_ARROW", "mod_action": "page +1 (main.lua:722-729)", "ini_pin": "PS5Pad.ini:40"}
+    ],
+    "menu_layout": "panel top-right, 570x500 at offset (-24,+24) (main.lua:534-541); title 'TOWNFALL : ITEM SPAWNER' (main.lua:566); hint line 'UP/DOWN SELECT | ENTER SPAWN | LEFT/RIGHT PAGE | F7 CLOSE' (main.lua:586); selected row red (main.lua:438) with '>> ' marker (main.lua:431); rows: Quantity, Page, Refresh pickup list, 8 pickup slots, STATUS (main.lua:378-421)",
+    "no_log_on_navigation": "UP/DOWN/LEFT/RIGHT/Quantity/Page actions emit NOTHING to UE4SS.log; their evidence is on-screen only (marker moves, Page text changes). Only scan, menu-create, spawn success/failure, and load print."
+  },
+  "rung_evidence": {
+    "rung1_game_thread_callback": {
+      "claim": "ExecuteInGameThread queued bodies actually run on the game thread",
+      "exact_evidence": "ANY new '[TownfallItemSpawner]' line after the first OPTIONS press of a session/map: 'N spawnable pickups found. Pages=M' (main.lua:189) or 'Scan failed: ...' (main.lua:194) — scanItems runs inside showMenu inside toggleMenu, the first drained body (main.lua:651 -> 647-668 -> 694-696)",
+      "silent_but_expected": "OPTIONS press #2+ on an already-built menu: buildUI early-return (main.lua:489-491) and items>0 skip the scan (main.lua:651) => zero new lines. Silence on press #1 after load/map-load is the stall signature, not later presses.",
+      "probe_recipe": "After map load (LoadMapPreHook resets items={} main.lua:738), press OPTIONS once: >=1 new mod line MUST appear."
+    },
+    "rung2_object_query": {
+      "claim": "FindFirstOf / StaticFindObject resolve live objects",
+      "queries": [
+        {"call": "FindFirstOf(\"PlayerController\")", "pin": "main.lua:21", "success_evidence": "silent; prerequisite of 'Menu created.'", "failure_evidence": "SILENT — buildUI sets status 'Load a save first.' (main.lua:495) and returns false; no menu, no log line"},
+        {"call": "FindFirstOf(\"ItemDatabaseSubsystem\")", "pin": "main.lua:64", "success_evidence": "'<N> spawnable pickups found. Pages=<M>' (main.lua:189)", "failure_evidence": "'Scan failed: Item database not ready. Load a save first.' (main.lua:194 + :66)"},
+        {"call": "StaticFindObject(\"/Script/UMG.Default__WidgetBlueprintLibrary\")", "pin": "main.lua:499", "success_evidence": "silent", "failure_evidence": "'WidgetBlueprintLibrary not found.' (main.lua:501)"},
+        {"call": "StaticFindObject(<pickup class path>) + LoadAsset retry", "pin": "main.lua:283-287", "success_evidence": "silent; spawn proceeds", "failure_evidence": "'Failed at load pickup class. See UE4SS.log. Pickup class could not be loaded: <path>' (main.lua:341-342 + :290)"},
+        {"call": "StaticConstructObject (UMG tree)", "pin": "main.lua:50,516,524,527,530,550,560", "success_evidence": "'Menu created.'", "failure_evidence": "'UI creation failed: Could not construct: <path> as <name>' (main.lua:636 + :52)"}
+      ]
+    },
+    "rung3_harmless_reflected_access": {
+      "claim": "Lua->engine reflected property reads / UFunction calls work against live UClass",
+      "evidence_in_menu_phase": "'Menu created.' (main.lua:643) proves dozens of harmless reflected calls/reads: Create (main.lua:510), AddChild (:456,531), SetPadding/SetAnchors/SetAlignment/SetPosition/SetSize (:460,534-541), SetText+FText (:434,469), Font.Size read+write (:470), SetColorAndOpacity (:364), SetShadowColorAndOpacity (:478), ShadowOffset write (:483), AddToViewport (:631), SetVisibility (:632,655,660), SetIgnoreLookInput/SetIgnoreMoveInput (:450-451). Scan count line proves db:GetItemIDFromDeprecatedEnum (:163) + db:GetInteractablePickupIDActorPath (:168).",
+      "evidence_at_spawn": "pawn reads pc.Pawn/GetPawn/K2_GetPawn (:31-33), K2_GetActorLocation (:233), GetControlRotation().Yaw (:234), hit.ImpactPoint/.ImpactNormal reads (:264-269), pickup.PickupInventoryItem.ItemId read (:313)",
+      "failure_shape": "any reflected failure inside buildUI -> 'UI creation failed: <err>' (main.lua:636); inside scanItems -> 'Scan failed: <err>' (:194); inside spawn -> 'Failed at <stage>. See UE4SS.log. <err>' (:342). API-GAP.md section 4 names the ground-trace out-param (hit.ImpactPoint) as historically highest-risk: expected failure text 'Failed at ground trace. See UE4SS.log.'"
+    },
+    "rung4_unchanged_activation": {
+      "claim": "the mod's own spawn path executes (deferred actor spawn from class)",
+      "call_path": "spawnSelected (main.lua:215) -> getPlayerPawn (:227) -> ground LineTraceSingle (:245-258) -> StaticFindObject/LoadAsset pickup class (:283-287) -> gameplay:BeginDeferredActorSpawnFromClass(pawn, pickupClass, transform, 2, pawn, 0) (:295-297) -> FinishSpawningActor(actor, transform, 0) (:303) -> configure (:306-330)",
+      "success_evidence": "'Spawned <name> x<Q> ID=<actualID>' (main.lua:335)",
+      "failure_evidence": "'Failed at <stage>. See UE4SS.log. <err>' (main.lua:342) with partial-actor cleanup K2_DestroyActor (:344-346)",
+      "post_conditions_proving_activation": "pickup.PickupAmount = Q (:325), bAutoDestroyOnPickUp=true (:326), SetEnabled(true) (:327), SetActorHiddenInGame(false) (:329), SetActorEnableCollision(true) (:330), actor tracked in ownedActors (:332)"
+    },
+    "rung5_visible_spawn": {
+      "claim": "a real item actor appears in the world",
+      "mod_confirmation": "'Spawned <name> x<Q> ID=<actualID>' log line (main.lua:335) + STATUS row 'Spawned <name> x<Q>' (main.lua:334)",
+      "user_should_see": "the selected item appears ~150 unreal units in front of the player along the camera yaw (main.lua:233-238), resting on the ground (+8 above the traced impact, main.lua:275), facing the player (main.lua:274), visible and solid (main.lua:329-330); walking into it picks it up and it vanishes (bAutoDestroyOnPickUp, main.lua:326)",
+      "capture_note": "screenshot/video of the world + the matching log line together close this rung; the log line ALONE does not prove visibility (see REPORT.md limits)"
+    }
+  },
+  "drain_crosscheck_vs_api_gap": {
+    "register_keybind_path": "READY — RegisterKeyBind LuaMod.cpp:1915 + Key table :614 (F7 :553, RETURN :458, arrows :480-483); pad bridge PS5Pad.ini -> ConfigureRetainedPS5PadInput (NativePadInput.cpp:10-26); callbacks fire synchronously on the UpdateThread (READINESS.md section 5). Confirmed in API-GAP.md section 1 table.",
+    "execute_in_game_thread_drain": "READY-set on the readpath-guard lineage (EngineTick pump registered, identity published — API-GAP.md section 3 row 1); BLOCKED on the l10r3 R3-armed fold-1 (pump_pending has zero consumers — API-GAP.md section 3 row 2). Mod calls default method EngineTick (DefaultExecuteInGameThreadMethod=EngineTick, ini :12).",
+    "drain_stall_evidence": [
+      "UE4SS.log init carries the two R3 lines: '[R3] refused: EngineTick pre-callback registrations (GameThreadInitializer + QueryHarnessDispatch) (detour registration compiled out under R3 marshal mode)' + '[R3] EngineTick detour unavailable; deferring game-thread pump to R3 marshal' (API-GAP.md section 5 table; initializer-l10-r3:1859-1860) — with these, menu can never open; total unresponsiveness to OPTIONS is EXPECTED, not new info",
+      "first-OPTIONS silence: press OPTIONS once after map load; zero new '[TownfallItemSpawner]' lines = keybind unreachable OR drain stalled (see POST-POPUP.md discrimination table)",
+      "call-time throw variant: 'ExecuteInGameThread: EngineTick method requested but EngineTick hook is not available (AOB scan failed)' (LuaMod.cpp:4729, verified in composed source) — in THIS mod the first ExecuteInGameThread call happens at the FIRST PAD PRESS (main.lua:695), not at load, so this error appears at first press; NOTE API-GAP.md section 5 says 'immediate at registration' which is true for mods that call it at load — for this mod the timing is first-press"
+    ],
+    "menu_opens_but_spawn_never_executes": "structurally impossible from the queue alone: all six callbacks share one m_engine_tick_actions queue (LuaMod.cpp:4774-4790), so any drain that opens the menu also drains spawn. Observable decompositions: (a) CROSS on an empty '---' slot is silent by design (spawnSelected nil-entry return main.lua:220); (b) busy gate shows 'Wait for the previous spawn.' in the STATUS row, no log (main.lua:217); (c) spawn ran and failed -> 'Failed at ...' line exists (:342); (d) true mid-session pump death freezes the WHOLE menu (nav, page, close all drained) — distinguishable from (a)/(b) by whether the red marker still moves."
+  },
+  "bounds": "Source-derived only; nothing here is an outcome promise. Every in-game rung stays UNKNOWN until a real console capture. No >8-style quality claims, no completion claims."
+}

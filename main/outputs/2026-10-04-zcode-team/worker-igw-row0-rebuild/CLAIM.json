@@ -1,0 +1,80 @@
+{
+  "worker": "worker-igw-row0-rebuild",
+  "date": "2026-10-05",
+  "marker": "igw.row0.rebuild/v1",
+  "task": "launch-11 SECONDARY path prep: rebuild the exec-write probe with the MINIMAL design confirmation — \"confirmed\": 1 on ROW 0 ONLY (IGW-1 T2: X->RX at 0x7878000, prot 4->5). Rows 1-5 stay confirmed:0 (they gate on the T2 verdict per the probe's own transition table).",
+  "mode": "LOCAL ONLY, proposal-only staging. No console contact; no game launch; no files outside this worker dir changed. Original worker-writability-probe-build/ left byte-identical (verified). launch-10 artifacts untouched.",
+  "trace_claims_verified": {
+    "gate_exec_write_probe_c_166_168": "VERIFIED: `else if (t->confirmed == 0) { why = XWP_SKIP_NOT_CONFIRMED; gate_failed = 1; }` at src/exec_write_probe.c:166-168; counted as skipped at :190-193; outcome enum XWP_SKIP_NOT_CONFIRMED=2 at src/exec_write_probe.h:72",
+    "builder_default_136": "VERIFIED: `\"confirmed\": 1 if t.get(\"confirmed\") else 0,` at build_exec_write_probe.py:136",
+    "transitions_json_no_confirmed_key": "VERIFIED: staged-from-original TRANSITIONS.json (sha256 9cac04a1d250adbc3ce245a11b077fe2b6684b9a13a6ce33c440d37ac09396fa, == launch-9 receipt transitions_sha256) carries no `confirmed` key on any of the 6 rows",
+    "build_id_seed": "VERIFIED: TRANSITIONS.json bytes hashed into build id at build_exec_write_probe.py:446-457 (`h.update(TRANSITIONS_JSON.read_bytes())`)"
+  },
+  "staged_table": {
+    "path": "TRANSITIONS.json",
+    "sha256": "2b0a363530b431e95fad0338f6bcd63e2fa5c90a86bf8b43e99ca82dd14b4df4",
+    "bytes": 1186,
+    "diff_vs_original": "ONE inserted line: `   \"confirmed\": 1,` in row 0 only (byte-minimal). JSON-semantic check: rows 1-5 and schema byte-for-byte equal; row 0 gained ONLY the confirmed key.",
+    "pre_edit_snapshot": "TRANSITIONS.json.orig sha256 9cac04a1d250adbc3ce245a11b077fe2b6684b9a13a6ce33c440d37ac09396fa (== original dir, still unchanged)"
+  },
+  "build": {
+    "builder": "build_exec_write_probe.py (byte-identical copy; machinery src/ and tests/ byte-identical copies; diff -r verified)",
+    "builder_gates_passed": [
+      "frozen lineage PRX hash 3b998f09... verified before build",
+      "forbidden-symbol gate passed (dl family / igcar_sys_mprotect absent; sceKernelMprotect absent in skeleton)",
+      "inverted syscall gate == 0 raw syscall instructions (both variants)",
+      "import-contract divergence gate (7 verbatim frozen rows byte-identical)",
+      "inner-ELF .text contains no 0F 05 byte pair",
+      "determinism double-build run1==run2 byte-equal on final_prx / inner_elf / combined / contract, BOTH variants"
+    ],
+    "armed": {
+      "build_id": "igd1-e030a09eb4d1",
+      "deliverable": "modbridge_exec_write_probe_armed.prx",
+      "fself_sha256": "e1541af612f97bb450b5f61888ae0c2fc93dea72454723dc9e0ffafabd6002df",
+      "fself_bytes": 20013,
+      "inner_elf_sha256": "cc544d6e8fe94c151ca9d49bd12613f87999e8be20dcb935ff824bb1ef37a6f9",
+      "inner_elf_bytes": 69464,
+      "combined_sha256": "f8dcce2d5a4e878929623a6321f054d76907b50116d1e277d9909db6d5fec5d4",
+      "import_contract_sha256": "8cc757b316a32e29997095c1494d7d042e7d4f4418808f733cdd53048cd52cb6",
+      "strong_imports": "8 = the 7 console-proven verbatim rows + sceKernelMprotect (libkernel, SharpProspero StubCatalog spelling, NOT console-proVEN; loud provenance flag carried in import-contract.json)",
+      "sht_strip_readback": {"bytes": 67832, "body_sha256_64_to_end": "e3f13d1994a1b4d27de05e31885d5a5cf9ea91daea3c57c2c229afd3696c295e", "method": "STAGE-PLAN-COMBINED §3 exact rule (validated: reproduces documented 67832/daea2ff4... on the launch-9 bare ELF)"}
+    },
+    "skeleton": {
+      "build_id": "igd1-5f1a25c33203",
+      "deliverable": "modbridge_exec_write_probe.prx",
+      "fself_sha256": "d8d16ed7a222bedffa8fde8627e6f490c01490ed2bd098b23c8aef943bbff134",
+      "fself_bytes": 19933,
+      "inner_elf_sha256": "8de0eb54a28e629255a9745c092aabc9652552899e93044ec9100a1ac8619463"
+    }
+  },
+  "post_build_checks": {
+    "check_xwp_artifact_armed": "rc=0: fself magic + segment copies + inner-sha binding OK; init/fini 1 slot each; 8 strong dynsym imports, 0 weak; ZERO syscall instructions; armed typed sceKernelMprotect reference exactly once",
+    "check_xwp_artifact_skeleton": "rc=0: 7 strong imports; sceKernelMprotect absent",
+    "host_suite": "PASS: armed 93 checks + unarmed 6 checks (mocked mprotect, 13-row test table); every JSONL record json.loads-parsed; ordering/grammar/budget assertions OK"
+  },
+  "binary_delta_vs_launch9": {
+    "reference": "launch-9 armed igd1-6ebab07f2111 (worker-writability-probe-build determinism/run-armed-1, fself 48949316..., 20013 B; inner cfed5e3d...)",
+    "inner_elf": "69464 -> 69464 B; 727 differing bytes in 48 runs, ALL classified in BINARY-DELTA.md",
+    "semantic_data_change": "EXACTLY 1 byte: offset 0xc0c0, row 0 `confirmed` u64 LSB 0x00 -> 0x01",
+    "collateral": "build-id string swap (17 chars, same length) + .rodata string-pool re-layout (4 note strings shifted -18 B; zero content changes) + RIP-relative/relocation updates pointing at the same logical strings + 24 B GNU/SIE build-id note digests",
+    "wrapper": "20013 -> 20013 B; 751 differing bytes = 32 B inner-ELF sha256 binding + propagated inner segment bytes",
+    "skeleton_delta": "same classes; 467 B inner",
+    "safety_contract_intact": {
+      "rows_1_to_5_confirmed": "all read back as 0 in the built binary (row bytes 1,4,5 fully identical to launch-9; rows 2,3 differ ONLY in relocated note_ptr)",
+      "armed_semantics": "unchanged: same 7 verbatim imports + the single derived sceKernelMprotect row; zero raw syscalls; restore-always; fail-open module_start",
+      "budget": "8 unchanged (mov edx,8 sites identical count 3 vs 3; machinery sources byte-identical)",
+      "machinery": "src/ diff -r clean against original; generated xwp_transitions.c diff = exactly row 0 `0u` -> `1u`"
+    }
+  },
+  "expected_console_evidence_if_staged": {
+    "T2_succeeds": "row0 record chain: row(confirmed=1) -> vmmap_persist(span_prot=0x4) -> attempt(mprotect_route=sceKernelMprotect_import, rc=0, outcome=8 XWP_ATTEMPT_OK) -> rw_test(read_done=1, write_tested=0) -> restore(to 0x4, outcome=10) -> post_restore re-proof; summary rows_attempted=1 attempts_used=1 rows_skipped=5(outcome=2) => W_WORKS verdict shape",
+    "T2_refused": "attempt rc<0 with errno recorded => W_FAILS_R_WORKS; or fail-closed refusal (XWP_REFUSE_NOT_COVERED=5 / XWP_REFUSE_PROT_MISMATCH=6, no_memory_touched=1, zero attempts) if the fresh VMMAP does not confirm 0x7878000 as 0x4",
+    "unlocks": "W_WORKS -> walkguard ACTIVE fold (RC_ASM_WALK_RX_GUARD 0->1) becomes admissible per worker-launch10-walkguard-prep; W_FAILS_R_WORKS -> D-1-only route; ABSENT/BOTH_FAIL/FATAL -> fold-0 stays"
+  },
+  "staging": "STAGING-PROPOSAL.md — USER-COORDINATED ONLY, never during launch-10's window; controller executes all console steps",
+  "honest_limits": [
+    "proposal-only staging; no console contact; no launch claims",
+    "sceKernelMprotect remains NOT console-proven (load-resolution unproven for the armed route until seq1/seq2 records appear)",
+    "all build evidence is host-side; native_executed=false, in_game_results=false"
+  ]
+}

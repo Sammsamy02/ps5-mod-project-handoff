@@ -1,0 +1,48 @@
+{
+  "worker": "worker-tick-witness-design",
+  "written_at_start": true,
+  "claims": [
+    {
+      "id": "TWD-1",
+      "claim": "The serialized-ELF witness route CANNOT resolve gameengine_tick on this target in its current form, and NO trim of decrypted-eboot.bin fixes it: OwnedSerializedElfSource::matches (consumed copy ue4ss-native-tick-file-owner-1/src/OwnedSerializedElfSource.cpp:78-91) requires EVERY non-writable PT_LOAD with file content (including the whole R-X text load) to be fully covered by READABLE live image-view segments and byte-compared via source_matches -> image.permits_data (:68-69). The eboot text span [0x400000,0x787c000) is exec-only (trusted r8/igf6 records), so matches() returns false at :86 (first live segment starts above cursor) and tick() returns 2 at :93.",
+      "confidence": "high",
+      "to_verify": "segments() wire flags come only from R-leased readable_ranges (ps-scan-provider-1 OwnedMappedImageCaller.hpp:21-31,25); readable_ranges on this target start at 0x787c000 (r8 bridge:398-421 + adapter satellite A)"
+    },
+    {
+      "id": "TWD-2",
+      "claim": "Trimming is additionally self-defeating: the Rust resolver needs the exec text BYTES in the file (xref lea scan over flags&1 spans, elf_tick.rs:110-114; CFG proofs over real code, elf_tick.rs:118-131,178-230), while the C++ matches() then demands those same linked spans be readable live. Dropping the text load breaks resolve (NoCandidate) and the executable requirement (:89); keeping it breaks matches(). A synthetic X-flagged load over readable data fails :85 because live data segments carry no PS_MAPPED_EXECUTE (segments() maps only what the R-only lease has, and the bridge registers PLH::R only).",
+      "confidence": "high",
+      "to_verify": "elf_tick.rs lines; OwnedMemory lease R-only admission (read-lease-1 src/OwnedMemory.cpp:125-126)"
+    },
+    {
+      "id": "TWD-3",
+      "claim": "The witness is doubly dormant exactly as tick-address-validation reported: 1-arg MakeNativeProgramContext forwards empty bytes (tick-file-owner-1 src/NativeLoaderContext.cpp:4-6) and facts.scan_policy defaults to OriginalOnly (NativeLoaderContext.hpp:13); the witness additionally fires only on scan NoMatch/endpoint_status 3, never Ambiguous (tick-file-owner-1 src/OwnedMappedScanSource.cpp:18).",
+      "confidence": "high",
+      "to_verify": "already verified by reading the files"
+    },
+    {
+      "id": "TWD-4",
+      "claim": "A slot-policy change alone (OriginalOnly -> SelectUniqueAfterNoMatch in the bridge facts) is safe-but-useless on this target for tick: it additionally ACTIVATES three candidate endpoints for slots 0/2/3 (GUObjectArray CFG, FName ctor, GMalloc DeleteFile) in collect_owned_mapped_candidates (mapped-candidate-selection-1 src/OwnedMappedCandidateSelection.cpp:19-50), each with its own permits gates; and it still cannot make the tick witness pass (TWD-1).",
+      "confidence": "high",
+      "to_verify": "candidate selection side effects enumerated above"
+    },
+    {
+      "id": "TWD-5",
+      "claim": "The vtable route (route B, live UGameEngine vtable via OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL) requires NO readable code: it reads the vtable pointer from the live object and the entry from the vtable memory, both data reads in writable/ro data, then resolves jmp thunks. With EngineTickResolveMethod::VTable (or scan-miss fallback already in the staged initializer), the tick can resolve without any code-pattern scan. This is the honest fallback route and requires only config, not code changes.",
+      "confidence": "medium",
+      "to_verify": "staged UnrealInitializer.cpp:1315-1378 selection semantics; UnrealVirtualBaseVC.hpp:118-131 read path; whether any step dereferences exec text"
+    },
+    {
+      "id": "TWD-6",
+      "claim": "If the witness route were ever to be made viable on a READABLE-text target, the honest minimum artifact is NOT small: consumers read the full p_filesz of every non-writable PT_LOAD plus PT_DYNAMIC (<=64KB) plus full DT_REL/DT_RELA tables (<=2M rows) plus phdrs; offsets may only be compacted preserving p_offset congruent p_vaddr mod p_align (OwnedSerializedElfSource.cpp:28,66). For a 194MB decrypted eboot this is essentially the whole file; and on THIS target even that fails (TWD-1).",
+      "confidence": "high",
+      "to_verify": "byte math in TICK-WITNESS-DESIGN.md"
+    }
+  ],
+  "non_claims": [
+    "No console contact, no target execution, no text-read probes.",
+    "No claim that a staged witness ELF would be cheap in module_start latency (194MB read + parse cost unmeasured).",
+    "No claim that the vtable-derived Tick address is semantically proven correct; it is the engine's own live dispatch target.",
+    "No frozen/wiring file is modified by this worker; all diffs are proposals."
+  ]
+}

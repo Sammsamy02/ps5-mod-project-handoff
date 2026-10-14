@@ -1,0 +1,59 @@
+{
+  "worker": "worker-r3-diff2-rebase",
+  "date": "2026-10-04",
+  "task": "Rebase DIFF 2 (r3-initializer-r3-marshal-mode.diff) from its measured-skewed base onto the c85c42f7... merged-initializer staging lineage, per LAUNCH11-MATRIX section 4-d (REBASE MANDATORY before any L11 R3-ARMED build) and section 3.5 step 2; then compile-gate BOTH folds under the composition's initializer unit argv with a fold-0 object-identity check against the unpatched c85c42f7 object.",
+  "revision": {
+    "id": "DIFF-2 rev B (worker-r3-diff2-rebase 2026-10-04)",
+    "supersedes": "DIFF-2 rev A (worker-r3-diffs-authoring 2026-10-04, diff sha256 d556c4e7de66c4692829ede78ed1bea8859953130088a44fa56683a96bada80c)",
+    "supersession_reason": "rev A is anchored on worker-query-s2-arm/staging/UnrealInitializer.cpp = 933d08a2...; the merge lineage every other initializer artifact builds on is c85c42f7... (LAUNCH11-MATRIX section 4-d measured base skew). rev A anchors are EXPECTED to drift on c85c42f7-derived staging; rev B is the re-anchored revision. rev A is preserved unchanged and is never re-applied."
+  },
+  "base_pins": {
+    "rebase_target": {
+      "path": "outputs/2026-10-04-zcode-team/worker-initializer-integration/staging/UnrealInitializer.cpp",
+      "sha256": "c85c42f7aaab0630569d65db599fbf8cfcbd0b79b8e99c6e27ea709aee5a8b7b",
+      "attested_by": "worker-initializer-integration/receipts/replace-receipt.json (files map)"
+    },
+    "rev_a_base_for_reference": {
+      "path": "outputs/2026-10-04-zcode-team/worker-query-s2-arm/staging/UnrealInitializer.cpp",
+      "sha256": "933d08a2f3e4dea1f80d216bd99779871b6e5b3ae1f26028d357d824051e2542",
+      "attested_by": "worker-r3-diffs-authoring/CLAIM.json RDA pins"
+    }
+  },
+  "claims": [
+    {
+      "id": "RR-1",
+      "claim": "DIFF 2 rev B ports all 6 rev-A hunks onto the c85c42f7 staging copy via an anchored replayer: (1) UE4SS_R3_MARSHAL_MODE define + constexpr R3MarshalGate, (2) [[maybe_unused]] on HookedEngineTick and QueryHarnessEngineTickDispatch, (3) FName-ctor PLH-detour compile-out with verification-latch settle + loud refusal, (4/5) the two __PROSPERO__ EngineTick registration compile-outs with the literal deferral line and pump_pending set, (6) the exported bridges R3MarshalPublishGameThreadIdentity / R3MarshalQueryHarnessDispatch / R3MarshalPumpPending. Every anchor is verified occurrence-count == 1 on the pinned base before splicing; any drift aborts.",
+      "evidence": "receipts/anchors.json (post-delivery), rebase_diff2.py"
+    },
+    {
+      "id": "RR-2",
+      "claim": "Drift reconciliation (the merged unit's seed consumption + Shape-A fold coexists with the compile-outs): the seed path skips the detour verifier when SeedArming::bSeedBoundFNameCtor is set, and VerifyFNameConstructor itself is only entered when FNameVerificationStatus is false; rev B's R3 compile-out sits INSIDE VerifyFNameConstructor (early return after settling the same latch), so seed-armed, seed-refused (Shape A) and table-absent launches all compose. The EngineTick registration block is byte-identical between the two lineages (the seed work changed the resolve branch above it, not the block), so the deferral hunk anchors cleanly; under seeds-armed + R3 mode the vtable tick fallback binds and the deferral then defers the pump.",
+      "evidence": "anchor regions read at staging lines 1301-1357 (VerifyFNameConstructor), 830-845 (bSeedBoundFNameCtor), 1416-1434 (verifier skip gates), 1784-1806 (EngineTick block); REPORT.md section 2"
+    },
+    {
+      "id": "RR-3",
+      "claim": "Fold discipline is HARDENED relative to rev A: every rev-B addition is preprocessor-guarded on UE4SS_R3_MARSHAL_MODE (with the same in-file fallback 0), so fold 0's preprocessed token stream is IDENTICAL to the unpatched c85c42f7 base. Fold 0 therefore compiles to a byte-identical object (gate RR-5), which is strictly stronger than rev A's constexpr-only kind-parity. Fold 1 (armed) preserves rev A's armed semantics: same constexpr gate value (true), same compile-outs, same deferral line, same pump_pending seam, same bridges.",
+      "evidence": "rebase_diff2.py edit table; receipts/compile-gate.json"
+    },
+    {
+      "id": "RR-4",
+      "claim": "The rebased diff applies cleanly: patch -p1 --dry-run succeeds against a fresh c85c42f7 copy in the labeled staging layout, and a real patch -p1 application is sha256-identical to the anchored replayer output (the delivered diff and the compiled patched unit are the same bytes).",
+      "evidence": "receipts/patch-dryrun.txt (post-delivery)"
+    },
+    {
+      "id": "RR-5",
+      "claim": "Compile gate under the EXACT composition initializer argv (notify-cancel build-1 receipt argv, 186 args, + the 4 prepended -I args the composition script inserts, source/-o/-MF redirected, LLVM_CONFIG env), prospero-clang++ -std=c++23 -O0: (a) control unpatched c85c42f7 compiles exit 0 and reproduces the attested object fe639a85... byte-exactly; (b) fold 0 (patched, no define) compiles exit 0 and its object is sha256-IDENTICAL to the control object; (c) fold 1 (patched + -DUE4SS_R3_MARSHAL_MODE=1) compiles exit 0 with a different object (the define demonstrably changes codegen); (d) -Werror variants: fold 0 promotes nothing (trivially identical to base), fold 1 adds zero new diagnostic kinds and loses none vs the pinned baseline (the baseline itself does not pass -Werror; kind parity per the original worker's gate is retained AND fold 0 additionally holds object parity).",
+      "evidence": "receipts/compile-gate.json + receipts/fold0-object-parity.json (post-delivery)"
+    }
+  ],
+  "non_claims": [
+    "No link, no composition run, no boot: this session is -c object compilation only. Cross-TU bridge symbol resolution (LuaMod DIFF 1 <-> initializer) is unverified here.",
+    "No in-game behavior of any fold is claimed; F-1 remains open; nothing staged into any composition, nothing executed on a console, no console contact.",
+    "The staging tree and the rev-A diff are modified NOWHERE; all work runs on hash-verified copies under this worker's directory.",
+    "Fold-0 link contract change vs rev A, recorded not hidden: with the preprocessor guard, a DISARMED initializer no longer defines the R3 bridge symbols, so a LuaMod TU carrying DIFF 1's __PROSPERO__ references must be built with the matching (disarmed) fold or the link fails LOUDLY. This is the existing ARM-DISARM 2.3 pairing law now enforced by the linker; the L11 rows arm both defines together (LAUNCH11-MATRIX 3.5 step 3).",
+    "FName verification is NOT performed under R3 mode (latch settled, loud refusal, delegated to the FC-1 read-only validator when it lands) - same honest limitation as rev A.",
+    "The L11-5 gated-bytes variant (apply_gate.py THEN DIFF-2, LAUNCH11-MATRIX 3.5 step 2) still requires the composition-time re-anchor decision of section 4-e site ownership; rev B closes the section 4-d BASE SKEW at the c85c42f7 lineage level and does not silently absorb the gate's own rewrites of the two shared sites."
+  ],
+  "delivery_order": ["CLAIM.json (this file, written first)", "rebase_diff2.py", "diffs/r3-initializer-r3-marshal-mode.revB.diff + receipts", "MATRIX-NOTE-SKEW-CLOSED.md", "REPORT.md (written last)"],
+  "tool_budget": "30-60 tool calls"
+}

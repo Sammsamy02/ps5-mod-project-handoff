@@ -1,0 +1,31 @@
+{
+  "receipt": "worker-polyhook-prospero-layer host checks",
+  "date": "2026-10-05 (local build session 2026-10-04 team day)",
+  "host_compiler": "Apple clang version 17.0.0 (clang-1700.6.4.2), macOS 15.7.8 arm64",
+  "command": "clang++ -std=c++17 -O0 -g0 -Wno-unknown-pragmas -Wno-sign-compare -I integration/files/patched-include -I <DEPS>/polyhook host/prospero_platform_host.cpp integration/files/sources/PolyHookProsperoPlatform.cpp -o host/host_tests && host/host_tests",
+  "sources": {
+    "host/prospero_platform_host.cpp": "c34010f3aa3dbf10c36dbe3193b2594552aae641f845495d767f3c5199e9acfc",
+    "integration/files/patched-include/polyhook2/PolyHookProsperoPlatform.hpp": "d4ec9b1b849ae077202e58d047663d42fb14c0f458bf1f6bf40f7e3b79e8f5a9",
+    "integration/files/sources/PolyHookProsperoPlatform.cpp": "1776079210b39dbd7fe9bf0ce1e15c57f77dc38fe577f3b533e814333a53acbe"
+  },
+  "output": {
+    "host/host-checks.txt": "8b0193b2a35ea356a2568ab6d917701ceea4034151abd08a6ae01fba16eeca04",
+    "checks_ok": 71,
+    "checks_failed": 0,
+    "summary": "ALL PASS (0 failures)"
+  },
+  "coverage": [
+    "PROT_* <-> PLH::ProtFlag translation + round-trips (SDK numbering)",
+    "mode-1 VMMAP walk on the exact live igf spans (9 records, ksz 144/1160 mix, insane-structsize stop, trust gate)",
+    "old-prot lookup + 16-KiB alignment + exactly-one raw_mprotect per transition",
+    "fail-closed refusals: hole-crossing, uncovered, untrusted map, collect failure, non-zero transition (UNSET, no restore), truncated map",
+    "PLH MemoryProtector RAII over the core: covered restore once with looked-up old prot; UNSET refusal skips the destructor restore (MemProtector.hpp:43)",
+    "accessor gates: exec-only read/write refused before deref; RW clamp at span end with real bytes; copy R->W granted, R->R refused",
+    "allocator: RWX at hole hint, RWX-refusal degrades to RW with exec_transition_required, refusing backend bounded (2048 attempts), hint-ignoring kernel unmapped+advanced, no hint intersects an existing span, degenerate requests refused",
+    "page-size fallback to pinned 0x4000 and valid backend page size honored",
+    "exec_publish success/refusal through the same verdict-gated path"
+  ],
+  "fixture_realism_note": "Every span the gates actually dereference is backed by real host buffers; the exec-only live span stays at its real recorded address and is only ever refused against (never dereferenced), matching the igf4/igf6 discipline.",
+  "not_claimed": "No macOS-host result predicts kernel behavior on the PS5 target; no syscall was issued by this worker.",
+  "rerun_note": "Re-run after constexpr translation + include-hygiene fixes found by the composition compile gate; same 71/71 ALL PASS result."
+}

@@ -1,0 +1,26 @@
+--- a/windows-candidate/build.py
++++ b/windows-candidate/build.py
+@@ -9,6 +9,7 @@
+ import re
+ import struct
+ import subprocess
++import sys
+ import uuid
+ HERE=Path(__file__).resolve().parent
+ ROOT=HERE.parents[2]
+@@ -29,13 +30,14 @@
+  p.add_argument('--fileio-root',default='/data/modbridge',help='Production namespace root dedicated to the file I/O owner (payload sandbox) compiled into the native ELF; host driver controls always use a per-build dedicated directory override.')
+  p.add_argument('--reject-worker-start',action='store_true',help='Host control with --sync: internal worker receives an invalid parameter and must retire without hanging readiness.')
+  p.add_argument('--reject-attach',action='store_true',help='With --entry, compile consumer DllMain to return FALSE after initialization.')
+- p.add_argument('--report-path',default='/tmp/modbridge-owned-dll-candidate.jsonl',help='Target-side profile file path; empty disables file output. Build never opens it.')
++ p.add_argument('--report-path',default='/data/modbridge-owned-dll-candidate.jsonl',help='Target-side profile file path; empty disables file output. Build never opens it. /data/ default: /tmp/ is unreadable over FTP from the controller.')
+  p.add_argument('--no-stdout',action='store_true',help='Disable target stdout result delivery.')
+  p.add_argument('--output',type=Path,default=ROOT/'.superpowers/native-dependency-spike/owned-dll-sdk-candidate-1')
+  p.add_argument('--sdk',type=Path,default=ROOT/'outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk')
+  p.add_argument('--llvm-bin',type=Path,default=ROOT/'outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin')
+  p.add_argument('--lld-link',type=Path,default=ROOT/'.superpowers/native-dependency-spike/unreal-library-container-survey-1/mount-research/tools/rustup/toolchains/1.90.0-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/lld-link')
+  a=p.parse_args();out=a.output.resolve()/uuid.uuid4().hex;out.mkdir(parents=True)
++ if a.report_path.startswith('/tmp/'):print('warning: --report-path %s is under /tmp/ (unreadable over FTP from the controller); /data/ is the production default; /tmp/ remains usable for host-only tests'%a.report_path,file=sys.stderr)
+  if a.clock and not a.entry:p.error('--clock requires --entry')
+  if a.workers and not a.entry:p.error('--workers requires --entry')
+  if a.sync and not a.workers:p.error('--sync requires --workers')

@@ -1,0 +1,9 @@
+# Built-in import callable gate: isolated Mac stage
+
+The `cg-import-callable-gate-20261013-13` stage fixes an unsafe admission path in the proposed Windows shim. Its built-in rows contained raw SysV host function bodies, some requiring an extra private `Impl*` argument. Returning those addresses as PE imports would make a name match look executable even though a Windows x64 guest could not safely call them.
+
+Raw handlers are now kept as private catalog entries. `resolve()` returns a built-in address only after a known row receives a non-null guest-callable wrapper through `publish_builtin_wrapper()`. Unknown rows and null wrappers refuse. This publication API is a gate for future per-signature wrapper generation; the stage itself generates **no** wrappers and proves no Windows API semantics. Registered-module lookup from the prior stage still works.
+
+The focused x86-64 host test passed **7/7** cases, including raw-address refusal, known-row publication, invalid publication refusal, case-insensitive registered modules, and recursive lookup. The rebuilt synthetic PE fixture passed **11/11** end-to-end checks and its pinned SHA-256 was unchanged. The [incremental patch](import-callable-gate-increment-20261013.patch), [exact-base hash manifest](import-callable-gate-manifest-20261013.json), and [evidence ZIP](import-callable-gate-evidence-20261013.zip) passed scratch `git apply --check`, application, and byte comparison against the isolated stage.
+
+This stage makes import handling fail closed while real wrappers are absent. It does **not** increase the number of callable built-in APIs or load an unchanged gameplay DLL. The loader still refuses real static TLS and GS access, and the project is not a console-only wait. The next offline ABI step is a typed wrapper generator that injects each shim instance's context, preserves Win64 calling rules, and validates each published signature; broader CRT and UE4SS behavior remain separate work.

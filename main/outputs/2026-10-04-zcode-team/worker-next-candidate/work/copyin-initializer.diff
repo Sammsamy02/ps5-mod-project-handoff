@@ -1,0 +1,166 @@
+--- outputs/2026-10-04-zcode-controller/launch11-combined/units/UnrealInitializer.cpp	2026-10-05 19:15:09
++++ outputs/2026-10-04-zcode-team/worker-copyin-unit/staging/UnrealInitializer.cpp	2026-10-05 20:46:01
+@@ -697,6 +697,26 @@
+         // rc_seed::resolve_listing_gap. 1 = mapped / 0 = not mapped /
+         // -1 = unavailable. Range cap 16 MiB.
+         extern "C" int bridge_kernel_range_verdict(uint64_t addr, uint64_t len);
++        // v5.1 (worker-copyin-unit STAGED): fresh per-address WRITE(2)-COPYIN
++        // owned-read probe — the design-note sibling of the range verdict
++        // (worker-write-copyin verdict-and-design-note.json; standalone
++        // payload evidence, builds 186dab02e289 / 98d370be8eeb). Consulted
++        // ONLY AFTER a Mapped range verdict (ordering rationale: mapped-ness
++        // is the zero-target-byte-touch oracle; the copyin probe moves real
++        // bytes through the kernel's stock vnode write path, so it must not
++        // fire on a range the kernel already refuses). READABLE (1) means
++        // the FULL required read range was transferred into the bridge-owned
++        // sink — authorization AND execution in one event; the entry-0
++        // anchor below then reads the SAME sink bytes. Refused (0) never
++        // implies unmapped (source-class allowlist: CPU-readable mmap-anon
++        // pages EFAULT — address-class-unknown). 1 = readable / 0 = refused /
++        // -1 = unavailable. Emitted tag: pool_copyin_probe_fresh (same code
++        // classes as pool_range_verdict_fresh) + raw rc/errno/sink captures.
++        extern "C" int bridge_kernel_write_copyin_probe(uint64_t addr, uint64_t len);
++        // Sink-byte capture accessor: 1 + pointer/len when the last READABLE
++        // probe captured its sink's first page; 0 otherwise (refusal paths,
++        // capture failure). The anchor consumes it instead of read_bytes_at.
++        extern "C" int bridge_write_copyin_sink_bytes(const uint8_t** out_bytes, uint32_t* out_len);
+ 
+         // Set only after the ctor was seed-bound AND behaviorally verified.
+         // While true, the detour-based VerifyFNameConstructor pass must not arm
+@@ -987,6 +1007,11 @@
+                 if (bridge_capture_envelope(&env) && env > capture_envelope) { capture_envelope = env; }
+             }
+             PoolWords words{};
++            // v5.1 (worker-copyin-unit STAGED): set at loop exit when the
++            // admission was carried by the copyin owned-read gap path rather
++            // than span membership — steers the anchor to the sink bytes and
++            // the provenance line in the success message.
++            bool pool_admitted_via_copyin = false;
+             const auto pool_wait_start = std::chrono::steady_clock::now();
+             for (;;)
+             {
+@@ -1020,21 +1045,51 @@
+                 const char* gap_note = nullptr;
+                 static bool gap_probed_this_boot = false;
+                 static const char* gap_note_cached = nullptr;
++                // v5.1 (worker-copyin-unit STAGED): copyin owned-read gap
++                // admission. The probe fires ONCE per boot (same discipline as
++                // the range verdict — the mapping is static; re-probing every
++                // retry would multiply fresh-evidence events without new
++                // information) and its admission is address-pinned: it counts
++                // only while words.blocks0 stays the probed value.
++                static bool gap_admitted_via_copyin = false;
++                static uint64_t gap_admitted_blocks0 = 0;
+                 if (!shape.ok)
+                 {
+                     if (!gap_probed_this_boot)
+                     {
+-                        const auto resolution = rc_seed::resolve_listing_gap(
+-                            shape,
+-                            static_cast<rc_seed::RangeMappedVerdict>(bridge_kernel_range_verdict(words.blocks0, rc_seed::kFNameBlockCapacityBytes)),
+-                            rc_seed::ReadableCoverageSource::None);
++                        const auto range_verdict = static_cast<rc_seed::RangeMappedVerdict>(
++                            bridge_kernel_range_verdict(words.blocks0, rc_seed::kFNameBlockCapacityBytes));
++                        // v5.1 ordering (design-note rationale): the copyin
++                        // probe is consulted AFTER the range verdict and ONLY
++                        // on Mapped — mapped-ness is the zero-target-byte-touch
++                        // oracle, while the copyin probe moves real bytes
++                        // through the kernel's stock vnode write path, so it
++                        // must not fire on a range the kernel already refuses.
++                        // READABLE (1) raises KernelWriteCopyin (both
++                        // authorization AND execution: the read already
++                        // happened into the bridge-owned sink); any other
++                        // verdict keeps readable_source None and the honest
++                        // refusal with the better-informed note.
++                        rc_seed::ReadableCoverageSource readable_source = rc_seed::ReadableCoverageSource::None;
++                        if (range_verdict == rc_seed::RangeMappedVerdict::Mapped)
++                        {
++                            if (bridge_kernel_write_copyin_probe(words.blocks0, rc_seed::kFNameBlockCapacityBytes) == 1)
++                            {
++                                readable_source = rc_seed::ReadableCoverageSource::KernelWriteCopyin;
++                            }
++                        }
++                        const auto resolution = rc_seed::resolve_listing_gap(shape, range_verdict, readable_source);
+                         gap_probed_this_boot = true;
+                         gap_note_cached = resolution.note;
++                        gap_admitted_via_copyin = resolution.ok;
++                        gap_admitted_blocks0 = words.blocks0;
+                     }
+                     gap_note = gap_note_cached;
+                 }
+-                if (shape.ok && words.none_id != 0 && words.byte_property_id != 0)
++                const bool pool_admitted = (shape.ok || (gap_admitted_via_copyin && words.blocks0 == gap_admitted_blocks0));
++                if (pool_admitted && words.none_id != 0 && words.byte_property_id != 0)
+                 {
++                    pool_admitted_via_copyin = !shape.ok; // shape ok ⇒ span membership carried it
+                     break;
+                 }
+                 if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - pool_wait_start).count() > validation_budget.count())
+@@ -1055,14 +1110,46 @@
+             // address is ownership-covered by the published-span membership
+             // check that just passed. Terminal on mismatch (content identity,
+             // same class as the entry matches below — never retried).
++            // v5.1 (worker-copyin-unit STAGED): on the copyin-admitted path
++            // the anchor verification reads the SINK BYTES the probe's
++            // kernel-mediated read produced (bridge_write_copyin_sink_bytes)
++            // — NEVER a direct block read, preserving the owned-read
++            // discipline end to end; the anchor and the authorization are
++            // then the same bytes. A missing/short capture refuses loudly
++            // instead of falling back. The span-membership path keeps the
++            // direct volatile read (ownership just admitted by membership).
+             {
+-                const auto anchor_bytes = read_bytes_at(words.blocks0, 2 + rc_seed::kNoneString.size());
+-                if (const auto anchor = rc_seed::check_none_anchor(anchor_bytes.data(), anchor_bytes.size()); !anchor.ok)
++                rc_seed::Check anchor{false, "anchor bytes unavailable"};
++                if (pool_admitted_via_copyin)
+                 {
++                    const uint8_t* sink_bytes = nullptr;
++                    uint32_t sink_len = 0;
++                    if (bridge_write_copyin_sink_bytes(&sink_bytes, &sink_len) == 1 &&
++                        sink_bytes != nullptr && sink_len >= 2 + rc_seed::kNoneString.size())
++                    {
++                        anchor = rc_seed::check_none_anchor(sink_bytes, sink_len);
++                    }
++                    else
++                    {
++                        anchor = rc_seed::Check{false, "copyin sink capture unavailable or short for the 'None' anchor"};
++                    }
++                }
++                else
++                {
++                    const auto anchor_bytes = read_bytes_at(words.blocks0, 2 + rc_seed::kNoneString.size());
++                    anchor = rc_seed::check_none_anchor(anchor_bytes.data(), anchor_bytes.size());
++                }
++                if (!anchor.ok)
++                {
+                     seed_refused(fmt::format("FName pool at 0x{:X}: Blocks[0] 0x{:X}: {}", pool_runtime, words.blocks0, anchor.failure));
+                 }
+             }
+ 
++            // v5.1 (worker-copyin-unit STAGED note): on the copyin-admitted
++            // path these pool-entry reads are ownership-covered by the
++            // admitted bounds_source "kernel-write-copyin-read" (the probe
++            // proved the full block capacity readable); only the anchor above
++            // is required to read the sink bytes verbatim.
+             const auto validate_entry = [&](uint32_t id, const rc_seed::Check& bounds, std::string_view expected) -> void {
+                 if (!bounds.ok)
+                 {
+@@ -1080,8 +1167,16 @@
+             validate_entry(words.byte_property_id,
+                            rc_seed::check_entry_bounds(words.byte_property_id, words.current_block, words.current_byte_offset, 2 + rc_seed::kBytePropertyString.size()),
+                            rc_seed::kBytePropertyString);
+-            Output::send(STR("[Seeds] FName pool validated at {} (CurrentBlock {}, Blocks[0] 0x{:X} inside a published readable span (image or non-image) of {}; 'None' anchor ok; 'None' id 0x{:X}, 'ByteProperty' id 0x{:X})\n"),
+-                         reinterpret_cast<void*>(pool_runtime), words.current_block, words.blocks0, published_count, words.none_id, words.byte_property_id);
++            // v5.1 (worker-copyin-unit STAGED): the provenance phrase names the
++            // actual admission source — span membership OR the copyin
++            // owned-read gap path (never claim span membership for a
++            // listing-gap admission).
++            Output::send(STR("[Seeds] FName pool validated at {} (CurrentBlock {}, Blocks[0] 0x{:X} {}; 'None' anchor ok; 'None' id 0x{:X}, 'ByteProperty' id 0x{:X})\n"),
++                         reinterpret_cast<void*>(pool_runtime), words.current_block, words.blocks0,
++                         pool_admitted_via_copyin
++                             ? std::string{"admitted via kernel-write-copyin-read (listing-gap owned-read probe; 'None' anchor verified from the sink bytes)"}
++                             : fmt::format("inside a published readable span (image or non-image) of {}", published_count),
++                         words.none_id, words.byte_property_id);
+ 
+             // ---- Phase 4: bind the ctor + behavioral ByteProperty probe (FNAME-VERDICT section 5) ----
+             // FNAME_Find EXPLICITLY: the default is FNAME_Add, which would

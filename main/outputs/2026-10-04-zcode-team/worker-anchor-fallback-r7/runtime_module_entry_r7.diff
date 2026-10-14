@@ -1,0 +1,65 @@
+PROPOSAL ONLY — worker-anchor-fallback-r7. Apply from outputs/2026-10-04-zcode-team/worker-module-start-wiring/ with:
+  cp runtime_module_entry_r3.c runtime_module_entry_r7.c && patch -p1 < ../../worker-anchor-fallback-r7/runtime_module_entry_r7.diff
+--- a/runtime_module_entry_r3.c
++++ b/runtime_module_entry_r7.c
+@@ -27,10 +27,14 @@
+  *
+  * Observable failure discipline: EVERY failure writes (a) a diagnostic event
+  * through the proven channel, (b) one append-only line to the UE4SS.log file
+- * the runtime itself uses (<module dir>/UE4SS.log), and (c) best-effort a
+- * `failed` line into <mod root>/runtime-status.txt through the vendored
+- * mfa_status API (RUNTIME-ACK point 4; only on terminal failure paths where
+- * no second sink can ever open — WIRING-SPEC S4 one-sink rule holds).
++ * the runtime itself uses (<module dir>/UE4SS.log) — r7: prefixed with
++ * `[t=<monotonic ms>ms pid=<pid>]` (playbook freshness recommendation, so
++ * triage can order interleaved failure lines across launches; both values
++ * come from imports the entry already links, no new imports), and (c)
++ * best-effort a `failed` line into <mod root>/runtime-status.txt through the
++ * vendored mfa_status API (RUNTIME-ACK point 4; only on terminal failure
++ * paths where no second sink can ever open — WIRING-SPEC S4 one-sink rule
++ * holds).
+  *
+  * Return semantics: wiring failures return 0 — the game runs UNMODDED rather
+  * than half-modded, and the loader must never kill the game for a mod
+@@ -154,6 +158,20 @@
+         decimal[n++] = (char)('0' + (magnitude % 10u));
+         magnitude /= 10u;
+     } while (magnitude != 0 && n < sizeof(decimal));
++    while (n != 0 && *used < capacity)
++        buffer[(*used)++] = decimal[--n];
++}
++
++/* r7: unsigned 64-bit decimal (monotonic ms / pid) for the log-line prefix.
++ * Same bounded, no-formatting-imports discipline as log_append_i32. */
++static void log_append_u64(char *buffer, size_t *used, size_t capacity, uint64_t value)
++{
++    char decimal[20];
++    size_t n = 0;
++    do {
++        decimal[n++] = (char)('0' + (value % 10u));
++        value /= 10u;
++    } while (value != 0 && n < sizeof(decimal));
+     while (n != 0 && *used < capacity)
+         buffer[(*used)++] = decimal[--n];
+ }
+@@ -169,7 +187,19 @@
+         return; /* import bindings unproven: never call them */
+     char line[RUNTIME_LOG_LINE_CAPACITY];
+     size_t used = 0;
+-    log_append(line, &used, sizeof(line) - 1, "modbridge module_start failed: ");
++    /* r7 freshness prefix — the SAME monotonic-ms + pid pair the status
++     * line already carries (write_status_failed): enables ordering and
++     * attribution of interleaved UE4SS.log failure lines during playbook
++     * triage. clock_gettime/getpid are proven imports; no new imports. */
++    uint64_t now_ms = 0;
++    struct timespec ts;
++    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
++        now_ms = (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
++    log_append(line, &used, sizeof(line) - 1, "[t=");
++    log_append_u64(line, &used, sizeof(line) - 1, now_ms);
++    log_append(line, &used, sizeof(line) - 1, "ms pid=");
++    log_append_u64(line, &used, sizeof(line) - 1, (uint64_t)getpid());
++    log_append(line, &used, sizeof(line) - 1, "] modbridge module_start failed: ");
+     log_append_sanitized(line, &used, sizeof(line) - 1, stage);
+     log_append(line, &used, sizeof(line) - 1, " code=");
+     log_append_i32(line, &used, sizeof(line) - 1, code);

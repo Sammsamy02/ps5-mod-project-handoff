@@ -1,0 +1,190 @@
+if (auto it = UStruct::VTableLayoutMap.find(STR("__vecDelDtor")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("__vecDelDtor"), 0x0);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("__vecDelDtor__uint32")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("__vecDelDtor__uint32"), 0x0);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("GetInheritanceSuper")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("GetInheritanceSuper"), 0x2D8);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("GetInheritanceSuper_C")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("GetInheritanceSuper_C"), 0x2D8);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("Link")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("Link"), 0x2E0);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("Link__Ref_FArchive__bool")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("Link__Ref_FArchive__bool"), 0x2E0);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("SerializeBin_C__FStructuredArchiveSlot__Ptr_void")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("SerializeBin_C__FStructuredArchiveSlot__Ptr_void"), 0x2E8);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("SerializeBin_C__Ref_FArchive__Ptr_void")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("SerializeBin_C__Ref_FArchive__Ptr_void"), 0x2F0);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("SerializeTaggedProperties_C__FStructuredArchiveSlot__Ptr_uint8__Ptr_UStruct__Ptr_uint8__Ptr_C_UObject")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("SerializeTaggedProperties_C__FStructuredArchiveSlot__Ptr_uint8__Ptr_UStruct__Ptr_uint8__Ptr_C_UObject"), 0x2F8);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("SerializeTaggedProperties_C__Ref_FArchive__Ptr_uint8__Ptr_UStruct__Ptr_uint8__Ptr_C_UObject")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("SerializeTaggedProperties_C__Ref_FArchive__Ptr_uint8__Ptr_UStruct__Ptr_uint8__Ptr_C_UObject"), 0x300);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("PreloadChildren")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("PreloadChildren"), 0x308);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("PreloadChildren__Ref_FArchive")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("PreloadChildren__Ref_FArchive"), 0x308);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("InitializeStruct")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("InitializeStruct"), 0x310);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("InitializeStruct_C__Ptr_void__int32")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("InitializeStruct_C__Ptr_void__int32"), 0x310);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("DestroyStruct")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("DestroyStruct"), 0x318);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("DestroyStruct_C__Ptr_void__int32")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("DestroyStruct_C__Ptr_void__int32"), 0x318);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("CustomFindProperty")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("CustomFindProperty"), 0x320);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("CustomFindProperty_C__C_FName")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("CustomFindProperty_C__C_FName"), 0x320);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("SerializeExpr")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("SerializeExpr"), 0x328);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("SerializeExpr__Ref_int32__Ref_FArchive")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("SerializeExpr__Ref_int32__Ref_FArchive"), 0x328);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("GetPrefixCPP")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("GetPrefixCPP"), 0x330);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("GetPrefixCPP_C")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("GetPrefixCPP_C"), 0x330);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("SetSuperStruct")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("SetSuperStruct"), 0x338);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("SetSuperStruct__Ptr_UStruct")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("SetSuperStruct__Ptr_UStruct"), 0x338);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("GetAuthoredNameForField_C__Ptr_C_FField")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("GetAuthoredNameForField_C__Ptr_C_FField"), 0x340);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("GetAuthoredNameForField_C__Ptr_C_UField")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("GetAuthoredNameForField_C__Ptr_C_UField"), 0x348);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("IsStructTrashed")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("IsStructTrashed"), 0x350);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("IsStructTrashed_C")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("IsStructTrashed_C"), 0x350);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("Visit_C__Ref_FPropertyVisitorPath__Ptr_void__C_TFunctionRef_enum_EPropertyVisitorControlFlow_cdecl_FPropertyVisitorPath_const_&_void_*_")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("Visit_C__Ref_FPropertyVisitorPath__Ptr_void__C_TFunctionRef_enum_EPropertyVisitorControlFlow_cdecl_FPropertyVisitorPath_const_&_void_*_"), 0x358);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("Visit")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("Visit"), 0x358);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("ResolveVisitedPathInfo")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("ResolveVisitedPathInfo"), 0x360);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("ResolveVisitedPathInfo_C__Ptr_void__Ref_C_FPropertyVisitorInfo")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("ResolveVisitedPathInfo_C__Ptr_void__Ref_C_FPropertyVisitorInfo"), 0x360);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("FindPropertyNameFromGuid")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("FindPropertyNameFromGuid"), 0x368);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("FindPropertyNameFromGuid_C__Ref_C_FGuid")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("FindPropertyNameFromGuid_C__Ref_C_FGuid"), 0x368);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("FindPropertyGuidFromName")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("FindPropertyGuidFromName"), 0x370);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("FindPropertyGuidFromName_C__C_FName")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("FindPropertyGuidFromName_C__C_FName"), 0x370);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("ArePropertyGuidsAvailable")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("ArePropertyGuidsAvailable"), 0x378);
+}
+
+if (auto it = UStruct::VTableLayoutMap.find(STR("ArePropertyGuidsAvailable_C")); it == UStruct::VTableLayoutMap.end())
+{
+    UStruct::VTableLayoutMap.emplace(STR("ArePropertyGuidsAvailable_C"), 0x378);
+}
+

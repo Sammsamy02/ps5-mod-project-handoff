@@ -1,0 +1,114 @@
+--- a/include/Mod/NativeModAbi.h
++++ b/include/Mod/NativeModAbi.h
+@@ -37,6 +37,7 @@
+ 
+ #include <stddef.h>
+ #include <stdint.h>
++#include <string.h>
+ 
+ #ifdef __cplusplus
+ extern "C" {
+@@ -237,7 +238,28 @@
+     mbm_status (*unregister)(void* ctx, uint64_t mod, uint64_t id);
+ 
+     const mbm_gui_v1* gui; /* null = GUI host not in this build (#11) */
++
++    /* Optional append-only service: creates an engine object, game-thread only.
++     * This is a STATE CHANGE, not hook admission or a DATA_ONLY capability.
++     * Default parameters only: Name=None, no flags/template/instance graph.
++     * class_object must identify UClass; outer may be null. out is null on error.
++     * ABI version remains 1. Check struct_size through this field before use. */
++    mbm_status (*construct_object)(void* ctx, uint64_t mod,
++                                  mbm_object class_object,
++                                  mbm_object outer_object, mbm_object* out);
+ } mbm_host_v1;
++
++/* Consumers must call this before touching the optional extension field. */
++static inline int mbm_host_has_construct_object(const mbm_host_v1* host)
++{
++    uint32_t header[3];
++    if (!host) return 0;
++    /* Copy only the ABI prefix until an older/smaller table is excluded. */
++    memcpy(header, (const void*)host, sizeof(header));
++    return header[0] == MBM_ABI_MAGIC && header[1] == MBM_ABI_VERSION &&
++           header[2] >= offsetof(mbm_host_v1, construct_object) + sizeof(host->construct_object) &&
++           host->construct_object != 0;
++}
+ 
+ /* ---------------- mod -> host description ---------------- */
+ typedef struct mbm_mod_v1
+--- a/include/Platform/NativeModHostCore.hpp
++++ b/include/Platform/NativeModHostCore.hpp
+@@ -80,6 +80,9 @@
+         // binds; inactive records make that harmless.
+         virtual auto install_key(uint32_t key, uint32_t modifier_mask, uint64_t record) -> mbm_status = 0;
+         virtual auto on_game_thread() -> bool = 0;
++        // Optional state-changing service. Existing engine adapters fail closed.
++        virtual auto construct_object(mbm_object, mbm_object, mbm_object*) -> mbm_status
++        { return MBM_E_UNAVAILABLE; }
+     };
+ 
+     enum class ModState : uint8_t
+@@ -280,6 +283,7 @@
+             m_table.execute_in_game_thread = &Host::abi_execute_in_game_thread;
+             m_table.unregister = &Host::abi_unregister;
+             m_table.gui = nullptr;
++            m_table.construct_object = &Host::abi_construct_object;
+         }
+ 
+         Host(const Host&) = delete;
+@@ -1034,6 +1038,26 @@
+                 if (const auto g = h.service_gate(mod); g != MBM_OK) return g; // [FIX F6]
+                 if (!h.m_engine.on_game_thread()) return MBM_E_STATE; // UFunctions run on the game thread only
+                 return h.m_engine.call_function(obj, fn, args, argc, ret);
++            });
++        }
++        static auto abi_construct_object(void* ctx, uint64_t mod, mbm_object cls,
++                                         mbm_object outer, mbm_object* out) -> mbm_status
++        {
++            if (!out) return MBM_E_INVALID;
++            *out = nullptr;
++            return guard(ctx, [&](Host& h) -> mbm_status {
++                if (!cls) return MBM_E_INVALID;
++                if (const auto g = h.service_gate(mod); g != MBM_OK) return g;
++                if (!h.m_engine.on_game_thread()) return MBM_E_STATE;
++                // Keep the module retained if stop races a synchronous engine call.
++                CallScope scope{h, mod, /*allow_starting=*/true};
++                if (!scope.entered()) return MBM_E_STATE;
++                mbm_object created{};
++                const auto status = h.m_engine.construct_object(cls, outer, &created);
++                if (status != MBM_OK) return status;
++                if (!created) return MBM_E_NOT_FOUND;
++                *out = created;
++                return MBM_OK;
+             });
+         }
+         static auto abi_hook_admission(void* ctx, uint32_t family, mbm_admission* out) -> mbm_status
+--- a/candidate/src/Mod/NativeModEngineServices.inc
++++ b/candidate/src/Mod/NativeModEngineServices.inc
+@@ -281,6 +281,25 @@
+             *out = o;
+             return o ? MBM_OK : MBM_E_NOT_FOUND;
+         }
++        auto construct_object(mbm_object cls, mbm_object outer, mbm_object* out) -> mbm_status override
++        {
++            *out = nullptr;
++            if (!Runtime::unreal_ready ||
++                !Unreal::UObjectGlobals::GlobalState::StaticConstructObjectInternal426.is_ready())
++                return MBM_E_UNAVAILABLE;
++            if (!Unreal::IsInGameThreadRaw()) return MBM_E_STATE;
++            if (!valid(cls) || (outer && !valid(outer))) return MBM_E_INVALID;
++            int32_t is_class{};
++            const auto status = object_is_a(cls, "Class", &is_class);
++            if (status != MBM_OK) return status;
++            if (!is_class) return MBM_E_TYPE;
++            // Native params are constructed by the port, never by reinterpreting
++            // a foreign MSVC parameter object. This service admits defaults only.
++            Unreal::FStaticConstructObjectParameters params{
++                static_cast<Unreal::UClass*>(obj(cls)), obj(outer)};
++            *out = Unreal::UObjectGlobals::StaticConstructObject(params);
++            return *out ? MBM_OK : MBM_E_NOT_FOUND;
++        }
+         auto find_all_of(const char* cls, mbm_object* out, int32_t cap, int32_t* total) -> mbm_status override
+         {
+             if (!Runtime::unreal_ready) return MBM_E_UNAVAILABLE;

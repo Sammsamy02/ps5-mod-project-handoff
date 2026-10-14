@@ -1,0 +1,21 @@
+HOST INTEGRATION TEST — PASS receipt (worker-l11-enqueue-ladder)
+date: 2026-10-05T16:39:13Z
+
+worlds:
+  control = worker-l11-marshal-integration/staging/luamod-l11-marshal-consumer/LuaMod.cpp (04c9d91664dd82c7, UNPATCHED)
+  fixed   = worker-l11-enqueue-ladder/staging/luamod-l11-el-ladder/LuaMod.cpp (f50976ae1e2626b0, staged fix)
+
+driven code: REAL staged ExecuteInGameThread binding (default method EngineTick, single-arg call = the main.lua:695 default API),
+REAL queues + process_simple_actions drain + ensure_engine_tick_hooked/ensure_process_event_hooked throw sites + REAL port TRY,
+REAL Lua 5.4 (LuaRaw, compiled as C++ per shipped CMakeLists LANGUAGE CXX) and REAL LuaMadeSimple.
+Declared shims (host-only): Unreal::Hook registration refusal knob, UE4SSRuntime address-availability knob, Output capture, FName, luauser lock hooks (single-threaded no-ops).
+
+results:
+  control world: exit=0 — see receipts/host-test-control.stdout
+  fixed   world: exit=0 — see receipts/host-test-fixed.stdout
+
+verdict: control reproduces the enqueue loss (throw before enqueue; queues empty; armed marshal bypassed);
+fixed lineage: armed world = enqueued+drained, W_FAILS world = enqueued+stalled-logged, working world = enqueued+armed+drained,
+address-unavailable ladder fallback = enqueued+drained (intact).
+
+overall: PASS

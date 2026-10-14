@@ -1,0 +1,72 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_start_bridge_r13.cpp	2026-10-04 22:49:24
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-facts-geometry-fix/staging/runtime_start_bridge_r13.geometrydiag.cpp	2026-10-05 07:38:50
+@@ -1,4 +1,15 @@
+ // runtime_start_bridge.cpp — the module_start -> composed-runtime wiring.
++//
++// worker-facts-geometry-fix STAGED COPY (2026-10-05): canonical
++// worker-module-start-wiring/runtime_start_bridge_r13.cpp (conversion
++// behavior byte-identical) + the controller-directed geometry diagnostics
++// (lmf_extent_base_low/high, lmf_extent_end_low/high, lmf_anchor_count,
++// lmf_intervals_found) emitted on BOTH the conversion-refusal and the
++// conversion-success paths through the EXISTING diagnostic channel. No new
++// sink, no new imports, no ordering change: configured roots still attach
++// strictly after a successful conversion per Resolution B 2.5/2.7 (the
++// adapter consumes the opt-in FLAG, never the root fields — verified: the
++// canonical adapter TU references neither configured_* field).
+ //
+ // r13 (2026-10-04, worker-bridge-r13-polish): r12 + the GO-WITH-FIXES review
+ // diffs, all five applied (worker-bridge-r12-final-review/REVIEW-VERDICT.md):
+@@ -655,6 +666,28 @@
+             ::diagnostic_event("lmf_linkmap_cap", (uint32_t)cap.capabilities.link_map_walk);
+             ::diagnostic_event("lmf_provider_code", (uint32_t)cap.provider_code);
+             ::diagnostic_event("lmf_identity_source", (uint32_t)cap.identity_source);
++            // worker-facts-geometry-fix (controller directive, launch-9):
++            // conversion-side geometry inputs through the EXISTING diagnostic
++            // channel. The per-refusal PREDICATE itself is already durable:
++            // each adapter refusal carries a unique static error_message that
++            // copy_detail relays verbatim into the r4 UE4SS mirror line and
++            // the runtime-status detail string. These four events name the
++            // INPUTS that predicate saw, so a zero-interval refusal is
++            // readable as "extent [base,end) vs N anchor spans" without any
++            // new sink. On a refusal the extent inputs are the snapshot's
++            // VmScan facts (the same numbers the window-anchor wrapper fed);
++            // the 64-bit halves follow the entry's established _low/_high
++            // event convention.
++            ::diagnostic_event("lmf_extent_base_low",
++                               (uint32_t)(cap.vm_scan.chosen_base & 0xffffffffu));
++            ::diagnostic_event("lmf_extent_base_high",
++                               (uint32_t)(cap.vm_scan.chosen_base >> 32));
++            ::diagnostic_event("lmf_extent_end_low",
++                               (uint32_t)((cap.vm_scan.chosen_base + cap.vm_scan.chosen_extent) & 0xffffffffu));
++            ::diagnostic_event("lmf_extent_end_high",
++                               (uint32_t)((cap.vm_scan.chosen_base + cap.vm_scan.chosen_extent) >> 32));
++            ::diagnostic_event("lmf_anchor_count", (uint32_t)cap.anchor_mapping_count);
++            ::diagnostic_event("lmf_intervals_found", 0u);
+             copy_detail(detail, detail_capacity, converted.error_message);
+             return MRS_ERR_CONVERSION;
+         }
+@@ -669,6 +702,24 @@
+         converted.facts.configured_working_directory = std::filesystem::path(mod_root);
+         ::diagnostic_event("bridge_cfg_gamedir", 1u);
+         ::diagnostic_event("bridge_cfg_workdir", 1u);
++        // worker-facts-geometry-fix: the same geometry inputs on the SUCCESS
++        // path, now from the adapter's resolved extent/provenance record, so
++        // every launch logs what the intervals were derived from.
++        {
++            const auto &image =
++                converted.facts.modules.images.at(RC::ScanTarget::MainExe);
++            ::diagnostic_event("lmf_extent_base_low",
++                               (uint32_t)(converted.resolved_image_base & 0xffffffffu));
++            ::diagnostic_event("lmf_extent_base_high",
++                               (uint32_t)(converted.resolved_image_base >> 32));
++            ::diagnostic_event("lmf_extent_end_low",
++                               (uint32_t)(converted.resolved_image_end & 0xffffffffu));
++            ::diagnostic_event("lmf_extent_end_high",
++                               (uint32_t)(converted.resolved_image_end >> 32));
++            ::diagnostic_event("lmf_anchor_count",
++                               (uint32_t)supplier->facts().anchor_mapping_count);
++            ::diagnostic_event("lmf_intervals_found", (uint32_t)image.readable_ranges.size());
++        }
+ 
+         // ---- Stage 2: NativeProgramContext build + validation. Throws on
+         // refused/invalid facts or missing regular files (both paths must

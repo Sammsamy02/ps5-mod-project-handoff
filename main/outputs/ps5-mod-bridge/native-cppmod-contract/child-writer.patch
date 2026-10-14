@@ -1,0 +1,78 @@
+--- a/tools/SharpProspero.Link/DynamicWriter.cs
++++ b/tools/SharpProspero.Link/DynamicWriter.cs
+@@ -302,7 +302,8 @@
+     /// <param name="libraryInitSymbol">A defined library function to publish as DT_INIT; null keeps the returning stub.</param>
+     public static byte[] Write(LinkResolution resolution, string? entrySymbol, ModuleKind kind = ModuleKind.Executable,
+         IReadOnlyList<string>? exportSymbols = null, string? moduleFileName = null,
+-        string? moduleName = null, string? exportLibraryName = null, string? libraryInitSymbol = null)
++        string? moduleName = null, string? exportLibraryName = null, string? libraryInitSymbol = null,
++        string? libraryFiniSymbol = null, bool libraryOwnsArrays = false)
+     {
+         ArgumentNullException.ThrowIfNull(resolution);
+         if (resolution.Unresolved.Count > 0)
+@@ -333,6 +334,27 @@
+                 || !initObj.Sections[initSym.SectionIndex].IsExecutable)
+                 throw new ElfLinkException($"Library init symbol '{libraryInitSymbol}' must be a defined function in an executable section.");
+             libraryInit = (initObj!, initSym!);
++        }
++
++        (ElfObject Obj, ElfSymbol Sym)? libraryFini = null;
++        if (libraryFiniSymbol is not null)
++        {
++            if (kind != ModuleKind.Library)
++                throw new ElfLinkException("A library finalizer requires a PRX library.");
++            if (!TryFindDefinedSymbol(resolution, libraryFiniSymbol, out ElfObject? finiObj, out ElfSymbol? finiSym)
++                || finiSym!.Type != SymType.Func || finiSym.SectionIndex < 0 || finiSym.SectionIndex >= finiObj!.Sections.Count
++                || !finiObj.Sections[finiSym.SectionIndex].IsExecutable
++                || finiSym.Value >= (ulong)finiObj.Sections[finiSym.SectionIndex].Data.Length)
++                throw new ElfLinkException($"Library fini symbol '{libraryFiniSymbol}' must be a defined function inside stored executable bytes.");
++            libraryFini = (finiObj!, finiSym!);
++        }
++        if (libraryOwnsArrays)
++        {
++            if (kind != ModuleKind.Library || libraryInit is null || libraryFini is null)
++                throw new ElfLinkException("Child-owned arrays require explicit library init and fini functions together.");
++            var selected = libraryInit.Value;
++            if (selected.Sym.Value >= (ulong)selected.Obj.Sections[selected.Sym.SectionIndex].Data.Length)
++                throw new ElfLinkException("Child initializer is outside stored executable bytes.");
+         }
+ 
+         // Module ids and mangled names for the imports. A module and a library are not the same thing:
+@@ -901,6 +923,12 @@
+         // code points at the first of the two and the helper reads both.
+         ulong tlsPairAddr = gotDataAddr + (ulong)gotDataOrder.Count * 8;
+         ulong relroDataAddr = Align(gotAddr + (ulong)gotBytes.Length, relroDataAlign);
++        // Own-image array boundaries remain real even when the child, rather
++        // than dynamic tags, owns traversal. Empty arrays have an equal span.
++        linkerDefined["__init_array_start"] = relroDataAddr + (haveInit ? initArrayOff : 0);
++        linkerDefined["__init_array_end"] = relroDataAddr + (haveInit ? initArrayEnd : 0);
++        linkerDefined["__fini_array_start"] = relroDataAddr + (haveFini ? finiArrayOff : 0);
++        linkerDefined["__fini_array_end"] = relroDataAddr + (haveFini ? finiArrayEnd : 0);
+         ulong procAddr = Align(relroDataAddr + relroDataLen, 8);
+         // The thread-local template closes the group. Every module that carries one keeps it here
+         // rather than in the plain writable group: it is a template each thread copies, written while
+@@ -1130,6 +1158,9 @@
+         ulong dynamicInitAddr = libraryInit is { } selectedInit
+             ? SymbolValue(resolution, importByName, SectionAddr, selectedInit.Obj, selectedInit.Sym, linkerDefined)
+             : initAddr;
++        ulong dynamicFiniAddr = libraryFini is { } selectedFini
++            ? SymbolValue(resolution, importByName, SectionAddr, selectedFini.Obj, selectedFini.Sym, linkerDefined)
++            : finiAddr;
+         byte[] dynamicBytes = BuildDynamic(moduleRecords, libraryRecords, moduleInfoName,
+             dynsymAddr, dynstrAddr, (ulong)dynstrBytes.Length, hashAddr, (ulong)hashBytes.Length,
+             relaAddr, (ulong)relaBytes.Length, gotAddr, dynsymBytes.Length,
+@@ -1139,9 +1170,11 @@
+             // declaring a real one would have the loader run them again before the entry is reached.
+             // A library has no entry of its own, so the loader is what runs its constructors and it
+             // names the array it actually carries.
+-            kind == ModuleKind.Library ? initArray : (0, 0),
+-            kind == ModuleKind.Library ? finiArray : (0, 0),
+-            dynamicInitAddr, finiAddr);
++            // Child entry ownership keeps the actual sections and linker bounds,
++            // but leaves no loader traversal path that could run them twice.
++            kind == ModuleKind.Library && !libraryOwnsArrays ? initArray : (0, 0),
++            kind == ModuleKind.Library && !libraryOwnsArrays ? finiArray : (0, 0),
++            dynamicInitAddr, dynamicFiniAddr);
+ 
+         // The first reserved word of the linkage table holds the address of the dynamic table. The two
+         // words after it are the loader's own, and it fills them; the module leaves them clear.

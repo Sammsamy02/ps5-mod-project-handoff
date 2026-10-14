@@ -1,0 +1,213 @@
+[
+  {
+    "role": "current_Config",
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/include/Unreal/UnrealInitializer.hpp",
+    "bytes": 9712,
+    "sha256": "4d5f1d84c16b8d540b2b659a502d6e30523be9112fecfa56f84b6f34a9b35643",
+    "windows": [
+      {
+        "start": 108,
+        "end": 117,
+        "text": "    {\n    public:\n#ifndef _WIN32\n        // Native discovery supplies validated, owned module metadata.\n        // A snapshot retains the actual byte owner; it does not discover an engine.\n        std::shared_ptr<const Platform::ModuleSnapshot> ModuleSource;\n        // Same validated byte owner, with explicit scanner image facts. This\n        // provider does not discover the game or validate its Unreal ABI.\n        std::shared_ptr<const Platform::OwnedMappedScanSource> NativeScanSource;\n#endif"
+      },
+      {
+        "start": 165,
+        "end": 168,
+        "text": "        // Optional cooperative startup cancellation/deadline. If absent,\n        // existing platform behavior and retry policies are preserved.\n        std::shared_ptr<const StartupWaitControl> StartupWait{};\n    };"
+      }
+    ]
+  },
+  {
+    "role": "current_initializer",
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l19-local-profile-r4/units/UnrealInitializer.cpp",
+    "bytes": 133927,
+    "sha256": "83af3211a377eb2b511cb594db6457a2de130494b7463d1393c200bafc78eca8",
+    "windows": [
+      {
+        "start": 1250,
+        "end": 1255,
+        "text": "            try\n            {\n                const uint64_t actual_base=SeedArming::module_view_base();\n                const rc::codecache::Metadata* profile_image=nullptr;\n                if(SeedArming::bridge_code_cache_context(actual_base,&profile_image)!=1) profile_image=nullptr;\n                const auto staged=RC::Platform::NativeLayouts::GetStagedNativeLayoutFacts();"
+      },
+      {
+        "start": 1313,
+        "end": 1331,
+        "text": "                }\n                if(!facts.ok) throw std::runtime_error(\"[BuildProfile] collect-all preflight refused: \"+failures);\n            }\n            catch(...)\n            {\n                // Preflight precedes the existing consumer's cleanup owner.\n                // Preserve one-shot bank retirement on this earlier refusal.\n                SeedArming::bridge_copyin_initializer_complete();\n                throw;\n            }\n            // L19 PREFLIGHT END\n            // [Seeds] The ps_scan arm is structurally dead on this target\n            // (SLOTS-FEASIBILITY section 0: G0 missing text_base, G1 eager\n            // caller construction, G2 Rust view gate, G3 measured anchors,\n            // G4 permits_code admission). Armed seeds are consumed directly;\n            // the retry loop below would only ever end in \"PS scan timed out\".\n            // Pool validation retries inside the same budget.\n            SeedArming::consume_required_slot_seeds(std::chrono::seconds(UnrealConfig.SecondsToScanBeforeGivingUp));\n        }"
+      },
+      {
+        "start": 1760,
+        "end": 1767,
+        "text": "        if (!UnrealConfig.ModuleSource)\n            throw std::logic_error(\"Native module source is not configured\");\n#if defined(__PROSPERO__)\n        if (!UnrealConfig.NativeScanSource || UnrealConfig.NativeScanSource->source_owner() != UnrealConfig.ModuleSource)\n            throw std::logic_error(\"Native mapped scan source must retain the configured module owner\");\n#endif\n#endif\n        // Build the potentially allocating callback/config copy before replacing"
+      },
+      {
+        "start": 2468,
+        "end": 2495,
+        "text": "    auto R3MarshalPublishGameThreadIdentity() -> bool\n    {\n        if constexpr (UnrealInitializer::R3MarshalGate::kR3MarshalMode)\n        {\n            // HookedEngineTick publication logic (merge-lineage SINI:161-190), reused,\n            // not re-invented: cancellation check first, then publish_current; the\n            // first published ID is immutable and publication never manufactures a\n            // worker identity.\n            const auto& StartupWait = UnrealInitializer::StaticStorage::GlobalConfig.StartupWait;\n            if (StartupWait && StartupWait->IsCancelled && StartupWait->IsCancelled())\n            {\n                // Startup refused/cancelled: never publish; the marshal drain gates on\n                // this false return and drains nothing (refusal, not degradation).\n                return false;\n            }\n            const auto publication = UnrealInitializer::NativeGameThreadIdentity.publish_current();\n            if (publication == NativeThreadDetail::Publication::Unavailable)\n            {\n                static std::atomic<bool> logged_unavailable{false};\n                if (!logged_unavailable.exchange(true))\n                {\n                    Output::send<LogLevel::Error>(STR(\"[R3] Unable to retrieve or synchronize ID of game thread\\n\"));\n                }\n                return false;\n            }\n            // Published and AlreadyCurrent both mean this caller IS the game thread;\n            // DifferentThread refuses. (NativeThreadDetail::Publication order:\n            // Published, AlreadyCurrent, DifferentThread, Unavailable.)"
+      }
+    ]
+  },
+  {
+    "role": "current_program",
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l19-local-profile-r4/units/UE4SSProgram.cpp",
+    "bytes": 143040,
+    "sha256": "e3235bc67af405018d5092efe2b37bdc3f8d916cb39a55cfa1bd62352787bf4b",
+    "windows": [
+      {
+        "start": 1023,
+        "end": 1036,
+        "text": "        Unreal::UnrealInitializer::Config config;\n#ifdef __PROSPERO__\n        config.ModuleSource = m_native_context.module_source;\n        config.NativeScanSource = m_native_context.scanner_source;\n        auto startup_wait = std::make_shared<Unreal::UnrealInitializer::StartupWaitControl>();\n        std::weak_ptr<std::atomic_bool> shutdown_requested = m_shutdown_requested;\n        startup_wait->IsCancelled = [shutdown_requested] {\n            auto request = shutdown_requested.lock();\n            return !request || request->load(std::memory_order_acquire);\n        };\n        startup_wait->Deadline = Unreal::UnrealInitializer::StartupWaitControl::Clock::now() +\n                                 Unreal::UnrealInitializer::DefaultStartupWaitTimeout;\n        config.StartupWait = std::move(startup_wait);\n#endif"
+      }
+    ]
+  },
+  {
+    "role": "current_bridge",
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l19-local-profile-r4/units/runtime_start_bridge_r14_diag_spanpub.cpp",
+    "bytes": 101505,
+    "sha256": "d4d1db12d9e469e5bbbe1bb2d5ad21c812384d8915c44d18d82952efb7312b9f",
+    "windows": [
+      {
+        "start": 550,
+        "end": 581,
+        "text": "    ::diagnostic_event(\"bridge_exepath_source\", source);\n    ::diagnostic_event(\"bridge_exepath_sig\", sig);\n    return 0;\n}\n\n// r8: PLH owned-memory pre-registration (launch-6 predicted gate 2.6: the\n// scan source builds a ReadLease over EVERY readable range the conversion\n// derives; unregistered bytes throw). The loader contract (NativeLoader-\n// Context.hpp) expects the in-process loader to supply \"already-existing\n// owned-service registrations\" for its retained mappings \u2014 this is that\n// call. Exec-only text is NOT registered readable \u2014 the D2/text_base\n// question stays open upstream.\n//\n// r14 (L1/L2/L5): registration is FROZEN-SNAPSHOT-DERIVED. The registry is\n// fed exclusively from the mappings array capture() passed to the\n// scan_image_base wrapper \u2014 the same array anchor_mappings (and therefore\n// ModuleSnapshot::ReadableRanges -> ReadLease ranges) is later built from\n// (live_module_facts.cpp:449-457 keeps records containing the chosen base\n// from this exact array; lmf_to_native_loader_facts.cpp:77-109 derives the\n// lease ranges from those). One snapshot, one derivation -> the registered\n// set provably covers every page any ReadLease can walk, with no second\n// sysctl to race. Records are registered with their true observed kve\n// protection mapped to PLH bits, minus W (the service must never authorize\n// writes into game memory; no lease needs it): readable-only pages -> R,\n// readable+exec -> R|X. Exec-only / no-protection records are never\n// registered. Skip-if-covered makes re-registration idempotent (L5); the\n// 128-region cap and any impossible quantization overlap refuse loudly\n// through the coverage gate (L3) instead of saturating or throwing deep in\n// PLH (\"Owned regions must not overlap\", OwnedMemory.cpp:54).\n#include <polyhook2/OwnedMemory.hpp>\nstatic PLH::OwnedMemory::ScopedRegion *g_image_regions[128];\nstatic unsigned g_image_region_count = 0;"
+      },
+      {
+        "start": 675,
+        "end": 684,
+        "text": "    ++g_image_region_count;\n    g_lease_spans[g_lease_span_count].b = lo;\n    g_lease_spans[g_lease_span_count].e = e;\n    ++g_lease_span_count;\n    return true;\n}\n\n// L1: register every readable record of the FROZEN capture snapshot that\n// intersects [extent_begin, extent_end). Called from the scan_image_base\n// wrapper \u2014 the first op capture() drives \u2014 so registration, the window"
+      },
+      {
+        "start": 1198,
+        "end": 1204,
+        "text": "extern \"C\" int bridge_code_cache_context(uint64_t module_base,const rc::codecache::Metadata** out)\n{\n    if(out)*out=nullptr;\n    if(!out||!g_copyin_initializer_owner.allows())return 0;\n    if(!g_code_cache.identity(module_base))return 0;\n    *out=&g_code_cache.metadata;return 1;\n}"
+      },
+      {
+        "start": 1750,
+        "end": 1775,
+        "text": "        const std::shared_ptr<const lmf::RetainedLiveModuleFactsSupplier> retained = supplier;\n        RC::Platform::LmfConversionOptions options{};\n        // In-game primary identity route (checkpoint zcode_ingame_v1_results):\n        // VMMAP span + in-memory ELF base scan. Explicit opt-in, default is\n        // refusal; without it a VmScan-identity snapshot never converts.\n        options.allow_vm_scan_base_as_module_image_base = true;\n        // Resolution B (configured roots): the observed executable path is\n        // empty on this target. Converting with it EMPTY (never fabricated)\n        // behind this explicit opt-in; ValidateNativeProgramContext then\n        // requires configured_game_directory, set on the facts below.\n        options.allow_configured_roots_for_missing_executable_path = true;\n\n        RC::Platform::LmfConversionResult converted =  // r12: non-const \u2014 configured roots attach after conversion\n            RC::Platform::TryMakeNativeLoaderFactsFromSupplier(\n                retained, std::filesystem::path(module_file_path), options);\n        if (!converted)\n        {\n            // r3 visibility: record WHICH identity route failed so the next\n            // log read is unambiguous (vmentry ok? scan ran? link-map rc?).\n            const lmf::LiveModuleFactsSnapshot &cap = supplier->facts();\n            ::diagnostic_event(\"lmf_vmentry_cap\", (uint32_t)cap.capabilities.vmentry);\n            ::diagnostic_event(\"lmf_vm_scan_cap\", (uint32_t)cap.capabilities.vm_scan);\n            ::diagnostic_event(\"lmf_linkmap_cap\", (uint32_t)cap.capabilities.link_map_walk);\n            ::diagnostic_event(\"lmf_provider_code\", (uint32_t)cap.provider_code);\n            ::diagnostic_event(\"lmf_identity_source\", (uint32_t)cap.identity_source);\n            // worker-facts-geometry-fix (controller directive, launch-9):"
+      }
+    ]
+  },
+  {
+    "role": "current_module_owner",
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/include/Unreal/PlatformModuleSnapshot.hpp",
+    "bytes": 5170,
+    "sha256": "3d05b06841a7e3f1bbc12834b47936cd2690c8eb974edaf5cb84a46f13cfa5ec",
+    "windows": [
+      {
+        "start": 24,
+        "end": 32,
+        "text": "\n    struct ModuleInput\n    {\n        // This owner must actually retain all described bytes and resolver state.\n        // Validation cannot establish mapping permissions or engine identity.\n        std::shared_ptr<const void> lifetime;\n        bool monolithic{};\n        std::unordered_map<ScanTarget, ModuleImage> images;\n        std::function<void*(std::string_view)> find_export;"
+      },
+      {
+        "start": 49,
+        "end": 57,
+        "text": "        auto IsMonolithic() const noexcept -> bool { return m_input.monolithic; }\n        auto FindExport(std::string_view name) const -> void*\n        {\n            if (!m_input.find_export)\n                throw std::logic_error(\"Native module export resolver is not configured\");\n            if (name.empty() || name.find('\\0') != std::string_view::npos)\n                throw std::invalid_argument(\"Export name must be nonempty and contain no NUL\");\n            return m_input.find_export(name);\n        }"
+      },
+      {
+        "start": 77,
+        "end": 83,
+        "text": "                throw std::invalid_argument(\"A monolithic snapshot must describe only MainExe\");\n            for (auto& [target, module] : m_input.images)\n            {\n                if (static_cast<size_t>(target) >= static_cast<size_t>(ScanTarget::Max))\n                    throw std::invalid_argument(\"Invalid module scan target\");\n                const auto image_begin = reinterpret_cast<uintptr_t>(module.base);\n                const auto image_end = End(module.base, module.size);"
+      }
+    ]
+  },
+  {
+    "role": "current_context",
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/include/Platform/NativeProgramContext.hpp",
+    "bytes": 7167,
+    "sha256": "0a068bb9d9b25f9b7213d584dabf26cadc793c42c93a0bb125f37d83c0a58f48",
+    "windows": [
+      {
+        "start": 55,
+        "end": 89,
+        "text": "\n    // Native loader facts, not process discovery. The loader must accurately\n    // bind these paths to the retained module snapshot. Lexical validation below\n    // cannot establish that identity or verify mapping permissions.\n    struct NativeProgramContext\n    {\n        std::filesystem::path module_file_path;\n        std::filesystem::path game_executable_path;\n        std::shared_ptr<const Unreal::Platform::ModuleSnapshot> module_source;\n        // Optional concrete scanner owner for the selected native ps_scan\n        // backend. It must describe the same retained loader module snapshot.\n        std::shared_ptr<const Unreal::Platform::OwnedMappedScanSource> scanner_source;\n        // Optional retained activation files. Presence selects immutable logical\n        // ue4ss/ keys for config and mod loading, with no disk fallback.\n        std::shared_ptr<const NativeModSource> mod_source;\n        // Resolution B (configured roots, 2026-10-04): explicit directory roots\n        // supplied by the native bootstrap. CONFIGURATION values, never\n        // kernel-observed paths; distinct from game-image identity (mod_source\n        // + retained VmScan anchor facts) and from the runtime-module path\n        // (module_file_path). When game_executable_path is empty (genuinely\n        // unobservable on this target), configured_game_directory is REQUIRED\n        // and carries the directory derivations.\n        std::filesystem::path configured_game_directory;\n        std::filesystem::path configured_working_directory;\n        // Deferred avoids enumerating, installing, or starting either mod type\n        // during construction. A bootstrap may call start_native_mods() once\n        // before init(), or deliberately opt into constructor autostart.\n        NativeModStartupPolicy mod_startup_policy{NativeModStartupPolicy::Deferred};\n        // Notified on the init caller thread after Unreal setup, property setup,\n        // and Lua function sharing, but before the update loop is launched.\n        std::function<void()> on_engine_initialized;\n        // Optional actual source. Its provider must support serialized activation\n        // on the constructing thread, exclusive processing on UE4SS's update\n        // thread, and deactivation after that thread has joined.\n        std::shared_ptr<Input::PlatformInputSource> input_source;"
+      }
+    ]
+  },
+  {
+    "role": "supplier_contract",
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/include/lmf_to_native_loader_facts.hpp",
+    "bytes": 9526,
+    "sha256": "1c990d0be15d2eb1e96819be178e46a10d00c524652a32fcdcf9517c36f46c56",
+    "windows": [
+      {
+        "start": 51,
+        "end": 66,
+        "text": "//   * readable_ranges are derived (integer arithmetic only, never\n//     dereferenced) from the snapshot's observed mappings, clamped and\n//     coalesced into the module image extent. No mappings -> refuse\n//     (ModuleSnapshot requires non-empty ranges).\n//   * ModuleInput.lifetime is a shared_ptr aliasing the supplier itself:\n//     the supplier owns the genuine RTLD_NOLOAD loader reference when one\n//     exists (VmScan captures own none \u2014 degraded, recorded) and MUST\n//     OUTLIVE the entire scan lease; call supplier.release() only AFTER\n//     the lease ends. The by-reference overloads below create a NON-OWNING\n//     alias (the empty-owner aliasing constructor), so this lifetime rule is\n//     purely a caller obligation \u2014 use the shared_ptr overload for a\n//     genuine owning alias.\n//   * find_export is left unset (the supplier provides no export resolver):\n//     ModuleSnapshot::FindExport then throws std::logic_error(\"Native module\n//     export resolver is not configured\") on any downstream call. Documented,\n//     not papered over."
+      }
+    ]
+  },
+  {
+    "role": "supplier_impl",
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/src/live_module_facts.cpp",
+    "bytes": 23066,
+    "sha256": "5eff2ad9d6b8fb1a58340f31e02eebb5126236f3249f87a83e7c045c7d6b075f",
+    "windows": [
+      {
+        "start": 471,
+        "end": 484,
+        "text": "Status RetainedLiveModuleFactsSupplier::validate_retention() noexcept {\n    if (!captured_) return Status::NotCaptured;\n    if (facts_.retention.kind != RetainKind::LoaderReference)\n        return Status::AlreadyReleased;\n    void *again = ops_.loader_retain_noload(ops_.context,\n                                            facts_.retention.retained_name);\n    if (again == nullptr) return Status::RetentionProbeFailed;\n    bool consistent = (again == facts_.retention.loader_handle);\n    const int rc = ops_.loader_release(ops_.context, again);  // balance probe\n    if (rc != 0) {\n        facts_.provider_code = rc;\n        return Status::RetentionProbeFailed;\n    }\n    return consistent ? Status::Ok : Status::RetentionProbeFailed;"
+      }
+    ]
+  },
+  {
+    "role": "owner_conversion",
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/src/lmf_to_native_loader_facts.cpp",
+    "bytes": 16864,
+    "sha256": "b63f482a37d9337fb4a6a1d75021e81e62e842ab7b7f3943acd5c76df5be26a8",
+    "windows": [
+      {
+        "start": 252,
+        "end": 263,
+        "text": "    auto& image = facts.modules.images[ScanTarget::MainExe];\n    image.base = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(extent.base));\n    image.size = static_cast<size_t>(extent.end - extent.base);\n    image.readable_ranges.resize(clamped.size());\n    for (size_t i = 0; i < clamped.size(); ++i) {\n        image.readable_ranges[i] = {};\n        image.readable_ranges[i].data = reinterpret_cast<const uint8_t*>(static_cast<uintptr_t>(clamped[i].first));\n        image.readable_ranges[i].size = static_cast<size_t>(clamped[i].second - clamped[i].first);\n    }\n    // find_export intentionally left unset: ModuleSnapshot::FindExport throws\n    // std::logic_error until a real export resolver is registered downstream.\n"
+      },
+      {
+        "start": 290,
+        "end": 299,
+        "text": "    return result;\n}\n\nauto TryMakeNativeLoaderFactsFromSupplier(std::shared_ptr<const lmf::RetainedLiveModuleFactsSupplier> supplier,\n                                          const std::filesystem::path& module_file_path,\n                                          const LmfConversionOptions& options) noexcept -> LmfConversionResult {\n    LmfConversionResult result{};\n    if (!supplier) {\n        result.error = LmfConversionError::SupplierInvalidArgument;\n        result.error_message = \"owning conversion requires a non-null supplier shared_ptr\";"
+      }
+    ]
+  },
+  {
+    "role": "read_lease_contract",
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-read-lease-1/include/polyhook2/OwnedMemory.hpp",
+    "bytes": 3171,
+    "sha256": "6a8fe108af18d70df9c6f3cf6e2403034d0debbd4c229047dafbbb4247c968aa",
+    "windows": [
+      {
+        "start": 24,
+        "end": 33,
+        "text": "public:\n    // Caller asserts these are genuinely owned, accessible bytes with the given\n    // permissions. If owner is empty, lifetime is synchronous: storage must\n    // outlive this scope and every access; no external unmap/protect is allowed.\n    // An owner must actually retain these bytes, not merely an unrelated object.\n    // This is not an API for registering discovered process/game mappings.\n    ScopedRegion(void* data, size_t size, ProtFlag protection,\n                 std::shared_ptr<const void> owner = {});\n    ~ScopedRegion() noexcept;\n    ScopedRegion(const ScopedRegion&) = delete;"
+      },
+      {
+        "start": 66,
+        "end": 75,
+        "text": "    // It never registers a source. Caller must still prevent direct writes and\n    // external lifetime/protection changes outside this service. Do not call\n    // any other owned-memory service operation while holding this lease.\n    // The borrowed spans are valid only through this object's lifetime.\n    explicit ReadLease(std::span<const ReadRange> ranges);\n    ~ReadLease() noexcept;\n    ReadLease(const ReadLease&) = delete;\n    auto operator=(const ReadLease&) -> ReadLease& = delete;\n    ReadLease(ReadLease&&) = delete;\n    auto operator=(ReadLease&&) -> ReadLease& = delete;"
+      }
+    ]
+  },
+  {
+    "role": "opaque_identity",
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-game-thread-1/include/Unreal/Platform/NativeGameThreadIdentity.hpp",
+    "bytes": 2086,
+    "sha256": "9fd9304f5679b49127c4beb5012e27958a56ec1c73e1dff8bb4a2a7a2b9e5d89",
+    "windows": [
+      {
+        "start": 9,
+        "end": 37,
+        "text": "// Private native state, used by the genuine Tick publisher and existing getters.\n// Publication does not itself prove engine identity or make worker callbacks safe.\nclass Identity final {\n    mutable std::mutex mutex_;\n    std::thread::id id_{};\npublic:\n    Identity() = default;\n    Identity(const Identity&) = delete;\n    auto operator=(const Identity&) -> Identity& = delete;\n\n    auto publish_current() noexcept -> Publication {\n        const auto current=std::this_thread::get_id();\n        if(current==std::thread::id{}) return Publication::Unavailable;\n        try {\n            std::lock_guard lock{mutex_};\n            if(id_==std::thread::id{}) {\n                id_=current;\n                return Publication::Published;\n            }\n            return id_==current ? Publication::AlreadyCurrent : Publication::DifferentThread;\n        } catch(...) {\n            return Publication::Unavailable;\n        }\n    }\n    auto id() const -> std::thread::id {\n        std::lock_guard lock{mutex_};\n        if(id_==std::thread::id{})\n            throw std::runtime_error{\"GetGameThreadId called too early, not yet initialized by UGameEngine::Tick\"};\n        return id_;"
+      }
+    ]
+  },
+  {
+    "role": "current_marshal",
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-menu-path-audit/source-cache/LuaMod.cpp",
+    "bytes": 422550,
+    "sha256": "8bd12c623bab4e35203e4faa13fb829b141a46a586a0426b47eaa32cb12f75b8",
+    "windows": [
+      {
+        "start": 4730,
+        "end": 4764,
+        "text": "                                     [[maybe_unused]] void* CustomData) -> void\n    {\n#ifdef __PROSPERO__\n        // ORDER MATTERS (R3D 4.3): under BOTH_FAIL nothing else publishes the identity,\n        // so the marshal CANNOT gate on IsInGameThreadRaw() first - before publication\n        // that predicate is false for every thread and the pump would never start. The\n        // first accepted invocation publishes via the initializer bridge (publish_current\n        // is mutex-arbitrated: exactly one thread wins; every other thread, on this and\n        // later invocations, refuses); from then on the raw gate refuses worker threads.\n        // The publishing thread BECOMES the game thread - the same semantics as\n        // HookedEngineTick's genuine-callback publication, backed by the calibration's\n        // game-thread-stability criterion C-4 (CARRIER-CANDIDATES).\n        if (!m_funcptr_marshal_identity_published)\n        {\n            // 4.4a: the HookedEngineTick publication body, routed onto the marshal.\n            // Published/AlreadyCurrent both mean this caller IS the game thread;\n            // Unavailable/DifferentThread/StartupWait-cancelled refuse (false).\n            if (!Unreal::R3MarshalPublishGameThreadIdentity())\n            {\n                return;\n            }\n            m_funcptr_marshal_identity_published = true;\n            if (Unreal::R3MarshalPumpPending() && !m_funcptr_marshal_pump_pending_logged)\n            {\n                m_funcptr_marshal_pump_pending_logged = true;\n                Output::send(STR(\"[R3] marshal is the game-thread pump (initializer deferred its EngineTick registrations)\\n\"));\n            }\n        }\n        // The carrier may be invoked on worker threads. Do not inspect Lua action\n        // state until the published game thread is this exact caller thread.\n        if (!Unreal::IsInGameThreadRaw())\n        {\n            return;\n        }\n        // [claude-cloud event-carrier] liveness for r3_marshal_lazy_arm's staleness rescan."
+      }
+    ]
+  }
+]

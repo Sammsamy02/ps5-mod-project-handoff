@@ -1,0 +1,195 @@
+VALIDATION — epoch_view.py against the REAL accumulated launch-10 sdiag
+Worker: worker-durable-events · 2026-10-05 · LOCAL ONLY, no console contact.
+
+Primary input (the accumulated append-only file, pinned as the RUN-5 baseline cut):
+  outputs/2026-10-04-zcode-controller/launch10-prep/sdiag-baseline-run5.jsonl
+    2139 records · 318910 B · sha256 40504e28e0bc15fd0060304842ad2602bf5b279fb406affaedcb17cf51f4ec0f
+  Byte-identical to launch10-evidence/run4-sdiag.jsonl (the cumulative post-run-4 fetch).
+Supporting sinks:
+  outputs/2026-10-04-zcode-controller/launch10-evidence/run4-ue4ss.log
+    (= launch10-prep/ue4ss-log-baseline-run5.txt, 8823 B, sha256 324145c9d261d55b...)
+  outputs/2026-10-04-zcode-controller/launch10-prep/runtime-status-baseline-run5.txt
+    (= launch10-evidence/run4-runtime-status.txt, 117 B, sha256 63909e2e28bcc0e0...)
+
+===============================================================================
+1. THE 4-EPOCH TABLE (real data; tool output verbatim)
+===============================================================================
+
+== epoch_view — one row per GAME EPOCH (pid), from the DURABLE sinks ==
+sdiag: outputs/2026-10-04-zcode-controller/launch10-prep/sdiag-baseline-run5.jsonl (2139 records)
+ue4ss mirror: outputs/2026-10-04-zcode-controller/launch10-evidence/run4-ue4ss.log
+runtime-status: outputs/2026-10-04-zcode-controller/launch10-prep/runtime-status-baseline-run5.txt — LATEST-STATE-ONLY: applies to session pid 370 ALONE; never read as history (user directive)
+
+epoch matrix (one row per pid, file/append order):
+  pid       recs    t_first    t_last     spanms stage chain (first-seen)                       terminal                       predicted pair                     verdict (oracle)
+  317       548     60003456   60009203   5747   ENTRY -> harness -> ACT -> VMMAP -> cfg -> le… runtime_start_failed code=3    anchor=7 intervals=1 spans=6       E2 START — MINIMAL-ACCEPT-grade conversion (D1-D5 quartet met, no D…
+  341       495     60249173   60254917   5744   ENTRY -> harness -> ACT -> STOP                mfa_activate_failed code=-8    anchor=- intervals=- spans=-       B7 MFA
+  355       548     60899781   60905523   5742   ENTRY -> harness -> ACT -> VMMAP -> cfg -> le… runtime_start_failed code=3    anchor=7 intervals=1 spans=6       pad phase-6 — MINIMAL-ACCEPT-grade conversion (D1-D5 quartet met, n…
+  370       548     62841898   62847645   5747   ENTRY -> harness -> ACT -> VMMAP -> cfg -> le… runtime_start_failed code=3    anchor=7 intervals=1 spans=6       pad phase-6 — MINIMAL-ACCEPT-grade conversion (D1-D5 quartet met, n…
+
+-- epoch pid=317 
+   records=548 seq=1..548 t_first=60003456 t_last=60009203 span_ms=5747
+   stage chain (coarse):    ENTRY -> harness -> ACT -> VMMAP -> cfg -> lease -> anchors -> conversion -> START -> STOP
+   stage chain (evidence.sh S-stages): S1_ENTRY_CTORS -> (harness) -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S4_LEASE_REG -> S5_IDENTITY_ANCHORS -> S6_CONVERSION -> S9_START_ACK -> S11_STOP
+   note: cfg appears before lease/anchors — bridge_exepath_source is emitted mid-walk (evidence.sh GAP-3 display quirk; first-seen order preserved, not reordered).
+   terminal: see refusal line below
+   refusal line: [t=60004266ms pid=317] modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad.ini must be ASCII text without control bytes
+   module_start_return: 0 (0 after a refusal = entry returned 0, game continues UNMODDED — evidence.sh G4 quirk, not an unload)
+   predicted pair: anchor=7 intervals=1 spans=6 ; lease_reg=6 ; extent=[0x400000, 0xc0602c8) ; cfg gamedir/workdir=1/1
+   activation: mfa_activated_low/high=36566/0 ; E4: evidence-equivalence (mfa_activated_low=36566/high=0; no literal `activated` state on file — LATEST-STATE-ONLY status has no capture for this epoch)
+   buffered-Lua harness: green (buffered_lua_result=0)
+   note: oracle E2 EXPECTED-REFUSAL: prepare/start threw (pad profile, mod source, sink open, ...); verdict >= MINIMAL-ACCEPT when the conversion quartet holds.
+   note: E4 by evidence-equivalence per LAUNCH10-RESULTS §2: the START-stage code=3 is reachable only AFTER MFA activation; the terminal write O_TRUNC-replaced the ack lines.
+
+-- epoch pid=341 
+   records=495 seq=1..495 t_first=60249173 t_last=60254917 span_ms=5744
+   stage chain (coarse):    ENTRY -> harness -> ACT -> STOP
+   stage chain (evidence.sh S-stages): S1_ENTRY_CTORS -> (harness) -> S2_ACTIVATION -> S11_STOP
+   terminal: see refusal line below
+   refusal line: [t=60249877ms pid=341] modbridge module_start failed: mfa_activate_failed code=-8 detail=size file is shorter than the load list says ue4ss/PS5Pad.ini
+   module_start_return: 0 (0 after a refusal = entry returned 0, game continues UNMODDED — evidence.sh G4 quirk, not an unload)
+   predicted pair: anchor=- intervals=- spans=- ; lease_reg=- ; extent=- ; cfg gamedir/workdir=-/-
+   activation: mfa_activated_low/high=-/- ; E4: absent (no activation evidence in this epoch)
+   buffered-Lua harness: green (buffered_lua_result=0)
+   note: oracle B7 EXPECTED-REFUSAL: FAIL with named cause; nothing downstream ran (no bridge tags in this epoch by construction).
+
+-- epoch pid=355 
+   records=548 seq=1..548 t_first=60899781 t_last=60905523 span_ms=5742
+   stage chain (coarse):    ENTRY -> harness -> ACT -> VMMAP -> cfg -> lease -> anchors -> conversion -> START -> STOP
+   stage chain (evidence.sh S-stages): S1_ENTRY_CTORS -> (harness) -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S4_LEASE_REG -> S5_IDENTITY_ANCHORS -> S6_CONVERSION -> S9_START_ACK -> S11_STOP
+   note: cfg appears before lease/anchors — bridge_exepath_source is emitted mid-walk (evidence.sh GAP-3 display quirk; first-seen order preserved, not reordered).
+   terminal: see refusal line below
+   refusal line: [t=60900581ms pid=355] modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad input unavailable: phase=6, error=-2137915388
+   pad error code: -2137915388 = 0x80920004 (pad error domain)
+   module_start_return: 0 (0 after a refusal = entry returned 0, game continues UNMODDED — evidence.sh G4 quirk, not an unload)
+   predicted pair: anchor=7 intervals=1 spans=6 ; lease_reg=6 ; extent=[0x400000, 0xc0602c8) ; cfg gamedir/workdir=1/1
+   activation: mfa_activated_low/high=36564/0 ; E4: evidence-equivalence (mfa_activated_low=36564/high=0; no literal `activated` state on file — LATEST-STATE-ONLY status has no capture for this epoch)
+   buffered-Lua harness: green (buffered_lua_result=0)
+   note: oracle E2 START subclass: pad provider init refused (pad error domain); EXPECTED-REFUSAL.
+   note: E4 by evidence-equivalence per LAUNCH10-RESULTS §2: the START-stage code=3 is reachable only AFTER MFA activation; the terminal write O_TRUNC-replaced the ack lines.
+
+-- epoch pid=370 
+   records=548 seq=1..548 t_first=62841898 t_last=62847645 span_ms=5747
+   stage chain (coarse):    ENTRY -> harness -> ACT -> VMMAP -> cfg -> lease -> anchors -> conversion -> START -> STOP
+   stage chain (evidence.sh S-stages): S1_ENTRY_CTORS -> (harness) -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S4_LEASE_REG -> S5_IDENTITY_ANCHORS -> S6_CONVERSION -> S9_START_ACK -> S11_STOP
+   note: cfg appears before lease/anchors — bridge_exepath_source is emitted mid-walk (evidence.sh GAP-3 display quirk; first-seen order preserved, not reordered).
+   terminal: see refusal line below
+   refusal line: [t=62842697ms pid=370] modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad input unavailable: phase=6, error=-2137915388
+   pad error code: -2137915388 = 0x80920004 (pad error domain)
+   module_start_return: 0 (0 after a refusal = entry returned 0, game continues UNMODDED — evidence.sh G4 quirk, not an unload)
+   predicted pair: anchor=7 intervals=1 spans=6 ; lease_reg=6 ; extent=[0x400000, 0xc0602c8) ; cfg gamedir/workdir=1/1
+   activation: mfa_activated_low/high=36564/0 ; E4: evidence-equivalence (mfa_activated_low=36564/high=0; no literal `activated` state on file — LATEST-STATE-ONLY status has no capture for this epoch)
+   buffered-Lua harness: green (buffered_lua_result=0)
+   note: oracle E2 START subclass: pad provider init refused (pad error domain); EXPECTED-REFUSAL.
+   note: E4 by evidence-equivalence per LAUNCH10-RESULTS §2: the START-stage code=3 is reachable only AFTER MFA activation; the terminal write O_TRUNC-replaced the ack lines.
+   note: status agrees (LATEST-STATE-ONLY, session pid matches): last=failed code=1 detail=PS5Pad input unavailable: phase=6, error=-2137915388
+   note: status `failed` corroborates the durable refusal of this epoch (no race: the file is not the history).
+
+unattributed legacy failure lines in the mirror (no r4 pid prefix; pre-r4 epochs — counted, never attributed): 8
+   e.g. modbridge module_start failed: runtime_start_failed code=1 detail=no image anchor (status NoImageAn…
+   e.g. modbridge module_start failed: runtime_start_failed code=1 detail=no image anchor (status NoImageAn…
+   e.g. modbridge module_start failed: runtime_start_failed code=1 detail=no image anchor (status NoImageAn…
+
+mirror-only epochs (pid-prefixed refusal lines with NO sdiag records in this file — earlier launches outside the accumulated window; shown for correlation, never merged into sdiag epochs):
+   pid=273 t=44372082 D6 conversion refusal (launch-9 terminal) — no observed mapping interval intersects the module image extent with valid geometry
+
+status (LATEST-STATE-ONLY): session pid=370 ms=62842688 states=1 last=failed code=1
+status detail: PS5Pad input unavailable: phase=6, error=-2137915388
+
+GUARDS: per-epoch (per-pid) values only — last-write-wins WITHIN a pid; t_ms deltas are never taken across epochs; the status file is latest-state-only and is never used as epoch history.
+
+===============================================================================
+2. TASK REQUIREMENTS -> RESULT
+===============================================================================
+
+R1  ALL FOUR epochs (pids 317/341/355/370) recovered from the accumulated file:
+    PASS — 4 epochs in append order (317, 341, 355, 370); record split
+    548+495+548+548 = 2139 (file total). Distinct outcomes:
+      pid 317 (run1): E2 START — code=3 'PS5Pad.ini must be ASCII text
+        without control bytes' — full conversion chain, quartet met.
+      pid 341 (run2): B7 MFA — mfa_activate_failed code=-8 (0xfffffff8)
+        'size file is shorter than the load list says ue4ss/PS5Pad.ini';
+        NO bridge tags in the whole epoch (refusal preceded capture, per B7).
+      pid 355 (run3): pad phase-6 — code=3 'PS5Pad input unavailable:
+        phase=6, error=-2137915388' (0x80920004) — MINIMAL-ACCEPT-grade
+        conversion (the LAUNCH10-RESULTS §2 CONFIRMED run).
+      pid 370 (run4): pad phase-6 — code=3, byte-identical refusal text to
+        run-3; THE RUN-4 REPRO. Status session 370 corroborates (its only
+        legal application: LATEST-STATE-ONLY session pid == 370).
+
+R2  Predicted-pair values for the conversion-passing epochs:
+    PASS — anchor_count=7, intervals_found=1, lease_spans=6 (+ lease_reg=6,
+    extent [0x400000, 0xc0602c8), cfg 1/1) on pid 317 AND pid 355 — the two
+    conversion passes LAUNCH10-RESULTS §3 confirmed ('The predicted pair is
+    CONFIRMED on real data, twice'). Honest extension: run-4 (pid 370) adds a
+    THIRD quartet with the identical pair 7/1/6 — the geometry claim now
+    reproduced three times on real boots; spanpub totals differ per boot
+    (119/127/123) exactly as the G9 note predicts (saturation at cap=16).
+
+R3  Run-4 repro:
+    PASS — pid 370 refusal text identical to pid 355's (phase=6,
+    error=0x80920004); sdiag runtime_start_failed t=62842696 vs r4 mirror
+    line t=62842697 (1 ms writer skew — runs 1-3 agreed exactly; noted, no
+    impact); status session 370/62842688 corroborates the same detail.
+
+===============================================================================
+3. CROSS-CHECKS vs launch10-evidence/ PER-RUN FILES (all real data)
+===============================================================================
+
+C1  Per-run files are exact slices of the accumulated file:
+      run1-sdiag.jsonl (548 recs)  -> epoch_view recovers exactly 1 epoch (317),
+        values identical to the accumulated file's pid-317 slice.
+      run3-sdiag.jsonl (1591 recs) -> exactly 3 epochs (317, 341, 355),
+        values identical to the corresponding slices.
+      run4-sdiag.jsonl (2139 recs) -> byte-identical to the accumulated file
+        (same sha256 40504e28...).
+      Provenance shas match LAUNCH10-RESULTS §6 (run1 d5ad9fa05e9bf4f7,
+      run3 264ba150325dbe28, run3-status f5ba12265b77c918 — re-verified here).
+
+C2  Baseline-cut mechanics (the RUN-N+1 discriminator):
+      epoch_view --baseline-bytes 237211 (= run3-sdiag.jsonl size) marks
+      exactly pid 370 new=yes and 317/341/355 new=no — the pid-370 records
+      begin exactly at the run3 file's byte end; the cut is byte-exact.
+
+C3  Cross-sink correlation by pid (r4 mirror line vs sdiag t_ms):
+      pid 317: 60004266 == 60004266 · pid 341: 60249877 == 60249877 ·
+      pid 355: 60900581 == 60900581 (LAUNCH10-RESULTS §0 'agree exactly'
+      re-verified); pid 370: 62842697 vs 62842696 (1 ms skew, recorded).
+
+C4  LAUNCH10-RESULTS value re-verification from the table:
+      run1 vmentry=22761 (G7) · run3 vmentry=10028 (G7) · spanpub totals
+      119/127 (G9) + run4 123 · mfa_activated_low 36564 run3 (§2), 36566
+      run1 · stat_ownmod=1 with exepath_source=0 on all three conversion
+      epochs (G8) · module_start_return=0 everywhere (G4 quirk annotated).
+
+C5  LATEST-STATE-ONLY discipline (user directive):
+      run3 file + run3-status read: the pad phase-6 refinement applies to
+      pid 355 ONLY (session pid match); pids 317/341 stay E2/B7 and are
+      never touched by the status file. run4 file + run5-baseline status
+      (session 370): only pid 370 gets the corroboration note. The tool
+      prints the latest-state-only banner and never treats the status as
+      history. (Supersedes the old 'fetch status before terminal write' caveat.)
+
+C6  Negative/robustness cases (synthetic, separate from the real corpus):
+      missing file -> exit 2 · empty input -> NO-EPOCHS (exit 0) · garbage
+      line -> skipped, valid records still classified · reboot between
+      epochs (t_ms backwards) -> per-epoch BOOT-GAP note, file order kept ·
+      truncated epoch (records end mid-stream) -> INCOMPLETE_WINDOW verdict,
+      never guessed.
+
+===============================================================================
+4. HONEST BOUNDS
+===============================================================================
+  - build_id is NOT carried by the sdiag record grammar (verified: marker/
+    schema/seq/pid/tag/value/value_hex/t_ms only); it is settable via
+    --build-id from the controller's staging receipt and is '-' when unset.
+    The four epochs share one observed behavior signature on one console
+    boot; build identity remains a controller-declared fact, not a sink fact.
+  - E4 'activated' is NOT literally on file for ANY of the four epochs (the
+    terminal write O_TRUNC-replaced the ack lines; status files captured only
+    the final failed state). The tool reports evidence-equivalence with the
+    caveat, per LAUNCH10-RESULTS §2 — no verdict above MINIMAL-ACCEPT-grade
+    conversion is claimed or automatable from this data.
+  - Verdicts are per-epoch oracle CLASSES; the controller's rung declaration
+    (ORACLE §2) stays a controller act. This tool never upgrades a verdict by
+    re-reading unchanged evidence.

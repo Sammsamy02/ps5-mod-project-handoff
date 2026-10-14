@@ -1,0 +1,24 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l25-runtime/typescan-r4/include/NativePropertyReadBackend.inl
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/NativePropertyReadBackend.inl
+@@ -18,10 +18,10 @@
+     void log_region(uint64_t,size_t,const admission::Query&) {}
+ };
+ static bool PropertyReadBytes(uintptr_t address,size_t length,void* destination) {
+-    if(!destination || !admission::valid_range(address,length) || bridge_copyin_range_faulted(address,length)!=0) return false;
++    if(!destination || !admission::valid_range(address,length)) return false;
+     PropertyReadOps ops; admission::Budget budget(ops.now_ms(),1000);
+     const auto proof=admission::coverage(ops,budget,address,length);
+-    if(proof.verdict!=admission::Verdict::Readable || budget.expired(ops.now_ms()) || bridge_copyin_range_faulted(address,length)!=0) return false;
++    if(proof.verdict!=admission::Verdict::Readable || budget.expired(ops.now_ms())) return false;
+     std::memcpy(destination,reinterpret_cast<const void*>(address),length);
+     return !budget.expired(ops.now_ms());
+ }
+@@ -37,7 +37,7 @@
+     // semantics — no proof means refuse.
+     rc::imagecoverage::Hit hit{};
+     if (bridge_image_range(static_cast<uint64_t>(address), length, &hit) != 1) return false;
+-    if (!hit.readable || bridge_copyin_range_faulted(address, length) != 0) return false;
++    if (!hit.readable) return false;
+     // Secondary: the same admission-coverage proof as l23 (budgeted VQ +
+     // fault-ledger re-check). This is the post-range proof that the bytes
+     // are actually readable, independent of the range source.

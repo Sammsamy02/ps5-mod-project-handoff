@@ -1,0 +1,27 @@
+#include "oauth_config.h"
+#define BUILD_ID "77e3422cf19deb5f1663ff2ec79923f11865eae5a50ce9691e567c03663ba57a"
+#define HOST_PROFILE "desktop_fixture"
+#define HOST_NATIVE 0
+#define HOST_ADDRESS "127.0.0.1"
+#define HOST_LIFETIME 600
+#define MB_HOST_DOWNLOAD 1
+#define MB_HOST_JOBS 1
+#define MB_HOST_PAK_PREPARATION 1
+#define MB_HOST_PAK_PROFILE 1
+#define MB_HOST_IOSTORE_PROFILE 1
+#define MB_HOST_JOB_DIRECTORY "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-nexus-acquisition-queue-1/fixture-config-1/scratch"
+#define MB_CRYPTO_CONFIG_ID "86adf3460965c831f05d27f490a309490a8a13efdb9d5fdb6eff453008e8d73f"
+#define MB_HOST_PAK_BASE_PATH "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-observations/townfall-main-pak-full-2026-10-01/pakchunk0-ps5.pak"
+#define MB_HOST_PAK_BASE_BYTES UINT64_C(297572462)
+#define MB_HOST_PAK_NEXUS_GAME "silenthilltownfall"
+#define MB_HOST_PAK_TIMEOUT_MS 300000u
+#define MB_HOST_PAK_BASE_SHA256 {238,20,92,188,128,143,150,80,138,98,108,46,38,89,35,113,249,188,79,46,246,72,64,120,74,74,47,51,45,140,216,103}
+#define MB_HOST_IOSTORE_BASE_TOC_PATH "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-observations/townfall-main-utoc-2026-10-01/pakchunk0-ps5.utoc"
+#define MB_HOST_IOSTORE_BASE_TOC_BYTES UINT64_C(29707562)
+#define MB_HOST_IOSTORE_BASE_TOC_SHA256 {53,222,39,82,108,46,217,26,125,33,171,2,123,78,42,214,220,88,204,161,55,171,146,195,30,31,96,201,224,187,117,181}
+#define MB_HOST_IOSTORE_BASE_HEADER_PATH "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-observations/townfall-original-container-header-1/container-header.bin"
+#define MB_HOST_IOSTORE_BASE_HEADER_BYTES UINT64_C(2272324)
+#define MB_HOST_IOSTORE_BASE_HEADER_SHA256 {215,182,247,202,36,213,122,237,157,74,63,70,11,196,154,215,189,143,107,70,35,137,110,30,132,220,220,55,172,115,162,167}
+#define MB_HOST_IOSTORE_BASE_UCAS_BYTES UINT64_C(128240377200)
+#define MB_HOST_IOSTORE_NEXUS_GAME "silenthilltownfall"
+#define MB_HOST_IOSTORE_TIMEOUT_MS 300000u

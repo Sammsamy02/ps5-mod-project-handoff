@@ -1,0 +1,123 @@
+--- a/MonoOwner.cpp
++++ b/MonoOwner.cpp
+@@ -20,6 +20,8 @@
+ #include <atomic>
+ #include <chrono>
+ #include <cstring>
++#include <csignal>
++#include <pthread.h>
+ 
+ extern "C" std::int32_t modbridge_cap10_abi_version() noexcept;
+ extern "C" std::int32_t modbridge_cap10_runtime_probe(std::int32_t, std::int32_t*) noexcept;
+@@ -67,12 +69,49 @@
+             MonoDomain* domain{};
+             MonoImage* image{};
+             MonoDlFallbackHandler* handler{};
++            sigset_t entry_mask{};
++            struct sigaction entry_pipe{}, mono_pipe{};
++            bool mono_pipe_observed{};
++            bool save_signal_state() noexcept
++            {
++                return sigaction(SIGPIPE, nullptr, &entry_pipe) == 0 &&
++                       pthread_sigmask(SIG_SETMASK, nullptr, &entry_mask) == 0;
++            }
++            bool observe_runtime_pipe() noexcept
++            {
++                mono_pipe_observed = sigaction(SIGPIPE, nullptr, &mono_pipe) == 0 &&
++                    !(mono_pipe.sa_flags & SA_SIGINFO) && mono_pipe.sa_handler == SIG_IGN;
++                return mono_pipe_observed;
++            }
++            static bool same_action(const struct sigaction& left, const struct sigaction& right) noexcept
++            {
++                if (left.sa_flags != right.sa_flags) return false;
++                if ((left.sa_flags & SA_SIGINFO) ? left.sa_sigaction != right.sa_sigaction : left.sa_handler != right.sa_handler)
++                    return false;
++                for (int signal = 1; signal < NSIG; ++signal)
++                    if (sigismember(&left.sa_mask, signal) != sigismember(&right.sa_mask, signal)) return false;
++                return true;
++            }
++            bool cleanup() noexcept
++            {
++                if (image) { mono_image_close(image); image = nullptr; } // Assembly retains its own image reference.
++                const bool initialized = domain != nullptr;
++                if (domain) { mono_jit_cleanup(domain); domain = nullptr; } // Actual owning init thread; no outer GC scope alive.
++                // Cleanup may close cached native modules; handler/user must outlive it.
++                if (handler) { mono_dl_fallback_unregister(handler); handler = nullptr; }
++                // A null/partially initialized runtime has no proved cleanup contract.
++                if (!initialized) return false;
++                bool clean = true;
++                struct sigaction current_pipe{};
++                if (!mono_pipe_observed || sigaction(SIGPIPE, nullptr, &current_pipe) != 0) clean = false;
++                else if (!same_action(current_pipe, mono_pipe)) clean = false; // Leave an identifiable replacement alone.
++                else if (sigaction(SIGPIPE, &entry_pipe, nullptr) != 0) clean = false;
++                if (pthread_sigmask(SIG_SETMASK, &entry_mask, nullptr) != 0) clean = false;
++                return clean;
++            }
+             ~Lifetime() noexcept
+             {
+-                if (image) mono_image_close(image); // Assembly retains its own image reference.
+-                if (domain) mono_jit_cleanup(domain); // Actual owning init thread; no outer GC scope alive.
+-                // Cleanup may close cached native modules; handler/user must outlive it.
+-                if (handler) mono_dl_fallback_unregister(handler);
++                if (image || domain || handler) (void)cleanup();
+             }
+         };
+         void emit(const char* tag, unsigned value) noexcept
+@@ -121,9 +160,12 @@
+         try
+         {
+             Lifetime owner; // Does not leave actual callback or its owning native thread.
++            if (!owner.save_signal_state()) { out.stage = Stage::SignalStateFailed; return out; }
+             // Mono appends mono/4.5 and mono/config to these prefixes itself.
+             mono_set_dirs(MODBRIDGE_CAP10_CORLIB_DIR, MODBRIDGE_CAP10_CONFIG_DIR);
+             mono_config_parse(nullptr); // Load the relocated runtime's global dllmap.
++            // Requires the saved-action lifetime fix in the matching Mono runtime.
++            mono_set_signal_chaining(true);
+             mono_jit_set_aot_mode(MONO_AOT_MODE_INTERP);
+ #if defined(__PROSPERO__) || defined(MODBRIDGE_CAP10_STATIC_CORLIB)
+             // The generated symbol holds the file-info pointer; do not pass its address.
+@@ -132,6 +174,7 @@
+             owner.domain = mono_jit_init_version("ModBridge.Cap10", "v4.0.30319");
+             if (!owner.domain) { out.stage = Stage::InitFailed; return out; }
+             out.initialized = true;
++            if (!owner.observe_runtime_pipe()) { out.stage = Stage::SignalStateFailed; return out; }
+             // mono_jit_init_version creates/attaches the current root-domain thread.
+             // No unsafe mono_thread_current probe and no extra attach/detach ownership.
+             owner.handler = mono_dl_fallback_register(load, symbol, close, &owner.provider);
+@@ -161,6 +204,7 @@
+             out.resolver_probe = owner.provider.probe;
+             out.completed = out.calls.completed && out.resolver_load && out.resolver_abi && out.resolver_probe;
+             // Actual cleanup runs before the observation result is emitted/callback returns.
++            if (!owner.cleanup()) { out.completed = false; out.stage = Stage::SignalStateFailed; }
+         }
+         catch (...) { out.completed = false; } // Not a Mono fatal/assert/OS-fault catch.
+         return out;
+--- a/MonoOwner.hpp
++++ b/MonoOwner.hpp
+@@ -5,7 +5,7 @@
+ namespace RC::Cap10Host
+ {
+     enum class Stage : unsigned { NotStarted, ExistingRuntime, InitFailed, ResolverFailed,
+-                                  ImageFailed, AssemblyIdentityFailed, MethodsFailed, Invoked };
++                                  ImageFailed, AssemblyIdentityFailed, MethodsFailed, Invoked, SignalStateFailed };
+     struct Result
+     {
+         Cap10Boundary::Report calls{};
+@@ -16,6 +16,17 @@
+     // Parent module, initialized interpreter/GC/thread/TLS/EH port and matching
+     // runtime corlib stay retained until this entire call and cleanup return.
+     // No other Mono users/owners permitted. Runtime initialization is one-shot.
++    // Caller must exclusively own changes to Mono-affected signal dispositions
++    // from entry through cleanup, and keep this same init thread's signal mask
++    // under this owner's control. Mono cleanup restores standard actions itself;
++    // concurrent handler changes, profiling/crash-handler installation and
++    // independent signal-mask changes during the call are unsupported.
++    // SIGPIPE is restored only while it still matches the observed Mono IGN action;
++    // an identifiable replacement is retained and completion is refused. POSIX
++    // sigaction has no atomic compare-and-set; this check does not provide locking.
++    // Requires matching Mono saved-action lifetime fix before enabling chaining.
++    // Restoration evidence applies after successful init/cleanup; a failed or
++    // fatal partial init is not a proved recoverable state. No cleanup on null domain.
+     // Requires the exact reserved-owned-loader source patch; no ambient resolution.
+     // mono_set_dirs takes the assembly prefix (PREFIX/lib) and configuration
+     // prefix (PREFIX/etc), not PREFIX/lib/mono/4.5 or PREFIX/etc/mono.

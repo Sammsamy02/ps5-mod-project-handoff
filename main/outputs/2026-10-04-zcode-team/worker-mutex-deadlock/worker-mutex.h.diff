@@ -1,0 +1,65 @@
+--- ../../ps5-mod-bridge/windows-candidate/tests/worker-mutex.h	2026-10-04 11:23:19
++++ proposed_worker-mutex.h	2026-10-04 12:31:59
+@@ -33,24 +33,36 @@
+ static const mb_worker_u16 mb_worker_mutex_abandon_folded[]={'m','b','w','o','r','k','e','r','.','a','b','a','n','d','o','n',0};
+ static const mb_worker_u16 mb_worker_mutex_backslash[]={'B','a','d','\\','N','a','m','e',0};
+ static struct {
+- void *unnamed,*named,*opened,*exists,*abandon_open;
++ void *unnamed,*named,*opened,*exists,*abandon_open,*worker_abandon;
++ void *tokens[8];mb_worker_u32 token_count;
+  mb_worker_u32 alertable,recursion,transfered,reacquired;
+ } mb_worker_mutex_state;
++/* Integration fix (worker-mutex-deadlock): every public handle token this
++ * fixture creates must be retired before the creator-side finish returns, or
++ * the native mutex owner can never close (BUSY on outstanding handles) and
++ * the SDK driver retries cleanup forever. Requires the combined CloseHandle
++ * dispatch proposed for owned_runtime.c (workers thread handles first, mutex
++ * tokens second). */
++__declspec(dllimport) mb_worker_i32 CloseHandle(void *);
++static void mb_worker_mutex_keep(void *token){
++ if(token && mb_worker_mutex_state.token_count<8)mb_worker_mutex_state.tokens[mb_worker_mutex_state.token_count++]=token;}
+ /* Creator-side documented semantics before the worker exists. */
+ static mb_worker_i32 mb_worker_mutex_prepare(void){
+- mb_worker_mutex_state.unnamed=CreateMutexW(0,0,0);
++ mb_worker_mutex_state.unnamed=CreateMutexW(0,0,0);mb_worker_mutex_keep(mb_worker_mutex_state.unnamed);
+  if(!mb_worker_mutex_state.unnamed)return -60;
+  if(WaitForSingleObjectEx(mb_worker_mutex_state.unnamed,1,0)!=MB_WORKER_MUTEX_WAIT_OBJECT_0)return -61; /* unowned mutex is signaled: a finite wait acquires */
+  if(ReleaseMutex(mb_worker_mutex_state.unnamed)!=1)return -62; /* creator became the owner above */
+  if(WaitForSingleObjectEx(mb_worker_mutex_state.unnamed,0,1)!=MB_WORKER_MUTEX_WAIT_FAILED || GetLastError()!=MB_WORKER_MUTEX_ERROR_NOT_SUPPORTED)return -63;
+- mb_worker_mutex_state.named=CreateMutexExW(0,mb_worker_mutex_named,0,0x1f0001u);
++ mb_worker_mutex_state.named=CreateMutexExW(0,mb_worker_mutex_named,0,0x1f0001u);mb_worker_mutex_keep(mb_worker_mutex_state.named);
+  if(!mb_worker_mutex_state.named)return -64;
+- mb_worker_mutex_state.opened=OpenMutexW(0x1f0001u,0,mb_worker_mutex_named_folded);
++ mb_worker_mutex_state.opened=OpenMutexW(0x1f0001u,0,mb_worker_mutex_named_folded);mb_worker_mutex_keep(mb_worker_mutex_state.opened);
+  if(!mb_worker_mutex_state.opened)return -65; /* folded lookup */
+- mb_worker_mutex_state.exists=CreateMutexW(0,1,mb_worker_mutex_named);
++ mb_worker_mutex_state.exists=CreateMutexW(0,1,mb_worker_mutex_named);mb_worker_mutex_keep(mb_worker_mutex_state.exists);
+  if(!mb_worker_mutex_state.exists || GetLastError()!=MB_WORKER_MUTEX_ERROR_ALREADY_EXISTS)return -66;
+  if(ReleaseMutex(mb_worker_mutex_state.exists)!=0 || GetLastError()!=MB_WORKER_MUTEX_ERROR_NOT_OWNER)return -67; /* initial owner ignored */
+  if(WaitForSingleObjectEx(mb_worker_mutex_state.opened,0,0)!=MB_WORKER_MUTEX_WAIT_OBJECT_0)return -68;
++ {void *second=OpenMutexW(0x1f0001u,0,mb_worker_mutex_named_folded);mb_worker_mutex_keep(second);
++ if(WaitForSingleObjectEx(second,0,0)!=MB_WORKER_MUTEX_WAIT_OBJECT_0)return -68;}
+  mb_worker_mutex_state.recursion=WaitForSingleObjectEx(mb_worker_mutex_state.opened,1,0);
+  if(mb_worker_mutex_state.recursion!=MB_WORKER_MUTEX_WAIT_TIMEOUT)return -69; /* owner re-wait: finite timeout */
+  if(ReleaseMutex(mb_worker_mutex_state.opened)!=1)return -70;
+@@ -60,7 +72,9 @@
+ /* Worker thread: acquire and publish a named mutex, then exit WITHOUT
+  * release so native thread exit abandons it. */
+ static mb_worker_i32 mb_worker_mutex_thread_acquire(void){
+- if(!CreateMutexW(0,1,mb_worker_mutex_abandon))return 0;
++ mb_worker_mutex_state.worker_abandon=CreateMutexW(0,1,mb_worker_mutex_abandon);
++ mb_worker_mutex_keep(mb_worker_mutex_state.worker_abandon);
++ if(!mb_worker_mutex_state.worker_abandon)return 0;
+  return 1;
+ }
+ /* Creator-side after join: WAIT_ABANDONED plus ownership transfer. */
+@@ -74,6 +88,9 @@
+  if(WaitForSingleObjectEx(mb_worker_mutex_state.abandon_open,0,0)!=MB_WORKER_MUTEX_WAIT_OBJECT_0)return -75;
+  if(ReleaseMutex(mb_worker_mutex_state.abandon_open)!=1)return -76;
+  mb_worker_mutex_state.reacquired=1;
++ for(mb_worker_u32 i=0;i<mb_worker_mutex_state.token_count;++i)
++  if(mb_worker_mutex_state.tokens[i] && !CloseHandle(mb_worker_mutex_state.tokens[i]))return -78;
++ mb_worker_mutex_state.token_count=0;
+  return 1;
+ }
+ #endif

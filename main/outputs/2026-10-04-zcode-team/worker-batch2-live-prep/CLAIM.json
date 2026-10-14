@@ -1,0 +1,40 @@
+{
+  "team": "2026-10-04-zcode-team",
+  "worker": "worker-batch2-live-prep",
+  "role": "Prepare the batch2/batch3 UStruct-chain predicates for live in-process use: design + implement the rung-3 live-read sequence (GUA+0x10 Objects** -> chunk[0] -> FUObjectItem[0] -> UObjectBase fields) as span-validated C callable from a PRX; verify readable-span coverage of Objects**=0x13800220a0; host-test on synthetic chunk/object fixtures; document what evidence the reads unlock.",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "output_dir": "outputs/2026-10-04-zcode-team/worker-batch2-live-prep/",
+  "constraints": {
+    "no_nested_subagents": true,
+    "no_network": true,
+    "no_console": true,
+    "write_only_under": "outputs/2026-10-04-zcode-team/worker-batch2-live-prep/",
+    "existing_files_read_only": true,
+    "claim_first_report_last": true,
+    "max_tool_calls": 80,
+    "scope": "design + host-test prep; NOT the console run itself; no raw dereference without span coverage"
+  },
+  "consumed_read_only": [
+    "outputs/2026-10-04-zcode-team/worker-5-layout-validator/src/townfall_layout_probes.hpp (MemSpan/Verdict/RCode conventions)",
+    "outputs/2026-10-04-zcode-team/worker-layout-batch2/src/reflection_layout_predicates.{hpp,cpp} (offset provenance, chunk math 65536 elems/chunk, stride 0x18, verdict discipline)",
+    "outputs/2026-10-04-zcode-team/worker-layout-batch3/{REPORT.md,src/} (walk predicates, Inconclusive-for-unreadable parity)",
+    "outputs/2026-10-04-zcode-team/worker-predicate-gc-fix/{REPORT.md,vendored-fixed/src/townfall_layout_probes.cpp} (layout-A GUA offsets 0x10/0x24/0x28/0x2C, corrected GC-order invariant, live observed values)",
+    "outputs/2026-10-04-zcode-team/worker-mapping-recovery/vmmap-v3-records.jsonl (recovered span list)",
+    "outputs/2026-10-04-zcode-team/worker-span-arbitration/{VERDICT.md,REPORT.md} (49 family spans REAL; 144-byte kinfo record stride bug; map incomplete)",
+    "outputs/2026-10-04-zcode-team/worker-anchor-validation/RECEIPT.md (validated GUA span [0x970c000,0x9a34000) prot 6 at 0x97ba110)",
+    "outputs/2026-10-04-zcode-team/worker-staged-pair-live/CLAIM.json (live validated GUA observed field set incl. Objects**=0x13800220a0)",
+    "outputs/2026-10-04-zcode-team/worker-ingame-probe-v3/src/vmmap_walk.c (variable kve_structsize walk pattern, cited only)"
+  ],
+  "planned_outputs": [
+    "src/live_gua_reads.h  (C header: span table, three-way-classified reads, rung-3 record + check states)",
+    "src/live_gua_reads.c  (implementation: every dereference preceded by covering-readable-span check; no OS calls)",
+    "tests/test_live_reads.cpp (host synthetic suite reusing live-shaped GUA values + adversarial coverage cases)",
+    "tests/test-run.txt, tests/test-run-asan.txt (committed run logs)",
+    "REPORT.md (live-read sequence design, 0x13800220a0 coverage verdict, evidence-unlock map for batch2/batch3)"
+  ],
+  "honesty_notes": [
+    "Host tests prove module correctness on synthetic images, not target facts.",
+    "Prompt's UObjectBase field order (Outer@0x18/Name@0x20) conflicts with the cited SET-5_06 setter (NamePrivate=0x18, OuterPrivate=0x20); code follows the cited setter and documents the conflict.",
+    "0x13800220a0 is NOT covered by any recovered span today (gap 0x1340c50000..0x13803b0000); the recovered map is provably incomplete, so the classification is not_covered_current_map = evidence unavailable until an in-process vmmap re-walk."
+  ]
+}

@@ -1,0 +1,222 @@
+--- diffs/fake_console_drive.py.asfound	2026-10-05 01:49:51
++++ tests/fake_console_drive.py	2026-10-05 02:18:50
+@@ -188,6 +188,37 @@
+      '"build_id":"%s","write_failures":0}\n' % cb.FC1POOL["build_id"]),
+ ]
+ 
++# cc1 carrier census sink (ninth-slot law): first launch -> empty baseline, then the
++# full success sequence (entry / startup 30x4s / mapscan / 30 qh_counter / census_match
++# / census_result CENSUS:VALIDATED / summary write_failures 0)
++def _cc1_stage():
++    def rec(seq, exp, **fields):
++        r = {"marker": "modbridge.ingamefacts", "schema": 1, "build_id": cb.CC1["build_id"],
++             "seq": seq, "exp": exp, "rc": 0, "errno": 0}
++        if fields:
++            r["fields"] = fields
++        return json.dumps(r)
++    lines = ([rec(1, "entry"), rec(2, "startup", polls=30, poll_s=4), rec(3, "mapscan")]
++             + [rec(4 + i, "qh_counter") for i in range(30)]
++             + [rec(34, "census_match", name="ReceiveTick"),
++                rec(35, "census_match", name="Tick"),
++                rec(36, "census_result", verdict="CENSUS:VALIDATED", reason_code="none",
++                    controls={"None_id_zero": 1, "ByteProperty_ascii_ok": 1},
++                    negative_hits={"PostRender": 0, "ZZZNotARealFunctionQQ": 0},
++                    matched_count=2, wide_entries_skipped=7, census_entries_scanned=98304,
++                    census_progress_markers=24, census_truncated=0, budget_entries=1048576,
++                    base_matches_observed_bias=1),
++                rec(37, "summary", write_failures=0, polls_run=30)])
++    return "\n".join(lines) + "\n"
++
++
++CC1_STAGES = [
++    "",             # baseline fetch (ride.5): absent on a first carrier launch
++    _cc1_stage(),   # post-launch: full census sequence
++]
++CC1_UE4SS_LINE = ("CC1: build=%s verdict=CENSUS:VALIDATED reason=none entries=98304 matches=2\n"
++                  % cb.CC1["build_id"])
++
+ # recorded v2 rollback pair (worker-engineversion-ini/package-v2) for the freeze gate
+ SETTINGS_V2_LOCAL = cb.T + "/worker-engineversion-ini/package-v2/ue4ss/UE4SS-settings.ini"
+ SETTINGS_V2_LOADLIST_LOCAL = cb.T + "/worker-engineversion-ini/package-v2/loadlist.txt"
+@@ -341,6 +372,10 @@
+             stage = min(fc1_fetch_n["n"], len(FC1_STAGES) - 1)
+             fc1_fetch_n["n"] += 1
+             return emit(FC1_STAGES[stage])
++        if "modbridge-carrier-facts.jsonl" in joined:
++            stage = min(cc1_fetch_n["n"], len(CC1_STAGES) - 1)
++            cc1_fetch_n["n"] += 1
++            return emit(CC1_STAGES[stage])
+         # --- settings v3 pair (stage-settings; freeze serves v2, readback v3) ---
+         if "UE4SS-settings.ini" in joined:
+             if data_target:  # STOR
+@@ -428,6 +463,19 @@
+             content = (self.prx_readback_corruptor(cb.FC1POOL) if self.prx_readback_corruptor
+                        else self.law_readback(cb.FC1POOL) if self.sht_law
+                        else open(cb.FC1POOL["prx"], "rb").read())
++            if out_target:
++                with open(out_target, "wb") as f:
++                    f.write(content)
++                return 0, ""
++            return 0, content.decode("utf-8", "replace")
++        if "modbridge_carrier.prx" in joined:
++            # cc1 carrier probe (NINTH-SLOT layout entry 9): SHT-strip law channel
++            if data_target:
++                self.prx_stors.append(joined.split()[-1])
++                return 0, ""
++            content = (self.prx_readback_corruptor(cb.CC1) if self.prx_readback_corruptor
++                       else self.law_readback(cb.CC1) if self.sht_law
++                       else open(cb.CC1["prx"], "rb").read())
+             if out_target:
+                 with open(out_target, "wb") as f:
+                     f.write(content)
+@@ -447,6 +495,7 @@
+ fc.settings_staged_v3 = False
+ xwp_fetch_n = {"n": 0}
+ fc1_fetch_n = {"n": 0}
++cc1_fetch_n = {"n": 0}
+ 
+ _orig_run_cmd = cb.run_cmd
+ 
+@@ -577,6 +626,7 @@
+ Q_STOR_URL = "ftp://ps5-host-not-configured.invalid:2121" + cb.QDRV1["target_prx"]
+ XWP_STOR_URL = "ftp://ps5-host-not-configured.invalid:2121" + cb.XWP_ARMED["target_prx"]
+ FC1_STOR_URL = "ftp://ps5-host-not-configured.invalid:2121" + cb.FC1POOL["target_prx"]
++CC1_STOR_URL = "ftp://ps5-host-not-configured.invalid:2121" + cb.CC1["target_prx"]
+ 
+ 
+ def seed_ini(text):
+@@ -666,33 +716,34 @@
+       statuses.get("obs.4") == "SKIPPED_HALT" and stored_ini() == PRE5Q)
+ fc.prx_readback_corruptor = None
+ 
+-print("== fake-console drive: stage-ridealongs (DEFINITIVE 8-entry law: bootstrap on the "
+-      "historical pre-image, then probes + ridealongs under the SHT-strip law channel) ==")
++print("== fake-console drive: stage-ridealongs (DEFINITIVE 9-entry law: bootstrap on the "
++      "historical pre-image, then probes + ridealongs + carrier under the SHT-strip law channel) ==")
+ HISTORICAL_INI = PRE4  # aligned_entry, path_test BEFORE composition — the historical shape
+ seed_ini(HISTORICAL_INI)
+ fc.prx_stors = []
+ xwp_fetch_n["n"] = 0
+ fc1_fetch_n["n"] = 0
++cc1_fetch_n["n"] = 0
+ ctx = cb.Ctx(run_dir=fresh("ridealongs-final-bootstrap"), dry=False, assume_yes=True)
+ res = cb.build_stage_ridealongs().run(ctx)
+ bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
+-check("stage-ridealongs all steps PASS (bootstrap + 4 PRXs, law readbacks, canonical ini)",
++check("stage-ridealongs all steps PASS (bootstrap + 5 PRXs, law readbacks, canonical ini)",
+       not bad, str(bad))
+ statuses = dict(res)
+-check("ride.1 §3 constants cross-check PASS (4 probes + canonical template)",
++check("ride.1 §3 constants cross-check PASS (5 probes incl. cc1 + canonical template)",
+       statuses.get("ride.1") == "PASS", statuses.get("ride.1"))
+ CANON_INI = open(cb.FINAL_INI["canonical_template"]).read()
+-check("BOOTSTRAP fired on the historical pre-image and stored the CANONICAL 8-line bytes",
++check("BOOTSTRAP fired on the historical pre-image and stored the CANONICAL 9-line bytes",
+       stored_ini() == CANON_INI, repr(stored_ini()))
+ check("INI-BOOTSTRAPPED verdict recorded (ONE sanctioned whole-file STOR)",
+       "INI-BOOTSTRAPPED" in open(os.path.join(ctx.run_dir, "ini-bootstrap-verdict.txt")).read())
+ check("bootstrap pre-image .bak + local pre preserved",
+       os.path.exists(os.path.join(ctx.run_dir, "ploader.ini.pre")))
+-check("final ini is byte-exact canonical: 8 entries, 7 registered, igf=0",
++check("final ini is byte-exact canonical: 9 entries, 8 registered, igf=0, carrier last",
+       cb.final_ini_verify_endstate(stored_ini()) == [],
+       str(cb.final_ini_verify_endstate(stored_ini())))
+-check("all FOUR PRXs STORed exactly once, file order (xwp, fc1, qdrv1, observer)",
+-      fc.prx_stors == [XWP_STOR_URL, FC1_STOR_URL, Q_STOR_URL, OBS_STOR_URL], str(fc.prx_stors))
++check("all FIVE PRXs STORed exactly once, file order (xwp, fc1, qdrv1, observer, cc1-carrier)",
++      fc.prx_stors == [XWP_STOR_URL, FC1_STOR_URL, Q_STOR_URL, OBS_STOR_URL, CC1_STOR_URL], str(fc.prx_stors))
+ check("xwp SHT-strip law verdict OK (67832 / daea2ff4…)",
+       json.load(open(os.path.join(ctx.run_dir, "xwp-readback-verdict.json")))["ok"] is True)
+ check("fc1 SHT-strip law verdict OK (67848 / 7e2dce27…)",
+@@ -701,12 +752,15 @@
+       json.load(open(os.path.join(ctx.run_dir, "qdrv1-readback-verdict.json")))["ok"] is True)
+ check("observer SHT-strip law verdict OK (30143976 / 3f89a5b6…)",
+       json.load(open(os.path.join(ctx.run_dir, "observer-readback-verdict.json")))["ok"] is True)
+-check("SC-0b baselines recorded (UE4SS.log + probe sinks)",
++check("cc1 SHT-strip law verdict OK (71528 / 131ff1c2…)",
++      json.load(open(os.path.join(ctx.run_dir, "cc1-readback-verdict.json")))["ok"] is True)
++check("SC-0b baselines recorded (UE4SS.log + probe sinks incl. cc1)",
+       statuses.get("ride.5") == "PASS" and os.path.exists(os.path.join(ctx.run_dir, "baseline-UE4SS.log")))
+ check("launch handoff step green (arm/launch gate reached with the canonical ini staged)",
+       statuses.get("ride.10") == "PASS", statuses.get("ride.10"))
+-check("handoff prompt pins the 7-OK/zero-FAIL gate + both probe sinks",
+-      "EXACTLY 7" in cb.FINAL_INI_HANDOFF and "modbridge-fc1pool-facts.jsonl" in cb.FINAL_INI_HANDOFF)
++check("handoff prompt pins the 8-OK/zero-FAIL gate + all three probe sinks",
++      "EXACTLY 8" in cb.FINAL_INI_HANDOFF and "modbridge-fc1pool-facts.jsonl" in cb.FINAL_INI_HANDOFF
++      and "modbridge-carrier-facts.jsonl" in cb.FINAL_INI_HANDOFF)
+ 
+ print("== fake-console drive: stage-ridealongs ensure-only (canonically-ordered 6-entry "
+       "pre-image -> content-anchored appends, NO bootstrap) ==")
+@@ -722,13 +776,14 @@
+ check("ensure-only run reaches the SAME byte-exact canonical end-state (order-history "
+       "independence: bootstrap vs ensure paths converge)",
+       stored_ini() == CANON_INI, repr(stored_ini()))
+-check("ensure-only run uploaded all FOUR PRXs (ini changed -> not the no-op path)",
+-      len(fc.prx_stors) == 4, str(fc.prx_stors))
++check("ensure-only run uploaded all FIVE PRXs (ini changed -> not the no-op path)",
++      len(fc.prx_stors) == 5, str(fc.prx_stors))
+ decision = json.load(open(os.path.join(ctx.run_dir, "ploader-edit-decision.json")))
+-check("decision recorded as INI-ENSURE-ONLY (no bootstrap): appends ONLY xwp + fc1 at their "
+-      "anchored positions",
++check("decision recorded as INI-ENSURE-ONLY (no bootstrap): appends ONLY xwp + fc1 + carrier "
++      "at their anchored positions (carrier AFTER the igf =0 line)",
+       decision["status"] == "append" and decision["appended"] ==
+-      ["%s = 2" % X for X in (cb.XWP_ARMED["module_line"], cb.FC1POOL["module_line"])],
++      ["%s = 2" % X for X in (cb.XWP_ARMED["module_line"], cb.FC1POOL["module_line"],
++                              cb.CC1["module_line"])],
+       str(decision)[:200])
+ 
+ print("== fake-console drive: stage-ridealongs DIFFERENT staging history (observer "
+@@ -757,7 +812,7 @@
+       stored_ini() == CANON_INI and len(fc.prx_stors) == 0, str(fc.prx_stors))
+ check("re-run still verifies the on-console PRX artifacts against the law (readback-only)",
+       all(json.load(open(os.path.join(ctx.run_dir, "%s-readback-verdict.json" % k)))["stor_skipped_noop"]
+-          is True for k in ("xwp", "fc1", "qdrv1", "observer")))
++          is True for k in ("xwp", "fc1", "qdrv1", "observer", "cc1")))
+ 
+ print("== fake-console drive: stage-ridealongs STOP on an unknown ini line (no bootstrap, "
+       "no upload, no store) ==")
+@@ -862,7 +917,31 @@
+ l_fetch_n["n"] = 0
+ xwp_fetch_n["n"] = 1   # post-launch sink content (fresh verdict records this launch)
+ fc1_fetch_n["n"] = 1
++cc1_fetch_n["n"] = 1
++# post-launch UE4SS.log carries exactly ONE fresh CC1: line (the cc1 census verdict);
++# applied from this point on so the pre-launch baselines recorded by ride.5 stay clean
++ge_orig_handle = fc.handle_curl
++
++
++def cc1_ue4ss_aware(argv):
++    joined = " ".join(argv)
++    if "UE4SS.log" in joined and "-o" in argv:
++        target = argv[argv.index("-o") + 1]
++        base = ge_orig_handle(argv)
++        with open(target, "a") as f:
++            f.write(CC1_UE4SS_LINE)
++        return base
++    return None
++
++
++def ge_handle(argv, *a, **k):
++    r = cc1_ue4ss_aware(argv)
++    return r if r is not None else ge_orig_handle(argv, *a, **k)
++
++
++fc.handle_curl = ge_handle
+ res = cb.build_game_evidence().run(ctx)
++fc.handle_curl = ge_orig_handle
+ bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
+ check("game-evidence all steps PASS/WARN", not bad, str(bad))
+ check("CP0-CP4 verdict PASS on green fixtures", json.load(open(os.path.join(ctx.run_dir, "cp0-cp4-verdict.json")))["verdict"] == "PASS")
+@@ -870,6 +949,11 @@
+ check("probe verdict sinks PASS (xwp records + fc1pool_result validated 11/11)",
+       pv["status"] == "PASS" and pv["sinks"]["fc1"]["validated_results"] == 1
+       and pv["sinks"]["xwp"]["fresh_records"] == 3, str(pv)[:200])
++cv = json.load(open(os.path.join(ctx.run_dir, "carrier-verdicts.json")))
++check("cc1 census sink PASS (fresh census_result CENSUS:VALIDATED + 30 qh_counter + one CC1: line)",
++      cv["status"] == "PASS" and cv["sinks"]["cc1"]["census_verdict"] == "CENSUS:VALIDATED"
++      and cv["sinks"]["cc1"]["qh_counter_lines"] == 30
++      and cv["sinks"]["cc1"]["ue4ss_cc1_lines"] == 1, str(cv)[:240])
+ check("game receipt written", os.path.exists(os.path.join(ctx.run_dir, "game-evidence-receipt.json")))
+ 
+ print("== fake-console drive: dll8 (PREFERRED single DLL run) ==")

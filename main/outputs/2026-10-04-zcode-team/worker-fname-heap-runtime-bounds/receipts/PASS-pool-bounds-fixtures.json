@@ -1,0 +1,35 @@
+{
+  "worker": "worker-fname-heap-runtime-bounds",
+  "utc": "2026-10-05",
+  "what": "PASS receipt — host fixture suite for the launch10-c FName-pool runtime-bounds admission (frozen envelope retired; published-span admission with captured-envelope truncation honesty)",
+  "suite": {
+    "source": "host-test/test_pool_bounds_host.cpp",
+    "sha256": "8d93d7c10bdb3d0d8a94cba673f93de6c4caf07ea751ad12d1e6f0ee96567ab7",
+    "drives": "REAL staged SeedValidation.hpp functions: rc_seed::publish_nonimage_readable_spans + rc_seed::check_pool_shape (+ unchanged check_entry_bounds/entry_location regression guards)",
+    "compile": "clang++ -std=c++20 -Wall -Wextra -I<staging> (rc=0, zero warnings; receipts/fixture-compile.stderr)",
+    "run": "test_pool_bounds <receipt-path> — writes its own receipt file; stdout unused (harness pipe writes block uninterruptibly in this environment; self-written files complete instantly)",
+    "result": "52 passed, 0 failed (exit 0)",
+    "output": "receipts/fixture-pool-bounds.txt sha256 c185d7d96652a7a911dc655bdd65ffc84353a216f69aba7cdd5d14a179d8ea21"
+  },
+  "required_positive_test": {
+    "case": "A8 REQUIRED POSITIVE: heap blocks0 passes NEW and FAILS OLD frozen bound",
+    "input": "blocks0=0x300020000 (8-aligned) inside published non-image readable span [0x300000000,0x380000000) from an 11-record realistic walk; image extent [0x400000,0xc0602c8); retired frozen range [0x8018c000,0x100118000)",
+    "verdict": "check_pool_shape -> ok, bounds_source=published-readable-spans; old predicate (replicated verbatim in the fixture ONLY for the contradiction proof) refuses",
+    "status": "PASS"
+  },
+  "class_coverage": {
+    "publication": "A1-A7 (counts, cap, envelope=max record end, ascending order, expected spans present, no image leak, sub-floor excluded)",
+    "positive": "A8 (required), A9 (vintage-frozen blocks0 still passes), H3/H4 (coverage-proven complete-capture admission outside the frozen range)",
+    "boundaries": "A10-A12 (span lo inclusive, hi-8 ok, hi exclusive), A14-A15 (extent end exclusive; first byte past extent = coverage class)",
+    "wrong_base": "A13 (pool-label-as-blocks0 and text-region values refuse 'inside the image extent'), D3 (extent check precedes membership for straddler spans)",
+    "truncation_honesty": "A17 (beyond-envelope miss refuses as 'snapshot truncated', bounds_source=capture-truncated, never 'unmapped'), H5 (truncated prefix moves the envelope to the cut)",
+    "unmapped_below_envelope": "A16 (below-envelope miss = honest 'not covered')",
+    "legacy_preserved": "A18 (CurrentBlock < 1), A19 (Blocks[0] is null), A20 (not 8-aligned), F1-F3 (check_entry_bounds strings + id decomposition unchanged)",
+    "no_fallback": "B1-B5 (null/zero-count table = loud 'span table unavailable' for ANY pool state; in-frozen-envelope blocks0 refused without a table)",
+    "cap": "C1-C5 (top-16 by size, saturation counters, ascending, smallest dropped, dropped-span pointer refuses — documented cap limit)",
+    "straddlers": "D1-D2 (outside-extent remainder clipped; sub-floor tail excluded)",
+    "constants": "G1-G5 (extent bytes 0xbc602c8, runtime end 0xc0602c8, block capacity 0x20000, cap 16, PROT_READ=1)"
+  },
+  "fixture_defects_found_during_development": "5 initial FAILs were all FIXTURE-side (literal scale typos A11/A14/D2/D3, wrong F2 expectation, H filler violating address-ordered enumeration) — the validator classified every one of those cases correctly as run; suite rerun 52/52 after fixture fixes",
+  "honest_limits": "Pure-function proof only: no target, no console, no dereference of Blocks[0] (entry-chain reads and the behavioral probe are target-side, unchanged from launch-10). Cap top-16 can false-refuse if >16 qualifying spans exist (counted + diagnosed); sub-floor and below-envelope classifications are exact by construction."
+}

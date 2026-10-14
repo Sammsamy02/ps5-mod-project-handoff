@@ -1,0 +1,43 @@
+{
+  "label": "REPRODUCTION-RECEIPT-NOT-A-NEW-PAIR",
+  "worker": "worker-batch2-layouts",
+  "team": "2026-10-04-zcode-team",
+  "date": "2026-10-04",
+  "purpose": "Full-scope re-run of the frozen assembler (assemble_staged_pair_v2) with the REAL verdicts (guobject_array Validated, layout A only) to produce an authoritative per-family refusal receipt for the batch-2 families. NOT a new stageable pair: the emitted INI bytes are byte-identical to worker-emit-final-pair/emission-final (the promoted pair). No batch-2 section was emitted; absent means refused.",
+  "assembler": "worker-emit-final-pair/vendored/worker-layout-batch3/bridge/assemble_staged_pair_v2.py (unmodified, run from its vendored location)",
+  "inputs": {
+    "candidates": "worker-emit-final-pair/vendored/worker-layout-minimum/candidates/layout-candidates.profile.json",
+    "widths1": ".superpowers/native-dependency-spike/ue4ss-native-layout-widths-1/coverage.json (419-entry compiled contract, PS5 SDK fixture compile)",
+    "delta": ".superpowers/native-dependency-spike/ue4ss-native-layout-widths-2/coverage-delta.json (UFunction.Func -> 16)",
+    "verdicts": "worker-emit-final-pair/input/verdicts-live-gua.json (REAL, single record)",
+    "identity": "worker-emit-final-pair/input/identity-final.json (REAL 5.6.1-0+++UE5 / 04bb4330a7d71dcefe1cc2c4d19769d5)",
+    "scope": "input/scope-full-batch2-probe.json (all 9 classes requested explicitly)"
+  },
+  "result": {
+    "exit_code": 0,
+    "emitted_sections": ["FUObjectArray (10 keys, UEP_TotalSize 0xB8)", "TUObjectArray (7 keys, UEP_TotalSize 0x20)"],
+    "batch2_refused": [
+      {"class": "FUObjectItem", "reason": "predicate 'uobject_item_chain' not Validated (absent)"},
+      {"class": "UObjectBase", "reason": "predicate 'uobject_item_chain' not Validated (absent)"},
+      {"class": "UStruct", "reason": "predicate 'uobject_item_chain' not Validated (absent)"},
+      {"class": "UClass", "reason": "predicate 'uobject_item_chain' not Validated (absent)"},
+      {"class": "FField", "reason": "predicate 'uobject_item_chain' not Validated (absent)"},
+      {"class": "FProperty", "reason": "predicate 'uobject_item_chain' not Validated (absent)"},
+      {"class": "UFunction", "reason": "permanent: Inconclusive-classifier only, no Validated-class predicate can exist"}
+    ],
+    "reason_note": "The refusal reason names the FIRST absent probe in each conjunctive chain (uobject_item_chain). ustruct_chain and ffield_variant are equally absent; all three require live reads R1-R5 (worker-staged-pair-live/RUNG3-REQUIRED-READS.md) that have never run on target.",
+    "skipped_no_width": [],
+    "verdict_digests_present": ["guobject_array"]
+  },
+  "verification": [
+    "MemberVariableLayout.ini and VTableLayout.ini byte-identical (diff) to worker-emit-final-pair/emission-final/ - assembler determinism proven, no batch-2 leakage",
+    "ParsePair (frozen parser_verify arm64 binary): exit 0, ok:true, 17 members / 2 sections, identity round-trips exactly (5.6.1-0+++UE5 / 04bb4330a7d71dcefe1cc2c4d19769d5 / prospero-x86_64-sysv) - see parsepair-result.json",
+    "Negative control (negative-controls/): feeding UNTRUSTED fabricated ustruct_chain=Validated + ffield_variant=UE5_FField verdicts with uobject_item_chain still absent emits byte-identical output and keeps every batch-2 family refused - the predicate chain gate is conjunctive; downstream predicates alone widen nothing"
+  ],
+  "artifact_sha256": {
+    "MemberVariableLayout.ini": "f291d552418dda916ec28675bd9e40d78bf1d3e9f75ce0c36df6b95dcfa63f32",
+    "VTableLayout.ini": "9c20f7c9b1a1ea9a665db12df82ee7e62694fe4cd207cf53a44116e124fbad86",
+    "assembly-manifest.json": "1b2ba0975ce5c4330c2584ebce6626bd1764a4270eef780c5d19a46a73726a99"
+  },
+  "staging_directive": "Do NOT stage from this directory. The only stageable pair remains worker-emit-final-pair/emission-final (and only once its code-anchor confirmation lands). The batch-2 sections become emittable ONLY by re-running the assembler with successor verdicts carrying Validated uobject_item_chain + ustruct_chain (+ ffield_variant settled UE5_FField) from a real probe run."
+}

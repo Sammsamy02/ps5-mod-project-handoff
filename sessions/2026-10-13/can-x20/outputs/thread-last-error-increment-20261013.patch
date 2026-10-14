@@ -1,0 +1,106 @@
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -4,7 +4,8 @@
+ // Candidate bodies exist for dynamic TLS, files, threads, and EH/SEH, but
+ // their full Win32 behavior or guest-callable ABI is not established. They
+ // remain unresolved imports. Static PE TLS is a separate loader refusal.
+-// GetLastError/SetLastError and pointer encoding are not implemented here.
++// Imported GetLastError/SetLastError use a process-wide per-thread slot;
++// direct guest TEB last-error access and pointer encoding are not integrated.
+ //
+ // Raw built-in handlers are private metadata. No PE import receives one
+ // until a per-signature guest-callable wrapper is explicitly published.
+@@ -40,6 +41,7 @@
+ constexpr uint32_t WAIT_FAILED = 0xFFFFFFFFu;
+ constexpr uint32_t TLS_OUT_OF_INDEXES = 0xFFFFFFFFu;
+ constexpr uint32_t GENERIC_WRITE = 0x40000000u;
++thread_local uint32_t win32_last_error = 0;
+ 
+ using WinThreadFn = uint32_t (*)(void*); // unsigned __stdcall, x64: Win64 call
+ 
+@@ -75,7 +77,6 @@
+     };
+     std::unordered_map<std::string, ModuleEntry> modules;
+     uint64_t pointer_cookie = 0xA5A5'5A5A'0000'0042ull; // fixed for design; M1 randomizes at DllMain time
+-    void* last_error_slot_value = nullptr; // reserved; no public error API yet
+ 
+     // ---- T1 emulation state ----
+     std::vector<bool> tls_slot_used;
+@@ -191,6 +192,16 @@
+         return 0;
+     }
+     return static_cast<uint32_t>(id);
++}
++
++static uint32_t impl_GetLastError(WinApiShim::Impl*)
++{
++    return win32_last_error;
++}
++
++static void impl_SetLastError(WinApiShim::Impl*, uint32_t error)
++{
++    win32_last_error = error;
+ }
+ 
+ static void impl_GetSystemTimeAsFileTime(WinApiShim::Impl* m, void* output)
+@@ -424,6 +435,8 @@
+         {"kernel32.dll", "Sleep", (void*)&impl_Sleep, 1, true},
+         {"kernel32.dll", "GetCurrentProcessId", (void*)&impl_GetCurrentProcessId, 0, true},
+         {"kernel32.dll", "GetCurrentThreadId", (void*)&impl_GetCurrentThreadId, 0, true},
++        {"kernel32.dll", "GetLastError", (void*)&impl_GetLastError, 0, true},
++        {"kernel32.dll", "SetLastError", (void*)&impl_SetLastError, 1, true},
+         {"kernel32.dll", "GetSystemTimeAsFileTime", (void*)&impl_GetSystemTimeAsFileTime, 1, true},
+         {"kernel32.dll", "WaitForSingleObject", (void*)&impl_WaitForSingleObject_events, 2, false},
+         {"kernel32.dll", "TlsAlloc", (void*)&impl_TlsAlloc, 0, false},
+--- a/loader/tests/lazy_import_resolution_test.cpp
++++ b/loader/tests/lazy_import_resolution_test.cpp
+@@ -155,6 +155,38 @@
+           static_cast<uint32_t>(getpid()),
+           "a later successful resolve installs the previously refused import");
+ 
++    state.active_symbol = "GetLastError";
++    void* get_error = shim.resolve("kernel32.dll", state.active_symbol, 0);
++    state.active_symbol = "SetLastError";
++    void* set_error = shim.resolve("kernel32.dll", state.active_symbol, 0);
++    check(get_error && set_error && state.hidden_during_seal,
++          "GetLastError and SetLastError install with sealed typed wrappers");
++    if (get_error && set_error)
++    {
++        check(cap13_win64_call0(get_error) == 0,
++              "new host thread starts with zero Win32 last error");
++        (void)cap13_win64_call1(set_error, 0xCAFE1234u);
++        check(cap13_win64_call0(get_error) == 0xCAFE1234u,
++              "SetLastError updates the calling thread's DWORD");
++        uint32_t worker_initial = UINT32_MAX;
++        uint32_t worker_written = 0;
++        std::thread worker([&] {
++            worker_initial = static_cast<uint32_t>(cap13_win64_call0(get_error));
++            (void)cap13_win64_call1(set_error, 0x19u);
++            worker_written = static_cast<uint32_t>(cap13_win64_call0(get_error));
++        });
++        worker.join();
++        check(worker_initial == 0 && worker_written == 0x19u &&
++              cap13_win64_call0(get_error) == 0xCAFE1234u,
++              "worker last error is independent of the main thread");
++        state.active_symbol = "Sleep";
++        void* sleep_entry = shim.resolve("kernel32.dll", state.active_symbol, 0);
++        if (sleep_entry) (void)cap13_win64_call1(sleep_entry, 0);
++        check(sleep_entry && cap13_win64_call0(get_error) == 0xCAFE1234u,
++              "Sleep does not erase the prior last-error code");
++    }
++    else check(false, "last-error wrappers are available for Win64 calls");
++
+     cap13::WinApiShim registered;
+     registered.register_builtin_exports();
+     MemoryState registered_state{};
+@@ -166,6 +198,10 @@
+           reinterpret_cast<void*>(&registered_sleep) &&
+           registered_state.allocated == 0,
+           "registered module export retains priority over lazy built-ins");
++    registered_state.active_symbol = "GetLastError";
++    void* second_get_error = registered.resolve("kernel32.dll", "GetLastError", 0);
++    check(second_get_error && cap13_win64_call0(second_get_error) == 0xCAFE1234u,
++          "last-error slot is shared across shim instances on one thread");
+ 
+     cap13::WinApiShim racing;
+     racing.register_builtin_exports();

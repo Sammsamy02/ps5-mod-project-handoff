@@ -1,0 +1,437 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_start_bridge_r13.cpp	2026-10-04 22:49:24
++++ ../runtime_start_bridge_r14.cpp	2026-10-05 08:13:23
+@@ -1,5 +1,45 @@
+ // runtime_start_bridge.cpp — the module_start -> composed-runtime wiring.
+ //
++// r14 (2026-10-05, worker-lease-coverage-fix): r13 + the lease-coverage
++// hardening. ROOT CAUSE (launch-8 pid 234 code=2 "Owned read range includes
++// unregistered bytes", OwnedMemory.cpp:122): the r10/r13 flow registered
++// readable spans from a FRESH sysctl taken BEFORE supplier->capture(), while
++// the ReadLease ranges are derived from the CAPTURE's frozen snapshot
++// (anchor_mappings, live_module_facts.cpp:449-457, through
++// derive_readable_ranges, lmf_to_native_loader_facts.cpp:77-109). Two
++// different snapshots = a race the r11 page-quantization could never close:
++// when the base-containing record (the only record containing chosen_base
++// 0x400000) is exec-only at T1 but readable at T2, the lease walks text pages
++// that were deliberately never registered. r14 changes WHO registers and WHEN,
++// not what may be registered:
++//   L1  Registration moves INTO the scan_image_base wrapper — the FIRST op
++//       capture() drives with the frozen mappings array — so the registered
++//       set is derived from the SAME snapshot bytes the conversion later
++//       leases. No extra sysctl, no drift class. Pre-capture registration
++//       (r13 bridge_register_readable_ranges) is REMOVED.
++//   L2  True-protection registration: readable records register R (|X when
++//       the kve bits carry exec). Never W (the service must not authorize
++//       writes into game memory). Exec-only and no-protection records stay
++//       unregistered — the fail-closed direction.
++//   L3  Coverage gate: after capture, the exact ranges the conversion WILL
++//       lease (records containing the chosen base, readable, clamped to the
++//       extent — byte-identical derivation to the adapter) are checked
++//       against the registry. A gap refuses the start LOUDLY BEFORE any
++//       lease (MRS_ERR_CONVERSION + bounded detail naming the gap and the
++//       nearest registered interval) instead of a deep PLH throw.
++//   L4  The window-anchor byte reads are gated on the registry: a fresh
++//       VMMAP coverage hit that is not owned-registered refuses with
++//       diagnostics instead of dereferencing (A stays logged-not-required).
++//   L5  Idempotence: skip-if-covered, so a re-entrant start can never throw
++//       "Owned regions must not overlap" from duplicate registrations.
++// Cap semantics unchanged (128) but saturation now refuses loudly via the
++// same gate. bridge_lease_reg_spans / bridge_lease_reg tags are kept with
++// the frozen-snapshot basis. Launch-9 attribution note: the shipped r13
++// passed registration (spans=6/reg=6, pid 273 delta) and refused later at
++// conversion geometry; the code=2 lease throw belonged to launch-8's r10
++// binary (pid 234). r14 is hardening for the scan-read stage (armed seed
++// verification reads), not a regression fix for r13's terminal state.
++//
+ // r13 (2026-10-04, worker-bridge-r13-polish): r12 + the GO-WITH-FIXES review
+ // diffs, all five applied (worker-bridge-r12-final-review/REVIEW-VERDICT.md):
+ //   P2-1  activation adopted FIRST — before the defensive early returns — so
+@@ -68,6 +108,12 @@
+ struct LiveModuleOsOps;
+ LiveModuleOsOps make_sce_live_module_os_ops(void *context) noexcept;
+ }
++
++// r14 (L4): owned-coverage gate for the window-anchor reads. Defined at file
++// scope in the r14 registration block below; forward-declared here because
++// window_anchor_verify (anonymous namespace, below) is its first caller.
++static bool bridge_anchor_owned_covered(uint64_t addr, uint32_t len) noexcept;
++
+ 
+ namespace
+ {
+@@ -379,6 +425,15 @@
+         }
+         ::diagnostic_event("anchor_cov", (uint32_t)((w << 16) | (covered ? 1 : 0)));
+         if (!covered) continue;
++        // r14 (L4): the fresh-VMMAP coverage hit is necessary but not
++        // sufficient — the byte read below is admitted only when the FROZEN
++        // owned registry covers it too. Snapshot drift between this query and
++        // the capture array refuses loudly here (bounded events, window id in
++        // the tag) instead of dereferencing unowned bytes.
++        if (!bridge_anchor_owned_covered(rt, a.length)) {
++            ::diagnostic_event("anchor_owned_ref", (uint32_t)(w << 16));
++            continue;
++        }
+         const unsigned char *p = reinterpret_cast<const unsigned char *>(rt);
+         bool matched = true; uint32_t mm = 0xffffffffu;
+         for (uint32_t i = 0; i < a.length; ++i)
+@@ -472,56 +527,267 @@
+ // derives; unregistered bytes throw). The loader contract (NativeLoader-
+ // Context.hpp) expects the in-process loader to supply "already-existing
+ // owned-service registrations" for its retained mappings — this is that
+-// call. Each readable span intersecting the anchored image extent registers
+-// with its true observed protection (R). Regions are static and never
+-// destroyed: process-lifetime synchronous ownership. Exec-only text is NOT
+-// registered readable — the D2/text_base question stays open upstream.
++// call. Exec-only text is NOT registered readable — the D2/text_base
++// question stays open upstream.
++//
++// r14 (L1/L2/L5): registration is FROZEN-SNAPSHOT-DERIVED. The registry is
++// fed exclusively from the mappings array capture() passed to the
++// scan_image_base wrapper — the same array anchor_mappings (and therefore
++// ModuleSnapshot::ReadableRanges -> ReadLease ranges) is later built from
++// (live_module_facts.cpp:449-457 keeps records containing the chosen base
++// from this exact array; lmf_to_native_loader_facts.cpp:77-109 derives the
++// lease ranges from those). One snapshot, one derivation -> the registered
++// set provably covers every page any ReadLease can walk, with no second
++// sysctl to race. Records are registered with their true observed kve
++// protection mapped to PLH bits, minus W (the service must never authorize
++// writes into game memory; no lease needs it): readable-only pages -> R,
++// readable+exec -> R|X. Exec-only / no-protection records are never
++// registered. Skip-if-covered makes re-registration idempotent (L5); the
++// 128-region cap and any impossible quantization overlap refuse loudly
++// through the coverage gate (L3) instead of saturating or throwing deep in
++// PLH ("Owned regions must not overlap", OwnedMemory.cpp:54).
+ #include <polyhook2/OwnedMemory.hpp>
+ static PLH::OwnedMemory::ScopedRegion *g_image_regions[128];
+ static unsigned g_image_region_count = 0;
+ 
+-static void bridge_register_readable_ranges()
+-{
+-    static lmf::OsVmMapping mappings[kBridgeVmmapEntries];
+-    size_t total = 0;
+-    if (bridge_query_vmentry(nullptr, mappings, kBridgeVmmapEntries, &total) != 0) {
+-        ::diagnostic_event("bridge_lease_reg", 0xffffffffu);
+-        return;
++// r14: bounded bookkeeping mirror of the live PLH registry ([b,e) pairs in
++// ascending order; merged where quantization made them touch). Backs the
++// coverage gate, the idempotence check and the bounded refusal reporting
++// without extra PLH calls. Capacity matches the ScopedRegion cap exactly.
++struct LeaseSpan { uint64_t b, e; };
++static LeaseSpan g_lease_spans[128];
++static unsigned g_lease_span_count = 0;
++static constexpr uint64_t kPage = 0x4000;  // PS5 page size
++
++// True observed protection for the service record: R always (the record is
++// only ever created for kve-readable bytes), X preserved when the kernel
++// reports exec. W deliberately dropped: ReadLease consults R only
++// (OwnedMemory.cpp:126) and mem_copy's W side must never admit game memory.
++static PLH::ProtFlag lease_span_plh_prot(uint32_t kve_protection) noexcept
++{
++    return (kve_protection & 4u) ? (PLH::ProtFlag)(PLH::R | PLH::X) : PLH::R;
++}
++
++// Containing registry span for [addr, addr+len), else nullptr. Pure.
++// NOTE the addr < e guard: without it, e - addr underflows for addresses
++// past a span and len <= (huge) false-matches — the exact class of bug
++// PLH::extent()/covering() guard against (OwnedMemory.cpp:36-48).
++static const LeaseSpan *bridge_lease_span_containing(uint64_t addr,
++                                                     uint64_t len) noexcept
++{
++    for (unsigned i = 0; i < g_lease_span_count; ++i) {
++        if (addr >= g_lease_spans[i].b && addr < g_lease_spans[i].e &&
++            len <= g_lease_spans[i].e - addr)
++            return &g_lease_spans[i];
+     }
+-    const size_t count = total < kBridgeVmmapEntries ? total : kBridgeVmmapEntries;
++    return nullptr;
++}
++
++// Bounded refusal report through the EXISTING diagnostic channel: what was
++// requested, and the nearest registered interval (0,0 when the registry is
++// empty). Tags follow the lo/high word precedent (mfa_activated_low/high).
++static void bridge_report_lease_refusal(const char *what, uint64_t addr,
++                                        uint64_t len) noexcept
++{
++    ::diagnostic_event(what, 1u);
++    ::diagnostic_event("bridge_lease_ref_lo", (uint32_t)(addr & 0xffffffffu));
++    ::diagnostic_event("bridge_lease_ref_hi", (uint32_t)(addr >> 32));
++    ::diagnostic_event("bridge_lease_ref_len", (uint32_t)len);
++    const LeaseSpan *near = nullptr;  // spans ascend: first span ending after
++    for (unsigned i = 0; i < g_lease_span_count; ++i) {  // the request, else last
++        if (g_lease_spans[i].e > addr) { near = &g_lease_spans[i]; break; }
++    }
++    if (near == nullptr && g_lease_span_count > 0)
++        near = &g_lease_spans[g_lease_span_count - 1];
++    if (near != nullptr) {
++        ::diagnostic_event("bridge_lease_near_lo", (uint32_t)(near->b & 0xffffffffu));
++        ::diagnostic_event("bridge_lease_near_hi", (uint32_t)(near->b >> 32));
++        ::diagnostic_event("bridge_lease_near_len", (uint32_t)(near->e - near->b));
++    }
++}
++
++// L2/L5: quantize [b_raw, e_raw) outward to PS5 pages and register with true
++// protection. Returns false ONLY on cap saturation (the L3 gate turns that
++// into a loud pre-lease refusal when it bites coverage); already-covered
++// and empty spans return true.
++static bool bridge_register_span(uint64_t b_raw, uint64_t e_raw,
++                                 uint32_t kve_protection) noexcept
++{
++    if (b_raw >= e_raw) return true;
++    // r11 (launch-8 root cause): the lease walks PER PAGE; quantize the
++    // registration outward (start down, end up) so every page the lease can
++    // walk is covered. Kept verbatim from r13.
++    const uint64_t b = b_raw & ~(kPage - 1);
++    const uint64_t e = (e_raw + kPage - 1) & ~(kPage - 1);
++    // L5 idempotence: a fully covered request is already served; registering
++    // it again would throw "Owned regions must not overlap"
++    // (OwnedMemory.cpp:53-54).
++    if (bridge_lease_span_containing(b, e - b) != nullptr) return true;
++    uint64_t lo = b;
++    if (g_lease_span_count > 0) {
++        const LeaseSpan &last = g_lease_spans[g_lease_span_count - 1];
++        if (lo < last.b) {
++            // Out-of-order record against the ascending registry: registering
++            // could overlap an existing PLH region (add() throws). Refuse to
++            // guess — skip and let the L3 coverage gate fail closed with the
++            // gap named if this record ever carries a derivable lease range.
++            ::diagnostic_event("bridge_lease_order", 1u);
++            return true;
++        }
++        if (lo < last.e) lo = last.e;  // clip the touching head; [lo,e) then
++    }                                  // never overlaps any existing region
++    if (lo >= e) return true;          // fully covered by the previous span
++    if (g_image_region_count >= 128 || g_lease_span_count >= 128) return false;
++    g_image_regions[g_image_region_count] =
++        new PLH::OwnedMemory::ScopedRegion(
++            reinterpret_cast<void *>(static_cast<uintptr_t>(lo)),
++            static_cast<size_t>(e - lo), lease_span_plh_prot(kve_protection));
++    ++g_image_region_count;
++    g_lease_spans[g_lease_span_count].b = lo;
++    g_lease_spans[g_lease_span_count].e = e;
++    ++g_lease_span_count;
++    return true;
++}
++
++// L1: register every readable record of the FROZEN capture snapshot that
++// intersects [extent_begin, extent_end). Called from the scan_image_base
++// wrapper — the first op capture() drives — so registration, the window
++// anchor and the later conversion all reason over the same bytes. Kept
++// diagnostics: bridge_lease_reg_spans (readable∩extent count, the cap input)
++// and bridge_lease_reg (registered count) — same tags, frozen basis.
++static void bridge_register_from_frozen_snapshot(const lmf::OsVmMapping *mappings,
++                                                 size_t count) noexcept
++{
+     const uint64_t extent_begin = kCandidateBase;
+     const uint64_t extent_end = kCandidateBase + kImageExtentVaddr;
+-    constexpr uint64_t kPage = 0x4000;  // PS5 page size
+-    unsigned registered = 0;
+-    // r13 (review P3-1): count EVERY readable span intersecting the extent,
+-    // not only the registered ones, so the 128-region cap can never saturate
+-    // silently (spans > 128 with reg == 128 reads unambiguously as "capped";
+-    // launch-7 evidence predicts spans == 6 on this target).
+-    unsigned readable_spans = 0;  // readable spans inside the extent (cap input)
++    unsigned readable_spans = 0;
+     for (size_t i = 0; i < count; ++i) {
+         if ((mappings[i].protection & kVmProtRead) == 0) continue;
+         const uint64_t b_raw = mappings[i].start < extent_begin ? extent_begin : mappings[i].start;
+         const uint64_t e_raw = mappings[i].end > extent_end ? extent_end : mappings[i].end;
+         if (b_raw >= e_raw) continue;
+         ++readable_spans;
+-        if (registered >= 128) continue;  // cap: keep counting, stop registering
+-        // r11 (launch-8 root cause): the lease walks PER PAGE; the extent
+-        // clamp 0xfc602c8 is NOT page-aligned, so the previous exact-end
+-        // registration left the final partial page unregistered and the lease
+-        // threw "Owned read range includes unregistered bytes". Quantize the
+-        // registration outward (start down, end up) so every page the lease
+-        // can walk is covered.
+-        const uint64_t b = b_raw & ~(kPage - 1);
+-        const uint64_t e = (e_raw + kPage - 1) & ~(kPage - 1);
+-        g_image_regions[registered++] = new PLH::OwnedMemory::ScopedRegion(
+-            reinterpret_cast<void *>(static_cast<uintptr_t>(b)),
+-            static_cast<size_t>(e - b), PLH::R);
++        if (!bridge_register_span(b_raw, e_raw, mappings[i].protection)) {
++            // Cap refusal is deferred to the coverage gate (L3): keep counting
++            // so the tag still reports the true span total, and mark the gap.
++            ::diagnostic_event("bridge_lease_cap", 1u);
++        }
+     }
+-    g_image_region_count = registered;
+     ::diagnostic_event("bridge_lease_reg_spans", (uint32_t)readable_spans);
+-    ::diagnostic_event("bridge_lease_reg", (uint32_t)registered);
++    ::diagnostic_event("bridge_lease_reg", (uint32_t)g_image_region_count);
+ }
+ 
++// L3: the pre-lease coverage gate. Recomputes EXACTLY the ranges the
++// conversion will lease — records of the same frozen snapshot that contain
++// `observed_base`, are kve-readable, and intersect the extent (the adapter's
++// derive_readable_ranges filter: lmf_to_native_loader_facts.cpp:81-107,
++// fed from anchor_mappings built at live_module_facts.cpp:449-457) — and
++// demands each one fully covered by the registry. Returns false and reports
++// the gap when coverage fails; an EMPTY derivable set is NOT a gate failure
++// (the conversion refuses honestly with the geometry text on its own).
++static bool bridge_verify_lease_coverage(const lmf::OsVmMapping *mappings,
++                                         size_t count, uint64_t observed_base,
++                                         uint64_t &gap_addr,
++                                         uint64_t &gap_len) noexcept
++{
++    const uint64_t extent_begin = kCandidateBase;
++    const uint64_t extent_end = kCandidateBase + kImageExtentVaddr;
++    for (size_t i = 0; i < count; ++i) {
++        if ((mappings[i].protection & kVmProtRead) == 0) continue;
++        if (!(mappings[i].start <= observed_base &&
++              observed_base < mappings[i].end)) continue;
++        const uint64_t b_raw = mappings[i].start < extent_begin ? extent_begin : mappings[i].start;
++        const uint64_t e_raw = mappings[i].end > extent_end ? extent_end : mappings[i].end;
++        if (b_raw >= e_raw) continue;
++        if (bridge_lease_span_containing(b_raw, e_raw - b_raw) == nullptr) {
++            gap_addr = b_raw;
++            gap_len = e_raw - b_raw;
++            return false;
++        }
++    }
++    return true;
++}
++
++// L4: owned-coverage gate for the window-anchor byte reads. A span the fresh
++// VMMAP reports readable is still refused unless the frozen registry covers
++// it — drift between snapshots refuses loudly (fail-closed) instead of
++// dereferencing unowned bytes.
++static bool bridge_anchor_owned_covered(uint64_t addr, uint32_t len) noexcept
++{
++    if (bridge_lease_span_containing(addr, len) != nullptr) return true;
++    bridge_report_lease_refusal("bridge_anchor_refuse", addr, len);
++    return false;
++}
++
++// L3 state: set only inside the scan wrapper (capture), consumed once by the
++// start function before conversion. Bounded printable detail for the
++// existing runtime-status detail channel (copy_detail filters/caps it).
++static bool g_lease_gap_reported = false;
++static char g_lease_gap_detail[192];
++
++// Bounded lowercase-hex append (no libc printf family: the packaging
++// import-contract refuses new undefined imports, so the bridge hand-rolls
++// what the entry's log tooling needs).
++static void lease_gap_append_hex(char *out, unsigned cap, unsigned &used,
++                                 uint64_t v) noexcept
++{
++    if (used + 2 >= cap) return;
++    out[used++] = '0';
++    out[used++] = 'x';
++    char tmp[16];
++    unsigned n = 0;
++    do {
++        const unsigned d = (unsigned)(v & 0xfu);
++        tmp[n++] = (char)(d < 10 ? '0' + d : 'a' + d - 10);
++        v >>= 4;
++    } while (v != 0 && n < sizeof tmp);
++    while (n != 0 && used + 1 < cap) out[used++] = tmp[--n];
++}
++
++// L3: run after the scan result is known (either route). Verifies every
++// range the conversion WILL lease (frozen snapshot, records containing the
++// winning chosen base, readable, clamped) against the registry; on a gap
++// records the refusal for the start function's pre-conversion check.
++static void bridge_gate_after_scan(const lmf::OsVmMapping *mappings,
++                                   size_t count, uint64_t chosen_base) noexcept
++{
++    uint64_t gap_addr = 0, gap_len = 0;
++    if (bridge_verify_lease_coverage(mappings, count, chosen_base,
++                                     gap_addr, gap_len))
++        return;
++    g_lease_gap_reported = true;
++    ::diagnostic_event("bridge_lease_gap", 1u);
++    bridge_report_lease_refusal("bridge_lease_gap_req", gap_addr, gap_len);
++    char *d = g_lease_gap_detail;
++    unsigned used = 0;
++    const unsigned cap = (unsigned)sizeof g_lease_gap_detail;
++    const char *head = "lease coverage gap: requested [";
++    for (unsigned i = 0; head[i] != '\0' && used + 1 < cap; ++i) d[used++] = head[i];
++    lease_gap_append_hex(d, cap, used, gap_addr);
++    const char *mid = " +0x";
++    for (unsigned i = 0; mid[i] != '\0' && used + 1 < cap; ++i) d[used++] = mid[i];
++    lease_gap_append_hex(d, cap, used, gap_len);
++    const char *tail = ") outside registered readable spans";
++    for (unsigned i = 0; tail[i] != '\0' && used + 1 < cap; ++i) d[used++] = tail[i];
++    const LeaseSpan *near = nullptr;
++    for (unsigned i = 0; i < g_lease_span_count; ++i) {
++        if (g_lease_spans[i].b >= gap_addr + gap_len &&
++            (near == nullptr || g_lease_spans[i].b < near->b))
++            near = &g_lease_spans[i];
++    }
++    if (near != nullptr) {
++        const char *mid2 = "; nearest registered [";
++        for (unsigned i = 0; mid2[i] != '\0' && used + 1 < cap; ++i) d[used++] = mid2[i];
++        lease_gap_append_hex(d, cap, used, near->b);
++        const char *mid3 = "..";
++        for (unsigned i = 0; mid3[i] != '\0' && used + 1 < cap; ++i) d[used++] = mid3[i];
++        lease_gap_append_hex(d, cap, used, near->e);
++        if (used + 1 < cap) d[used++] = ')';
++    }
++    d[used] = '\0';
++}
++
++
+ extern "C" int modbridge_runtime_stop(void)
+ {
+     auto &slot = owner_slot();
+@@ -581,7 +847,11 @@
+         // r8: register the image's readable ranges BEFORE conversion — the
+         // scan source's ReadLease (inside MakeNativeProgramContext) requires
+         // every readable byte pre-registered.
+-        bridge_register_readable_ranges();
++        // r14 (L1): that registration moved INTO the scan_image_base wrapper
++        // below, so it is derived from the SAME frozen capture snapshot the
++        // conversion leases from — the pre-capture fresh sysctl (r13
++        // bridge_register_readable_ranges) is gone; it was the drift class
++        // behind launch-8's "Owned read range includes unregistered bytes".
+         lmf::LiveModuleOsOps base_ops = lmf::make_sce_live_module_os_ops(nullptr);
+         // r3: wrap scan_image_base so the header scan keeps first shot; when
+         // it cannot anchor (exec-only eboot header on this target), the
+@@ -605,13 +875,20 @@
+             [](void *ctx, const lmf::OsVmMapping *mappings, size_t count,
+                lmf::VmScanResult *out) -> int {
+               if (out == nullptr || mappings == nullptr) return -1;
++              // r14 (L1): FIRST op of capture(), holding the FROZEN snapshot
++              // the whole chain will reason over. Register every readable
++              // record intersecting the anchored extent from THESE bytes —
++              // never a fresh sysctl (the r13 pre-capture call is retired).
++              bridge_register_from_frozen_snapshot(mappings, count);
+               const lmf::LiveModuleOsOps &base =
+                   *static_cast<const lmf::LiveModuleOsOps *>(ctx);
+               // First: the original header scan (unchanged behavior).
+               if (base.scan_image_base != nullptr &&
+                   base.scan_image_base(nullptr, mappings, count, out) == 0 &&
+-                  out->chosen_index >= 0 && out->chosen_base != 0)
++                  out->chosen_index >= 0 && out->chosen_base != 0) {
++                  bridge_gate_after_scan(mappings, count, out->chosen_base);
+                   return 0;
++              }
+               // Fallback: data-window anchor (validated windows, readable
+               // spans only, BOTH windows must verify at the candidate base).
+               if (!window_anchor_verify()) return -1;
+@@ -622,11 +899,23 @@
+               r.candidate_count = 1;
+               r.truncated = 0;
+               *out = r;
++              bridge_gate_after_scan(mappings, count, r.chosen_base);
+               return 0;
+             };
+         auto supplier = std::make_shared<lmf::RetainedLiveModuleFactsSupplier>(
+             ops, prospero_live_firmware_profile());
+         supplier->capture();  // VMMAP-first; facts().status records the outcome
++        // r14 (L3): post-capture coverage gate. Runs BEFORE conversion so a
++        // gap refuses here, naming the gap and the nearest registered span,
++        // instead of surfacing as a deep PLH throw inside
++        // MakeNativeProgramContext (launch-8's code=2). The flag is only ever
++        // set inside the scan wrapper during capture(); an empty derivable
++        // set is left to the conversion's own honest geometry refusal.
++        if (g_lease_gap_reported)
++        {
++            copy_detail(detail, detail_capacity, g_lease_gap_detail);
++            return MRS_ERR_CONVERSION;
++        }
+ 
+         // Owning conversion overload: ModuleInput.lifetime aliases the
+         // supplier (and any retained loader reference) into the facts.

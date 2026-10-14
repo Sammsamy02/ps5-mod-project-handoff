@@ -1,0 +1,546 @@
+--- /dev/null
++++ b/loader/include/pe_import_scan.h
+@@ -0,0 +1,21 @@
++// Read-only, bounded PE32+ static-import DLL-name scanner.
++#ifndef CAP13_PE_IMPORT_SCAN_H
++#define CAP13_PE_IMPORT_SCAN_H
++
++#include <cstddef>
++#include <string>
++#include <vector>
++
++namespace cap13 {
++
++struct PeImportScanResult
++{
++    bool ok = false;
++    std::string reason;
++    std::vector<std::string> dll_names;
++};
++
++PeImportScanResult pe_scan_imported_dlls(const void* file_bytes, size_t file_size);
++
++} // namespace cap13
++#endif
+--- /dev/null
++++ b/loader/src/pe_import_scan.cpp
+@@ -0,0 +1,170 @@
++#include "pe_import_scan.h"
++#include "pe_types.h"
++
++#include <algorithm>
++#include <cstring>
++#include <limits>
++
++namespace cap13 {
++namespace {
++
++bool fits(size_t offset, size_t length, size_t size)
++{
++    return offset <= size && length <= size - offset;
++}
++
++struct RawImage
++{
++    const uint8_t* data;
++    size_t size;
++    const PeOptionalHeader64* optional;
++    const PeSectionHeader* sections;
++    uint16_t section_count;
++
++    // Only file-backed bytes are readable. Virtual zero-fill is not accepted
++    // as import metadata, even when its RVA lies inside SizeOfImage.
++    bool translate(uint32_t rva, size_t length, size_t* offset,
++                   size_t* available = nullptr) const
++    {
++        if (rva < optional->SizeOfHeaders)
++        {
++            if (!fits(rva, length, optional->SizeOfHeaders) ||
++                !fits(rva, length, size)) return false;
++            *offset = rva;
++            if (available) *available = std::min(size, size_t(optional->SizeOfHeaders)) - rva;
++            return true;
++        }
++        for (uint16_t i = 0; i < section_count; ++i)
++        {
++            const auto& section = sections[i];
++            if (rva < section.VirtualAddress) continue;
++            const uint64_t delta = uint64_t(rva) - section.VirtualAddress;
++            if (delta > section.SizeOfRawData ||
++                length > uint64_t(section.SizeOfRawData) - delta) continue;
++            const uint64_t raw = uint64_t(section.PointerToRawData) + delta;
++            if (raw > size || length > size - size_t(raw)) return false;
++            *offset = size_t(raw);
++            if (available) *available = section.SizeOfRawData - size_t(delta);
++            return true;
++        }
++        return false;
++    }
++};
++
++PeImportScanResult refuse(const char* why)
++{
++    PeImportScanResult result;
++    result.reason = why;
++    return result;
++}
++
++} // namespace
++
++PeImportScanResult pe_scan_imported_dlls(const void* file_bytes, size_t file_size)
++{
++    if (!file_bytes || file_size < sizeof(PeDosHeader))
++        return refuse("PE import scan: missing or short DOS header");
++    const auto* data = static_cast<const uint8_t*>(file_bytes);
++    PeDosHeader dos{};
++    std::memcpy(&dos, data, sizeof(dos));
++    if (dos.e_magic != 0x5a4d || dos.e_lfanew < 0)
++        return refuse("PE import scan: invalid DOS header");
++    const size_t pe = size_t(dos.e_lfanew);
++    if (!fits(pe, 4 + sizeof(PeFileHeader), file_size) ||
++        std::memcmp(data + pe, "PE\0\0", 4) != 0)
++        return refuse("PE import scan: invalid NT header");
++    PeFileHeader coff{};
++    std::memcpy(&coff, data + pe + 4, sizeof(coff));
++    const size_t optional_offset = pe + 4 + sizeof(coff);
++    if (coff.Machine != 0x8664 ||
++        coff.SizeOfOptionalHeader < sizeof(PeOptionalHeader64) ||
++        !fits(optional_offset, coff.SizeOfOptionalHeader, file_size))
++        return refuse("PE import scan: unsupported or truncated PE32+ header");
++    const auto* optional = reinterpret_cast<const PeOptionalHeader64*>(data + optional_offset);
++    if (optional->Magic != 0x020b || optional->NumberOfRvaAndSizes <= PE_DIR_IMPORT ||
++        optional->SizeOfImage == 0 || optional->SizeOfImage > 512u * 1024u * 1024u ||
++        optional->SizeOfHeaders > optional->SizeOfImage ||
++        optional->SizeOfHeaders > file_size)
++        return refuse("PE import scan: invalid PE32+ image bounds");
++    if (coff.NumberOfSections == 0 || coff.NumberOfSections > 96)
++        return refuse("PE import scan: invalid section count");
++    const size_t section_offset = optional_offset + coff.SizeOfOptionalHeader;
++    const size_t section_bytes = size_t(coff.NumberOfSections) * sizeof(PeSectionHeader);
++    if (!fits(section_offset, section_bytes, file_size) ||
++        !fits(section_offset, section_bytes, optional->SizeOfHeaders))
++        return refuse("PE import scan: section table outside headers");
++    RawImage image{data, file_size, optional,
++        reinterpret_cast<const PeSectionHeader*>(data + section_offset),
++        coff.NumberOfSections};
++    for (uint16_t i = 0; i < image.section_count; ++i)
++    {
++        const auto& section = image.sections[i];
++        const uint64_t mapped = std::max(section.VirtualSize, section.SizeOfRawData);
++        if (uint64_t(section.VirtualAddress) + mapped > optional->SizeOfImage ||
++            uint64_t(section.PointerToRawData) + section.SizeOfRawData > file_size ||
++            (mapped && section.VirtualAddress < optional->SizeOfHeaders))
++            return refuse("PE import scan: section range outside image or file");
++        for (uint16_t j = 0; j < i; ++j)
++        {
++            const auto& previous = image.sections[j];
++            const uint64_t previous_size = std::max(previous.VirtualSize, previous.SizeOfRawData);
++            if (mapped && previous_size &&
++                uint64_t(section.VirtualAddress) < uint64_t(previous.VirtualAddress) + previous_size &&
++                uint64_t(previous.VirtualAddress) < uint64_t(section.VirtualAddress) + mapped)
++                return refuse("PE import scan: overlapping image sections");
++        }
++    }
++    if (optional->NumberOfRvaAndSizes > PE_DIR_DELAYIMPORT)
++    {
++        const auto& delayed = optional->DataDirectory[PE_DIR_DELAYIMPORT];
++        if (delayed.VirtualAddress || delayed.Size)
++            return refuse("PE import scan: delay imports are unsupported");
++    }
++    const auto& imports = optional->DataDirectory[PE_DIR_IMPORT];
++    if (!imports.VirtualAddress && !imports.Size)
++    {
++        PeImportScanResult result;
++        result.ok = true;
++        return result;
++    }
++    if (!imports.VirtualAddress || imports.Size < sizeof(PeImportDescriptor) ||
++        imports.Size > 1024u * 1024u)
++        return refuse("PE import scan: malformed import directory size");
++    size_t directory_offset = 0;
++    if (!image.translate(imports.VirtualAddress, imports.Size, &directory_offset))
++        return refuse("PE import scan: import directory outside file-backed image");
++    PeImportScanResult result;
++    const size_t count = imports.Size / sizeof(PeImportDescriptor);
++    bool terminated = false;
++    for (size_t i = 0; i < count; ++i)
++    {
++        PeImportDescriptor descriptor{};
++        std::memcpy(&descriptor, data + directory_offset + i * sizeof(descriptor),
++                    sizeof(descriptor));
++        if (!descriptor.OriginalFirstThunk && !descriptor.TimeDateStamp &&
++            !descriptor.ForwarderChain && !descriptor.Name && !descriptor.FirstThunk)
++        {
++            terminated = true;
++            break;
++        }
++        size_t name_offset = 0;
++        size_t available = 0;
++        if (!descriptor.Name ||
++            !image.translate(descriptor.Name, 1, &name_offset, &available))
++            return refuse("PE import scan: DLL name RVA outside file-backed image");
++        const size_t cap = std::min<size_t>(available, 4096);
++        const void* end = std::memchr(data + name_offset, 0, cap);
++        if (!end || end == data + name_offset)
++            return refuse("PE import scan: unterminated or empty DLL name");
++        const size_t length = static_cast<const uint8_t*>(end) - (data + name_offset);
++        for (size_t n = 0; n < length; ++n)
++            if (data[name_offset + n] < 0x20 || data[name_offset + n] >= 0x7f)
++                return refuse("PE import scan: non-ASCII DLL name");
++        result.dll_names.emplace_back(reinterpret_cast<const char*>(data + name_offset), length);
++    }
++    if (!terminated) return refuse("PE import scan: import descriptors lack terminator");
++    result.ok = true;
++    return result;
++}
++
++} // namespace cap13
+--- a/loader/include/guest_pe_batch.h
++++ b/loader/include/guest_pe_batch.h
+@@ -20,6 +20,18 @@
+     GuestSegmentSwitch* segment = nullptr;
+ };
+ 
++// The source is consulted by imported DLL basename. It may search a mod
++// folder or another caller-owned store, but must return unchanged PE bytes.
++// A fetched segment backend must outlive any attached module in the result.
++struct GuestPeFetchedDependency
++{
++    std::string source_path;
++    std::vector<uint8_t> bytes;
++    GuestSegmentSwitch* segment = nullptr;
++};
++using FetchPeDependency = bool (*)(void* user, const char* import_dll,
++                                    GuestPeFetchedDependency* out);
++
+ struct GuestPeBatchResult
+ {
+     bool ok = false;
+@@ -36,6 +48,14 @@
+     const std::vector<GuestPeBatchInput>& inputs, WinApiShim& shim,
+     const LoadOptions& options, StaticTlsBank& bank, GuestTebView& teb);
+ 
++// Recursively collect static DLL imports from one root image and fetch
++// locally available dependencies without per-game names or fixed addresses.
++// System/framework imports already known to the shim are left to the shim.
++GuestPeBatchResult pe_attach_guest_closure(
++    const GuestPeBatchInput& root, FetchPeDependency fetch, void* fetch_user,
++    WinApiShim& shim, const LoadOptions& options, StaticTlsBank& bank,
++    GuestTebView& teb);
++
+ // Detach in reverse attachment order. Failed detaches remain in result.
+ // Caller must quiesce all guest threads and keep shim, bank, and segments
+ // alive until no attached modules remain.
+--- a/loader/src/guest_pe_batch.cpp
++++ b/loader/src/guest_pe_batch.cpp
+@@ -1,6 +1,8 @@
+ #include "guest_pe_batch.h"
++#include "pe_import_scan.h"
+ #include "win_api_shim.h"
+ 
++#include <memory>
+ #include <string>
+ #include <unordered_set>
+ #include <utility>
+@@ -164,4 +166,79 @@
+     return result;
+ }
+ 
++GuestPeBatchResult pe_attach_guest_closure(
++    const GuestPeBatchInput& root, FetchPeDependency fetch, void* fetch_user,
++    WinApiShim& shim, const LoadOptions& options, StaticTlsBank& bank,
++    GuestTebView& teb)
++{
++    GuestPeBatchResult refused;
++    const std::string root_key = module_key(root.source_path);
++    if (root_key.empty() || !root.file_bytes || !root.file_size ||
++        !root.segment || !fetch)
++    {
++        refused.reason = "invalid root PE or dependency source";
++        return refused;
++    }
++    if (root.file_size > 512u * 1024u * 1024u)
++    {
++        refused.reason = "dependency closure exceeds byte cap";
++        return refused;
++    }
++    std::vector<std::unique_ptr<GuestPeFetchedDependency>> owned;
++    std::vector<GuestPeBatchInput> inputs{root};
++    std::unordered_set<std::string> seen{root_key};
++    size_t total_bytes = root.file_size;
++    for (size_t i = 0; i < inputs.size(); ++i)
++    {
++        const auto& input = inputs[i];
++        const auto scan = pe_scan_imported_dlls(input.file_bytes, input.file_size);
++        if (!scan.ok)
++        {
++            refused.reason = std::string("static dependency scan refused for ") +
++                             input.source_path + ": " + scan.reason;
++            return refused;
++        }
++        for (const auto& imported : scan.dll_names)
++        {
++            const std::string key = module_key(imported.c_str());
++            if (key != imported &&
++                (imported.find('/') != std::string::npos ||
++                 imported.find('\\') != std::string::npos))
++            {
++                refused.reason = "imported DLL name contains a path";
++                return refused;
++            }
++            if (seen.count(key) || shim.has_module_surface(imported.c_str()))
++                continue;
++            GuestPeFetchedDependency dependency;
++            if (!fetch(fetch_user, imported.c_str(), &dependency))
++                continue; // Exact unsupported import is reported by batch resolution.
++            if (module_key(dependency.source_path.c_str()) != key)
++            {
++                refused.reason = "mismatched fetched dependency basename: " + imported;
++                return refused;
++            }
++            if (dependency.bytes.empty() || !dependency.segment)
++            {
++                refused.reason = "invalid fetched PE dependency: " + imported;
++                return refused;
++            }
++            if (inputs.size() >= 256 ||
++                dependency.bytes.size() > 512u * 1024u * 1024u - total_bytes)
++            {
++                refused.reason = "dependency closure exceeds size cap";
++                return refused;
++            }
++            total_bytes += dependency.bytes.size();
++            owned.push_back(std::make_unique<GuestPeFetchedDependency>(
++                std::move(dependency)));
++            const auto& stored = *owned.back();
++            inputs.push_back({stored.source_path.c_str(), stored.bytes.data(),
++                              stored.bytes.size(), stored.segment});
++            seen.insert(key);
++        }
++    }
++    return pe_attach_guest_batch(inputs, shim, options, bank, teb);
++}
++
+ } // namespace cap13
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -83,6 +83,10 @@
+     bool unregister_mapped_module(const char* source_path, WinModule handle,
+                                   void* owner);
+ 
++    // Read-only namespace check for static dependency discovery. Presence
++    // does not mean every symbol is callable; resolve still gates each row.
++    bool has_module_surface(const char* dll_name);
++
+     // The adapter registers each validated mapped DLL by its HMODULE/image
+     // base before DllMain. A non-TLS module needs a callback that actually
+     // suppresses its thread notifications; active static TLS always refuses
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -225,6 +225,15 @@
+         row->second.owner != owner || !row->second.mapped_lookup) return false;
+     m->modules.erase(row);
+     return true;
++}
++
++bool WinApiShim::has_module_surface(const char* dll_name)
++{
++    const std::string key = ascii_module_key(dll_name);
++    if (key.empty()) return false;
++    std::lock_guard guard(m->mu);
++    return m->modules.count(key) || m->raw_exports.count(key) ||
++           m->exports.count(key);
+ }
+ 
+ bool WinApiShim::register_thread_notification_policy(
+--- a/loader/tests/guest_pe_batch_test.cpp
++++ b/loader/tests/guest_pe_batch_test.cpp
+@@ -1,4 +1,5 @@
+ #include "guest_pe_batch.h"
++#include "pe_import_scan.h"
+ #include "win_api_shim.h"
+ #include "pe_types.h"
+ 
+@@ -60,6 +61,33 @@
+     bool enter(void* teb) override { return ++enters <= allow_until && teb; }
+     void leave() noexcept override {}
+ };
++struct SourceState
++{
++    struct Entry
++    {
++        const char* name;
++        const char* path;
++        const std::vector<uint8_t>* bytes;
++        RecordingSwitch* segment;
++    };
++    std::vector<Entry> entries;
++    std::vector<std::string> requested;
++};
++bool fetch_dependency(void* user, const char* name,
++                      cap13::GuestPeFetchedDependency* out)
++{
++    auto& source = *static_cast<SourceState*>(user);
++    source.requested.emplace_back(name);
++    for (const auto& entry : source.entries)
++    {
++        if (std::strcmp(entry.name, name) != 0) continue;
++        out->source_path = entry.path;
++        out->bytes = *entry.bytes;
++        out->segment = entry.segment;
++        return true;
++    }
++    return false;
++}
+ std::vector<uint8_t> consumer_for(const std::vector<uint8_t>& fixture,
+                                   const char* provider)
+ {
+@@ -82,7 +110,7 @@
+ 
+ int main(int argc, char** argv)
+ {
+-    if (argc != 2) return 2;
++    if (argc != 7) return 2;
+     auto fixture = read_file(argv[1]);
+     if (fixture.empty()) return 2;
+     cap13::WinApiShim shim;
+@@ -200,6 +228,95 @@
+           shim.resolve("provider.dll", "start_mod", 0) == nullptr,
+           "caller can retry cleanup after segment backend recovers");
+ 
++    auto fixture_scan = cap13::pe_scan_imported_dlls(fixture.data(), fixture.size());
++    check(fixture_scan.ok && fixture_scan.dll_names.size() == 2 &&
++          fixture_scan.dll_names[0] == "UE4SS.dll" &&
++          fixture_scan.dll_names[1] == "KERNEL32.dll",
++          "read-only scanner names the synthetic fixture's two static DLL imports");
++    bool real_scans_ok = true;
++    for (int i = 2; i < 7; ++i)
++    {
++        auto real = read_file(argv[i]);
++        auto scan = cap13::pe_scan_imported_dlls(real.data(), real.size());
++        real_scans_ok &= scan.ok && !scan.dll_names.empty();
++    }
++    check(real_scans_ok, "five unchanged upstream DLLs yield bounded import names");
++
++    RecordingSwitch discovered_consumer, discovered_provider;
++    SourceState source;
++    source.entries.push_back({"provider.dll", "/mods/provider.dll",
++                              &fixture, &discovered_provider});
++    auto discovered = cap13::pe_attach_guest_closure(
++        {"/mods/consumer.dll", consumer.data(), consumer.size(), &discovered_consumer},
++        fetch_dependency, &source, shim, options, bank, teb);
++    check(discovered.ok && discovered.input_indices == std::vector<size_t>({1, 0}) &&
++          source.requested == std::vector<std::string>({"provider.dll"}),
++          "root consumer discovers its local provider without a caller list");
++    check(cap13::pe_detach_guest_batch(discovered, teb) && discovered.modules.empty(),
++          "discovered dependency closure detaches cleanly");
++
++    RecordingSwitch closure_first, closure_middle, closure_last;
++    SourceState transitive;
++    transitive.entries.push_back({"middle.dll", "/mods/middle.dll",
++                                  &middle, &closure_middle});
++    transitive.entries.push_back({"last.dll", "/mods/last.dll",
++                                  &fixture, &closure_last});
++    auto transitive_result = cap13::pe_attach_guest_closure(
++        {"/mods/first.dll", first.data(), first.size(), &closure_first},
++        fetch_dependency, &transitive, shim, options, bank, teb);
++    check(transitive_result.ok &&
++          transitive_result.input_indices == std::vector<size_t>({2, 1, 0}) &&
++          transitive.requested == std::vector<std::string>({"middle.dll", "last.dll"}),
++          "static import closure discovers two transitive local dependencies");
++    check(cap13::pe_detach_guest_batch(transitive_result, teb),
++          "transitive closure detaches cleanly");
++
++    RecordingSwitch missing_root_switch;
++    SourceState missing_source;
++    auto missing_closure = cap13::pe_attach_guest_closure(
++        {"/mods/consumer.dll", unknown.data(), unknown.size(), &missing_root_switch},
++        fetch_dependency, &missing_source, shim, options, bank, teb);
++    check(!missing_closure.ok && !missing_closure.missing.empty() &&
++          missing_closure.missing[0] == "external.dll!start_mod",
++          "unavailable dependency stays an exact named import refusal");
++
++    RecordingSwitch mismatch_root, mismatch_provider;
++    SourceState mismatch_source;
++    mismatch_source.entries.push_back({"provider.dll", "/mods/wrong.dll",
++                                       &fixture, &mismatch_provider});
++    auto mismatch = cap13::pe_attach_guest_closure(
++        {"/mods/consumer.dll", consumer.data(), consumer.size(), &mismatch_root},
++        fetch_dependency, &mismatch_source, shim, options, bank, teb);
++    check(!mismatch.ok && mismatch.modules.empty() && mismatch_root.enters == 0 &&
++          mismatch.reason.find("mismatched") != std::string::npos,
++          "source cannot substitute a DLL under a different basename");
++
++    RecordingSwitch closure_a, closure_b;
++    SourceState cycle_source;
++    cycle_source.entries.push_back({"b.dll", "/mods/b.dll", &b, &closure_b});
++    auto closure_cycle = cap13::pe_attach_guest_closure(
++        {"/mods/a.dll", a.data(), a.size(), &closure_a},
++        fetch_dependency, &cycle_source, shim, options, bank, teb);
++    check(!closure_cycle.ok && closure_cycle.modules.empty() &&
++          closure_cycle.reason.find("intra-batch") != std::string::npos,
++          "discovered cyclic dependency refuses before guest entry");
++
++    auto malformed_import = fixture;
++    auto* bad_descriptor = reinterpret_cast<cap13::PeImportDescriptor*>(
++        malformed_import.data() + 0x600);
++    bad_descriptor->Name = 0x7fffffff;
++    auto malformed_scan = cap13::pe_scan_imported_dlls(
++        malformed_import.data(), malformed_import.size());
++    RecordingSwitch malformed_switch;
++    SourceState malformed_source;
++    auto malformed_closure = cap13::pe_attach_guest_closure(
++        {"/mods/malformed.dll", malformed_import.data(), malformed_import.size(),
++         &malformed_switch}, fetch_dependency, &malformed_source,
++        shim, options, bank, teb);
++    check(!malformed_scan.ok && !malformed_closure.ok &&
++          malformed_switch.enters == 0 && malformed_closure.modules.empty(),
++          "malformed import RVA refuses before any guest entry");
++
+     std::printf("cases=%d failed=%d\n", checks, failures);
+     return failures ? 1 : 0;
+ }
+--- a/loader/tests/run_guest_pe_batch.py
++++ b/loader/tests/run_guest_pe_batch.py
+@@ -10,17 +10,39 @@
+ if hashlib.sha256(fixture.read_bytes()).hexdigest() != expected:
+     raise RuntimeError("synthetic fixture hash mismatch")
+ out = root / "tests/guest-pe-batch-host"
++upstream = root.parent.parent / "cg-max-ready-20261013-03/cap13/upstream-inputs"
++real_cases = [
++    (root.parent / "third_party/TrueFOV-upstream-winmm.dll",
++     "5f23eee1c7479e75699d26d339ea69269eb0da0c33fc9be4cd60957ee63302a3"),
++    (upstream / "ZeroCompanyMandoWardrobe-upstream-main.dll",
++     "821ecad6c9f7e61faa2a07b31c216475768b72c2066369d3b0b88f715b33a40c"),
++    (upstream / "TFWWorkbench-upstream-main.dll",
++     "24b05dc267dc6e9faa6cbcb4e85a8491733e0a86b86fbac92f5aa1a0950aa6ca"),
++    (upstream / "EventViewerMod-upstream-main.dll",
++     "83422a25fffd8d0d39c78fe001eac2fd169fc148858a5004ae3af52fd41544e0"),
++    (upstream / "KismetDebuggerMod-upstream-main.dll",
++     "4e7907661afe4bb49ebd1677b9e631410554b80ed9df1a9b3ea9e1bcd92a4aae"),
++]
++for path, digest in real_cases:
++    if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
++        raise RuntimeError(f"unchanged input hash mismatch: {path}")
+ subprocess.run([
+     "clang++", "-arch", "x86_64", "-std=c++17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-pthread",
+     "-I" + str(root / "include"), "-I" + str(root / "src"),
+     str(root / "tests/guest_pe_batch_test.cpp"),
+-    str(root / "src/guest_pe_batch.cpp"), str(root / "src/guest_pe_loader.cpp"),
++    str(root / "src/guest_pe_batch.cpp"), str(root / "src/pe_import_scan.cpp"),
++    str(root / "src/guest_pe_loader.cpp"),
+     str(root / "src/pe_loader.cpp"), str(root / "src/pe_tls_registration.cpp"),
+     str(root / "src/static_tls_bank.cpp"), str(root / "src/guest_teb_lifecycle.cpp"),
+     str(root / "src/win_api_shim.cpp"), str(root / "src/win64_bridge.S"),
+     "-o", str(out),
+ ], check=True, timeout=30)
+-subprocess.run(["arch", "-x86_64", str(out), str(fixture)], check=True, timeout=20)
++subprocess.run(["arch", "-x86_64", str(out), str(fixture),
++                *[str(path) for path, _ in real_cases]], check=True, timeout=30)
+ if hashlib.sha256(fixture.read_bytes()).hexdigest() != expected:
+     raise RuntimeError("synthetic fixture changed")
+ print(f"UNCHANGED fixture sha256={expected}")
++for path, digest in real_cases:
++    if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
++        raise RuntimeError(f"unchanged input modified: {path}")
++print("UNCHANGED five upstream DLL hashes")

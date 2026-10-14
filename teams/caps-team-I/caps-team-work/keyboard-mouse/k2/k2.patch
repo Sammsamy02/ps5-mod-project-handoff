@@ -1,0 +1,1547 @@
+diff -ruN base/candidate/src/KbmEngineKeysRuntime.inc new/candidate/src/KbmEngineKeysRuntime.inc
+--- base/candidate/src/KbmEngineKeysRuntime.inc	1969-12-31 18:00:00
++++ new/candidate/src/KbmEngineKeysRuntime.inc	2026-10-13 21:27:14
+@@ -0,0 +1,274 @@
++// KbmEngineKeysRuntime.inc -- runtime binding of the engine-keys input (keyboard and mouse, capability K2, Team I2).
++//
++// Included ONCE, by candidate/src/UE4SSProgram.cpp, inside #if defined(__PROSPERO__) && defined(HAS_INPUT) (the build
++// replaces existing units and adds none: the same pattern as VmtTickPumpCore.inc and NativeModEngineServices.inc).
++// Defines the three entry points:
++//   RC::Platform::KbmComposeInput(input)  UE4SSProgram::validate_native_services, constructor thread, before
++//                                         Handler::init: input = Merged{ the PS5Pad.ini source when the composition
++//                                         made one, engine keys }. Any failure keeps `input` exactly as it was.
++//   RC::Platform::KbmGameThreadFrame()    the game-thread drains in LuaMod.cpp: the R3 FuncPtr-marshal drain (the pump
++//                                         that runs on PS5) and the VMT Tick drain (when it is armed), once per pump
++//                                         call; the sampler samples at most every 8 ms, so it is once per frame.
++//   RC::Platform::KbmRetire()             UE4SSProgram teardown, right after Handler::shutdown (which closed the
++//                                         engine-keys channel): handler shutdown -> pump retirement -> unload.
++//
++// The engine is reached ONLY through what the runtime already ships and uses for Lua / C++ mods: the object array
++// liveness check, UObjectGlobals::FindAllOf, reflection by name (GetFunctionByNameInChain, GetPropertyByNameInChain,
++// TFieldRange over a UFunction / UScriptStruct, FProperty flags / offsets / sizes, FBoolProperty byte offset / mask,
++// FStructProperty struct), the find-only FName constructor (FNAME_Find) and UObject::ProcessEvent (the call path Lua
++// uses). No import, no address, no offset, no game or mod name, no hook, no detour.
++#include <Platform/KbmEngineKeys.hpp>
++
++#include <DynamicOutput/Output.hpp>
++#include <Helpers/Utf16Utf8.hpp>
++#include <Unreal/CoreUObject/UObject/Class.hpp>
++#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
++#include <Unreal/NameTypes.hpp>
++#include <Unreal/UObject.hpp>
++#include <Unreal/UObjectArray.hpp>
++#include <Unreal/UObjectGlobals.hpp>
++
++#include <atomic>
++#include <chrono>
++#include <cstring>
++#include <memory>
++#include <string_view>
++#include <type_traits>
++#include <vector>
++
++namespace RC::Platform::Kbm
++{
++    class UnrealKeyReflection final : public KeyReflection
++    {
++        using UObject = Unreal::UObject;
++        using UFunction = Unreal::UFunction;
++        using UStruct = Unreal::UStruct;
++        using FProperty = Unreal::FProperty;
++        using FName = Unreal::FName;
++        static_assert(std::is_trivially_copyable_v<FName>, "FName is copied into the parameter frame as bytes");
++
++        static constexpr int k_max_fields = 64;      // bound on any reflected property walk
++        static constexpr int k_max_class_depth = 64; // bound on any super-class walk
++
++        // Engine key names are ASCII; the port's character type is wider.
++        static auto wide(const char* ascii) -> StringType
++        {
++            StringType w;
++            for (const char* c = ascii; c && *c; ++c) w.push_back(static_cast<StringType::value_type>(static_cast<unsigned char>(*c)));
++            return w;
++        }
++        // Engine names compare ASCII case-insensitively (the display spelling is whichever spelling the name table
++        // saw first; console-proven 2026-10-13 for "Width"/"width"), everything else exact.
++        static auto name_eq(const StringType& a, const char* b) -> bool
++        {
++            const size_t n = std::strlen(b);
++            if (a.size() != n) return false;
++            for (size_t i = 0; i < n; ++i)
++            {
++                auto x = static_cast<uint32_t>(a[i]), y = static_cast<uint32_t>(static_cast<unsigned char>(b[i]));
++                if (x >= 'A' && x <= 'Z') x += 32;
++                if (y >= 'A' && y <= 'Z') y += 32;
++                if (x != y) return false;
++            }
++            return true;
++        }
++        // O(1) liveness, the same test the #9 / #11 bindings use: the object's own object-array slot still holds it
++        // and it is not unreachable.
++        static auto valid(UObject* o) -> bool
++        {
++            if (!o) return false;
++            auto* item = Unreal::FUObjectArray::IndexToObject(o->GetInternalIndex());
++            return item && item->GetUObject() == o && !item->IsUnreachable();
++        }
++        static auto class_chain_has(UObject* o, const char* class_name) -> bool
++        {
++            int depth = 0;
++            for (UStruct* s = o->GetClassPrivate(); s && depth < k_max_class_depth; s = s->GetSuperStruct(), ++depth)
++                if (name_eq(s->GetName(), class_name)) return true;
++            return false;
++        }
++        static auto kind_of(FProperty* p) -> Kind
++        {
++            if (p->IsA<Unreal::FBoolProperty>()) return Kind::Bool;
++            if (p->IsA<Unreal::FStructProperty>()) return Kind::Struct;
++            if (p->IsA<Unreal::FNameProperty>()) return Kind::Name;
++            return Kind::Other;
++        }
++        static auto field_of(FProperty* p) -> Field
++        {
++            Field f{};
++            f.kind = kind_of(p);
++            f.parm = p->HasAnyPropertyFlags(Unreal::CPF_Parm);
++            f.ret = p->HasAnyPropertyFlags(Unreal::CPF_ReturnParm);
++            f.out = p->HasAnyPropertyFlags(Unreal::CPF_OutParm);
++            f.ref = p->HasAnyPropertyFlags(Unreal::CPF_ReferenceParm);
++            f.offset = p->GetOffset_Internal();
++            f.size = p->GetSize();
++            f.array_dim = p->GetArrayDim();
++            if (f.kind == Kind::Struct)
++            {
++                Unreal::UScriptStruct* st = static_cast<Unreal::FStructProperty*>(p)->GetStruct(); // TObjectPtr -> raw (as LuaUObject.cpp)
++                f.struct_type = st;
++            }
++            if (f.kind == Kind::Bool)
++            {
++                auto* bp = static_cast<Unreal::FBoolProperty*>(p);
++                f.bool_byte_offset = bp->GetByteOffset();
++                f.bool_field_mask = bp->GetFieldMask();
++            }
++            return f;
++        }
++
++      public:
++        auto find_local_controller() -> Handle override
++        {
++            try
++            {
++                std::vector<UObject*> controllers{};
++                Unreal::UObjectGlobals::FindAllOf(STR("PlayerController"), controllers);
++                for (UObject* pc : controllers)
++                {
++                    if (!valid(pc)) continue;
++                    // APlayerController::Player (reflected UPROPERTY): a LocalPlayer for the local player's controller.
++                    FProperty* p = pc->GetPropertyByNameInChain(STR("Player"));
++                    if (!p || !p->IsA<Unreal::FObjectProperty>() || static_cast<size_t>(p->GetSize()) != sizeof(UObject*)) continue;
++                    UObject* player{};
++                    std::memcpy(&player, p->ContainerPtrToValuePtr<void>(static_cast<void*>(pc)), sizeof player);
++                    if (!valid(player)) continue;
++                    if (class_chain_has(player, "LocalPlayer")) return pc;
++                }
++            }
++            catch (...)
++            {
++            }
++            return nullptr; // none yet (the reader retries at most twice a second)
++        }
++        auto object_index(Handle object) -> int32_t override { return static_cast<UObject*>(object)->GetInternalIndex(); }
++        // Reads only the object array, never the (possibly freed) object itself.
++        auto is_live_at(Handle object, int32_t index) -> bool override
++        {
++            if (!object || index < 0) return false;
++            auto* item = Unreal::FUObjectArray::IndexToObject(index); // bounds-checked
++            return item && item->GetUObject() == static_cast<UObject*>(object) && !item->IsUnreachable();
++        }
++        auto class_of(Handle object) -> Handle override { return static_cast<UObject*>(object)->GetClassPrivate(); }
++        auto find_function(Handle object, const char* name) -> Handle override
++        {
++            const StringType w = wide(name);
++            return static_cast<UObject*>(object)->GetFunctionByNameInChain(w.c_str());
++        }
++        auto function_layout(Handle function, int32_t& parms_size, int32_t& return_offset, std::vector<Field>& params) -> bool override
++        {
++            auto* fn = static_cast<UFunction*>(function);
++            parms_size = static_cast<int32_t>(fn->GetParmsSize());
++            const uint16_t ret = fn->GetReturnValueOffset();
++            return_offset = ret == 0xFFFF ? -1 : static_cast<int32_t>(ret);
++            int seen = 0;
++            for (FProperty* p : Unreal::TFieldRange<FProperty>(fn, Unreal::EFieldIterationFlags::IncludeDeprecated))
++            {
++                if (++seen > k_max_fields) return false;
++                if (!p->HasAnyPropertyFlags(Unreal::CPF_Parm)) continue;
++                params.push_back(field_of(p));
++            }
++            return true;
++        }
++        auto struct_is_named(Handle script_struct, const char* name) -> bool override
++        {
++            return name_eq(static_cast<Unreal::UScriptStruct*>(script_struct)->GetName(), name);
++        }
++        auto struct_members(Handle script_struct, std::vector<Field>& members) -> bool override
++        {
++            auto* st = static_cast<Unreal::UScriptStruct*>(script_struct);
++            int seen = 0;
++            for (FProperty* p : Unreal::TFieldRange<FProperty>(st, Unreal::EFieldIterationFlags::IncludeDeprecated))
++            {
++                if (++seen > k_max_fields) return false;
++                Field f = field_of(p);
++                f.name_is_keyname = name_eq(p->GetName(), "KeyName");
++                members.push_back(f);
++            }
++            return true;
++        }
++        auto name_size() -> size_t override { return sizeof(FName); }
++        auto find_name(const char* ascii, uint8_t* out, size_t cap) -> bool override
++        {
++            if (!ascii || !*ascii || cap < sizeof(FName)) return false;
++            const StringType w = wide(ascii);
++            const FName name(StringViewType{w}, Unreal::FNAME_Find); // find-only: never adds to the name table
++            if (name.IsNone()) return false;
++            std::memcpy(out, &name, sizeof name);
++            return true;
++        }
++        auto name_matches_function(Handle function, const uint8_t* name_bytes) -> bool override
++        {
++            FName probe{};
++            std::memcpy(&probe, name_bytes, sizeof probe);
++            return !probe.IsNone() && probe.Equals(static_cast<UFunction*>(function)->GetNamePrivate());
++        }
++        void call(Handle object, Handle function, void* frame) override
++        {
++            static_cast<UObject*>(object)->ProcessEvent(static_cast<UFunction*>(function), frame);
++        }
++        auto now_ms() -> uint64_t override
++        {
++            return static_cast<uint64_t>(
++                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
++        }
++    };
++
++    namespace Runtime
++    {
++        // Created once by KbmComposeInput and never freed: a game-thread pump call may still be running while the
++        // program tears down, so the sampler stays valid until the module is unloaded (process lifetime).
++        inline std::atomic<EngineKeysRuntime*> g_runtime{nullptr};
++
++        inline auto steady_ns() -> uint64_t
++        {
++            return static_cast<uint64_t>(
++                    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
++        }
++        inline void log_line(const char* line)
++        {
++            try
++            {
++                Output::send(STR("{}\n"), Unicode::DecodeUtf8(std::string_view{line}));
++            }
++            catch (...)
++            {
++            }
++        }
++        inline auto make_reader() -> std::unique_ptr<KeyStateReader>
++        {
++            return std::make_unique<EngineKeyReader>(std::make_unique<UnrealKeyReflection>());
++        }
++    } // namespace Runtime
++} // namespace RC::Platform::Kbm
++
++namespace RC::Platform
++{
++    void KbmComposeInput(std::shared_ptr<Input::PlatformInputSource>& input) noexcept
++    {
++        try
++        {
++            using namespace Kbm;
++            if (Runtime::g_runtime.load(std::memory_order_acquire)) return; // once per process
++            auto runtime = std::make_unique<EngineKeysRuntime>(&Runtime::make_reader, SamplerConfig{}, &Runtime::steady_ns, &Runtime::log_line);
++            if (!runtime->compose(input)) return; // input unchanged (pad only, as before this change)
++            Runtime::g_runtime.store(runtime.release(), std::memory_order_release);
++        }
++        catch (...)
++        {
++            // keep the supplied source exactly as it was
++        }
++    }
++
++    void KbmGameThreadFrame() noexcept
++    {
++        if (auto* runtime = Kbm::Runtime::g_runtime.load(std::memory_order_acquire)) runtime->frame();
++    }
++
++    void KbmRetire() noexcept
++    {
++        if (auto* runtime = Kbm::Runtime::g_runtime.load(std::memory_order_acquire)) runtime->retire();
++    }
++} // namespace RC::Platform
+diff -ruN base/candidate/src/LuaMod.cpp new/candidate/src/LuaMod.cpp
+--- base/candidate/src/LuaMod.cpp	2026-10-13 20:29:16
++++ new/candidate/src/LuaMod.cpp	2026-10-13 21:25:26
+@@ -170,6 +170,8 @@
+ #ifdef __PROSPERO__
+ // [CAP09] defined in src/Mod/CppMod.cpp (NativeModEngineServices.inc).
+ namespace RC::Platform { void NativeModsGameThreadFrame(int source) noexcept; }
++// [K2] defined in src/UE4SSProgram.cpp (KbmEngineKeysRuntime.inc): engine-keys sampler, never throws.
++namespace RC::Platform { void KbmGameThreadFrame() noexcept; }
+ #endif
+ 
+ namespace RC
+@@ -7226,6 +7228,7 @@
+             // [CAP09] native C++ mods: game-thread tasks + per-frame callbacks
+             // on the same data-only pump (never throws).
+             RC::Platform::NativeModsGameThreadFrame(0);
++            RC::Platform::KbmGameThreadFrame(); // [K2] keyboard/mouse engine-keys sampler (at most every 8 ms)
+     #endif
+ 
+             {
+@@ -7340,6 +7343,7 @@
+                     }
+                     // [CAP09] native C++ mods (source 1 = copied-vtable Tick pump).
+                     RC::Platform::NativeModsGameThreadFrame(1);
++                    RC::Platform::KbmGameThreadFrame(); // [K2] same sampler; its 8 ms gate keeps it once per frame
+                     {
+                         std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+                         LuaMod::m_is_processing_actions = false;
+diff -ruN base/candidate/src/UE4SSProgram.cpp new/candidate/src/UE4SSProgram.cpp
+--- base/candidate/src/UE4SSProgram.cpp	2026-10-13 19:56:47
++++ new/candidate/src/UE4SSProgram.cpp	2026-10-13 20:55:39
+@@ -113,6 +113,15 @@
+ #include <UE4SSRuntime.hpp>
+ #include <UnrealDef.hpp>
+ 
++#if defined(__PROSPERO__) && defined(HAS_INPUT)
++// [K2] keyboard/mouse (Team I2): engine-keys input next to the PS5Pad.ini chords. Defines
++// RC::Platform::KbmComposeInput / KbmGameThreadFrame / KbmRetire. Included once, here only.
++#include "KbmEngineKeysRuntime.inc"
++#elif defined(__PROSPERO__)
++// [K2] no input support compiled: the marshal drain's call has nothing to sample.
++namespace RC::Platform { void KbmGameThreadFrame() noexcept {} }
++#endif
++
+ #ifdef _WIN32
+ #include <polyhook2/PE/IatHook.hpp>
+ #endif
+@@ -735,6 +744,8 @@
+             std::fprintf(stderr, "Native UE4SS input provider failed to deactivate; releasing its owner is unsafe\n");
+             std::terminate();
+         }
++        // [K2] teardown order: handler shutdown (closed the engine-keys channel) -> pump retirement -> unload.
++        Platform::KbmRetire();
+ #endif
+         Unreal::NativePropertyGuard::Revoke();
+         if (m_native_owns_output_devices)
+@@ -1177,6 +1188,10 @@
+         if (settings_manager.General.EnableHotReloadSystem || settings_manager.General.EnableAutoReloadingLuaMods)
+             throw std::runtime_error("Native hot reload and filesystem watcher services are unavailable");
+ #ifdef HAS_INPUT
++        // [K2] input = Merged{ the PS5Pad.ini source (only when the composition made one), engine keys }. Never
++        // throws; on any failure the supplied source is kept exactly as it was. The engine-keys half reports
++        // unavailable until the engine answered once, so Handler::init deferred-attaches it like the held pad.
++        Platform::KbmComposeInput(m_native_context.input_source);
+         if (m_native_context.input_source)
+         {
+             if (!m_input_handler.init(m_native_context.input_source))
+diff -ruN base/include/Platform/KbmEngineKeys.hpp new/include/Platform/KbmEngineKeys.hpp
+--- base/include/Platform/KbmEngineKeys.hpp	1969-12-31 18:00:00
++++ new/include/Platform/KbmEngineKeys.hpp	2026-10-13 21:29:20
+@@ -0,0 +1,1198 @@
++#pragma once
++// KbmEngineKeys.hpp -- USB keyboard and mouse for UE4SS key binds on PS5 (capability K2, Team I2).
++//
++// Plain words: the game already owns the USB keyboard and mouse and turns them into Unreal key presses. We open
++// no device. On the game thread the runtime asks the game's own local PlayerController "is key X down?" (its
++// reflected IsInputKeyDown function), only for keys that mods registered, and turns up->down changes into normal
++// UE4SS key events. The controller chords from PS5Pad.ini keep working exactly as before, next to it.
++//
++// This header is ENGINE-FREE (no Unreal header; host-tested in caps-team-I/.../k2/tests):
++//   1. key table          UE4SS Key -> engine key name (Epic's public EKeys names; the live game's name table
++//                         decides at run time, find-only, whether the name exists)
++//   2. KeyStateReader     the engine boundary the sampler uses (game thread only)
++//   3. KeyReflection +    the reflection-checked reader: IsInputKeyDown found BY NAME, its parameter layout
++//      EngineKeyReader    checked by reflection (one by-value `Key` struct parameter holding `FName KeyName`, one
++//                         bool return value; reflected offsets and ParmsSize only), find-only FName lookup with a
++//                         miss cache, controller cache rebuilt on miss with a generation counter. Any failed check
++//                         = Unsupported for good.
++//   4. EngineKeySampler   game thread: once per pump call (at most every 8 ms; nothing at all while no key with an
++//                         engine name is bound), up->down edges into an SPSC ring
++//   5. EngineKeySource    UE4SS update thread: a normal PlatformInputSource that drains the ring
++//   6. CompositeInputSource "Merged": the handler still sees ONE source (pad + engine keys)
++//   7. EngineKeysRuntime  the glue: compose once (failure keeps the supplied source), frame (re-entry guarded),
++//                         retire (teardown: handler shutdown -> pump retirement -> unload)
++// The Unreal binding of KeyReflection and the three C entry points are in candidate/src/KbmEngineKeysRuntime.inc.
++//
++// Rules kept: no new import, no device access, no hook / detour / code patch, no game or mod name, no offset
++// (every layout fact comes from the engine's reflection at run time), fail closed (any failed check switches the
++// engine-keys source off; pad chords are unaffected), bounded cost (only bound keys; 0.25 ms budget with automatic
++// slowdown; modifiers are read only on a frame that has a key edge), nothing throws out of tick() / process_event().
++#include <Input/Handler.hpp>
++#include <Input/KeyDef.hpp>
++#include <Input/PlatformInputSource.hpp>
++#include <Input/RingBuffer.hpp>
++
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <chrono>
++#include <cstddef>
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <functional>
++#include <memory>
++#include <optional>
++#include <span>
++#include <string_view>
++#include <utility>
++#include <vector>
++
++namespace RC::Platform::Kbm
++{
++    using Input::InputEvent;
++    using Input::Key;
++    using Input::ModifierKey;
++    using Input::ModifierKeys;
++
++    // =============================================================================================================
++    // 1. Key table (generated from the runtime's real KeyDef.hpp enum; checked by k2/tests/check_table.py against
++    //    KeyDef.cpp spellings, SDL_scancode.h HID usages and Epic's public EKeys list). One row per bindable UE4SS
++    //    key. `fkey` = engine key name (nullptr = the engine has no such key). `hid` / `note` are documentation for
++    //    the device route (option A, not used here) and the table gate.
++    // =============================================================================================================
++    struct KeyRow
++    {
++        Key key;
++        const char* name;
++        const char* fkey;
++        uint16_t hid;
++        const char* note;
++    };
++    struct ModifierRow
++    {
++        ModifierKey modifier;
++        const char* fkey_left;
++        const char* fkey_right;
++        uint16_t hid_left;
++        uint16_t hid_right;
++    };
++    struct HidAlias
++    {
++        uint16_t hid;
++        Key key;
++        const char* note;
++    };
++
++    inline constexpr KeyRow k_key_rows[] = {
++        {Key::LEFT_MOUSE_BUTTON, "LEFT_MOUSE_BUTTON", "LeftMouseButton", 0x00, "mouse button: engine route only (no HID keyboard usage)"},
++        {Key::RIGHT_MOUSE_BUTTON, "RIGHT_MOUSE_BUTTON", "RightMouseButton", 0x00, "mouse button: engine route only (no HID keyboard usage)"},
++        {Key::CANCEL, "CANCEL", nullptr, 0x00, "PC Ctrl+Break; no engine key, no HID usage"},
++        {Key::MIDDLE_MOUSE_BUTTON, "MIDDLE_MOUSE_BUTTON", "MiddleMouseButton", 0x00, "mouse button: engine route only (no HID keyboard usage)"},
++        {Key::XBUTTON_ONE, "XBUTTON_ONE", "ThumbMouseButton", 0x00, "mouse button: engine route only (no HID keyboard usage)"},
++        {Key::XBUTTON_TWO, "XBUTTON_TWO", "ThumbMouseButton2", 0x00, "mouse button: engine route only (no HID keyboard usage)"},
++        {Key::BACKSPACE, "BACKSPACE", "BackSpace", 0x2A, nullptr},
++        {Key::TAB, "TAB", "Tab", 0x2B, nullptr},
++        {Key::CLEAR, "CLEAR", nullptr, 0x9C, "no engine key"},
++        {Key::RETURN, "RETURN", "Enter", 0x28, "keypad Enter (HID 0x58) is an alias"},
++        {Key::PAUSE, "PAUSE", "Pause", 0x48, nullptr},
++        {Key::CAPS_LOCK, "CAPS_LOCK", "CapsLock", 0x39, nullptr},
++        {Key::IME_KANA, "IME_KANA", nullptr, 0x88, "same value as IME_HANGUEL/IME_HANGUL; HID International2 (JP kana), alias HID 0x90 LANG1 (KR hangul); no engine key; enum aliases: IME_HANGUEL, IME_HANGUL"},
++        {Key::IME_ON, "IME_ON", nullptr, 0x00, "PC IME control; no engine key, no HID usage"},
++        {Key::IME_JUNJA, "IME_JUNJA", nullptr, 0x00, "PC IME control; no engine key, no HID usage"},
++        {Key::IME_FINAL, "IME_FINAL", nullptr, 0x00, "PC IME control; no engine key, no HID usage"},
++        {Key::IME_HANJA, "IME_HANJA", nullptr, 0x91, "same value as IME_KANJI; HID LANG2 (KR hanja); no engine key; enum aliases: IME_KANJI"},
++        {Key::IME_OFF, "IME_OFF", nullptr, 0x00, "PC IME control; no engine key, no HID usage"},
++        {Key::ESCAPE, "ESCAPE", "Escape", 0x29, "PS5 system may keep this key; to be checked on console"},
++        {Key::IME_CONVERT, "IME_CONVERT", nullptr, 0x8A, "HID International4 (JP henkan); no engine key"},
++        {Key::IME_NONCONVERT, "IME_NONCONVERT", nullptr, 0x8B, "HID International5 (JP muhenkan); no engine key"},
++        {Key::IME_ACCEPT, "IME_ACCEPT", nullptr, 0x00, "PC IME control; no engine key, no HID usage"},
++        {Key::IME_MODECHANGE, "IME_MODECHANGE", nullptr, 0x00, "PC IME control; no engine key, no HID usage"},
++        {Key::SPACE, "SPACE", "SpaceBar", 0x2C, nullptr},
++        {Key::PAGE_UP, "PAGE_UP", "PageUp", 0x4B, nullptr},
++        {Key::PAGE_DOWN, "PAGE_DOWN", "PageDown", 0x4E, nullptr},
++        {Key::END, "END", "End", 0x4D, nullptr},
++        {Key::HOME, "HOME", "Home", 0x4A, nullptr},
++        {Key::LEFT_ARROW, "LEFT_ARROW", "Left", 0x50, nullptr},
++        {Key::UP_ARROW, "UP_ARROW", "Up", 0x52, nullptr},
++        {Key::RIGHT_ARROW, "RIGHT_ARROW", "Right", 0x4F, nullptr},
++        {Key::DOWN_ARROW, "DOWN_ARROW", "Down", 0x51, nullptr},
++        {Key::SELECT, "SELECT", nullptr, 0x77, "no engine key"},
++        {Key::PRINT, "PRINT", nullptr, 0x00, "PC-only virtual key; no HID usage"},
++        {Key::EXECUTE, "EXECUTE", nullptr, 0x74, "no engine key"},
++        {Key::PRINT_SCREEN, "PRINT_SCREEN", nullptr, 0x46, "no engine key; PS5 system may keep it"},
++        {Key::INS, "INS", "Insert", 0x49, nullptr},
++        {Key::DEL, "DEL", "Delete", 0x4C, nullptr},
++        {Key::HELP, "HELP", nullptr, 0x75, "no engine key"},
++        {Key::ZERO, "ZERO", "Zero", 0x27, nullptr},
++        {Key::ONE, "ONE", "One", 0x1E, nullptr},
++        {Key::TWO, "TWO", "Two", 0x1F, nullptr},
++        {Key::THREE, "THREE", "Three", 0x20, nullptr},
++        {Key::FOUR, "FOUR", "Four", 0x21, nullptr},
++        {Key::FIVE, "FIVE", "Five", 0x22, nullptr},
++        {Key::SIX, "SIX", "Six", 0x23, nullptr},
++        {Key::SEVEN, "SEVEN", "Seven", 0x24, nullptr},
++        {Key::EIGHT, "EIGHT", "Eight", 0x25, nullptr},
++        {Key::NINE, "NINE", "Nine", 0x26, nullptr},
++        {Key::A, "A", "A", 0x04, nullptr},
++        {Key::B, "B", "B", 0x05, nullptr},
++        {Key::C, "C", "C", 0x06, nullptr},
++        {Key::D, "D", "D", 0x07, nullptr},
++        {Key::E, "E", "E", 0x08, nullptr},
++        {Key::F, "F", "F", 0x09, nullptr},
++        {Key::G, "G", "G", 0x0A, nullptr},
++        {Key::H, "H", "H", 0x0B, nullptr},
++        {Key::I, "I", "I", 0x0C, nullptr},
++        {Key::J, "J", "J", 0x0D, nullptr},
++        {Key::K, "K", "K", 0x0E, nullptr},
++        {Key::L, "L", "L", 0x0F, nullptr},
++        {Key::M, "M", "M", 0x10, nullptr},
++        {Key::N, "N", "N", 0x11, nullptr},
++        {Key::O, "O", "O", 0x12, nullptr},
++        {Key::P, "P", "P", 0x13, nullptr},
++        {Key::Q, "Q", "Q", 0x14, nullptr},
++        {Key::R, "R", "R", 0x15, nullptr},
++        {Key::S, "S", "S", 0x16, nullptr},
++        {Key::T, "T", "T", 0x17, nullptr},
++        {Key::U, "U", "U", 0x18, nullptr},
++        {Key::V, "V", "V", 0x19, nullptr},
++        {Key::W, "W", "W", 0x1A, nullptr},
++        {Key::X, "X", "X", 0x1B, nullptr},
++        {Key::Y, "Y", "Y", 0x1C, nullptr},
++        {Key::Z, "Z", "Z", 0x1D, nullptr},
++        {Key::LEFT_WIN, "LEFT_WIN", "LeftCommand", 0xE3, "GUI/Windows key; the engine calls it Command; PS5 system may keep it"},
++        {Key::RIGHT_WIN, "RIGHT_WIN", "RightCommand", 0xE7, "GUI/Windows key; the engine calls it Command"},
++        {Key::APPS, "APPS", nullptr, 0x65, "menu key; no engine key"},
++        {Key::SLEEP, "SLEEP", nullptr, 0x00, "not on the keyboard usage page"},
++        {Key::NUM_ZERO, "NUM_ZERO", "NumPadZero", 0x62, nullptr},
++        {Key::NUM_ONE, "NUM_ONE", "NumPadOne", 0x59, nullptr},
++        {Key::NUM_TWO, "NUM_TWO", "NumPadTwo", 0x5A, nullptr},
++        {Key::NUM_THREE, "NUM_THREE", "NumPadThree", 0x5B, nullptr},
++        {Key::NUM_FOUR, "NUM_FOUR", "NumPadFour", 0x5C, nullptr},
++        {Key::NUM_FIVE, "NUM_FIVE", "NumPadFive", 0x5D, nullptr},
++        {Key::NUM_SIX, "NUM_SIX", "NumPadSix", 0x5E, nullptr},
++        {Key::NUM_SEVEN, "NUM_SEVEN", "NumPadSeven", 0x5F, nullptr},
++        {Key::NUM_EIGHT, "NUM_EIGHT", "NumPadEight", 0x60, nullptr},
++        {Key::NUM_NINE, "NUM_NINE", "NumPadNine", 0x61, nullptr},
++        {Key::MULTIPLY, "MULTIPLY", "Multiply", 0x55, nullptr},
++        {Key::ADD, "ADD", "Add", 0x57, nullptr},
++        {Key::SEPARATOR, "SEPARATOR", nullptr, 0x9F, "no engine key"},
++        {Key::SUBTRACT, "SUBTRACT", "Subtract", 0x56, nullptr},
++        {Key::DECIMAL, "DECIMAL", "Decimal", 0x63, nullptr},
++        {Key::DIVIDE, "DIVIDE", "Divide", 0x54, nullptr},
++        {Key::F1, "F1", "F1", 0x3A, nullptr},
++        {Key::F2, "F2", "F2", 0x3B, nullptr},
++        {Key::F3, "F3", "F3", 0x3C, nullptr},
++        {Key::F4, "F4", "F4", 0x3D, nullptr},
++        {Key::F5, "F5", "F5", 0x3E, nullptr},
++        {Key::F6, "F6", "F6", 0x3F, nullptr},
++        {Key::F7, "F7", "F7", 0x40, nullptr},
++        {Key::F8, "F8", "F8", 0x41, nullptr},
++        {Key::F9, "F9", "F9", 0x42, nullptr},
++        {Key::F10, "F10", "F10", 0x43, nullptr},
++        {Key::F11, "F11", "F11", 0x44, nullptr},
++        {Key::F12, "F12", "F12", 0x45, nullptr},
++        {Key::F13, "F13", nullptr, 0x68, "engine has F1-F12 only"},
++        {Key::F14, "F14", nullptr, 0x69, "engine has F1-F12 only"},
++        {Key::F15, "F15", nullptr, 0x6A, "engine has F1-F12 only"},
++        {Key::F16, "F16", nullptr, 0x6B, "engine has F1-F12 only"},
++        {Key::F17, "F17", nullptr, 0x6C, "engine has F1-F12 only"},
++        {Key::F18, "F18", nullptr, 0x6D, "engine has F1-F12 only"},
++        {Key::F19, "F19", nullptr, 0x6E, "engine has F1-F12 only"},
++        {Key::F20, "F20", nullptr, 0x6F, "engine has F1-F12 only"},
++        {Key::F21, "F21", nullptr, 0x70, "engine has F1-F12 only"},
++        {Key::F22, "F22", nullptr, 0x71, "engine has F1-F12 only"},
++        {Key::F23, "F23", nullptr, 0x72, "engine has F1-F12 only"},
++        {Key::F24, "F24", nullptr, 0x73, "engine has F1-F12 only"},
++        {Key::NUM_LOCK, "NUM_LOCK", "NumLock", 0x53, nullptr},
++        {Key::SCROLL_LOCK, "SCROLL_LOCK", "ScrollLock", 0x47, nullptr},
++        {Key::BROWSER_BACK, "BROWSER_BACK", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::BROWSER_FORWARD, "BROWSER_FORWARD", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::BROWSER_REFRESH, "BROWSER_REFRESH", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::BROWSER_STOP, "BROWSER_STOP", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::BROWSER_SEARCH, "BROWSER_SEARCH", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::BROWSER_FAVORITES, "BROWSER_FAVORITES", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::BROWSER_HOME, "BROWSER_HOME", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::VOLUME_MUTE, "VOLUME_MUTE", nullptr, 0x7F, "no engine key; PS5 system may keep it"},
++        {Key::VOLUME_DOWN, "VOLUME_DOWN", nullptr, 0x81, "no engine key; PS5 system may keep it"},
++        {Key::VOLUME_UP, "VOLUME_UP", nullptr, 0x80, "no engine key; PS5 system may keep it"},
++        {Key::MEDIA_NEXT_TRACK, "MEDIA_NEXT_TRACK", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::MEDIA_PREV_TRACK, "MEDIA_PREV_TRACK", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::MEDIA_STOP, "MEDIA_STOP", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::MEDIA_PLAY_PAUSE, "MEDIA_PLAY_PAUSE", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::LAUNCH_MAIL, "LAUNCH_MAIL", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::LAUNCH_MEDIA_SELECT, "LAUNCH_MEDIA_SELECT", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::LAUNCH_APP1, "LAUNCH_APP1", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::LAUNCH_APP2, "LAUNCH_APP2", nullptr, 0x00, "media/browser key: USB consumer page, not keyboard page; unmapped"},
++        {Key::OEM_ONE, "OEM_ONE", "Semicolon", 0x33, "US layout position (;)"},
++        {Key::OEM_PLUS, "OEM_PLUS", "Equals", 0x2E, "US layout position (=)"},
++        {Key::OEM_COMMA, "OEM_COMMA", "Comma", 0x36, "US layout position (,)"},
++        {Key::OEM_MINUS, "OEM_MINUS", "Hyphen", 0x2D, "US layout position (-)"},
++        {Key::OEM_PERIOD, "OEM_PERIOD", "Period", 0x37, "US layout position (.)"},
++        {Key::OEM_TWO, "OEM_TWO", "Slash", 0x38, "US layout position (/)"},
++        {Key::OEM_THREE, "OEM_THREE", "Tilde", 0x35, "US layout position (`)"},
++        {Key::OEM_FOUR, "OEM_FOUR", "LeftBracket", 0x2F, "US layout position ([)"},
++        {Key::OEM_FIVE, "OEM_FIVE", "Backslash", 0x31, "US layout position (\\)"},
++        {Key::OEM_SIX, "OEM_SIX", "RightBracket", 0x30, "US layout position (])"},
++        {Key::OEM_SEVEN, "OEM_SEVEN", "Apostrophe", 0x34, "US layout position (')"},
++        {Key::OEM_EIGHT, "OEM_EIGHT", nullptr, 0x00, "layout-specific key with no fixed position; unmapped"},
++        {Key::OEM_102, "OEM_102", nullptr, 0x64, "ISO extra key (<>); no engine key"},
++        {Key::IME_PROCESS, "IME_PROCESS", nullptr, 0x00, "PC-only virtual key; unmapped"},
++        {Key::PACKET, "PACKET", nullptr, 0x00, "PC-only virtual key; unmapped"},
++        {Key::ATTN, "ATTN", nullptr, 0x00, "PC-only virtual key; unmapped"},
++        {Key::CRSEL, "CRSEL", nullptr, 0xA3, "no engine key"},
++        {Key::EXSEL, "EXSEL", nullptr, 0xA4, "no engine key"},
++        {Key::EREOF, "EREOF", nullptr, 0x00, "PC-only virtual key; unmapped"},
++        {Key::PLAY, "PLAY", nullptr, 0x00, "PC-only virtual key; unmapped"},
++        {Key::ZOOM, "ZOOM", nullptr, 0x00, "PC-only virtual key; unmapped"},
++        {Key::NONAME, "NONAME", nullptr, 0x00, "PC-only virtual key; unmapped"},
++        {Key::PA1, "PA1", nullptr, 0x00, "PC-only virtual key; unmapped"},
++        {Key::OEM_CLEAR, "OEM_CLEAR", nullptr, 0x00, "PC-only virtual key; unmapped"},
++    };
++
++    inline constexpr ModifierRow k_modifier_rows[] = {
++        {ModifierKey::SHIFT, "LeftShift", "RightShift", 0xE1, 0xE5},
++        {ModifierKey::CONTROL, "LeftControl", "RightControl", 0xE0, 0xE4},
++        {ModifierKey::ALT, "LeftAlt", "RightAlt", 0xE2, 0xE6},
++    };
++
++    inline constexpr HidAlias k_hid_aliases[] = {
++        {0x58, Key::RETURN, "keypad Enter"},
++        {0x90, Key::IME_HANGUL, "LANG1 (KR hangul/english); same UE4SS value as IME_KANA"},
++    };
++
++    namespace detail
++    {
++        constexpr auto make_row_index() -> std::array<int16_t, 256>
++        {
++            std::array<int16_t, 256> index{};
++            for (auto& slot : index) slot = -1;
++            for (size_t i = 0; i < std::size(k_key_rows); ++i) index[static_cast<uint8_t>(k_key_rows[i].key)] = static_cast<int16_t>(i);
++            return index;
++        }
++        constexpr auto rows_unique() -> bool
++        {
++            for (size_t i = 0; i < std::size(k_key_rows); ++i)
++                for (size_t j = i + 1; j < std::size(k_key_rows); ++j)
++                    if (k_key_rows[i].key == k_key_rows[j].key) return false;
++            return true;
++        }
++        inline constexpr std::array<int16_t, 256> k_row_index = make_row_index();
++
++        inline auto steady_now_ns() -> uint64_t
++        {
++            return static_cast<uint64_t>(
++                    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
++        }
++    } // namespace detail
++    static_assert(detail::rows_unique(), "every UE4SS key appears once in the key table");
++
++    inline auto key_table() -> std::span<const KeyRow> { return k_key_rows; }
++    inline auto modifier_table() -> std::span<const ModifierRow> { return k_modifier_rows; }
++    inline auto hid_aliases() -> std::span<const HidAlias> { return k_hid_aliases; }
++
++    // nullptr if the value is not a bindable key
++    inline auto row_for(Key key) -> const KeyRow*
++    {
++        const int16_t i = detail::k_row_index[static_cast<uint8_t>(key)];
++        return i < 0 ? nullptr : &k_key_rows[i];
++    }
++    inline auto fkey_for(Key key) -> const char*
++    {
++        const KeyRow* row = row_for(key);
++        return row ? row->fkey : nullptr;
++    }
++    inline auto key_for_fkey(std::string_view fkey) -> std::optional<Key>
++    {
++        for (const auto& row : k_key_rows)
++            if (row.fkey && fkey == row.fkey) return row.key;
++        return std::nullopt;
++    }
++    inline auto key_for_hid(uint16_t usage) -> std::optional<Key>
++    {
++        if (usage == 0) return std::nullopt;
++        for (const auto& row : k_key_rows)
++            if (row.hid == usage) return row.key;
++        for (const auto& alias : k_hid_aliases)
++            if (alias.hid == usage) return alias.key;
++        return std::nullopt;
++    }
++
++    // Dense name ids for the reader's O(1) name cache: 0..255 = the UE4SS key value (its engine name is fkey_for),
++    // 256 + 2*row + side = the modifier names (side 0 = left, 1 = right).
++    inline constexpr uint16_t k_modifier_id_base = 256;
++    inline constexpr uint16_t k_name_id_count = static_cast<uint16_t>(k_modifier_id_base + 2 * std::size(k_modifier_rows));
++
++    // =============================================================================================================
++    // 2. Engine boundary (game thread only)
++    // =============================================================================================================
++    class KeyStateReader
++    {
++      public:
++        enum class Frame : uint8_t
++        {
++            Ready,        // controller found, function usable
++            NoController, // loading screen / no local player yet: try later
++            Unsupported,  // this engine build cannot answer: stop for good (fail closed)
++        };
++        struct FrameInfo
++        {
++            Frame status;
++            uint64_t controller_generation; // changes when the controller object changes
++        };
++        virtual ~KeyStateReader() = default;
++        virtual auto begin_frame() -> FrameInfo = 0;
++        // nullopt = this one read failed (key name not in this game, refused call); never throws on purpose
++        virtual auto is_down(uint16_t name_id, const char* fkey_name) -> std::optional<bool> = 0;
++        // short reason for the one-time "[kbm] engine-keys supported=0 reason=<...>" line
++        virtual auto unsupported_reason() const -> const char* { return "unsupported"; }
++    };
++
++    // =============================================================================================================
++    // 3. Reflection-checked reader. KeyReflection is the narrow reflection model it needs; the runtime implements
++    //    it with the port's reflection (UObject / UFunction / FProperty / FName), the host tests with a fake model.
++    //    Every number the reader uses (parameter offsets, sizes, bool byte/mask, ParmsSize, FName size) comes from
++    //    this model at run time; nothing is hand-written.
++    // =============================================================================================================
++    class KeyReflection
++    {
++      public:
++        using Handle = void*; // opaque UObject* / UClass* / UFunction* / UScriptStruct*
++        enum class Kind : uint8_t
++        {
++            Other,
++            Bool,
++            Struct,
++            Name,
++        };
++        // One reflected property: a function parameter or a struct member.
++        struct Field
++        {
++            Kind kind{Kind::Other};
++            bool parm{}, ret{}, out{}, ref{}; // CPF_Parm / CPF_ReturnParm / CPF_OutParm / CPF_ReferenceParm
++            int32_t offset{-1};               // reflected Offset_Internal
++            int32_t size{};                   // reflected size (ElementSize * ArrayDim)
++            int32_t array_dim{1};
++            Handle struct_type{};             // Kind::Struct: the UScriptStruct
++            bool name_is_keyname{};           // engine name == "KeyName" (ASCII case-insensitive, as the engine compares)
++            uint8_t bool_byte_offset{};       // Kind::Bool: reflected ByteOffset
++            uint8_t bool_field_mask{};        // Kind::Bool: reflected FieldMask
++        };
++        virtual ~KeyReflection() = default;
++        // The local player's controller (its Player is a LocalPlayer), nullptr = none yet. Must not throw.
++        virtual auto find_local_controller() -> Handle = 0;
++        // The object's own object-array index. Only called on an object just returned live by find_local_controller.
++        virtual auto object_index(Handle object) -> int32_t = 0;
++        // O(1) liveness WITHOUT reading the object: slot `index` still holds this pointer and it is reachable. Safe on
++        // a cached pointer whose object the engine may have freed since (level change, GC).
++        virtual auto is_live_at(Handle object, int32_t index) -> bool = 0;
++        virtual auto class_of(Handle object) -> Handle = 0;
++        virtual auto find_function(Handle object, const char* name) -> Handle = 0; // by name, through the class chain
++        // ParmsSize, ReturnValueOffset (-1 = none) and every CPF_Parm property; false = unreadable
++        virtual auto function_layout(Handle function, int32_t& parms_size, int32_t& return_offset, std::vector<Field>& params) -> bool = 0;
++        virtual auto struct_is_named(Handle script_struct, const char* name) -> bool = 0;
++        virtual auto struct_members(Handle script_struct, std::vector<Field>& members) -> bool = 0;
++        virtual auto name_size() -> size_t = 0; // sizeof the runtime's FName
++        // Find-only FName lookup (FNAME_Find: never adds to the game's name table). false = not in this game.
++        virtual auto find_name(const char* ascii, uint8_t* out, size_t cap) -> bool = 0;
++        // Second source for the name route: the found FName equals the UFunction's own reflected name.
++        virtual auto name_matches_function(Handle function, const uint8_t* name_bytes) -> bool = 0;
++        virtual void call(Handle object, Handle function, void* frame) = 0; // the UFunction call path Lua uses
++        virtual auto now_ms() -> uint64_t = 0;
++    };
++
++    class EngineKeyReader final : public KeyStateReader
++    {
++      public:
++        using Handle = KeyReflection::Handle;
++        // Controller search while none is cached: first try at once, then 0.5 s, 1 s, 2 s, ... up to 8 s between
++        // tries (reset after a find). A search that itself took >= 4 ms jumps straight to 8 s (a slow full object walk
++        // must never repeat often).
++        static constexpr uint64_t k_probe_interval_ms = 500;
++        static constexpr uint64_t k_probe_max_ms = 8000;
++        static constexpr uint64_t k_slow_probe_ms = 4;
++        static constexpr int32_t k_max_parms_size = 4096;     // sanity bound on the reflected ParmsSize
++        static constexpr size_t k_max_name_size = 16;
++
++        explicit EngineKeyReader(std::unique_ptr<KeyReflection> model) : m_model(std::move(model))
++        {
++            if (!m_model) m_reason = "no-reflection";
++        }
++
++        auto begin_frame() -> FrameInfo override
++        {
++            if (m_reason) return {Frame::Unsupported, m_generation};
++            // Cache rebuilt on miss: the cached controller must still own its object-array slot (checked without
++            // touching the object) and still have the same class.
++            if (m_pc && (!m_model->is_live_at(m_pc, m_pc_index) || m_model->class_of(m_pc) != m_pc_class)) m_pc = nullptr;
++            if (!m_pc)
++            {
++                const uint64_t now = m_model->now_ms();
++                if (m_probed && now < m_next_probe_ms) return {Frame::NoController, m_generation};
++                m_probed = true;
++                Handle pc = m_model->find_local_controller();
++                const uint64_t after = m_model->now_ms();
++                const int32_t index = pc ? m_model->object_index(pc) : -1;
++                Handle cls = pc && m_model->is_live_at(pc, index) ? m_model->class_of(pc) : nullptr;
++                if (!cls)
++                {
++                    // miss: back off (exponential, capped; a slow search goes straight to the cap)
++                    if (after - now >= k_slow_probe_ms) m_probe_wait_ms = k_probe_max_ms;
++                    m_next_probe_ms = after + m_probe_wait_ms;
++                    m_probe_wait_ms = std::min(m_probe_wait_ms * 2, k_probe_max_ms);
++                    ++m_probe_misses;
++                    return {Frame::NoController, m_generation};
++                }
++                m_probe_wait_ms = k_probe_interval_ms;
++                m_next_probe_ms = 0; // a later loss searches again at once
++                if (cls != m_fn_class)
++                {
++                    if (const char* why = resolve(pc))
++                    {
++                        m_reason = why;
++                        return {Frame::Unsupported, m_generation};
++                    }
++                    m_fn_class = cls;
++                }
++                m_pc = pc;
++                m_pc_index = index;
++                m_pc_class = cls;
++                ++m_generation;
++            }
++            return {Frame::Ready, m_generation};
++        }
++
++        auto is_down(uint16_t name_id, const char* fkey_name) -> std::optional<bool> override
++        {
++            if (m_reason || !m_fn || !m_pc || !fkey_name || name_id >= k_name_id_count) return std::nullopt;
++            CachedName& name = m_names[name_id];
++            if (name.state == NameState::Unresolved)
++            {
++                // Looked up once (find-only); a miss is cached as "key not in this game".
++                name.state = m_model->find_name(fkey_name, name.bytes.data(), name.bytes.size()) ? NameState::Found : NameState::Missing;
++                ++m_name_lookups;
++            }
++            if (name.state != NameState::Found) return std::nullopt;
++            auto* frame = reinterpret_cast<uint8_t*>(m_frame.data());
++            const size_t frame_bytes = m_frame.size() * sizeof(std::max_align_t);
++            std::memset(frame, 0, frame_bytes);
++            std::memcpy(frame + m_name_offset, name.bytes.data(), m_name_size);
++            m_model->call(m_pc, m_fn, frame);
++            // The Key parameter is passed by value: the engine copies it and never writes it back. Anything but our
++            // KeyName in it now means the layout is not what we checked -> stop for good (no destructor guesswork).
++            for (int32_t i = m_key_offset; i < m_key_offset + m_key_size; ++i)
++            {
++                const bool in_name = i >= m_name_offset && i < m_name_offset + static_cast<int32_t>(m_name_size);
++                const uint8_t expected = in_name ? name.bytes[static_cast<size_t>(i - m_name_offset)] : 0;
++                if (frame[i] != expected)
++                {
++                    m_reason = "key-param-written";
++                    return std::nullopt;
++                }
++            }
++            return (frame[m_ret_offset + m_ret_byte] & m_ret_mask) != 0;
++        }
++
++        auto unsupported_reason() const -> const char* override { return m_reason ? m_reason : "unsupported"; }
++
++        // test / diagnostic views
++        auto generation() const -> uint64_t { return m_generation; }
++        auto name_lookups() const -> uint64_t { return m_name_lookups; }
++        auto probe_misses() const -> uint64_t { return m_probe_misses; }
++
++      private:
++        using Field = KeyReflection::Field;
++        using Kind = KeyReflection::Kind;
++
++        // nullptr = the layout is the one we can use (and is now committed); otherwise the refusal reason.
++        auto resolve(Handle pc) -> const char*
++        {
++            Handle fn = m_model->find_function(pc, "IsInputKeyDown");
++            if (!fn) return "no-function";
++            int32_t parms_size = -1, return_offset = -1;
++            m_params.clear();
++            if (!m_model->function_layout(fn, parms_size, return_offset, m_params)) return "layout:unreadable";
++            if (parms_size <= 0 || parms_size > k_max_parms_size) return "layout:parms-size";
++            const Field* key = nullptr;
++            const Field* ret = nullptr;
++            int parms = 0;
++            for (const auto& f : m_params)
++            {
++                if (!f.parm) continue;
++                ++parms;
++                if (f.ret)
++                {
++                    if (ret) return "layout:return";
++                    ret = &f;
++                }
++                else
++                {
++                    if (key) return "layout:param-count";
++                    key = &f;
++                }
++            }
++            if (parms != 2 || !key || !ret) return "layout:param-count";
++            // one bool return value, at the function's own return-value offset, inside ParmsSize
++            if (ret->kind != Kind::Bool || ret->array_dim != 1 || ret->offset < 0 || ret->offset != return_offset || ret->size < 1 ||
++                ret->offset + ret->size > parms_size || ret->bool_field_mask == 0 || ret->bool_byte_offset >= ret->size)
++                return "layout:return";
++            // one `Key` struct parameter, by value (not out / ref), inside ParmsSize, not overlapping the return value
++            if (key->kind != Kind::Struct || !key->struct_type || key->out || key->ref || key->array_dim != 1 || key->offset < 0 ||
++                key->size <= 0 || key->offset + key->size > parms_size)
++                return "layout:key-param";
++            if (key->offset < ret->offset + ret->size && ret->offset < key->offset + key->size) return "layout:overlap";
++            if (!m_model->struct_is_named(key->struct_type, "Key")) return "layout:key-struct";
++            // ... holding exactly one FName KeyName (the engine's own member offset; size = the runtime's FName)
++            m_members.clear();
++            if (!m_model->struct_members(key->struct_type, m_members)) return "layout:key-members";
++            const Field* key_name = nullptr;
++            for (const auto& m : m_members)
++            {
++                if (!m.name_is_keyname) continue;
++                if (key_name) return "layout:keyname";
++                key_name = &m;
++            }
++            const size_t name_size = m_model->name_size();
++            if (!key_name || key_name->kind != Kind::Name || key_name->array_dim != 1 || key_name->offset < 0 || name_size == 0 ||
++                name_size > k_max_name_size || static_cast<size_t>(key_name->size) != name_size || key_name->offset + key_name->size > key->size)
++                return "layout:keyname";
++            // Two sources for the name route: the find-only lookup of the function's name must give the UFunction's
++            // own reflected name.
++            std::array<uint8_t, k_max_name_size> probe{};
++            if (!m_model->find_name("IsInputKeyDown", probe.data(), probe.size()) || !m_model->name_matches_function(fn, probe.data()))
++                return "fname-find";
++            // commit
++            m_fn = fn;
++            m_key_offset = key->offset;
++            m_key_size = key->size;
++            m_name_offset = key->offset + key_name->offset;
++            m_name_size = name_size;
++            m_ret_offset = ret->offset;
++            m_ret_byte = ret->bool_byte_offset;
++            m_ret_mask = ret->bool_field_mask;
++            m_frame.assign(static_cast<size_t>(parms_size) / sizeof(std::max_align_t) + 2, std::max_align_t{});
++            return nullptr;
++        }
++
++        enum class NameState : uint8_t
++        {
++            Unresolved,
++            Found,
++            Missing,
++        };
++        struct CachedName
++        {
++            NameState state{NameState::Unresolved};
++            std::array<uint8_t, k_max_name_size> bytes{};
++        };
++
++        std::unique_ptr<KeyReflection> m_model;
++        const char* m_reason{}; // set = Unsupported for good
++        Handle m_pc{}, m_pc_class{}, m_fn{}, m_fn_class{};
++        uint64_t m_generation{};
++        uint64_t m_next_probe_ms{};
++        uint64_t m_probe_wait_ms{k_probe_interval_ms};
++        uint64_t m_probe_misses{};
++        int32_t m_pc_index{-1};
++        bool m_probed{};
++        int32_t m_key_offset{}, m_key_size{}, m_name_offset{}, m_ret_offset{};
++        size_t m_name_size{};
++        uint8_t m_ret_byte{}, m_ret_mask{};
++        uint64_t m_name_lookups{};
++        std::vector<std::max_align_t> m_frame; // zeroed parameter frame, sized from the reflected ParmsSize
++        std::vector<Field> m_params, m_members;
++        std::array<CachedName, k_name_id_count> m_names{};
++    };
++
++    // =============================================================================================================
++    // 4. Channel (lock-free; single producer = game-thread sampler, single consumer = update-thread source)
++    // =============================================================================================================
++    struct EngineKeyChannel
++    {
++        static constexpr int ring_slots = 256; // RingBufferSPSC holds slots-1 events
++        Input::RingBufferSPSC<InputEvent, ring_slots> ring;
++        std::array<std::atomic<uint64_t>, 4> subscribed{}; // bit k = UE4SS key k has a bind
++        std::atomic<uint32_t> bound{0};                     // subscribed keys that have an engine key name
++        std::atomic<bool> published{false};                 // the update thread published the subscriptions once
++        std::atomic<bool> open{true};                       // false after deactivate / retirement
++        std::atomic<int> support{0};                        // 0 unknown, 1 yes, -1 no (permanent)
++        std::atomic<uint32_t> divisor{1};                   // sample every Nth due pump call
++        // Diagnostics (monotonic counters).
++        std::atomic<uint64_t> frames{}, sampled_frames{}, reads{}, read_failures{};
++        std::atomic<uint64_t> events{}, drops{}, throttle_steps{};
++    };
++
++    struct SamplerConfig
++    {
++        uint64_t budget_ns = 250'000;                   // sampling cost allowed per sampled frame
++        uint32_t over_budget_frames = 3;                // consecutive overruns before slowing down
++        uint32_t max_divisor = 8;                       // never slower than every 8th due frame
++        uint32_t max_keys_per_frame = 64;               // above this, keys are sampled round-robin
++        uint64_t min_interval_ns = 8'000'000;           // the pump can run several times per engine frame
++        uint32_t recover_frames = 60;                   // this many sampled frames in a row under budget halve the divisor
++        uint64_t summary_interval_ns = 60'000'000'000;  // one "[kbm] SUM" line per minute
++    };
++
++    // =============================================================================================================
++    // 5. Sampler (game thread; the ONLY caller of the reader)
++    // =============================================================================================================
++    class EngineKeySampler
++    {
++      public:
++        using Clock = std::function<uint64_t()>;
++        using LogSink = std::function<void(const char*)>;
++
++        EngineKeySampler(std::shared_ptr<EngineKeyChannel> channel, std::unique_ptr<KeyStateReader> reader, SamplerConfig config = {},
++                         Clock now_ns = {}, LogSink log = {})
++            : m_channel(std::move(channel)), m_reader(std::move(reader)), m_config(config), m_now(std::move(now_ns)), m_log(std::move(log))
++        {
++            if (!m_now) m_now = &detail::steady_now_ns;
++            if (m_config.max_divisor == 0) m_config.max_divisor = 1;
++            if (m_config.max_keys_per_frame == 0) m_config.max_keys_per_frame = 1;
++            if (m_config.max_keys_per_frame > Input::max_keys) m_config.max_keys_per_frame = Input::max_keys;
++            m_work.reserve(Input::max_keys);
++            m_edges.reserve(Input::max_keys);
++            // No reader = this route can never answer: fail closed.
++            if (!m_reader && m_channel)
++            {
++                m_channel->support.store(-1, std::memory_order_release);
++                m_fail_reason = "no-reader";
++            }
++        }
++
++        // Once per game-thread pump call. Never throws: any exception switches the engine-keys source off.
++        void tick() noexcept
++        {
++            if (!m_channel) return;
++            try
++            {
++                tick_body();
++            }
++            catch (...)
++            {
++                m_channel->support.store(-1, std::memory_order_release);
++                if (!m_fail_reason) m_fail_reason = "exception";
++                try
++                {
++                    announce(false);
++                }
++                catch (...)
++                {
++                }
++            }
++        }
++
++        auto announced() const -> bool { return m_announced; }
++
++      private:
++        enum class State : uint8_t
++        {
++            Unknown, // no baseline yet: the next read never produces an event
++            Up,
++            Down,
++        };
++
++        void tick_body()
++        {
++            auto& ch = *m_channel;
++            ch.frames.fetch_add(1, std::memory_order_relaxed);
++            const uint64_t now = m_now();
++            summary(now);
++            if (ch.support.load(std::memory_order_acquire) < 0)
++            {
++                announce(false);
++                return;
++            }
++            if (!ch.open.load(std::memory_order_acquire)) return;
++            if (m_sampled_once && now - m_last_sample_ns < m_config.min_interval_ns) return;
++            if (++m_phase < ch.divisor.load(std::memory_order_relaxed)) return;
++            m_phase = 0;
++            m_sampled_once = true;
++            m_last_sample_ns = now;
++
++            // Only keys a mod actually registered, and only keys the engine has a name for. No such key = no engine
++            // call at all this frame (not even the controller search).
++            m_work.clear();
++            for (unsigned word = 0; word < ch.subscribed.size(); ++word)
++            {
++                const uint64_t bits = ch.subscribed[word].load(std::memory_order_acquire);
++                for (unsigned bit = 0; bit < 64; ++bit)
++                {
++                    const unsigned value = word * 64 + bit;
++                    if (value == 0 || value >= Input::max_keys) continue;
++                    const Key key = static_cast<Key>(value);
++                    if (!((bits >> bit) & 1u) || !fkey_for(key))
++                    {
++                        m_state[value] = State::Unknown;
++                        continue;
++                    }
++                    m_work.push_back(key);
++                }
++            }
++            if (m_work.empty()) return;
++
++            const auto info = m_reader->begin_frame();
++            if (info.status == KeyStateReader::Frame::Unsupported)
++            {
++                ch.support.store(-1, std::memory_order_release);
++                m_fail_reason = m_reader->unsupported_reason();
++                reset_baseline();
++                announce(false);
++                return;
++            }
++            if (info.status == KeyStateReader::Frame::NoController)
++            {
++                reset_baseline();
++                m_generation = ~0ull;
++                account(m_now() - now); // a controller search counts against the budget too
++                return;
++            }
++            if (info.controller_generation != m_generation)
++            {
++                // A new controller (level change, loading screen): keys already held never fire.
++                reset_baseline();
++                m_generation = info.controller_generation;
++            }
++            int unknown = 0;
++            ch.support.compare_exchange_strong(unknown, 1, std::memory_order_acq_rel);
++            ch.sampled_frames.fetch_add(1, std::memory_order_relaxed);
++            if (!m_announced) announce(true); // m_work is not empty, so the subscriptions were published
++
++            size_t count = m_work.size();
++            size_t start = 0;
++            if (count > m_config.max_keys_per_frame)
++            {
++                start = m_round_robin % count;
++                m_round_robin = static_cast<uint32_t>((start + m_config.max_keys_per_frame) % count);
++                count = m_config.max_keys_per_frame;
++            }
++
++            m_edges.clear();
++            for (size_t i = 0; i < count; ++i)
++            {
++                const Key key = m_work[(start + i) % m_work.size()];
++                const auto down = m_reader->is_down(static_cast<uint16_t>(key), fkey_for(key));
++                ch.reads.fetch_add(1, std::memory_order_relaxed);
++                if (!down)
++                {
++                    ch.read_failures.fetch_add(1, std::memory_order_relaxed);
++                    continue; // keep the previous state; no event from a failed read
++                }
++                State& state = m_state[static_cast<uint8_t>(key)];
++                // Key-down edge only (UE4SS RegisterKeyBind fires on press, no auto-repeat).
++                if (state == State::Up && *down) m_edges.push_back(key);
++                state = *down ? State::Down : State::Up;
++            }
++            if (!m_edges.empty())
++            {
++                // Modifiers only on a frame with an edge (same engine frame, so the same answer as reading first).
++                const ModifierKeys mods = read_modifiers();
++                for (const Key key : m_edges)
++                {
++                    if (ch.ring.push(InputEvent{key, mods}))
++                        ch.events.fetch_add(1, std::memory_order_relaxed);
++                    else
++                        ch.drops.fetch_add(1, std::memory_order_relaxed);
++                }
++            }
++            account(m_now() - now);
++        }
++
++        void reset_baseline() { m_state.fill(State::Unknown); }
++
++        auto read_modifiers() -> ModifierKeys
++        {
++            auto& ch = *m_channel;
++            ModifierKeys mods{};
++            uint16_t id = k_modifier_id_base;
++            for (const auto& row : k_modifier_rows)
++            {
++                const auto left = m_reader->is_down(id++, row.fkey_left);
++                const auto right = m_reader->is_down(id++, row.fkey_right);
++                ch.reads.fetch_add(2, std::memory_order_relaxed);
++                if (!left) ch.read_failures.fetch_add(1, std::memory_order_relaxed);
++                if (!right) ch.read_failures.fetch_add(1, std::memory_order_relaxed);
++                // A failed modifier read counts as "not held" (never invents a modifier).
++                if (left.value_or(false) || right.value_or(false)) mods |= row.modifier;
++            }
++            return mods;
++        }
++
++        void account(uint64_t cost_ns)
++        {
++            auto& ch = *m_channel;
++            if (cost_ns <= m_config.budget_ns)
++            {
++                m_over = 0;
++                // recover: a long run under budget halves the divisor again (one slow patch never slows it for good)
++                const uint32_t current = ch.divisor.load(std::memory_order_relaxed);
++                if (current > 1 && ++m_under >= m_config.recover_frames)
++                {
++                    m_under = 0;
++                    ch.divisor.store(current / 2, std::memory_order_relaxed);
++                }
++                return;
++            }
++            m_under = 0;
++            if (++m_over < m_config.over_budget_frames) return;
++            m_over = 0;
++            const uint32_t current = ch.divisor.load(std::memory_order_relaxed);
++            if (current >= m_config.max_divisor) return;
++            ch.divisor.store(std::min(current * 2, m_config.max_divisor), std::memory_order_relaxed);
++            ch.throttle_steps.fetch_add(1, std::memory_order_relaxed);
++        }
++
++        void emit(const char* line)
++        {
++            if (!m_log) return;
++            try
++            {
++                m_log(line);
++            }
++            catch (...)
++            {
++            }
++        }
++
++        // Exactly once per process: "[kbm] engine-keys supported=<0|1> reason=<...> bound=<n>". If a source that
++        // already said supported=1 later switches itself off (exception, engine wrote the Key parameter), one more
++        // line, also at most once: "[kbm] engine-keys stopped reason=<...>".
++        void announce(bool supported)
++        {
++            if (m_announced)
++            {
++                if (supported || !m_announced_supported || m_stop_announced) return;
++                m_stop_announced = true;
++                char stopped[96];
++                std::snprintf(stopped, sizeof stopped, "[kbm] engine-keys stopped reason=%s", m_fail_reason ? m_fail_reason : "unsupported");
++                emit(stopped);
++                return;
++            }
++            m_announced = true;
++            m_announced_supported = supported;
++            char line[160];
++            std::snprintf(line, sizeof line, "[kbm] engine-keys supported=%d reason=%s bound=%u", supported ? 1 : 0,
++                          supported ? "ok" : (m_fail_reason ? m_fail_reason : "unsupported"),
++                          static_cast<unsigned>(m_channel->bound.load(std::memory_order_acquire)));
++            emit(line);
++        }
++
++        // Every summary_interval_ns: "[kbm] SUM frames= sampled= reads= fails= events= drops= divisor=". At the first
++        // one, if nothing was decided yet, also once: "[kbm] engine-keys waiting reason=<no-binds|no-controller> bound=<n>".
++        void summary(uint64_t now)
++        {
++            if (!m_summary_started)
++            {
++                m_summary_started = true;
++                m_next_summary_ns = now + m_config.summary_interval_ns;
++                return;
++            }
++            if (now < m_next_summary_ns) return;
++            m_next_summary_ns = now + m_config.summary_interval_ns;
++            const auto& ch = *m_channel;
++            char line[224];
++            std::snprintf(line, sizeof line, "[kbm] SUM frames=%llu sampled=%llu reads=%llu fails=%llu events=%llu drops=%llu divisor=%u",
++                          static_cast<unsigned long long>(ch.frames.load(std::memory_order_relaxed)),
++                          static_cast<unsigned long long>(ch.sampled_frames.load(std::memory_order_relaxed)),
++                          static_cast<unsigned long long>(ch.reads.load(std::memory_order_relaxed)),
++                          static_cast<unsigned long long>(ch.read_failures.load(std::memory_order_relaxed)),
++                          static_cast<unsigned long long>(ch.events.load(std::memory_order_relaxed)),
++                          static_cast<unsigned long long>(ch.drops.load(std::memory_order_relaxed)),
++                          static_cast<unsigned>(ch.divisor.load(std::memory_order_relaxed)));
++            emit(line);
++            if (!m_announced && !m_waiting_announced)
++            {
++                m_waiting_announced = true;
++                const unsigned bound = ch.bound.load(std::memory_order_acquire);
++                char waiting[96];
++                std::snprintf(waiting, sizeof waiting, "[kbm] engine-keys waiting reason=%s bound=%u", bound ? "no-controller" : "no-binds", bound);
++                emit(waiting);
++            }
++        }
++
++        std::shared_ptr<EngineKeyChannel> m_channel;
++        std::unique_ptr<KeyStateReader> m_reader;
++        SamplerConfig m_config;
++        Clock m_now;
++        LogSink m_log;
++        std::array<State, 256> m_state{};
++        std::vector<Key> m_work;
++        std::vector<Key> m_edges;
++        uint64_t m_generation{~0ull};
++        uint64_t m_last_sample_ns{};
++        uint64_t m_next_summary_ns{};
++        const char* m_fail_reason{};
++        uint32_t m_phase{};
++        uint32_t m_round_robin{};
++        uint32_t m_over{};
++        uint32_t m_under{};
++        bool m_sampled_once{};
++        bool m_summary_started{};
++        bool m_announced{};
++        bool m_announced_supported{};
++        bool m_stop_announced{};
++        bool m_waiting_announced{};
++    };
++
++    // =============================================================================================================
++    // 6. Source (UE4SS update thread; a normal PlatformInputSource)
++    // =============================================================================================================
++    class EngineKeySource final : public Input::PlatformInputSource
++    {
++      public:
++        explicit EngineKeySource(std::shared_ptr<EngineKeyChannel> channel) : m_channel(std::move(channel))
++        {
++            m_events.reserve(EngineKeyChannel::ring_slots);
++        }
++        // true once the engine answered at least once
++        bool is_available() override
++        {
++            return m_channel && m_channel->open.load(std::memory_order_acquire) && m_channel->support.load(std::memory_order_acquire) == 1;
++        }
++        // nothing to open: (re)opens the channel
++        bool activate() override
++        {
++            if (!m_channel) return false;
++            m_channel->open.store(true, std::memory_order_release);
++            return is_available();
++        }
++        // closes the channel; the sampler stops calling the engine
++        bool deactivate() override
++        {
++            m_events.clear();
++            if (m_channel) m_channel->open.store(false, std::memory_order_release);
++            return true;
++        }
++        int source_priority() override { return 90; }
++        const char* get_name() override { return "EngineKeys"; }
++
++        std::vector<InputEvent>& process_event(Input::Handler* handler) override
++        {
++            m_events.clear();
++            if (!handler || !m_channel) return m_events;
++            auto& ch = *m_channel;
++            // Publish which keys have binds, so the game-thread sampler asks the engine about those keys only.
++            const auto& subscribed = handler->get_subscribed_keys();
++            std::array<uint64_t, 4> words{};
++            uint32_t bound = 0;
++            for (size_t value = 0; value < subscribed.size(); ++value)
++            {
++                if (!subscribed[value]) continue;
++                words[value / 64] |= 1ull << (value % 64);
++                if (fkey_for(static_cast<Key>(value))) ++bound;
++            }
++            for (size_t word = 0; word < words.size(); ++word) ch.subscribed[word].store(words[word], std::memory_order_release);
++            ch.bound.store(bound, std::memory_order_release);
++            ch.published.store(true, std::memory_order_release);
++            // Always drain (stale presses never pile up); deliver only when allowed. No allocation: reserved above.
++            const bool deliver = ch.open.load(std::memory_order_acquire) && handler->get_allow_input();
++            while (auto event = ch.ring.pop())
++            {
++                const auto value = static_cast<size_t>(event->key);
++                if (!deliver || value >= subscribed.size() || !subscribed[value]) continue;
++                if (m_events.size() < m_events.capacity()) m_events.push_back(*event);
++            }
++            return m_events;
++        }
++
++      private:
++        std::shared_ptr<EngineKeyChannel> m_channel;
++        std::vector<InputEvent> m_events;
++    };
++
++    // =============================================================================================================
++    // 7. Merged source: the handler takes ONE source. Every child is polled on every call (the pad keeps its own
++    //    borrowed-handle retry); the same key+modifiers from two different children in one poll is one press (pad
++    //    L3+R3 = F7 together with keyboard F7); a throwing child is skipped and counted; activation never fails just
++    //    because one child is down.
++    // =============================================================================================================
++    class CompositeInputSource final : public Input::PlatformInputSource
++    {
++      public:
++        explicit CompositeInputSource(std::vector<std::shared_ptr<Input::PlatformInputSource>> children)
++        {
++            for (auto& child : children)
++                if (child) m_children.push_back(std::move(child));
++            m_events.reserve(256);
++        }
++        bool is_available() override
++        {
++            for (auto& child : m_children)
++            {
++                try
++                {
++                    if (child->is_available()) return true;
++                }
++                catch (...)
++                {
++                    ++m_child_exceptions;
++                }
++            }
++            return false;
++        }
++        bool activate() override
++        {
++            bool any = false;
++            for (auto& child : m_children)
++            {
++                try
++                {
++                    // Only children that are available now; the others stay attached and retry from their poll path.
++                    if (child->is_available() && child->activate()) any = true;
++                }
++                catch (...)
++                {
++                    ++m_child_exceptions;
++                }
++            }
++            return any;
++        }
++        bool deactivate() override
++        {
++            bool all = true;
++            m_events.clear();
++            for (auto& child : m_children)
++            {
++                try
++                {
++                    if (!child->deactivate()) all = false; // the child keeps its owner for a retry
++                }
++                catch (...)
++                {
++                    ++m_child_exceptions;
++                    all = false;
++                }
++            }
++            return all;
++        }
++        int source_priority() override
++        {
++            int best = 999;
++            for (auto& child : m_children) best = std::min(best, child->source_priority());
++            return best;
++        }
++        const char* get_name() override { return "Merged"; }
++
++        std::vector<InputEvent>& process_event(Input::Handler* handler) override
++        {
++            m_events.clear();
++            for (auto& child : m_children)
++            {
++                try
++                {
++                    // Merge only ACROSS children: two presses queued by one child are two presses, as on PC.
++                    const auto earlier = static_cast<std::ptrdiff_t>(m_events.size());
++                    for (const auto& event : child->process_event(handler))
++                    {
++                        const bool duplicate = std::any_of(m_events.begin(), m_events.begin() + earlier, [&](const InputEvent& seen) {
++                            return seen.key == event.key && seen.modifier_keys == event.modifier_keys;
++                        });
++                        if (duplicate)
++                        {
++                            ++m_duplicates;
++                            continue;
++                        }
++                        m_events.push_back(event);
++                    }
++                }
++                catch (...)
++                {
++                    ++m_child_exceptions; // isolate: one broken child never silences the others
++                }
++            }
++            return m_events;
++        }
++
++        auto child_exceptions() const -> uint64_t { return m_child_exceptions; }
++        auto duplicates_merged() const -> uint64_t { return m_duplicates; }
++        auto children() const -> size_t { return m_children.size(); }
++
++      private:
++        std::vector<std::shared_ptr<Input::PlatformInputSource>> m_children;
++        std::vector<InputEvent> m_events;
++        uint64_t m_child_exceptions{};
++        uint64_t m_duplicates{};
++    };
++
++    // =============================================================================================================
++    // 8. Composition helper (engine-free half of KbmComposeInput): Merged{ supplied source if any, engine keys }.
++    //    May throw (allocation); the caller commits only after it returned.
++    // =============================================================================================================
++    inline auto make_merged_input(const std::shared_ptr<Input::PlatformInputSource>& supplied, const std::shared_ptr<EngineKeyChannel>& channel)
++            -> std::shared_ptr<CompositeInputSource>
++    {
++        std::vector<std::shared_ptr<Input::PlatformInputSource>> children;
++        if (supplied) children.push_back(supplied);
++        children.push_back(std::make_shared<EngineKeySource>(channel));
++        return std::make_shared<CompositeInputSource>(std::move(children));
++    }
++
++    // =============================================================================================================
++    // 9. Runtime glue, engine-free. KbmEngineKeysRuntime.inc creates ONE instance on the constructor thread and never
++    //    frees it (a game-thread pump call may still be running while the program tears down).
++    //      compose(input)  constructor thread, before Handler::init; once; never throws; false = input unchanged
++    //      frame()         game thread, every pump call (both drains may call it; the 8 ms gate keeps it once per frame)
++    //      retire()        teardown, after Handler::shutdown: handler shutdown -> pump retirement -> unload
++    // =============================================================================================================
++    class EngineKeysRuntime
++    {
++      public:
++        using ReaderFactory = std::function<std::unique_ptr<KeyStateReader>()>;
++
++        EngineKeysRuntime(ReaderFactory factory, SamplerConfig config = {}, EngineKeySampler::Clock clock = {}, EngineKeySampler::LogSink log = {})
++            : m_factory(std::move(factory)), m_config(config), m_clock(std::move(clock)), m_log(std::move(log))
++        {
++        }
++
++        auto compose(std::shared_ptr<Input::PlatformInputSource>& input) noexcept -> bool
++        {
++            try
++            {
++                if (m_live.load(std::memory_order_acquire)) return false; // once per process
++                auto channel = std::make_shared<EngineKeyChannel>();
++                auto sampler = std::make_unique<EngineKeySampler>(channel, m_factory ? m_factory() : nullptr, m_config, m_clock, m_log);
++                auto merged = make_merged_input(input, channel);
++                // commit (nothing below can throw)
++                m_channel = std::move(channel);
++                m_sampler = std::move(sampler);
++                m_live.store(m_sampler.get(), std::memory_order_release);
++                input = std::move(merged);
++                return true;
++            }
++            catch (...)
++            {
++                return false; // the supplied source stays exactly as it was (pad only, as before K2)
++            }
++        }
++
++        void frame() noexcept
++        {
++            EngineKeySampler* sampler = m_live.load(std::memory_order_acquire);
++            if (!sampler || m_in_frame || m_retired.load(std::memory_order_acquire)) return;
++            m_in_frame = true; // game thread only: a nested pump call (engine re-entry) samples nothing
++            sampler->tick();   // noexcept; fails closed internally
++            m_in_frame = false;
++        }
++
++        void retire() noexcept
++        {
++            m_retired.store(true, std::memory_order_release);
++            if (m_live.load(std::memory_order_acquire) && m_channel) m_channel->open.store(false, std::memory_order_release);
++        }
++
++        auto composed() const -> bool { return m_live.load(std::memory_order_acquire) != nullptr; }
++        auto retired() const -> bool { return m_retired.load(std::memory_order_acquire); }
++        auto channel() const -> const std::shared_ptr<EngineKeyChannel>& { return m_channel; }
++
++      private:
++        ReaderFactory m_factory;
++        SamplerConfig m_config;
++        EngineKeySampler::Clock m_clock;
++        EngineKeySampler::LogSink m_log;
++        std::shared_ptr<EngineKeyChannel> m_channel;
++        std::unique_ptr<EngineKeySampler> m_sampler;
++        std::atomic<EngineKeySampler*> m_live{nullptr};
++        std::atomic<bool> m_retired{false};
++        bool m_in_frame{false};
++    };
++} // namespace RC::Platform::Kbm

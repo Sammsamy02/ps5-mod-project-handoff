@@ -1,0 +1,395 @@
+--- a/UE4SS/src/LuaType/LuaUObject.cpp
++++ b/UE4SS/src/LuaType/LuaUObject.cpp
+@@ -1,3 +1,5 @@
++#include <type_traits>
++
+ #include <Helpers/Casting.hpp>
+ #include <LuaType/LuaAActor.hpp>
+ #include <LuaType/LuaCustomProperty.hpp>
+@@ -35,7 +37,7 @@
+ #include <UnrealCustom/CustomProperty.hpp>
+ 
+ #pragma warning(default : 4005)
+-#include <DynamicOutput/DynamicOutput.hpp>
++#include <DynamicOutput/Output.hpp>
+ #include <Helpers/Integer.hpp>
+ 
+ namespace RC::LuaType
+@@ -1742,7 +1744,7 @@
+             if (params.lua.is_string(params.stored_at_index))
+             {
+                 auto lua_string = params.lua.get_string(params.stored_at_index);
+-                auto fstring = Unreal::FString{FromCharTypePtr<TCHAR>(ensure_str(lua_string).c_str())};
++                auto fstring = Unreal::FString{FromCharTypePtr<Unreal::TCHAR>(ensure_str(lua_string).c_str())};
+                 *string = fstring;
+             }
+             else if (params.lua.is_userdata(params.stored_at_index))
+--- a/UE4SS/src/Mod/LuaMod.cpp
++++ b/UE4SS/src/Mod/LuaMod.cpp
+@@ -2,6 +2,8 @@
+ 
+ #include <algorithm>
+ #include <atomic>
++#include <cstddef>
++#include <cstdio>
+ #include <filesystem>
+ #include <format>
+ #include <limits>
+@@ -11,7 +13,7 @@
+ #include <unordered_set>
+ #include <vector>
+ 
+-#include <DynamicOutput/DynamicOutput.hpp>
++#include <DynamicOutput/Output.hpp>
+ #include <ExceptionHandling.hpp>
+ #include <Helpers/Format.hpp>
+ #include <Helpers/String.hpp>
+@@ -67,6 +69,12 @@
+ #include <Unreal/Core/Windows/AllowWindowsPlatformTypes.hpp>
+ #endif
+ #pragma warning(default : 4005)
++
++#ifdef _WIN32
++#define UE4SS_LUAMOD_PRINTF printf_s
++#else
++#define UE4SS_LUAMOD_PRINTF std::printf
++#endif
+ 
+ namespace RC
+ {
+@@ -1171,8 +1179,9 @@
+             {
+                 continue;
+             }
+-            for (const auto& [index, name] : std::ranges::enumerate_view(it->names))
+-            {
++            for (std::size_t index = 0; index < it->names.size(); ++index)
++            {
++                const auto& name = it->names[index];
+                 if (!name.Equals(in_name[index]))
+                 {
+                     found = false;
+@@ -1217,8 +1226,9 @@
+             {
+                 continue;
+             }
+-            for (const auto& [index, name] : std::ranges::enumerate_view(it->names))
+-            {
++            for (std::size_t index = 0; index < it->names.size(); ++index)
++            {
++                const auto& name = it->names[index];
+                 if (name != in_name[index])
+                 {
+                     found = false;
+@@ -2250,31 +2260,31 @@
+ 
+                                                            ));
+ 
+-            printf_s("Registered Custom Property\n");
+-            printf_s("PropertyInfo {\n");
+-            printf_s("\tName: %S\n", FromCharTypePtr<wchar_t>(property_info.name.c_str()));
+-            printf_s("\tType {\n");
+-            printf_s("\t\tName: %s\n", property_info.type.name.data());
+-            printf_s("\t\tSize: 0x%X\n", property_info.type.size);
+-            printf_s("\t\tFFieldClassPointer: 0x%p\n", property_info.type.ffieldclass_pointer);
+-            printf_s("\t\tStaticPointer: 0x%p\n", property_info.type.static_pointer);
+-            printf_s("\t}\n");
+-            printf_s("\tBelongsToClass: %S\n", FromCharTypePtr<wchar_t>(property_info.belongs_to_class.c_str()));
+-            printf_s("\tOffsetInternal: 0x%X\n", property_info.offset_internal);
++            UE4SS_LUAMOD_PRINTF("Registered Custom Property\n");
++            UE4SS_LUAMOD_PRINTF("PropertyInfo {\n");
++            UE4SS_LUAMOD_PRINTF("\tName: %ls\n", FromCharTypePtr<wchar_t>(property_info.name.c_str()));
++            UE4SS_LUAMOD_PRINTF("\tType {\n");
++            UE4SS_LUAMOD_PRINTF("\t\tName: %s\n", property_info.type.name.data());
++            UE4SS_LUAMOD_PRINTF("\t\tSize: 0x%X\n", property_info.type.size);
++            UE4SS_LUAMOD_PRINTF("\t\tFFieldClassPointer: 0x%p\n", property_info.type.ffieldclass_pointer);
++            UE4SS_LUAMOD_PRINTF("\t\tStaticPointer: 0x%p\n", property_info.type.static_pointer);
++            UE4SS_LUAMOD_PRINTF("\t}\n");
++            UE4SS_LUAMOD_PRINTF("\tBelongsToClass: %ls\n", FromCharTypePtr<wchar_t>(property_info.belongs_to_class.c_str()));
++            UE4SS_LUAMOD_PRINTF("\tOffsetInternal: 0x%X\n", property_info.offset_internal);
+ 
+             if (property_info.is_array_property)
+             {
+-                printf_s("\tArrayProperty {\n");
+-                printf_s("\t\tType {\n");
+-                printf_s("\t\t\tName: %s\n", property_info.array_inner.name.data());
+-                printf_s("\t\t\tSize: 0x%X\n", property_info.array_inner.size);
+-                printf_s("\t\t\tFFieldClassPointer: %p\n", property_info.array_inner.ffieldclass_pointer);
+-                printf_s("\t\t\tStaticPointer: %p\n", property_info.array_inner.static_pointer);
+-                printf_s("\t\t}\n");
+-                printf_s("\t}\n");
+-            }
+-
+-            printf_s("}\n");
++                UE4SS_LUAMOD_PRINTF("\tArrayProperty {\n");
++                UE4SS_LUAMOD_PRINTF("\t\tType {\n");
++                UE4SS_LUAMOD_PRINTF("\t\t\tName: %s\n", property_info.array_inner.name.data());
++                UE4SS_LUAMOD_PRINTF("\t\t\tSize: 0x%X\n", property_info.array_inner.size);
++                UE4SS_LUAMOD_PRINTF("\t\t\tFFieldClassPointer: %p\n", property_info.array_inner.ffieldclass_pointer);
++                UE4SS_LUAMOD_PRINTF("\t\t\tStaticPointer: %p\n", property_info.array_inner.static_pointer);
++                UE4SS_LUAMOD_PRINTF("\t\t}\n");
++                UE4SS_LUAMOD_PRINTF("\t}\n");
++            }
++
++            UE4SS_LUAMOD_PRINTF("}\n");
+ 
+             return 0;
+         });
+@@ -6725,7 +6735,7 @@
+             });
+         });
+ 
+-        Unreal::Hook::RegisterULocalPlayerExecPreCallback([](Unreal::ULocalPlayer* context, Unreal::UWorld* in_world, const TCHAR* cmd, Unreal::FOutputDevice& ar)
++        Unreal::Hook::RegisterULocalPlayerExecPreCallback([](Unreal::ULocalPlayer* context, Unreal::UWorld* in_world, const Unreal::TCHAR* cmd, Unreal::FOutputDevice& ar)
+                                                                   -> Unreal::Hook::ULocalPlayerExecCallbackReturnValue {
+             return TRY([&] {
+                 for (const auto& callback_data : m_local_player_exec_pre_callbacks)
+@@ -6781,7 +6791,7 @@
+             });
+         });
+ 
+-        Unreal::Hook::RegisterULocalPlayerExecPostCallback([](Unreal::ULocalPlayer* context, Unreal::UWorld* in_world, const TCHAR* cmd, Unreal::FOutputDevice& ar)
++        Unreal::Hook::RegisterULocalPlayerExecPostCallback([](Unreal::ULocalPlayer* context, Unreal::UWorld* in_world, const Unreal::TCHAR* cmd, Unreal::FOutputDevice& ar)
+                                                                    -> Unreal::Hook::ULocalPlayerExecCallbackReturnValue {
+             return TRY([&] {
+                 for (const auto& callback_data : m_local_player_exec_post_callbacks)
+@@ -6838,7 +6848,7 @@
+         });
+ 
+         Unreal::Hook::RegisterCallFunctionByNameWithArgumentsPreCallback(
+-                [](Unreal::UObject* context, const TCHAR* str, Unreal::FOutputDevice& ar, Unreal::UObject* executor, bool b_force_call_with_non_exec)
++                [](Unreal::UObject* context, const Unreal::TCHAR* str, Unreal::FOutputDevice& ar, Unreal::UObject* executor, bool b_force_call_with_non_exec)
+                         -> std::pair<bool, bool> {
+                     return TRY([&] {
+                         std::pair<bool, bool> return_value{};
+@@ -6880,7 +6890,7 @@
+                 });
+ 
+         Unreal::Hook::RegisterCallFunctionByNameWithArgumentsPostCallback(
+-                [](Unreal::UObject* context, const TCHAR* str, Unreal::FOutputDevice& ar, Unreal::UObject* executor, bool b_force_call_with_non_exec)
++                [](Unreal::UObject* context, const Unreal::TCHAR* str, Unreal::FOutputDevice& ar, Unreal::UObject* executor, bool b_force_call_with_non_exec)
+                         -> std::pair<bool, bool> {
+                     return TRY([&] {
+                         std::pair<bool, bool> return_value{};
+@@ -6922,10 +6932,10 @@
+                 });
+ 
+         // Lua from the in-game console.
+-        Unreal::Hook::RegisterProcessConsoleExecCallback([](Unreal::UObject* context, const TCHAR* cmd, Unreal::FOutputDevice& ar, Unreal::UObject* executor) -> bool {
++        Unreal::Hook::RegisterProcessConsoleExecCallback([](Unreal::UObject* context, const Unreal::TCHAR* cmd, Unreal::FOutputDevice& ar, Unreal::UObject* executor) -> bool {
+             auto logln = [&ar](const File::StringType& log_message) {
+                 Output::send(fmt::format(STR("{}\n"), log_message));
+-                ar.Log(FromCharTypePtr<TCHAR>(log_message.c_str()));
++                ar.Log(FromCharTypePtr<Unreal::TCHAR>(log_message.c_str()));
+             };
+ 
+             if (!LuaStatics::console_executor_enabled && String::iequal(File::StringViewType{ToCharTypePtr(cmd)}, File::StringViewType{STR("luastart")}))
+@@ -6952,9 +6962,9 @@
+                 // TODO: Replace with proper implementation when we have UGameViewportClient and UConsole.
+                 //       This should be fairly cross-game & cross-engine-version compatible even without the proper implementation.
+                 //       This is because I don't think they've changed the layout here and we have a reflected property right before the unreflected one that we're looking for.
+-                Unreal::UObject** console = static_cast<Unreal::UObject**>(context->GetValuePtrByPropertyName(FromCharTypePtr<TCHAR>(STR("ViewportConsole"))));
++                Unreal::UObject** console = static_cast<Unreal::UObject**>(context->GetValuePtrByPropertyName(FromCharTypePtr<Unreal::TCHAR>(STR("ViewportConsole"))));
+                 auto* default_texture_white = std::bit_cast<Unreal::TArray<Unreal::FString>*>(
+-                        static_cast<uint8_t*>((*console)->GetValuePtrByPropertyNameInChain(FromCharTypePtr<TCHAR>(STR("DefaultTexture_White")))) + 0x8);
++                        static_cast<uint8_t*>((*console)->GetValuePtrByPropertyNameInChain(FromCharTypePtr<Unreal::TCHAR>(STR("DefaultTexture_White")))) + 0x8);
+                 auto* scrollback = std::bit_cast<int32_t*>(std::bit_cast<uint8_t*>(default_texture_white) + 0x10);
+                 default_texture_white->SetNum(0);
+                 default_texture_white->SetMax(0);
+@@ -7013,7 +7023,7 @@
+ 
+         // RegisterProcessConsoleExecPreHook
+         Unreal::Hook::RegisterProcessConsoleExecGlobalPreCallback(
+-                [](Unreal::UObject* context, const TCHAR* cmd, Unreal::FOutputDevice& ar, Unreal::UObject* executor) -> std::pair<bool, bool> {
++                [](Unreal::UObject* context, const Unreal::TCHAR* cmd, Unreal::FOutputDevice& ar, Unreal::UObject* executor) -> std::pair<bool, bool> {
+                     return TRY([&] {
+                         auto command = File::StringType{ToCharTypePtr(cmd)};
+                         auto command_parts = explode_by_occurrence_with_quotes(command, STR(' '));
+@@ -7063,7 +7073,7 @@
+ 
+         // RegisterProcessConsoleExecPostHook
+         Unreal::Hook::RegisterProcessConsoleExecGlobalPostCallback(
+-                [](Unreal::UObject* context, const TCHAR* cmd, Unreal::FOutputDevice& ar, Unreal::UObject* executor) -> std::pair<bool, bool> {
++                [](Unreal::UObject* context, const Unreal::TCHAR* cmd, Unreal::FOutputDevice& ar, Unreal::UObject* executor) -> std::pair<bool, bool> {
+                     return TRY([&] {
+                         auto command = File::StringType{ToCharTypePtr(cmd)};
+                         auto command_parts = explode_by_occurrence_with_quotes(command, STR(' '));
+@@ -7111,7 +7121,7 @@
+                 });
+ 
+         // RegisterConsoleCommandHandler
+-        Unreal::Hook::RegisterProcessConsoleExecCallback([](Unreal::UObject* context, const TCHAR* cmd, Unreal::FOutputDevice& ar, Unreal::UObject* executor) -> bool {
++        Unreal::Hook::RegisterProcessConsoleExecCallback([](Unreal::UObject* context, const Unreal::TCHAR* cmd, Unreal::FOutputDevice& ar, Unreal::UObject* executor) -> bool {
+             (void)executor;
+ 
+             if (!Unreal::Cast<Unreal::UGameViewportClient>(context))
+@@ -7166,7 +7176,7 @@
+         });
+ 
+         // RegisterConsoleCommandGlobalHandler
+-        Unreal::Hook::RegisterProcessConsoleExecCallback([](Unreal::UObject* context, const TCHAR* cmd, Unreal::FOutputDevice& ar, Unreal::UObject* executor) -> bool {
++        Unreal::Hook::RegisterProcessConsoleExecCallback([](Unreal::UObject* context, const Unreal::TCHAR* cmd, Unreal::FOutputDevice& ar, Unreal::UObject* executor) -> bool {
+             (void)context;
+             (void)executor;
+ 
+@@ -7329,3 +7339,5 @@
+ #if PLATFORM_WINDOWS
+ #include <Unreal/Core/Windows/HideWindowsPlatformTypes.hpp>
+ #endif
++
++#undef UE4SS_LUAMOD_PRINTF
+--- a/UE4SS/include/LuaType/LuaUObject.hpp
++++ b/UE4SS/include/LuaType/LuaUObject.hpp
+@@ -7,7 +7,7 @@
+ #include <type_traits>
+ 
+ #include <Constructs/Generator.hpp>
+-#include <DynamicOutput/DynamicOutput.hpp>
++#include <DynamicOutput/Output.hpp>
+ #include <Helpers/String.hpp>
+ #include <Common.hpp>
+ #include <LuaMadeSimple/LuaObject.hpp>
+@@ -752,7 +752,7 @@
+ 
+                 auto ar = Unreal::FOutputDevice{};
+                 auto return_value =
+-                        lua_object.get_remote_cpp_object()->ProcessConsoleExec(FromCharTypePtr<TCHAR>(cmd.c_str()), ar, executor.get_remote_cpp_object());
++                        lua_object.get_remote_cpp_object()->ProcessConsoleExec(FromCharTypePtr<Unreal::TCHAR>(cmd.c_str()), ar, executor.get_remote_cpp_object());
+ 
+                 lua.set_bool(return_value);
+                 return 1;
+--- a/UE4SS/include/LuaType/LuaUnrealString.hpp
++++ b/UE4SS/include/LuaType/LuaUnrealString.hpp
+@@ -197,7 +197,7 @@
+         // FString specializations
+         static void push_string_to_lua(const LuaMadeSimple::Lua& lua, const Unreal::FString& str)
+         {
+-            const TCHAR* string_data = *str;
++            const Unreal::TCHAR* string_data = *str;
+             if (string_data)
+             {
+                 std::string utf8_string = to_utf8_string(string_data);
+--- a/UE4SS/include/ExceptionHandling.hpp
++++ b/UE4SS/include/ExceptionHandling.hpp
+@@ -1,8 +1,9 @@
+ #pragma once
+ 
++#include <cstdio>
+ #include <stdexcept>
+ 
+-#include <DynamicOutput/DynamicOutput.hpp>
++#include <DynamicOutput/Output.hpp>
+ #include <Helpers/String.hpp>
+ 
+ #define UE4SS_ERROR_OUTPUTTER()                                                                                                                                \
+@@ -12,7 +13,7 @@
+     }                                                                                                                                                          \
+     else                                                                                                                                                       \
+     {                                                                                                                                                          \
+-        printf_s("Internal Error: %s\n", e.what());                                                                                                            \
++        std::printf("Internal Error: %s\n", e.what());                                                                                                            \
+     }
+ 
+ #ifndef SEH_DISABLE
+--- a/UE4SS/include/UE4SSProgram.hpp
++++ b/UE4SS/include/UE4SSProgram.hpp
+@@ -9,7 +9,7 @@
+ 
+ #include <Common.hpp>
+ #include <CrashDumper.hpp>
+-#include <DynamicOutput/DynamicOutput.hpp>
++#include <File/Macros.hpp>
+ #include <GUI/GUI.hpp>
+ #include <GUI/GUITab.hpp>
+ #include <Input/Handler.hpp>
+@@ -55,6 +55,7 @@
+     namespace Output
+     {
+         class ConsoleDevice;
++        class DebugConsoleDevice;
+     }
+ 
+     struct RecognizableStruct
+--- a/UE4SS/include/Mod/CppMod.hpp
++++ b/UE4SS/include/Mod/CppMod.hpp
+@@ -1,16 +1,22 @@
+ #pragma once
+ 
++#include <memory>
+ #include <vector>
+ 
++#ifdef _WIN32
+ #include <Unreal/Core/Windows/MinimalWindowsApi.hpp>
++#else
++namespace RC::Platform { class CppModModule; }
++#endif
+ 
+-#include <Mod/CppUserModBase.hpp>
+ #include <Mod/Mod.hpp>
+ 
+ #include <String/StringType.hpp>
+ 
+ namespace RC
+ {
++    class CppUserModBase;
++
+     namespace LuaMadeSimple
+     {
+         class Lua;
+@@ -26,8 +32,13 @@
+         StringType m_dll_filename{};
+         std::filesystem::path m_dlls_path;
+ 
++#ifdef _WIN32
+         Unreal::Windows::HMODULE m_main_dll_module = NULL;
+         void* m_dlls_path_cookie = NULL;
++#else
++        // Opaque native loader ownership; construction/destruction live in the platform loader.
++        std::unique_ptr<Platform::CppModModule> m_platform_module;
++#endif
+         start_type m_start_mod_func = nullptr;
+         uninstall_type m_uninstall_mod_func = nullptr;
+ 
+--- a/UE4SS/include/Mod/Mod.hpp
++++ b/UE4SS/include/Mod/Mod.hpp
+@@ -9,7 +9,6 @@
+ #include <unordered_set>
+ 
+ #include <Common.hpp>
+-#include <File/File.hpp>
+ 
+ namespace RC
+ {
+--- a/UE4SS/include/Mod/LuaMod.hpp
++++ b/UE4SS/include/Mod/LuaMod.hpp
+@@ -9,7 +9,7 @@
+ #include <filesystem>
+ 
+ #include <Common.hpp>
+-#include <File/File.hpp>
++#include <File/Macros.hpp>
+ #include <LuaMadeSimple/LuaMadeSimple.hpp>
+ #include <Mod/Mod.hpp>
+ #include <SettingsManager.hpp>
+--- a/UE4SS/include/SettingsManager.hpp
++++ b/UE4SS/include/SettingsManager.hpp
+@@ -4,7 +4,7 @@
+ #include <filesystem>
+ 
+ #include <Common.hpp>
+-#include <File/File.hpp>
++#include <File/Macros.hpp>
+ #include <GUI/GUI.hpp>
+ #include <Input/KeyDef.hpp>
+ #include <Unreal/UnrealInitializer.hpp>
+--- a/Unreal/Engine/UDataTable.hpp
++++ b/Unreal/Engine/UDataTable.hpp
+@@ -6,7 +6,7 @@
+ #include <Unreal/NameTypes.hpp>
+ #include <Unreal/Core/Containers/Map.hpp>
+ #include <Unreal/Core/Templates/Function.hpp>
+-#include <DynamicOutput/DynamicOutput.hpp>
++#include <DynamicOutput/Output.hpp>
+ #include <Unreal/TypeChecker.hpp>
+ 
+ namespace RC::Unreal

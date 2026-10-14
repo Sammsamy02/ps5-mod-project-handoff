@@ -1,0 +1,36 @@
+{
+  "script": "sign_and_verify.sh",
+  "utc": "2026-10-08T21:32:38Z",
+  "tool": {
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-sdk-build-check/ps5-payload-sdk/samples/install_app/make_fself.py",
+    "sha256": "d76a78f4bdf214d2f6a7508797dcede7d680c8b3d4ca0a4fe0a4d1d436cc9275",
+    "invocation": "python3 make_fself.py INPUT OUTPUT (default ptype=fake)"
+  },
+  "input": {
+    "path": "/tmp/l25-fakesign/l24-bare-unsigned.prx",
+    "magic": "7f454c46",
+    "size_bytes": 31315144,
+    "sha256": "1aba1af9216457078c2e7eebc99529cf56951efa1805a036c3f58f61ff5e50ff"
+  },
+  "output": {
+    "path": "/tmp/l25-fakesign/l24-scripted.self",
+    "magic": "4f153d1d",
+    "size_bytes": 31331783,
+    "sha256": "0ba7170e9c9188b317933c05d292866ae263dea66a4411eac59552fc8918d2f7",
+    "size_delta_bytes": 16639
+  },
+  "magic_table": {
+    "4f153d1d": "SELF/FSELF container (this tool's output)",
+    "5414f5ee": "Sony-signed sprx (readback-acceptable, never our output)",
+    "7f454c46": "plain ELF (unsigned; valid input only, never bootable on console)"
+  },
+  "post_upload_readback_required": {
+    "download": "curl -s -Q \"SITE SELF\" -o /tmp/readback.prx ftp://PS5_HOST:PORT/data/plugins/<name>.prx",
+    "magic_check": "xxd -p -l 4 /tmp/readback.prx  # expect 4f153d1d or 5414f5ee",
+    "hash_check": "shasum -a 256 /tmp/readback.prx  # must equal output.sha256 above"
+  },
+  "verified": {
+    "output_magic_is_fself": true,
+    "input_was_plain_elf": true
+  }
+}

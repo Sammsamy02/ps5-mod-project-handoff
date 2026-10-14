@@ -1,0 +1,30 @@
+--- outputs/2026-10-04-zcode-team/worker-launch10-walkguard-prep/staging/asmhelper-guard/ASMHelper.guarded.cpp	2026-10-06 15:47:01.248176094 +0000
++++ outputs/2026-10-06-claude-cloud/staging/asmhelper-nojmp/ASMHelper.guarded.nojmp.cpp	2026-10-06 16:06:26.025397419 +0000
+@@ -324,6 +324,20 @@
+ 
+     auto resolve_function_address_from_potential_jmp(void* function_ptr) -> void*
+     {
++#if defined(__PROSPERO__)
++        // [claude-cloud 2026-10-06] No jmp-follow on PROSPERO (GATE-1 avoidance, zero text
++        // reads). Callers pass a code address taken from DATA (a vtable slot via
++        // GET_ADDRESS_OF_UNREAL_VIRTUAL, a UFunction Func pointer). The follow exists for
++        // MSVC incremental-link/import jmp thunks, which this ELF target does not emit; an
++        // Itanium this-adjust thunk starts with add/sub, so the Windows path would return it
++        // unchanged as well. Following here needs a read of exec-only text, which is exactly
++        // the walkguard GATE-1 refusal that unwinds init. Calling through the unresolved
++        // entry is equivalent; only an inline-detour target could differ, and detour
++        // registration is refused/compiled out in this world (R3 marshal mode, no-exec gate).
++        // get_first_instruction_at_address keeps its guard for every other caller.
++        Output::send(STR("[WalkRxGuard] jmp-follow skipped (exec-only text; no read): using entry {} as-is\n"), function_ptr);
++        return function_ptr;
++#else
+         ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT]{};
+         auto instruction = get_first_instruction_at_address(function_ptr, operands);
+         if (instruction.raw.mnemonic == ZYDIS_MNEMONIC_JMP || instruction.raw.mnemonic == ZYDIS_MNEMONIC_CALL)
+@@ -342,5 +356,6 @@
+         {
+             return function_ptr;
+         }
++#endif
+     }
+ } // namespace RC::ASM

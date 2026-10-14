@@ -1,0 +1,27 @@
+--- a/src/UObjectGlobals.cpp	2026-10-09 22:21:52
++++ b/src/UObjectGlobals.cpp	2026-10-11 21:26:18
+@@ -1657,11 +1657,22 @@
+ 
+         const auto& ObjObjects = GUObjectArray->GetObjObjects();
+         const auto NumChunks = ObjObjects.GetNumChunks();
++        const auto NumElements = ObjObjects.GetNumElements();
+         static const auto ItemSize = FUObjectItem::UEP_TotalSize();
+ 
+-        for (int32_t ChunkIndex = 0; ChunkIndex < NumChunks; ++ChunkIndex)
++        // [IT lookup-speed 01, Claude round-13 item 2] The old loop ran the
++        // FULL 64*1024 slots of every chunk, including the unwritten tail of
++        // the last chunk past GetNumElements() — with ~35K live elements in
++        // chunk 0 that was ~30K dead flag-reads per walk (2 loads each,
++        // [FFO2] scanned=35479 vs the 65536-slot scan). Slots at or beyond
++        // NumElements are unallocated and can never hold a live UObject, so
++        // clamping the final chunk to the remainder is semantics-identical.
++        int32_t RemainingElements = NumElements;
++        for (int32_t ChunkIndex = 0; ChunkIndex < NumChunks && RemainingElements > 0; ++ChunkIndex)
+         {
+-            for (int32_t ItemIndex = 0; ItemIndex < TUObjectArray::NumElementsPerChunk; ++ItemIndex)
++            const int32_t MaxInChunk = RemainingElements < TUObjectArray::NumElementsPerChunk ? RemainingElements : TUObjectArray::NumElementsPerChunk;
++            RemainingElements -= MaxInChunk;
++            for (int32_t ItemIndex = 0; ItemIndex < MaxInChunk; ++ItemIndex)
+             {
+                 const auto& ChunksPtr = ObjObjects.GetObjects();
+                 const auto ObjectItem = std::bit_cast<FUObjectItem*>(&std::bit_cast<uint8_t*>(ChunksPtr[ChunkIndex])[ItemIndex * ItemSize]);

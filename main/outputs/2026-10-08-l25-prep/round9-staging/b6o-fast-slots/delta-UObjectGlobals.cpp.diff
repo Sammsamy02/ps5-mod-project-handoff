@@ -1,0 +1,112 @@
+--- round9-staging/b6o-fast-slots/base/UObjectGlobals.cpp	2026-10-12 13:53:16
++++ ../2026-10-08-l26-runtime/typescan-r4/candidate/src/UObjectGlobals.cpp	2026-10-12 14:54:42
+@@ -1213,6 +1213,7 @@
+     // the small libc heap. Any inconsistency disables the index and the walk is used (fail closed).
+     // =====================================================================================
+     static uint64_t g_r9_sync_calls_fwd{0}, g_r9_sync_ticks_fwd{0}; // [R9-PERF] Sync() cost (see r9_take_index_stats)
++    static uint64_t g_r9_watch_fwd{0}; // [R9-PERF] freed/empty slots re-checked per sync (last sync)
+     namespace r9idx
+     {
+         template <typename T>
+@@ -1293,10 +1294,57 @@
+             if (Index < 0 || ChunkIndex >= ObjObjects.GetNumChunks()) { return nullptr; }
+             const auto& ChunksPtr = ObjObjects.GetObjects();
+             return std::bit_cast<FUObjectItem*>(&std::bit_cast<uint8_t*>(ChunksPtr[ChunkIndex])[(Index % TUObjectArray::NumElementsPerChunk) * ItemSize]);
++        }
++        // [R9-IDX3] direct slot reads for the index (launch 9: after a level change ~tens of thousands
++        // of freed slots are re-checked every sync, and the by-name accessor lookups cost ~4 ms per
++        // frame). FUObjectItem::Object / ::Flags offsets are read once from the proven layout data;
++        // only for the item shape where GetUObject() is Object and the internal flags are Flags
++        // (4.13 .. 5.6, no item packing). Any other version or a missing offset keeps the accessor
++        // path. Refreshed at the start of every Sync; used only under the index mutex.
++        struct FastSlots
++        {
++            bool Ok{false};
++            uint8_t* const* Chunks{nullptr};
++            int32_t NumChunks{0};
++            int32_t ItemSize{0};
++            int32_t OffObject{-1};
++            int32_t OffFlags{-1};
++        };
++        static FastSlots g_fast{};
++        static auto RefreshFastSlots() -> void
++        {
++            g_fast.Ok = false;
++#if !UE_ENABLE_FUOBJECT_ITEM_PACKING
++            static const int32_t s_off_object = [] { auto It = FUObjectItem::MemberOffsets.find(STR("Object")); return It == FUObjectItem::MemberOffsets.end() ? -1 : It->second; }();
++            static const int32_t s_off_flags = [] { auto It = FUObjectItem::MemberOffsets.find(STR("Flags")); return It == FUObjectItem::MemberOffsets.end() ? -1 : It->second; }();
++            if (!Version::IsAtLeast(4, 13) || Version::IsAtLeast(5, 7) || s_off_object < 0 || s_off_flags < 0) { return; }
++            const auto& ObjObjects = GUObjectArray->GetObjObjects();
++            g_fast.ItemSize = FUObjectItem::UEP_TotalSize();
++            g_fast.NumChunks = ObjObjects.GetNumChunks();
++            g_fast.Chunks = std::bit_cast<uint8_t* const*>(ObjObjects.GetObjects());
++            g_fast.OffObject = s_off_object;
++            g_fast.OffFlags = s_off_flags;
++            g_fast.Ok = g_fast.Chunks != nullptr && g_fast.ItemSize > 0 && g_fast.NumChunks >= 0 &&
++                        s_off_object + static_cast<int32_t>(sizeof(void*)) <= g_fast.ItemSize &&
++                        s_off_flags + static_cast<int32_t>(sizeof(int32_t)) <= g_fast.ItemSize;
++#endif
+         }
+         // Live object in the slot, or nullptr when empty or unreachable (never touch freed memory).
+         static auto LiveAt(int32_t Index) -> UObject*
+         {
++            if (g_fast.Ok)
++            {
++                const int32_t ChunkIndex = Index / TUObjectArray::NumElementsPerChunk;
++                if (Index < 0 || ChunkIndex >= g_fast.NumChunks) { return nullptr; }
++                const uint8_t* Chunk = g_fast.Chunks[ChunkIndex];
++                if (Chunk == nullptr) { return nullptr; }
++                const uint8_t* Item = Chunk + static_cast<size_t>(Index % TUObjectArray::NumElementsPerChunk) * static_cast<size_t>(g_fast.ItemSize);
++                UObject* Object = *reinterpret_cast<UObject* const*>(Item + g_fast.OffObject);
++                if (Object == nullptr) { return nullptr; }
++                const int32_t Flags = *reinterpret_cast<const int32_t*>(Item + g_fast.OffFlags);
++                if (Flags & static_cast<int32_t>(EInternalObjectFlags::Unreachable)) { return nullptr; }
++                return Object;
++            }
+             FUObjectItem* Item = ItemAt(Index);
+             if (Item == nullptr) { return nullptr; }
+             UObject* Object = Item->GetUObject();
+@@ -1415,6 +1463,7 @@
+             if (!GUObjectArray) { return false; }
+             const int32_t Num = GUObjectArray->GetObjObjects().GetNumElements();
+             if (Num < 0 || Num > 64 * 1024 * 1024) { S.Disabled = true; return false; }
++            RefreshFastSlots(); // after Num: the engine grows NumChunks before NumElements, so every index < Num is covered
+             Grow(S, Num);
+             if (!S.Built)
+             {
+@@ -1437,6 +1486,7 @@
+                     try { Output::send<LogLevel::Error>(STR("[R9-IDX] object index disabled: class self-index check failed ({} of {}); using the full walk\n"), Bad, Checked); } catch (...) {}
+                     return false;
+                 }
++                __atomic_store_n(&g_r9_watch_fwd, static_cast<uint64_t>(S.FreeWatch.size()), __ATOMIC_RELAXED);
+                 return true;
+             }
+             // re-check watched slots first (they are re-added by Observe if still empty)
+@@ -1454,6 +1504,7 @@
+             }
+             for (int32_t i = S.SyncedNum; i < Num; ++i) { Observe(S, i); }
+             S.SyncedNum = Num;
++            __atomic_store_n(&g_r9_watch_fwd, static_cast<uint64_t>(S.FreeWatch.size()), __ATOMIC_RELAXED);
+             return true;
+         }
+         // FirstOnly: walk semantics (lowest-index EXACT class match, else the LAST subclass match).
+@@ -1586,7 +1637,7 @@
+                 if (!g_logged)
+                 {
+                     g_logged = true;
+-                    Output::send(STR("[R9-IDX] object index active: built from {} slots, {} classes (FindFirstOf/FindAllOf no longer walk the whole array)\n"), S.SyncedNum, S.Classes.size());
++                    Output::send(STR("[R9-IDX] object index active: built from {} slots, {} classes (FindFirstOf/FindAllOf no longer walk the whole array) direct-slots={}\n"), S.SyncedNum, S.Classes.size(), g_fast.Ok ? 1 : 0);
+                 }
+                 return true;
+             }
+@@ -1671,8 +1722,9 @@
+     // Called by the engine-registered delete listener for every freed object index.
+     // [R9-PERF] listener / index maintenance cost (cycle ticks; read and reset by the [PERF] line)
+     static uint64_t g_r9_del_calls{0}, g_r9_del_ticks{0};
+-    auto r9_take_index_stats(uint64_t& del_calls, uint64_t& del_ticks, uint64_t& sync_calls, uint64_t& sync_ticks) -> void
++    auto r9_take_index_stats(uint64_t& del_calls, uint64_t& del_ticks, uint64_t& sync_calls, uint64_t& sync_ticks, uint64_t& watch) -> void
+     {
++        watch = __atomic_load_n(&g_r9_watch_fwd, __ATOMIC_RELAXED);
+         del_calls = __atomic_exchange_n(&g_r9_del_calls, uint64_t{0}, __ATOMIC_RELAXED);
+         del_ticks = __atomic_exchange_n(&g_r9_del_ticks, uint64_t{0}, __ATOMIC_RELAXED);
+         sync_calls = __atomic_exchange_n(&g_r9_sync_calls_fwd, uint64_t{0}, __ATOMIC_RELAXED);

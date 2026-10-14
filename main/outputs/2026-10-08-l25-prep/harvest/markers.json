@@ -1,0 +1,735 @@
+{
+ "_meta": {
+  "purpose": "Marker table for harvest.py (PS5 UE4SS per-launch evidence harvest). Each entry: pattern (case-sensitive substring), meaning, phase, source (citation or PENDING agent report), files (optional; default [\"ue4ss\",\"klog\"]). L25 instrumentation sources live under outputs/2026-10-08-l25-runtime/ and are cited as typescan-r4/... or copyin-probe/... relative file:line paths; every string was grepped from the candidate sources on 2026-10-08 (agent-Z14). Mod-side TownfallItemSpawner markers (mod-start/menu-open/menu-failure/spawn family) were added 2026-10-08 by agent-AJ from LAUNCH-PLAN.md v3.3 + agent-AI-spawn-procedure.md section 3, each string re-verified against the provenance main.lua copy (outputs/2026-10-08-l23-package/console-test-20261008T171655Z-964d76/harvest-20261008T174239Z-25929d/main.lua, 21415 B, 746 lines). l26 fix-wave markers ([FFO] add-fallback / [FFO] query-fallback / [UF] nofn / [UF] miss / [FN] ctor unready) were added 2026-10-08 by agent-EH from agent-CP-findfirstof-fix.md section 4, agent-DA-verified-query-fix.md ('Marker string (exact)' + 'Console acceptance signal'), and agent-CN-resolver-impl.md sections 1/3. SHIP-STATE CAVEAT (agent-EH, 2026-10-08 late): the 21:18 l26 build (PRX e13b1d0b) carries CP+CN+CL, so add-fallback/[FN]/[UF] are LIVE in that binary (zero hits in /tmp/l26v2.log + /tmp/v6-run.log = names resolved via Find / no unready ctor / no member miss on the probed paths); DA's query-fallback marker is NOT in any shipped binary yet (landed 22:39, staged in outputs/2026-10-08-l26-runtime/typescan-r4/) - its absence proves nothing until the next build launches.",
+  "files_key": {
+   "ue4ss": "harvest-<label>-ue4ss.log (pulled from /data/plugins/UE4SS.log)",
+   "runtime-status": "harvest-<label>-runtime-status.txt (pulled from /data/modbridge/roots/PPSA33286/runtime-status.txt)",
+   "diag": "harvest-<label>-supplier-diag.jsonl (pulled from /data/modbridge-supplier-diag.jsonl)",
+   "aligned": "harvest-<label>-aligned-entry.log (pulled from /data/townfall_runtime_aligned_entry.log)",
+   "klog": "local klog-*.log TCP capture (ps5-host-not-configured.invalid:3232 tap, picked up in place)"
+  },
+  "known_today_citations": [
+   "outputs/2026-10-08-l25-prep/agent-F-crash-forensics.md",
+   "outputs/2026-10-08-l25-prep/agent-G-mod-start-gating.md",
+   "outputs/2026-10-08-l25-prep/agent-H-r3-marshal.md",
+   "outputs/2026-10-08-l25-prep/agent-I-mfa-audit.md",
+   "outputs/2026-10-08-l25-prep/agent-J-log-digest.md",
+   "outputs/2026-10-08-l24-runtime/HARVEST-PLAN.md (section 2 marker ladder)",
+   "outputs/2026-10-08-l25-prep/agent-O-listener-instrumentation.md (landed 2026-10-08: [L25][DeleteListener] family + l25_dl_* tags, section 5)",
+   "outputs/2026-10-08-l25-prep/agent-P-phase-tags.md (landed 2026-10-08: [l25] phase tags, section 1)",
+   "outputs/2026-10-08-l25-prep/agent-Q-copyin-probe.md (landed 2026-10-08: [Seeds][L25] copyin-probe liveness, section 3)",
+   "outputs/2026-10-08-l25-prep/LAUNCH-PLAN.md v3.3 (mod-side TownfallItemSpawner log markers with main.lua line numbers; added by agent-AJ 2026-10-08)",
+   "outputs/2026-10-08-l25-prep/agent-AI-spawn-procedure.md (section 3 exact log strings; section 4 dependency triage; added by agent-AJ 2026-10-08)",
+   "outputs/2026-10-08-l25-prep/agent-T-klog-capture.md (landed 2026-10-08 14:26: authoritative klog ranked-path procedure, section 2 capture recipe)"
+  ],
+  "pending": [],
+  "klog_procedure": "agent-T-klog-capture.md LANDED 2026-10-08 14:26 (no longer pending). harvest.py KLOG_RANKED_DIRS updated 2026-10-08 (agent-BE, from agent-BD rehearsal section 7.2) to the agent-T recipe: per-test out-dirs /tmp/l25-vanilla, /tmp/l25-variant-B, /tmp/l25-variant-A plus the outputs/*/console-test-*/ session-dir glob and the previous script-dir//tmp/l25-harvest//tmp/l24-harvest entries; the newest klog-*.log (mtime) across all ranked dirs wins so a stale capture in one out-dir cannot shadow a newer tap. No marker entry below is PENDING; agent-O/agent-P placeholders were resolved to cited entries on 2026-10-08."
+ },
+ "markers": [
+  {
+   "pattern": "Adding shutdown listener",
+   "meaning": "End of UE4SS PostInitialize (UnrealInitializer :527). In every l24 session this was the LAST UE4SS line; init is judged passed beyond :528 (AddUObjectDeleteListener) only if something follows this marker.",
+   "phase": "init-end",
+   "source": "agent-G-mod-start-gating.md sections 1/5; agent-J-log-digest.md section 2 (last line :608)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "Starting callback garbage collector!",
+   "meaning": "First milestone after 'Adding shutdown listener' (agent-G step 6, :542) - strongest early evidence init passed :528.",
+   "phase": "init-end",
+   "source": "agent-G-mod-start-gating.md section 1 step 6; LAUNCH-PLAN.md v3.2/v3.3 (UnrealInitializer.cpp:542 - in variant B the FIRST proof init passed :528; mod-context enrichment by agent-AJ 2026-10-08, entry pre-existing and NOT duplicated)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "Unreal Engine modules",
+   "meaning": "Post-init module list ('Unreal Engine modules (modular/non-modular):') - absent in all l24 sessions (agent-J section 4 item 1). Presence = init completed and the event loop is progressing.",
+   "phase": "post-init",
+   "source": "agent-J-log-digest.md section 4 item 1",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "TypeScan] scan-complete",
+   "meaning": "Type scan finished; gate line '[TypeScan] scan-complete missing-keys=N core-ready=true|false'. core-ready=0 returns false and blocks reflection consumers.",
+   "phase": "scan",
+   "source": "l24 HARVEST-PLAN.md section 0 (step 4 of the marker ladder); agent-J section 2 item 17",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[TypeScan] refusal",
+   "meaning": "l24 collect-and-continue refusal line: reason in {slot read, class null, class misaligned, class identity}; taxonomy in typescan-r3/include/NativePropertyPointerGuard.hpp.",
+   "phase": "scan",
+   "source": "l24 HARVEST-PLAN.md section 0; agent-N-review-fixes.md (l25-fix F3 four-marker order)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[LayoutPreflight] checked=",
+   "meaning": "Layout preflight summary line; pass = 'missing-required=0' (l24 values: checked=66 startup-required=50 conditional-map=14 runtime-deferred=2).",
+   "phase": "preflight",
+   "source": "l24 HARVEST-PLAN.md section 2 step 1; agent-J section 2 item 8",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "outcome=admitted",
+   "meaning": "FName pool admission succeeded (L14 path, budget 60s; l24: admitted in 2627ms via image-segments + VirtualQuery, oracle-probes=0).",
+   "phase": "admission",
+   "source": "agent-F-crash-forensics.md (':528 FName pool 0x9765EC0 admitted'); agent-J section 2 item 10",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "runtime_start_ok",
+   "meaning": "modbridge runtime up (diag tag; l24 pid 144 seq 1068). Runtime-status/diag-side success counterpart to module_start failed.",
+   "phase": "admission",
+   "source": "agent-F-crash-forensics.md timeline row t_ms 3,747,547",
+   "files": [
+    "diag",
+    "aligned",
+    "runtime-status"
+   ]
+  },
+  {
+   "pattern": "mfa_activate_failed",
+   "meaning": "ModForge file admission failed; code=-8 = size file longer than load list says (l24 18:53: ue4ss/UE4SS-settings.ini). All-or-nothing: activation aborts.",
+   "phase": "admission",
+   "source": "agent-I-mfa-audit.md section 2; agent-J-log-digest.md section 5 (line 609)",
+   "files": [
+    "ue4ss",
+    "aligned",
+    "runtime-status"
+   ]
+  },
+  {
+   "pattern": "module_start failed",
+   "meaning": "modbridge module_start aborted ('[t=...ms pid=...] modbridge module_start failed: ...'). Appends to the previous session's UE4SS.log when the new session dies before UE4SS init (l24 precedent: exactly one such appended line).",
+   "phase": "admission",
+   "source": "agent-J-log-digest.md section 5; agent-F-crash-forensics.md session table pid 222",
+   "files": [
+    "ue4ss",
+    "aligned",
+    "runtime-status"
+   ]
+  },
+  {
+   "pattern": "[R3] FuncPtr-marshal armed",
+   "meaning": "R3 marshal carrier armed on a BP-override UFunction (full string '[R3] FuncPtr-marshal armed on carrier ...') - game-thread pump arm proof. Never seen in any l22/l23/l24 session.",
+   "phase": "runtime-arm",
+   "source": "agent-H-r3-marshal.md Q6 item 1 (LuaMod.cpp:4994)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[R3] event carrier scan",
+   "meaning": "Marshal carrier scan result line ('N override(s) found, M newly armed') - arm-stage proof (LuaMod.cpp:5111).",
+   "phase": "runtime-arm",
+   "source": "agent-H-r3-marshal.md Q6 item 1",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[R3] marshal arm failed",
+   "meaning": "Once-per-process loud arm failure ('closures will queue until a carrier arms') - LuaMod.cpp:5177.",
+   "phase": "runtime-arm",
+   "source": "agent-H-r3-marshal.md Q5 (loud failure points)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[R3] marshal is the game-thread pump",
+   "meaning": "First live drain on the published game thread (LuaMod.cpp:4817) - pump is firing, not merely armed.",
+   "phase": "runtime-pump",
+   "source": "agent-H-r3-marshal.md Q6 item 2",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "r3_marshal_pumped",
+   "meaning": "Throttled (~1/s) diag heartbeat that funcptr_marshal_hook fired on the game thread (agent-H one-line-code recommendation). Distinguishes armed-but-never-fires from firing-but-unpublished from alive-pump. Expected in the supplier-diag/aligned sinks.",
+   "phase": "runtime-pump",
+   "source": "agent-H-r3-marshal.md l25 recommendations (heartbeat proposal); task-specified known marker; implemented l25 at typescan-r4/candidate/src/LuaMod.cpp:4920 (agent-P-phase-tags.md section 1, >=1s CAS throttle, tag string verbatim)",
+   "files": [
+    "diag",
+    "aligned",
+    "ue4ss",
+    "klog"
+   ]
+  },
+  {
+   "pattern": "[l22] Lua mod started",
+   "meaning": "Lua mod start success ('[l22] Lua mod started: TownfallItemSpawner (main script returned)', LuaMod.cpp:7557) - only after main.lua loads AND executes without error.",
+   "phase": "mod-start",
+   "source": "agent-G-mod-start-gating.md section 4; l24 HARVEST-PLAN.md ladder step 5",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[l22] keybind callback entry",
+   "meaning": "Keybind dispatch reached after pad edge ('key=118' = F7 / the L3+R3 press) - ladder step 9.",
+   "phase": "menu-path",
+   "source": "l24 HARVEST-PLAN.md ladder step 9; agent-H section on L3+R3 chain",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[l23] game-thread self-test",
+   "meaning": "L23GameThreadProbe lifecycle ('queued via ExecuteInGameThread deadline=30000ms' -> 'ran' or 'NOT DRAINED'). NOT DRAINED is a recorded outcome, not a menu-path failure.",
+   "phase": "mod-start",
+   "source": "l24 HARVEST-PLAN.md ladder step 7; agent-G section 1 step 11",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "pad_borrow_begin",
+   "meaning": "Pad handle borrow started (needs >=10s uptime). Without 'pad_borrow_returned' the GetHandle call hangs on this firmware (documented rev-2 failure).",
+   "phase": "pad-chain",
+   "source": "l24 HARVEST-PLAN.md ladder step 8; agent-H section 5 pad-side facts",
+   "files": [
+    "diag",
+    "aligned"
+   ]
+  },
+  {
+   "pattern": "pad_first_state_read",
+   "meaning": "First real pad state read - pad chain progressing past borrow/open.",
+   "phase": "pad-chain",
+   "source": "agent-H section 5 (PS5PadSource.cpp:146-149); l24 HARVEST-PLAN step 8",
+   "files": [
+    "diag",
+    "aligned"
+   ]
+  },
+  {
+   "pattern": "pad_key_edge",
+   "meaning": "Pad key edge reached runtime; value 118 = F7 (the L3+R3 press). Absent = chord never reached the runtime.",
+   "phase": "pad-chain",
+   "source": "l24 HARVEST-PLAN.md ladder step 8; agent-H section 5",
+   "files": [
+    "diag",
+    "aligned"
+   ]
+  },
+  {
+   "pattern": "Stopping mod",
+   "meaning": "Clean uninstall path ('Stopping mod TownfallItemSpawner for uninstall') - clean game-exit corroboration, not a ladder step.",
+   "phase": "teardown",
+   "source": "l24 HARVEST-PLAN.md section 2 clean-exit note; agent-H section 6",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "copyin",
+   "meaning": "copyin syscall activity anywhere (UE4SS text, klog, diag tags like copyin_initializer_* / pool_copyin_*). GATE-1 oracle experiments and the resident copyin initializer are the primary crash-attribution candidate.",
+   "phase": "crash",
+   "source": "task-specified known marker; agent-F-crash-forensics.md attribution + AGENTS.md GATE-1 note",
+   "files": [
+    "ue4ss",
+    "klog",
+    "diag",
+    "aligned"
+   ]
+  },
+  {
+   "pattern": "nonsleeping",
+   "meaning": "klog kernel assertion ('copyin: has nonsleeping lock') - the CE-108255-1 crash signature (libkernel RIP 0x80004920) seen at save-load in l24.",
+   "phase": "crash",
+   "source": "task-specified known marker; agent-F-crash-forensics.md timeline + AGENTS.md PS5 rules",
+   "files": [
+    "klog",
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "AddUObjectDeleteListener",
+   "meaning": "The :528 stall-point call itself (symbol name; matches exception text or diag payloads, not a dedicated log line). The instrumented [L25][DeleteListener] family below reports its actual behavior (enter/return/refusal).",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md section 2 (call sites typescan-r4/candidate/src/UnrealInitializer.cpp:551/:570; callee typescan-r4/candidate/src/UObjectArray.cpp:481-576)",
+   "files": [
+    "ue4ss",
+    "diag",
+    "aligned"
+   ]
+  },
+  {
+   "pattern": "listener-",
+   "meaning": "Catch-all for any residual listener-prefixed string; the actual l25 family prefix is '[L25][DeleteListener]' (entries below) and its diag tags are 'l25_dl_*'.",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md section 5 (exact family resolved 2026-10-08; this catch-all kept only for stray matches)",
+   "files": [
+    "ue4ss",
+    "diag",
+    "aligned"
+   ]
+  },
+  {
+   "pattern": "phase=",
+   "meaning": "Catch-all for phase-tag key=value strings; agent-P shipped '[l25] '-prefixed log tags and *_entered/*_started diag events instead (entries below) - no 'phase=' strings exist in the l25 candidates.",
+   "phase": "phase-tag",
+   "source": "agent-P-phase-tags.md section 1 (exact tags resolved 2026-10-08; this catch-all kept only for stray matches)",
+   "files": [
+    "ue4ss",
+    "klog",
+    "diag",
+    "aligned"
+   ]
+  },
+  {
+   "pattern": "[l25]",
+   "meaning": "l25 runtime-phase instrumentation family (agent-P): '[l25] event loop started', '[l25] on_program_start entered', '[l25] marshal hook first invocation (carrier fired)', '[l22] ExecuteInGameThread queued depth=' - specific entries with file:line below.",
+   "phase": "runtime-instrumentation",
+   "source": "agent-P-phase-tags.md section 1; typescan-r4/candidate/src/UE4SSProgram.cpp:1458/:1605; typescan-r4/candidate/src/LuaMod.cpp:4869/:5673",
+   "files": [
+    "ue4ss",
+    "klog",
+    "diag",
+    "aligned"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] shutdown-listener registration begin (pre-marker)",
+   "meaning": "Pre-marker directly before the shutdown-listener registration - the exact :528 stall point where every l24 session's log ended. In-source order: this line, then the historical 'Adding shutdown listener', then the AddUObjectDeleteListener call (agent-O section 5 reading ladder: this line present without the callee markers = hang at/below the call).",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md section 5 item 1; typescan-r4/candidate/src/UnrealInitializer.cpp:567",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] shutdown-listener registration returned in",
+   "meaning": "Post-marker + elapsed ms: the shutdown-listener AddUObjectDeleteListener call RETURNED. Presence after the last 'Adding shutdown listener' line = init passed :528 even if '[l22] Lua mod started' is absent (harvest.py init verdict keys on exactly this).",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md section 5 item 10; typescan-r4/candidate/src/UnrealInitializer.cpp:573",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] class-delete-listener registration begin",
+   "meaning": "Pre-marker for the class-cache delete-listener registration (runs BEFORE the shutdown listener; UnrealInitializer.cpp:544-558 block).",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md section 5 item 11; typescan-r4/candidate/src/UnrealInitializer.cpp:548",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] class-delete-listener registration returned in",
+   "meaning": "Post-marker + elapsed ms: the class-cache delete-listener registration returned. Appears BEFORE the last 'Adding shutdown listener' line, so it proves the class call returned but NOT by itself that init passed :528.",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md section 5 item 12; typescan-r4/candidate/src/UnrealInitializer.cpp:553",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] Add enter (GUObjectArray=",
+   "meaning": "Callee entry inside AddUObjectDeleteListener with GUObjectArray + listener pointers (both adds). Ladder: pre-marker without this = hang entering the call frame.",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md section 5 item 3; typescan-r4/candidate/src/UObjectArray.cpp:489",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] header pre: Data=",
+   "meaning": "Engine UObjectDeleteListeners TArray header dump BEFORE registration (Data/Num/Max). Also matches the Remove-path dump ('Remove header pre: Data=', UObjectArray.cpp:598). Ladder: pre without post = hang inside Contains/Append (engine memory walk or GMalloc).",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md section 5 item 4; typescan-r4/candidate/src/UObjectArray.cpp:508",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] header post: Data=",
+   "meaning": "Header dump AFTER registration with growth path: 'path=no-realloc' / 'path=fresh-alloc' / 'path=realloc'. Also matches 'Remove header post: Data=... (was_present=...)' (UObjectArray.cpp:609).",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md section 5 item 8; typescan-r4/candidate/src/UObjectArray.cpp:554",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] REFUSED (",
+   "meaning": "Clean refusal line 'REFUSED (<code>) : <reason>' - registration skipped, init CONTINUES (behavior change vs the old throw). Codes (UObjectArray.cpp:436-442): 1 null GUObjectArray, 2 exception/layout-missing, 3 insane header, 4 duplicate, 5 GMalloc unbound for growth.",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md section 5 item 5; typescan-r4/candidate/src/UObjectArray.cpp:493/:513/:522/:532/:566/:572",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] RISK: capacity full",
+   "meaning": "Realloc path flagged RISK: Append will reallocate the engine-owned listener buffer while the game thread may be iterating it (engine critical section not held). Visible per-session residual race, not a refusal.",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md section 5 item 6; typescan-r4/candidate/src/UObjectArray.cpp:541",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] fresh allocation",
+   "meaning": "First allocation path 'fresh allocation (Num==Max==0); no live old buffer to free' - safest growth case.",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md section 5 item 7; typescan-r4/candidate/src/UObjectArray.cpp:547",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] ANOMALY: Num advanced by",
+   "meaning": "Post-write check failed: listener count advanced by more than the expected 1 - concurrent engine-side writer suspected.",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md section 5 item 9; typescan-r4/candidate/src/UObjectArray.cpp:559",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] engine called FClassDeleteListener::NotifyUObjectDeleted",
+   "meaning": "First (then >=10s-throttled) engine dispatch into the class-cache delete listener on object deletion - DIRECT proof the engine dispatches our listener (slot-4 ABI fix covered).",
+   "phase": "engine-dispatch",
+   "source": "agent-O-listener-instrumentation.md sections 3/5 item 13; typescan-r4/candidate/src/ClassListener.cpp:174 (diag tag l25_dl_first_notify_class, :90)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] engine called FShutdownDeleteListener::NotifyUObjectDeleted",
+   "meaning": "Engine dispatch into the shutdown delete listener's NotifyUObjectDeleted (body was empty pre-l25; marker-only, still no behavioral work).",
+   "phase": "engine-dispatch",
+   "source": "agent-O-listener-instrumentation.md sections 3/5 item 14; typescan-r4/candidate/src/ClassListener.cpp:232 (diag tag l25_dl_first_notify_shutdown, :91)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] engine called FClassDeleteListener::OnUObjectArrayShutdown",
+   "meaning": "Engine called the class-cache listener's shutdown callback (game-thread deregistration path follows).",
+   "phase": "engine-dispatch",
+   "source": "agent-O-listener-instrumentation.md sections 3/5 item 15; typescan-r4/candidate/src/ClassListener.cpp:219 (diag tag l25_dl_shutdown_cb_class, :92)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] engine called FShutdownDeleteListener::OnUObjectArrayShutdown",
+   "meaning": "Engine called the shutdown listener's own OnUObjectArrayShutdown callback.",
+   "phase": "engine-dispatch",
+   "source": "agent-O-listener-instrumentation.md sections 3/5 item 16; typescan-r4/candidate/src/ClassListener.cpp:243 (diag tag l25_dl_shutdown_cb_shutdown, :93)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "delete-listener registration SKIPPED (variant B; unsafe long-term: stale object pointers not cleared)",
+   "meaning": "Variant-B build (MODBRIDGE_L25_SKIP_DELETE_LISTENER defined): BOTH delete-listener registrations skipped - zero delete listeners registered, init otherwise unchanged; stale object pointers left uncleared for the session (accepted diagnostic tradeoff).",
+   "phase": "init-end",
+   "source": "agent-O-listener-instrumentation.md sections 4/5 item 17; typescan-r4/candidate/src/UnrealInitializer.cpp:557/:578",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] Remove enter",
+   "meaning": "Deregistration path entry (engine calls Remove from our OnUObjectArrayShutdown callbacks on the game thread; same hardening as Add).",
+   "phase": "teardown",
+   "source": "agent-O-listener-instrumentation.md section 2 (RemoveUObjectDeleteListener :578-625) + section 5 item 18; typescan-r4/candidate/src/UObjectArray.cpp:585",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[L25][DeleteListener] Remove REFUSED",
+   "meaning": "Deregistration clean refusal (null GUObjectArray / insane header / exception) - teardown-path anomaly, not a launch failure.",
+   "phase": "teardown",
+   "source": "agent-O-listener-instrumentation.md section 5 item 18; typescan-r4/candidate/src/UObjectArray.cpp:588/:602/:615/:621",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "l25_dl_",
+   "meaning": "agent-O diagnostic-event tag family (supplier-diag jsonl / aligned-entry sink): l25_dl_add_begin, l25_dl_pre, l25_dl_post, l25_dl_add_done, l25_dl_refused, l25_dl_risk, l25_dl_remove_begin, l25_dl_remove_done (UObjectArray.cpp:488-623); l25_dl_class_begin, l25_dl_class_done, l25_dl_shutdown_begin, l25_dl_shutdown_done (UnrealInitializer.cpp:549-575); l25_dl_first_notify_class, l25_dl_first_notify_shutdown, l25_dl_shutdown_cb_class, l25_dl_shutdown_cb_shutdown (ClassListener.cpp:90-93). Prospero-guarded.",
+   "phase": "listener-diag",
+   "source": "agent-O-listener-instrumentation.md sections 2/3/5 (diag tags); typescan-r4/candidate/src/UObjectArray.cpp, ClassListener.cpp, UnrealInitializer.cpp (lines above)",
+   "files": [
+    "diag",
+    "aligned"
+   ]
+  },
+  {
+   "pattern": "[Seeds][L25] copyin probe state after admission",
+   "meaning": "One-time post-admission state line: 'kernel-write dispatch STOPPED (sink bank retired at admission completion; oracle-probes=... used-vq=... used-copyin=... elapsed=...ms); initializer owner gate remains armed ... until shutdown'. Proves the resident copyin probe is inert after admission (agent-Q section 1-2; weakens the copyin-probe crash-primary attribution).",
+   "phase": "admission",
+   "source": "agent-Q-copyin-probe.md section 3 item 1; copyin-probe/candidate/src/UnrealInitializer.cpp:1026 (events copyin_probe_liveness_state/:liveness_oracle_calls at :1024-1025)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[Seeds][L25] WARNING: copyin kernel-write probe dispatched AFTER admission retirement",
+   "meaning": "Throttled (first + >=10s) WARNING: a probe dispatch was ATTEMPTED after admission retirement (liveness evidence, not a kernel write - the bridge must refuse at the retired-bank check). Any hit is crash-attribution evidence.",
+   "phase": "admission",
+   "source": "agent-Q-copyin-probe.md section 3 item 1; copyin-probe/candidate/src/UnrealInitializer.cpp:1047 (events copyin_probe_fire_post_admission/_addr_lo/_addr_hi/_len at :1043-1046)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "copyin_probe_",
+   "meaning": "agent-Q copyin-probe liveness diag tags: UE4SS side copyin_probe_liveness_state=3, copyin_probe_liveness_oracle_calls, copyin_probe_fire_post_admission/_addr_lo/_addr_hi/_len; bridge side copyin_probe_state (bits: gate_armed/bank_retired/parent-fd-open/sink-open), copyin_probe_gate_armed, copyin_probe_bank_retired, copyin_probe_parent_fd_open, copyin_probe_sinks_open, copyin_probe_nonce_used, copyin_probe_attempts_total, copyin_probe_gate_released, copyin_probe_attempts_late_total. Also substring-matches the init-phase pool_copyin_probe_* telemetry. CAVEAT: agent-Q delivered overlay+patch, not yet adopted by the build - absence proves nothing until WIRING.md steps are done.",
+   "phase": "admission",
+   "source": "agent-Q-copyin-probe.md section 3; copyin-probe/candidate/src/UnrealInitializer.cpp:1024-1046; copyin-probe/candidate/lifecycle/runtime_start_bridge.cpp:1112-1118/:1131-1132",
+   "files": [
+    "diag",
+    "aligned",
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[l25] event loop started",
+   "meaning": "First line the m_event_loop jthread executes (update() head): proves init() completed past the UnrealInitializer stall window AND the loop thread is actually scheduled, not merely constructed. Diag event event_loop_started=1.",
+   "phase": "post-init",
+   "source": "agent-P-phase-tags.md section 1 (UE4SSProgram.cpp table); typescan-r4/candidate/src/UE4SSProgram.cpp:1605 (diag event :1606)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[l25] on_program_start entered",
+   "meaning": "Top of UE4SSProgram::on_program_start: bounds the install_lua_mods / LuaMod::on_program_start / start_lua_mods chain on both sides. Diag event on_program_start_entered=1.",
+   "phase": "mod-start",
+   "source": "agent-P-phase-tags.md section 1 (UE4SSProgram.cpp table); typescan-r4/candidate/src/UE4SSProgram.cpp:1458 (diag event :1459)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[l25] marshal hook first invocation (carrier fired)",
+   "meaning": "Once-per-process proof that funcptr_marshal_hook actually fired - the ScriptHookThunks SetFuncPtr swap delivered an engine call (armed-but-never-fires is thereby excluded). Diag event r3_marshal_first_invoke=1 (complements the r3_marshal_pumped heartbeat).",
+   "phase": "runtime-pump",
+   "source": "agent-P-phase-tags.md section 1 (LuaMod.cpp table); typescan-r4/candidate/src/LuaMod.cpp:4869 (diag event :4871)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[l22] ExecuteInGameThread queued depth=",
+   "meaning": "Throttled (>=1s) total game-thread action queue depth (six queues summed under m_thread_actions_mutex) - distinguishes enqueue progress from drain progress. Diag event eigt_queue_depth=N.",
+   "phase": "runtime-pump",
+   "source": "agent-P-phase-tags.md section 1 (LuaMod.cpp table); typescan-r4/candidate/src/LuaMod.cpp:5673 (diag event :5675)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[TownfallItemSpawner] Loaded v1.0",
+   "meaning": "Mod script EXECUTED at load (full line 'Loaded v1.0. Clean pickup-only release. F7 opens the menu.'; log() prefixes the MOD_TAG, main.lua:5-6). Renders as '[Lua] [TownfallItemSpawner] ...' (fixture-corroborated, worker-runbook-v2 fx04). Fires in the MAIN MENU before any save: proves mod admission + Lua start only, NOT menu open.",
+   "phase": "mod-start",
+   "source": "LAUNCH-PLAN.md v3.3 (main.lua:746); agent-AI-spawn-procedure.md section 3; re-verified against provenance main.lua 2026-10-08 (log call :746)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "spawnable pickups found",
+   "meaning": "First-open item-scan SUCCESS: '<N> spawnable pickups found. Pages=<P>' (fixture: 12 pickups, Pages=2). NOTE: the pattern is NOT tag-prefixed because the rendered line inserts the count between tag and phrase ('[Lua] [TownfallItemSpawner] 12 spawnable pickups found. Pages=2', fx04 fixture) - a '[TownfallItemSpawner] spawnable pickups found' substring would never match. Logged on the FIRST menu open (and on Refresh-row rescans) once the item database is reachable; pairs with 'Menu created.' as the only in-log menu-open evidence (the F7 toggle itself and selection moves log NOTHING).",
+   "phase": "menu-open",
+   "source": "LAUNCH-PLAN.md v3.3 (main.lua:189; task brief listed the tag-prefixed form - corrected to the fixture-verified rendering); agent-AI-spawn-procedure.md section 3; re-verified: status built :188, log call :189",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "Scan failed:",
+   "meaning": "Mod-context first-open item-scan FAILURE: '[TownfallItemSpawner] Scan failed: <err>' (e.g. 'Item database not ready. Load a save first.' if the menu opened before the save settled). Menu-failure mode 'scan-failed'; recovery = wait, then Refresh pickup list (menu row 3).",
+   "phase": "menu-open",
+   "source": "LAUNCH-PLAN.md v3.3 (main.lua:194); agent-AI-spawn-procedure.md sections 3/5 triage",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[TownfallItemSpawner] Menu created.",
+   "meaning": "UI BUILT: the UMG widget tree (UserWidget->CanvasPanel->Borders->VerticalBox->TextBlocks) constructed and AddToViewport(9999) succeeded. With 'spawnable pickups found' = the menu-open pair; alone still proves the open handler's ExecuteInGameThread closure drained and the UI exists.",
+   "phase": "menu-open",
+   "source": "LAUNCH-PLAN.md v3.3 (main.lua:643); agent-AI-spawn-procedure.md section 3; re-verified against provenance main.lua 2026-10-08",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "UI creation failed:",
+   "meaning": "Widget creation FAILURE: '[TownfallItemSpawner] UI creation failed: <err>'. GATE-1 FName-pool SUSPECT - buildUI's construct() calls FName(name) for every widget (FNAME_Add -> FName pool writes = the blocked copyin-oracle path, agent-AI section 4.2); on this failure widget refs are nilled and no menu appears. Menu-failure mode 'ui-creation-failed'.",
+   "phase": "menu-open",
+   "source": "LAUNCH-PLAN.md v3.3 (main.lua:636); agent-AI-spawn-procedure.md sections 3/4.2",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "WidgetBlueprintLibrary not found.",
+   "meaning": "Dependency MISSING: StaticFindObject('/Script/UMG.Default__WidgetBlueprintLibrary') invalid - UI dependency resolution failed BEFORE any widget construction. Menu-failure mode 'widgetbp-missing' (distinct from the GATE-1 FName suspect).",
+   "phase": "menu-open",
+   "source": "LAUNCH-PLAN.md v3.3 (cites main.lua:502); agent-AI-spawn-procedure.md section 3 (cites :501); re-verified line is :501 in the provenance copy - LAUNCH-PLAN's :502 is a one-line citation drift, string identical",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[TownfallItemSpawner] Spawned ",
+   "meaning": "SPAWN PROOF (trailing space significant - excludes 'Spawned'-prefixed other strings): '[TownfallItemSpawner] Spawned <name> x<qty> ID=<id>' (fixture sample: 'Spawned Antibiotics x1 ID=DeprecatedItem'). Ground trace 150 cm ahead + BeginDeferredActorSpawnFromClass + FinishSpawningActor + pickup config all succeeded - the definitive Item-Spawner mission marker. harvest.py parses name/qty/ID for the item-spawned verdict.",
+   "phase": "spawn",
+   "source": "LAUNCH-PLAN.md v3.3 (main.lua:335); agent-AI-spawn-procedure.md section 3; re-verified: status built :334 ('Spawned ' .. entry.name .. ' x' .. qty), log call :335 appends ' ID=<id>'",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[TownfallItemSpawner] Failed at ",
+   "meaning": "Spawn pipeline FAILURE (trailing space significant): '[TownfallItemSpawner] Failed at <stage>. See UE4SS.log. <err>' with stage in {player, ground trace, load pickup class, spawn actor, configure pickup}. Still a VALID variant-B result (init + mod start + pump + pad all proven); harvest.py captures the stage for the verdict. Do not retry-spam (busy guard; one spawn per session per the directive).",
+   "phase": "spawn",
+   "source": "LAUNCH-PLAN.md v3.3 (main.lua:342); agent-AI-spawn-procedure.md sections 3/5 triage; re-verified: stage var :341, log call :342",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[l22] keybind callback entry key=118",
+   "meaning": "F7 dispatch corroboration: the L3+R3 chord's F7 keybind callback ENTERED (rendered '[l22] keybind callback entry key=118 ref=<n>'; 0x76). Proves the pad chord -> keybind dispatch path fired for the menu toggle; expect a following '[l22] ExecuteInGameThread queued'/'drained ... (callback entry)' pair proving the pump drained it.",
+   "phase": "menu-path",
+   "source": "LAUNCH-PLAN.md v3.3 (dispatch-corroboration pair; LuaMod.cpp:2040 '[l22] keybind callback entry key={} ref={}'); l24 HARVEST-PLAN.md ladder step 9",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[l22] keybind callback entry key=13",
+   "meaning": "RETURN dispatch corroboration: CROSS on a PICKUPS row reached the activate/spawn keybind callback (rendered '[l22] keybind callback entry key=13 ref=<n>'; 0x0D). With the '[TownfallItemSpawner] Spawned ' marker = the full input->spawn chain; expect a following ExecuteInGameThread queued/drained pair.",
+   "phase": "menu-path",
+   "source": "LAUNCH-PLAN.md v3.3 (key=13 RETURN edge); LuaMod.cpp:2040; PS5Pad.ini CROSS->RETURN mapping (agent-AI-spawn-procedure.md section 1.3)",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "RegisterKeyBind",
+   "meaning": "mod registered a keybind (expect 6 in main.lua per Claude review-3 harvest list)",
+   "phase": "mod-start",
+   "source": "cited: Claude review-3 harvest checklist; LuaMod RegisterKeyBind path",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "profile_digest",
+   "meaning": "build profile digest line (must read d648e85e for l25)",
+   "phase": "startup",
+   "source": "cited: Claude review-3 harvest checklist; profile admission log",
+   "files": [
+    "ue4ss",
+    "diag"
+   ]
+  },
+  {
+   "pattern": "[l23] self-test",
+   "meaning": "buffered-Lua self-test lifecycle (queued/ran)",
+   "phase": "init",
+   "source": "cited: Claude review-3 harvest checklist; l23-era self-test markers",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "AddToViewport",
+   "meaning": "mod widget added to viewport (menu visible path)",
+   "phase": "mod-run",
+   "source": "cited: Claude review-3 harvest checklist; mod UMG menu path",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[FFO] query-fallback",
+   "meaning": "DA layer-2 verified-query fix ENGAGEMENT: the FindXOf Verified wrapper found the constructed ComparisonIndex failed the ToString/iequal verification (the N1 adapter-root symptom) and served the lookup via the string walk instead of the fast FName path. Full line '[FFO] query-fallback [n:X]' (X = constructed ComparisonIndex, uppercase hex; deduped per index, 128-site cap). READ IT AS HEALTH SIGNAL, NOT AN ERROR: PRESENCE on the next run is expected-and-healthy while the adapter root bug persists - it is the fix WORKING (lookups still succeed via the verified fallback). ABSENCE + successful lookups = root-fixed (the query index round-trips through the bound ctor). ABSENCE + still-nil lookups with no add-fallback either = N1 falsified in that pool state, re-read CR section 4 (A2 wrapper layer next). Not in any shipped binary as of the 21:18 l26 build (agent-DA landed 22:39).",
+   "phase": "findxof-fix",
+   "source": "agent-DA-verified-query-fix.md ('Marker string (exact)' + 'Console acceptance signal'); outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UObjectGlobals.cpp (helper block :528-681, marker in FindXOfQueryMismatch path); added by agent-EH 2026-10-08",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[FFO] add-fallback",
+   "meaning": "CP layer-1 Find-first fix FALLBACK: the FindXOf name construction missed via FNAME_Find and fell back to FNAME_Add ('[FFO] add-fallback [n:X]', X = the Add-result index; deduped per index, 128-site cap). Interpretation pairs with query-fallback: ZERO lines for real class names = every lookup resolved via Find (CP bug #1 fixed - the observed l26-v2/v6 state); a fallback line for a KNOWN-existing class = the name genuinely absent from the pool, i.e. the GATE-1/pool-admission family, NOT the N1 mismatch (agent-DA discrimination note). LIVE in the 21:18 l26 build (PRX e13b1d0b).",
+   "phase": "findxof-fix",
+   "source": "agent-CP-findfirstof-fix.md section 4 (diagnostic marker) + section 6 item 1 (console readout); agent-DA-verified-query-fix.md (add-fallback vs query-fallback discrimination); added by agent-EH 2026-10-08",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[UF] nofn",
+   "meaning": "CN hardening item 3 - OBSERVABLE MISS at the Lua call site: member/function lookup returned the upstream compat wrapper after a miss; full line '[UF] nofn [n:X] cls=[n:Y]' (deduped per (class,name), 128-site cap, no ToString/no engine calls). '[n:0]' discriminates the NAME_None conversion failure from a real walk miss. Absence (as in l26-v2/v6) = no member-miss on the probed paths, NOT proof the root cause is fixed.",
+   "phase": "ufunc-hardening",
+   "source": "agent-CN-resolver-impl.md section 1 item 3 + section 3 (marker strings); candidate/src/LuaUObject.cpp handle_unreal_property_value miss branch; added by agent-EH 2026-10-08",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[UF] miss",
+   "meaning": "CN hardening item 4 - UFunction WALK MISS telemetry from GetFunctionByNameInChain (l22 record_function_lookup hook extended to the miss branch): full line '[UF] miss w=[n:X] c=[n:Y] v=N 1=[a,b,c]' (wanted name, class, UFunctions visited, first-3 child FName comparison indices; deduped per (struct,name), 128-site cap). v=0 => chain/offset/cast problem; many-visited-no-match => comparison problem.",
+   "phase": "ufunc-hardening",
+   "source": "agent-CN-resolver-impl.md section 1 item 4 + section 3; candidate/src/UObject.cpp GetFunctionByNameInChain Prospero body; added by agent-EH 2026-10-08",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[FN] ctor unready",
+   "meaning": "CN hardening item 2 - ONCE-PER-PROCESS ctor-unready degradation notice: the FName construct_with_string early return fired before the ctor was bound ('[FN] ctor unready: NAME_None produced'); construction semantics unchanged (still NAME_None) but the degradation can no longer be silent - a future Seeds/G1 refusal cannot silently degrade to NAME_None unnoticed. Any hit means name construction ran before ctor binding on that path.",
+   "phase": "ufunc-hardening",
+   "source": "agent-CN-resolver-impl.md section 1 item 2 + section 3; candidate/include/Unreal/NameTypes.hpp construct_with_string + candidate/src/NameTypes.cpp NotifyFNameCtorUnreadyOnce; added by agent-EH 2026-10-08",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[FN] tostring-bind disabled",
+   "meaning": "Claude dual-check guard tripped: engine ToStringInternal bind mismatched/empty at startup; runtime fell back to legacy path",
+   "phase": "startup",
+   "source": "cited: Claude directive 2026-10-09 item 1 + agent-EI report",
+   "files": [
+    "ue4ss"
+   ]
+  },
+  {
+   "pattern": "[FN] tostring-bind",
+   "meaning": "ToStringInternal bind admission/state markers",
+   "phase": "startup",
+   "source": "cited: agent-EI report",
+   "files": [
+    "ue4ss"
+   ]
+  }
+ ]
+}

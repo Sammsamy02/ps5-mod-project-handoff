@@ -1,0 +1,95 @@
+{
+ "worker": "worker-lease-coverage-fix",
+ "date": "2026-10-05",
+ "suite": "fixtures/run_tests.sh",
+ "method": "compiles the PRODUCTION bridge TU (r13=OLD, r14=NEW) into the test binary; PLH OwnedMemory service compiled from its REAL source (ue4ss-native-read-lease-1/src/OwnedMemory.cpp, -DPLH_OWNED_MEMORY_HOST_TEST); sysctl link-mock with per-call mutation, diagnostic-event capture, SIGSEGV shadow layer, recording start-chain mocks; one process per scenario (process-lifetime PLH registry)",
+ "old_production_source": "outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_start_bridge_r13.cpp",
+ "new_production_source": "outputs/2026-10-04-zcode-team/worker-lease-coverage-fix/runtime_start_bridge_r14.cpp",
+ "old_sha256": "10385e2265af0a12236bc7f713ed343a7f13796644aac0de511f6663f579209a",
+ "new_sha256": "03a9acb1d1b4df67881652a20a7c48a533f88591f07e3f987f2601800f91dd1a",
+ "runner_exit_code": 0,
+ "key_evidence": {
+  "launch8_throw_reproduced_in_old": "drift OLD + capgate OLD: production ReadLease throws exactly 'Owned read range includes unregistered bytes'",
+  "throw_defused_in_new": "drift NEW: same drifted kernel state, lease passes via frozen-snapshot registration",
+  "gate_refusal": "capgate NEW: MRS_ERR_CONVERSION + detail 'lease coverage gap: requested [0x400000 +0x787c000) outside registered readable spans'",
+  "exec_pages_never_registered": "exectext/happy: exec-only and no-protection records excluded from the registry",
+  "seed_gate": "seedgate: armed seed 0x63d590 (exec-only LOAD0) refused with bounded nearest-span report",
+  "r11_regression_kept": "happy: lease over LOAD1 incl. final partial page passes",
+  "consumer_fail_closed": "gap: whole-extent read attempt refused naming the gap; registry unchanged"
+ },
+ "scenarios": [
+  {
+   "build": "new",
+   "scenario": "happy",
+   "result": "ALL PASS"
+  },
+  {
+   "build": "new",
+   "scenario": "drift",
+   "result": "ALL PASS"
+  },
+  {
+   "build": "new",
+   "scenario": "exectext",
+   "result": "ALL PASS"
+  },
+  {
+   "build": "new",
+   "scenario": "cap",
+   "result": "ALL PASS"
+  },
+  {
+   "build": "new",
+   "scenario": "capgate",
+   "result": "ALL PASS"
+  },
+  {
+   "build": "new",
+   "scenario": "gap",
+   "result": "ALL PASS"
+  },
+  {
+   "build": "new",
+   "scenario": "happy",
+   "result": "ALL PASS"
+  },
+  {
+   "build": "new",
+   "scenario": "drift",
+   "result": "ALL PASS"
+  },
+  {
+   "build": "new",
+   "scenario": "exectext",
+   "result": "ALL PASS"
+  },
+  {
+   "build": "new",
+   "scenario": "cap",
+   "result": "ALL PASS"
+  },
+  {
+   "build": "new",
+   "scenario": "capgate",
+   "result": "ALL PASS"
+  },
+  {
+   "build": "new",
+   "scenario": "gap",
+   "result": "ALL PASS"
+  },
+  {
+   "build": "new",
+   "scenario": "seedgate",
+   "result": "ALL PASS"
+  },
+  {
+   "build": "new",
+   "scenario": "idempotent",
+   "result": "ALL PASS"
+  }
+ ],
+ "total_checks": 70,
+ "failed_checks": 0,
+ "note": "final r14 (dead statics removed); all scenarios re-run green"
+}

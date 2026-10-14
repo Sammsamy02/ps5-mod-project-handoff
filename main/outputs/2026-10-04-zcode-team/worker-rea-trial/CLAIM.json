@@ -1,0 +1,56 @@
+{
+  "worker": "worker-rea-trial",
+  "date": "2026-10-05",
+  "restart": "prior attempt lost; this run completed setup + investigation",
+  "mission": "Complete REA (github.com/morluto/rea v3.2.1) Ghidra provider setup on darwin/arm64 and run one concrete agent-driven investigation through REA's CLI on the retained PS5 eboot; report findings + workflow verdict.",
+  "target": {
+    "path": ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+    "bytes": 194241424,
+    "sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+    "format": "ELF64 x86-64 (FreeBSD OSABI), PS5 UE 5.6.1",
+    "address_space": "ELF vaddr (Ghidra/REA native); file = vaddr + 0x4000 (LOAD0); runtime = vaddr + 0x400000"
+  },
+  "setup_completed": {
+    "native_decompiler_built": {
+      "route": "make -j8 ghidra_opt CXX='clang++ -std=c++11' ARCH_TYPE= ADDITIONAL_FLAGS= (arm64 overrides; documented decomp_opt route fails on missing bfd.h)",
+      "installed": "Ghidra/Features/Decompiler/os/mac_arm_64/decompile (REA expects mac_arm_64 on darwin/arm64, not mac_arm)",
+      "result": "3.2MB Mach-O arm64, ghidra-native_decompiler doctor check healthy"
+    },
+    "patches_to_installed_rea_dist": [
+      "GhidraInstallation.js: platform check admits darwin; architecture check admits darwin/arm64 (backup *.orig-rea-trial-backup). Without this, REA 3.2.1 hard-refuses the Ghidra provider on macOS despite implementing a darwin unix-socket path.",
+      "GhidraDefaults.js: GHIDRA_STARTUP_TIMEOUT_MS 330_000 -> 5_400_000 (90 min; later sessions also fine at 90 min under process mode).",
+      "GhidraLauncher.js (restart): opt-in persistent-project -process mode via env REA_GHIDRA_PROCESS_PROJECT_DIR / REA_GHIDRA_PROCESS_PROGRAM (+ _PROJECT_NAME); emits '<dir> <name> -process <program> -noanalysis -readOnly' and omits -deleteProject; unset env = stock behavior. Bridge sha256 verification still binds the session to the exact target bytes."
+    ],
+    "heap_fix_zero_patch": "Ghidra analyzeHeadless defaults MAXMEM 2G; the prior 53-min execution_failure was java.lang.OutOfMemoryError inside X86Analyzer/SymbolicPropogator. Fix: export GHIDRA_HEADLESS_MAXMEM=8G before rea commands (passes through REA's launch env; verified -Xmx8G in child JVM argv).",
+    "doctor_final": "all ghidra checks healthy; hopper missing (acceptable: Ghidra provider read-only sufficient); skill/registration integrations unconfigured (optional)"
+  },
+  "investigation_queries": [
+    {"q": "Q1 decompile function at 0x23d590 (FName ctor)", "status": "DELIVERED via rea function (analyze_function): full dossier + pseudocode matching capstone ground truth line-by-line; corrected bextr annotation (0x2001 = start 1 len 32, not '13 bits'); callees = 0x23d600 intern; analyzed-code caller FUN_0022d770; latency 7.44s (10.04s after enrichment)", "artifact": "function-23d590.json"},
+    {"q": "Q2 callers of 0x23d590", "status": "PARTIAL via REA: rea xrefs 0x23d590 = 2 instruction-verified call sites in analyzed code (0x22d96a, 0x22dd99); image-wide verification of the 14,401 byte-level upper bound requires full auto-analysis, which was externally killed at ~113 min and not replayed", "artifact": "xrefs-ctor.json"},
+    {"q": "Q3 code referencing pool label 0x9365ec0", "status": "DELIVERED via rea xrefs: 49 references, site list IDENTICAL to independent capstone lea byte scan (49/49 intersection, zero differences either direction); control candidates 0 refs; latency 13.72s (6.91s before enrichment)", "artifact": "xrefs-pool.json"},
+    {"q": "Q4 pool-init/allocation function 0x23a5d0", "status": "DELIVERED via rea decompile (procedure_pseudo_code): every ground-truth instruction confirmed (lock 0x74728e0, memset(pool+8,0x10008), Malloc(0x20000,2)=0xb7a20 path, Blocks[0] store at pool+0x10, 256 x 0x40 descriptors, bucket loop malloc(0x400,4)/mask 0xff, default names from pool+0x14040 'None' first); 236 default-name registrations (corrects local '~20' scan-window estimate); init self-check + stack-cookie tail; latency 7.09s", "artifact": "decompile-pool-init.json"}
+  ],
+  "evidence_quality": {
+    "tier": "dual-channel static: (L) byte-exact capstone disassembly + full-file scans; (R) REA 3.2.1 Evidence JSON delivered by Ghidra 12.1.4 over a sha256-verified analysis DB; channels agree on every overlapping claim",
+    "independent_cross_check": "worker-re-fname-pool findings fully agree (pool address, init sequence, allocator chain, layout offsets); REA channel adds decompiled C + instruction-verified reference set",
+    "limits": [
+      "image-wide instruction-verified caller count NOT secured: full auto-analysis (tuned options, 8G heap) ran ~113 min and was externally killed; not replayed per no-blind-replay; 14,401 remains a byte-level upper bound",
+      "pool-xref references computed by bounded cluster enrichment (0x230000-0x249fff disassembly + operand refs via Ghidra getOpObjects/rip-relative semantics) on the trial-owned project copy; documented in FINDINGS 5.2 provenance",
+      "exact Binned2-vs-Binned3 allocator leaf label unproven (no symbols)",
+      "no runtime/dynamic verification (static only); launch-9 BSS-vs-heap runtime contradiction inherited unresolved"
+    ]
+  },
+  "no_claims": [
+    "not claiming REA is production-ready unpatched on macOS: three dist patches + built natives + GHIDRA_HEADLESS_MAXMEM are still required",
+    "not claiming full-image Ghidra analysis of the 194MB binary is complete (it was killed externally; xref completeness is bounded to the enriched cluster + 2 ctor sites)",
+    "not claiming >8/10 quality or runtime verification"
+  ],
+  "workflow_verdict": "REA + Ghidra with persistent-project -process mode (demonstrated here) is the preferred route for repeat agent-driven RE queries on this binary: 7 queries at 6.0-13.7s each vs 45+ min per import-mode command (~300x); Evidence JSON provenance is strong; remaining gaps are one-time full-image analysis cost, three setup patches, and no orphan-JVM cleanup on abort.",
+  "artifacts": [
+    "REA-TRIAL.md", "FINDINGS.md", "REPORT.md", "CLAIM.json",
+    "function-23d590.json", "xrefs-pool.json", "xrefs-ctor.json", "decompile-pool-init.json",
+    "function-23d590.timeout-45min.json", "xrefs-pool.OOM-execution-failure.json",
+    "analyze-eboot.json", "pool-lea-refs-scan.json", "ctor-callers-14401.txt",
+    "run-final-queries.sh", "run-sessions.sh", "tools/", "analysis-pass2.log"
+  ]
+}

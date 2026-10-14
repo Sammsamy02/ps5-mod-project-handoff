@@ -1,0 +1,38 @@
+--- original/check_odr_emitters_l19.py
++++ new/check_odr_emitters_r4_vintage_v2.py
+@@ -75,6 +75,10 @@
+ import struct
+ import sys
+ from pathlib import Path
++
++# Explicit R4 generation admission; all original symbol/body predicates below remain unchanged.
++sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'execution'))
++from full_pipeline import load_odr_generation
+ 
+ VAL = "_ZN2RC8Platform28ValidateNativeProgramContextERKNS0_20NativeProgramContextE"
+ NMS = "_ZNK2RC12UE4SSProgram17native_mod_sourceEv"
+@@ -252,6 +256,8 @@
+                     help="HARD-require fresh offset-sensitive inline bodies to byte-match retained "
+                          "hashes (default: advisory, since same-vintage TU-flag call-mode codegen "
+                          "differences are not layout shifts)")
++    ap.add_argument("--generation-receipt", required=True)
++    ap.add_argument("--generation-receipt-sha256", required=True)
+     args = ap.parse_args()
+ 
+     rundir = Path(args.rundir).resolve()
+@@ -308,6 +314,15 @@
+         "non_unit_inputs": other_inputs,
+     }
+     fresh = {p for p in units if not is_archive(p) and p.startswith(str(rundir) + "/")}
++    actual_fresh = set(fresh)
++    generation = load_odr_generation(args.generation_receipt, args.generation_receipt_sha256, rundir)
++    if not generation <= set(units):
++        raise ValueError("generation provider absent from actual map")
++    fresh |= generation
++    receipt["R4_generation_classification"] = {"actual_this_pass_object_paths": sorted(actual_fresh),
++        "additional_admitted_generation_object_paths": sorted(generation - actual_fresh),
++        "generation_receipt": args.generation_receipt, "generation_receipt_sha256": args.generation_receipt_sha256,
++        "scope": "explicit pinned generation; actual compiler/reuse counts are unchanged in composition receipt"}
+     retained_set = {p for p in units if not is_archive(p) and p not in fresh}
+     receipt["units"].update({"composition_units": len(units), "fresh": len(fresh),
+                              "retained": len(retained_set)})

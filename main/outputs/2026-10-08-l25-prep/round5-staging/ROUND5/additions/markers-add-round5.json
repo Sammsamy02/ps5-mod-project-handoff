@@ -1,0 +1,165 @@
+{
+ "schema": "markers-add-round5/1",
+ "by": "agent II (round-5 build staging), 2026-10-11",
+ "purpose": "Round-5 ADDITION marker entries beyond the 3 restored [SHIM] entries (restore-round5.sh S4 takes the manifest 15 -> 18). This file carries: the [FL] first-launch family (GT TU, literals verified against round4-setaside/FirstLaunchProfile.cpp), agent IB's writable-area [SHIM] marker (landed in the stash 2026-10-11 09:14, LuaPathShim.cpp:1547), and the [FL-MAP] world-fix logger family (resolved 2026-10-11 from IA's landed 03-map-logger.patch; apply order 02 -> 02b -> 03 per world-fix/APPLY-ORDER-AND-PROBE-EXPECTATIONS.md). Every entry's required text is independently grepped in the tree sources by apply-additions-round5.sh BEFORE markers-declared.json is touched.",
+ "expected_final_count": "18 (after restore) + 1 (IB write-area) + 8 ([FL]) + 3 ([FL-MAP]) = 30. Resolved 2026-10-11 after IA/IK's patches landed in round5-staging/world-fix/ (02-core-fix, 02b-getworld-fallback, 03-map-logger + APPLY-ORDER-AND-PROBE-EXPECTATIONS.md); literals below were read from the landed 03-map-logger.patch diff text.",
+ "entries": [
+  {
+   "id": "shim-write-area",
+   "fix": "writable-area upgrade of the io/path shim (agent IB, 2026-10-11: per-mod writable root derived from the modbridge root; write confinement target surface)",
+   "canonical_marker": "[SHIM]",
+   "required": [
+    {
+     "text": "[SHIM] write-area ",
+     "encodings": ["utf-16le"],
+     "source": "typescan-r4/candidate/src/LuaPathShim.cpp:1547 (Output::send(STR(\"[SHIM] write-area {} -> {}/{}\\n\")) wide literal — Prospero char16_t lands UTF-16LE; budgeted first N per install, kMaxMarkers)"
+    }
+   ],
+   "note": "Pinned from agent IB's landed stash edit (round4-setaside/LuaPathShim.cpp post-upgrade, sha 2f6d2e6d...). Fires once per mod install when a writable root is derived. NOTE the trailing space in the required text disambiguates from [SHIM] write-rejected."
+  },
+  {
+   "id": "fl-profile-slot",
+   "fix": "first-launch profile generator TU (agent GT, Claude round-5 addenda A1/A5); NEW_UNITS 'firstlaunch'",
+   "canonical_marker": "[FL]",
+   "required": [
+    {
+     "text": "[FL] profile slot=",
+     "encodings": ["utf-8"],
+     "source": "typescan-r4/candidate/src/FirstLaunchProfile.cpp:1123/1127 (fl_send(fmt::format(...)) NARROW literals — st_send doctrine: widened ONCE at runtime via Unicode::DecodeUtf8, so the composable bytes in .rodata are UTF-8)"
+    }
+   ],
+   "note": "Composition proof for the restored+registered FL TU (fires slot=absent on first launch, slot=regenerate on re-verify failure)."
+  },
+  {
+   "id": "fl-profile-loaded",
+   "fix": "first-launch profile generator TU (agent GT); persisted-slot load/re-verify outcome line",
+   "canonical_marker": "[FL]",
+   "required": [
+    {
+     "text": "[FL] profile loaded=",
+     "encodings": ["utf-8"],
+     "source": "typescan-r4/candidate/src/FirstLaunchProfile.cpp:1017-1078 (narrow fmt literals)"
+    }
+   ],
+   "note": "Fires on every persisted-slot load attempt (verified=1) and every re-verify failure mode (verified=0 + reason)."
+  },
+  {
+   "id": "fl-detect-verdict",
+   "fix": "first-launch profile generator TU (agent GT); engine-detect tier ladder verdict",
+   "canonical_marker": "[FL]",
+   "required": [
+    {
+     "text": "[FL] detect verdict=",
+     "encodings": ["utf-8"],
+     "source": "typescan-r4/candidate/src/FirstLaunchProfile.cpp:1187 (narrow fmt literal; tier ladder REFUSED/FAMILY-ONLY/TENTATIVE/CONFIDENT)"
+    }
+   ],
+   "note": "The detect rung's one-line verdict; NOT-YET stubs fail-closed with detect-no-markers per GT section 7."
+  },
+  {
+   "id": "fl-table-row",
+   "fix": "first-launch profile generator TU (agent GT); winning measured table row",
+   "canonical_marker": "[FL]",
+   "required": [
+    {
+     "text": "[FL] table row=",
+     "encodings": ["utf-8"],
+     "source": "typescan-r4/candidate/src/FirstLaunchProfile.cpp:1204 (narrow fmt literal)"
+    }
+   ],
+   "note": "Fires when a MEASURED per-version row wins selection (GJ authoring form; packed-cell anchors fail-closed until the packer fills labels)."
+  },
+  {
+   "id": "fl-verify-request",
+   "fix": "first-launch profile generator TU (agent GT); behavioral verify request emission",
+   "canonical_marker": "[FL]",
+   "required": [
+    {
+     "text": "[FL] verify request ",
+     "encodings": ["utf-8"],
+     "source": "typescan-r4/candidate/src/FirstLaunchProfile.cpp:733 (narrow fmt literal; trailing space in text; per emitted request — anchor, probe kind, addr)"
+    }
+   ],
+   "note": "apply-additions-round5.sh independently greps every entry's required text against the restored TU source before touching markers-declared.json; any literal not found in the tree refuses the step."
+  },
+  {
+   "id": "fl-pin",
+   "fix": "first-launch profile generator TU (agent GT); generated pin exposure",
+   "canonical_marker": "[FL]",
+   "required": [
+    {
+     "text": "[FL] pin ",
+     "encodings": ["utf-8"],
+     "source": "typescan-r4/candidate/src/FirstLaunchProfile.cpp:842/882 (narrow fmt literal; trailing space in text)"
+    }
+   ],
+   "note": "Per generated pin (anchor, image-relative addr, arms, census class)."
+  },
+  {
+   "id": "fl-commit",
+   "fix": "first-launch profile generator TU (agent GT); commit outcome",
+   "canonical_marker": "[FL]",
+   "required": [
+    {
+     "text": "[FL] commit outcome=",
+     "encodings": ["utf-8"],
+     "source": "typescan-r4/candidate/src/FirstLaunchProfile.cpp:1310 (narrow literal COMMITTED)"
+    }
+   ],
+   "note": "Fires only on a fully verified commit; persist failure is session-armed + WARN instead (GI 5b rung 5)."
+  },
+  {
+   "id": "fl-fail-closed",
+   "fix": "first-launch profile generator TU (agent GT); the fail-closed family head",
+   "canonical_marker": "[FL]",
+   "required": [
+    {
+     "text": "[FL] FAIL-CLOSED reason=",
+     "encodings": ["utf-8"],
+     "source": "typescan-r4/candidate/src/FirstLaunchProfile.cpp:205/818/828/836 (narrow fmt literal; every refusal rung)"
+    }
+   ],
+   "note": "THE safety marker: the generator never guesses a pin; every refusal names its reason."
+  },
+  {
+   "id": "fl-map-detour-pre",
+   "fix": "world-fix map logger (agent IA 03-map-logger.patch; Claude round-8 item 4): [FL-MAP] lines inside the framework's own LoadMap pre-callback delivery body",
+   "canonical_marker": "[FL-MAP]",
+   "required": [
+    {
+     "text": "[FL-MAP] order={} map='{}' phase=pre src=detour",
+     "encodings": ["utf-16le"],
+     "source": "round5-staging/world-fix/03-map-logger.patch +line 99 shape: Output::send(STR(\"[FL-MAP] order={} map='{}' phase=pre src=detour\\n\")) — ONE contiguous wide literal (Prospero char16_t lands UTF-16LE); after apply, typescan-r4/candidate/src/LuaMod.cpp"
+    }
+   ],
+   "note": "Fires wherever the LoadMap detour arms (incl. a future successful deferred arm). The fmt braces are part of the contiguous literal text, so this substring is composable proof."
+  },
+  {
+   "id": "fl-map-detour-loaded",
+   "fix": "world-fix map logger (agent IA 03-map-logger.patch): LoadMap post-callback delivery body",
+   "canonical_marker": "[FL-MAP]",
+   "required": [
+    {
+     "text": "[FL-MAP] order={} map='{}' phase=loaded src=detour url='{}'",
+     "encodings": ["utf-16le"],
+     "source": "round5-staging/world-fix/03-map-logger.patch +line 114 shape (contiguous wide literal; lands in LuaMod.cpp after apply)"
+    }
+   ],
+   "note": "phase=loaded via the detour; url= carries the FURL map name."
+  },
+  {
+   "id": "fl-map-marshal-watch",
+   "fix": "world-fix map logger (agent IA 03-map-logger.patch): the bounded 1 Hz World-identity watch on the game-thread marshal pump — the only map-load source that delivers in the current console world (R3)",
+   "canonical_marker": "[FL-MAP]",
+   "required": [
+    {
+     "text": "[FL-MAP] order={} map='{}' phase=loaded src=marshal-watch",
+     "encodings": ["utf-16le"],
+     "source": "round5-staging/world-fix/03-map-logger.patch +line 154 shape (contiguous wide literal; lands in LuaMod.cpp after apply)"
+    }
+   ],
+   "note": "The CURRENT-world delivery source per IA's 01-diagnosis (the detour's deferred arm refused in R3 worlds). Cross-check vs zzdiag's [MAP] GetFullName line per APPLY-ORDER section 3."
+  }
+ ],
+ "pending_templates": []
+}

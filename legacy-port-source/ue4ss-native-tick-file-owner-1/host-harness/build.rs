@@ -1,0 +1,1 @@
+fn main(){println!("cargo:rerun-if-changed=libtick_owner_controls.a");println!("cargo:rustc-link-search=native={}",std::env::var("CARGO_MANIFEST_DIR").unwrap());println!("cargo:rustc-link-lib=static=tick_owner_controls");println!("cargo:rustc-link-lib=c++");}

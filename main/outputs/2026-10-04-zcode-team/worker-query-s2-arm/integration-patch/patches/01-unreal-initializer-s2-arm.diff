@@ -1,0 +1,122 @@
+--- a/.superpowers/native-dependency-spike/ue4ss-native-tick-initializer-retry-1/src/UnrealInitializer.cpp	2026-10-03 21:53:16
++++ b/.superpowers/native-dependency-spike/ue4ss-native-tick-initializer-retry-1/src/UnrealInitializer.cpp	2026-10-04 15:42:39
+@@ -56,6 +56,9 @@
+ #include <Unreal/Hooks/Internal/ProcessEventProfiler.hpp>
+ #include <Unreal/Hooks/Internal/DetourInstance.hpp>
+ #include <Unreal/Hooks/Internal/DetourSubclasses.hpp>
++#ifdef __PROSPERO__
++#include <NativeQueryHarness.hpp>
++#endif
+ 
+ namespace RC::Unreal::UnrealInitializer
+ {
+@@ -208,6 +211,15 @@
+ #endif
+     }
+ 
++#ifdef __PROSPERO__
++    // Per-tick entry for RC::Platform::QueryHarness: noexcept, no
++    // allocation, no I/O; all refusals are counted internally.
++    static auto QueryHarnessEngineTickDispatch([[maybe_unused]] Hook::TCallbackIterationData<void>& CallbackIterationData, [[maybe_unused]] UEngine*, [[maybe_unused]] float, [[maybe_unused]] bool) -> void
++    {
++        RC::Platform::QueryHarness::Global().OnEngineTickDispatch();
++    }
++#endif
++
+     auto LoadExport(StringViewType Name) -> void*
+     {
+ #ifdef _WIN32
+@@ -847,6 +859,26 @@
+         // Exact native offsets already include target configuration effects.
+         ApplyDebugBuildOffsets();
+ #endif
++#ifdef __PROSPERO__
++        // S2 ARM (worker-query-s2-arm). InitializeVersionedContainer()
++        // selects NativeProvidedVirtualVC on Prospero, whose
++        // set_virtual_offsets() calls
++        // PublishStagedNativeLayoutMaps((uint32_t)Version::Major,
++        // (uint32_t)Version::Minor, Version::NonShipping,
++        // Version::DebugBuild) and THROWS on every refusal mode. On
++        // Prospero this is the statement immediately after that publish
++        // call (the #ifndef offset block above preprocesses to nothing),
++        // so reaching it means the publish genuinely succeeded; arm the
++        // harness layout gate with exactly the consumed facts. Storage
++        // stays Unknown: the validated townfall-ps5-ue56 profile supplies
++        // no GUObjectArray storage claim (informational field only; the
++        // fixed/chunked dispatch is engine-version-driven).
++        RC::Platform::QueryHarness::Global().ArmLayoutGate({static_cast<uint32_t>(Version::Major), static_cast<uint32_t>(Version::Minor), static_cast<uint8_t>(Version::NonShipping ? 1 : 0), static_cast<uint8_t>(Version::DebugBuild ? 1 : 0), RC::Platform::QueryHarness::StorageLayout::Unknown, "PublishStagedNativeLayoutMaps"});
++        // Disarm-on-throw: any serialized-startup failure after a
++        // successful publish closes the gate before propagating.
++        try
++        {
++#endif
+ 
+         // Second pass
+         {
+@@ -884,6 +916,14 @@
+         }
+ 
+         StaticStorage::bScanFullyCompleted = true;
++#ifdef __PROSPERO__
++        }
++        catch (...)
++        {
++            RC::Platform::QueryHarness::Global().DisarmLayoutGate();
++            throw;
++        }
++#endif
+     }
+ 
+     auto VerifyFNameConstructor(void* AddressOverride) -> void
+@@ -991,6 +1031,15 @@
+         {
+             ScanGame();
+         }
++#ifdef __PROSPERO__
++        // The gate armed inside ScanGame() stays open for the remainder of
++        // serialized startup; any failure from here through engine
++        // readiness disarms before propagating (the wrapped region is not
++        // re-indented: byte-minimal reviewable diff against the pinned
++        // base, semantics unchanged).
++        try
++        {
++#endif
+ 
+         if (!StaticStorage::FNameVerificationStatus.load(std::memory_order_acquire))
+         {
+@@ -1336,6 +1385,17 @@
+             {
+                 throw std::runtime_error("Native game-thread initializer callback registration failed");
+             }
++            // Persistent harmless-query dispatch route (worker-query-s2-arm):
++            // the self-retiring GameThreadInitializer callback publishes the
++            // game-thread identity exactly once, but the query harness must
++            // observe EVERY genuine engine tick (two consecutive accepted
++            // reads). This callback never removes itself; refusal outcomes
++            // are counted inside the harness and never thrown from a Tick.
++            const auto query_dispatch_callback = Hook::RegisterEngineTickPreCallback(QueryHarnessEngineTickDispatch, {false, false, STR("UE4SS"), STR("QueryHarnessDispatch")});
++            if (query_dispatch_callback == Hook::ERROR_ID)
++            {
++                throw std::runtime_error("Query harness tick dispatch callback registration failed");
++            }
+ #else
+             Hook::RegisterEngineTickPreCallback(HookedEngineTick, {true, false, STR("UE4SS"), STR("GameThreadInitializer")});
+ #endif
+@@ -1499,6 +1559,17 @@
+ 
+         Output::send<LogLevel::Verbose>(STR("UnrealConfig.FExecVTableOffsetInLocalPlayer: {:X}\n"), UnrealConfig.FExecVTableOffsetInLocalPlayer);
+ 
++#ifdef __PROSPERO__
++        }
++        catch (...)
++        {
++            // Post-arm startup failure: close the gate first, then
++            // preserve the original failure (closed gate refuses and
++            // counts every later dispatch - honest negative evidence).
++            RC::Platform::QueryHarness::Global().DisarmLayoutGate();
++            throw;
++        }
++#endif
+         PostInitialize(UnrealConfig);
+     }
+ }

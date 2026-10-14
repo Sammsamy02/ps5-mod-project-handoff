@@ -1,0 +1,47 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUObject.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-menu-marshal-bounds/candidate/LuaUObject.cpp
+@@ -194,6 +194,44 @@
+         if (!func || !calling_context)
+         {
+             lua.throw_error("[UFunction::call_ufunction_from_lua] Tried calling function without both UFunction and calling context");
++        }
++
++        // Reflected offsets must fit both the declared parameter frame and
++        // this fixed Lua buffer. Validate every parameter (including return/out
++        // slots) before any pusher can write or ProcessEvent can read it.
++        constexpr auto parameter_capacity = sizeof(DynamicUnrealFunctionData::data);
++        const auto declared_parameter_size = static_cast<size_t>(func->GetParmsSize());
++        if (declared_parameter_size > parameter_capacity)
++        {
++            lua.throw_error("UFunction parameter frame exceeds the Lua buffer capacity");
++            return 0;
++        }
++        if (func->HasChildren())
++        {
++            for (Unreal::FProperty* parameter : Unreal::TFieldRange<Unreal::FProperty>(func, Unreal::EFieldIterationFlags::IncludeDeprecated))
++            {
++                if (!parameter->HasAnyPropertyFlags(Unreal::CPF_Parm))
++                {
++                    continue;
++                }
++                const auto offset = parameter->GetOffset_Internal();
++                const auto element_size = parameter->GetElementSize();
++                const auto array_dim = parameter->GetArrayDim();
++                if (offset < 0 || element_size <= 0 || array_dim <= 0 ||
++                    static_cast<size_t>(offset) > declared_parameter_size)
++                {
++                    lua.throw_error("UFunction parameter has invalid reflected bounds");
++                    return 0;
++                }
++                const auto remaining = declared_parameter_size - static_cast<size_t>(offset);
++                // Division avoids signed GetSize() multiplication overflow and
++                // offset+extent overflow on inconsistent reflected metadata.
++                if (static_cast<size_t>(array_dim) > remaining / static_cast<size_t>(element_size))
++                {
++                    lua.throw_error("UFunction parameter extends beyond the declared frame");
++                    return 0;
++                }
++            }
+         }
+ 
+         uint8_t num_ufunc_params = func->GetNumParms();

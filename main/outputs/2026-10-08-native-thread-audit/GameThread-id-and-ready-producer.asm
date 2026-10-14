@@ -1,0 +1,10 @@
+0x3a14e8e file0x3a18e8e e80dd5a503 call 0x74723a0
+0x3a14e93 file0x3a18e93 488d0dfe3b9405 lea rcx, [rip + 0x5943bfe] rip->0x9358a98
+0x3a14e9a file0x3a18e9a 31ff xor edi, edi
+0x3a14e9c file0x3a18e9c 8901 mov dword ptr [rcx], eax
+0x3a14e9e file0x3a18e9e 488d0dff3b9405 lea rcx, [rip + 0x5943bff] rip->0x9358aa4
+0x3a14ea5 file0x3a18ea5 c60101 mov byte ptr [rcx], 1
+0x3a14ea8 file0x3a18ea8 e8136f60fc call 0x1bdc0
+0x3a14ead file0x3a18ead e85eb65efc call 0x510
+0x3a14eb2 file0x3a18eb2 4889c7 mov rdi, rax
+0x3a14eb5 file0x3a18eb5 e8a6a45ffc call 0xf360

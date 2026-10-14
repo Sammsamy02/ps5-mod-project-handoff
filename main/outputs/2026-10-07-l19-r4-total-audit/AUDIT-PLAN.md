@@ -1,0 +1,7 @@
+This independent LOCAL audit waits for the producer's sealed official-engine addendum. It changes no candidate, frozen source, receipt, profile, artifact, setting, or checkpoint and performs no network or console contact.
+
+Acceptance requires exact licensed-source hashes and complete original 5.6.1 declarations, a reproducible mapping of configuration and packing effects, independently authenticated native instruction and relocation windows, named or source-order semantic anchors for the native field-size getter, and independent confirmation that constructor/layout observations match the relevant declaration. A occupied prefix, nearby guard, allocation lower bound, or compiler projection alone will not supply an exact native class total.
+
+Compiler projections can test consequences of the declared source contract and show incompatible packing/configurations. They must retain the complete declaration member/inheritance/alignment/macro inputs or explicitly document reductions. Their results are source-contract inferences, not native sizeof measurements. Native FFieldVariant storage and legacy host wrapper storage must remain distinct.
+
+The audit will verify the sealed manifest, rerun the bounded validator into this owned directory, inspect native byte/PT_LOAD/DT_RELA and source topology independently, and exercise focused mutation refusals. Its result will state whether each exact total is accepted as a high-confidence source/native inference or remains unknown; no live execution or complete runtime ABI claim will be made.

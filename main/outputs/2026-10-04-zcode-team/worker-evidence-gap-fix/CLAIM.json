@@ -1,0 +1,37 @@
+{
+  "worker": "worker-evidence-gap-fix",
+  "date": "2026-10-04",
+  "scope": "evidence.sh + its suites (worker-launch10-evidence-upgrade/host-test); rehearsal fixtures untouched",
+  "task": "Fix rehearsal RUN-RECEIPT gaps GAP-1 (HIGH), GAP-2 (MEDIUM), GAP-3 (LOW); both suites must stay green; no re-baselining",
+  "file": "outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/evidence.sh",
+  "sha256_before": "5a034d460e642a51a7689e7cd498f9367609c9cddf64fcb31cdaed101601ba52",
+  "sha256_after": "76559126074c28dad936905a8d9c2c3c3d7fffedc47907cc7f0f356616ae858a",
+  "changes": [
+    {
+      "gap": "GAP-1 HIGH",
+      "what": "lmf_extent_base_low/high, lmf_extent_end_low/high, lmf_anchor_count, lmf_intervals_found added to stage_of_tag in BOTH classifiers (text stream + supplier-diag jsonl) and to the bare-lmf text regex, so success-path chains include S6_CONVERSION; SDIAGSUM now carries anchor_count and intervals_found directly after lease_spans/lease_reg (controller predicted pair: anchor_count=7, intervals_found=1 next to lease_spans=6).",
+      "verified": "Sets A/B/C/E success chains now contain S6_CONVERSION; one-page summary shows lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1; host-test case 17 asserts both."
+    },
+    {
+      "gap": "GAP-2 MEDIUM",
+      "what": "[TownfallItemSpawner] lines now print verbatim: classifier emits MODLOADLINE records; a dedicated bounded 'mod-load prints' section (capped 6) appears on the one-pager; MODS_STARTED NEXT text points at it; JSON tail gains mod_load_lines count. G2 (load prints) vs G3 (mod-error lines, also BEST) decidable without the raw log.",
+      "verified": "Sets A/E show all 4 verbatim lines (start_mods, Loaded v1.0, 42 spawnable pickups, Menu created.); B/C/D show no section (no such lines); host-test case 17 asserts verbatim print + count."
+    },
+    {
+      "gap": "GAP-3 LOW",
+      "what": "First-seen chain order NOT reordered (honest record). When S7_CFG_ATTACH appears before S4_LEASE_REG or S5_IDENTITY_ANCHORS (bridge_exepath_source emitted mid-walk), a one-line display-quirk note is emitted under the stage chains. Crash-tail benign-note behavior untouched (GAP-4 kept as is); GAP-5 STIME cap 24 untouched.",
+      "verified": "Note present on A/B/C/D (S7 before S4/S5); correctly ABSENT on E (S7 after S4, no S5); host-test case 17 asserts presence."
+    }
+  ],
+  "untouched": [
+    "Pinned baseline constants (BASE_UE4SS/ENTRY/STATUS/XWP, PIN_*_SHA, BASE_SESS_PID=273, BASE_SESS_MS=44372083) and all drift-guard logic: diff-verified untouched (no re-baselining)",
+    "Rehearsal fixtures: byte-identical before/after test runs (runs/fixtures-pre.sha256 == runs/fixtures-post.sha256)",
+    "Verdict precedence: all five rehearsal verdicts unchanged (A/E MODS_STARTED, B/C FAILED_STATUS, D FAILED_S6_CONVERSION)"
+  ],
+  "tests": {
+    "host_fixture_suite": {"result": "PASS", "passed": 94, "failed": 0, "rc": 0, "note": "was 84/0 pre-patch; +10 new GAP regression assertions in case 17 (l10_success_conversion)"},
+    "rehearsal_five_sets": {"result": "PASS", "sets": "A-E all rc=0, empty stderr, ZERO WARN"},
+    "receipt": "outputs/2026-10-04-zcode-team/worker-evidence-gap-fix/TEST-RECEIPT.txt"
+  },
+  "constraints_honored": ["no rehearsal fixture modification", "no re-baselining", "verdict precedence unchanged", "LOCAL ONLY, no console contact"]
+}

@@ -1,0 +1,32 @@
+--- round9-staging/b6o-fast-slots/base/LuaMod.cpp	2026-10-12 14:09:28
++++ ../2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp	2026-10-12 14:51:13
+@@ -4948,7 +4948,7 @@
+     namespace Unreal::UObjectGlobals
+     {
+         auto r9_take_walk_stats(uint64_t& calls, uint64_t& ns) -> void; // [R9-PERF] UObjectGlobals.cpp
+-        auto r9_take_index_stats(uint64_t& del_calls, uint64_t& del_ticks, uint64_t& sync_calls, uint64_t& sync_ticks) -> void;
++        auto r9_take_index_stats(uint64_t& del_calls, uint64_t& del_ticks, uint64_t& sync_calls, uint64_t& sync_ticks, uint64_t& watch) -> void;
+     }
+     namespace r9perf
+     {
+@@ -5034,16 +5034,16 @@
+                 for (const char* q = fn_ms; *q != '\0'; ++q) { fn_wide.push_back(static_cast<StringType::value_type>(static_cast<unsigned char>(*q))); }
+                 const double fn_total_ms = ticks_per_ns > 0 ? fn_total_ticks / ticks_per_ns / 1e6 : -1.0;
+                 const auto tk = [&](uint64_t ticks) -> double { return ticks_per_ns > 0 ? ticks / ticks_per_ns / 1e6 : -1.0; };
+-                uint64_t del_calls{0}, del_ticks{0}, sync_calls{0}, sync_ticks{0};
+-                Unreal::UObjectGlobals::r9_take_index_stats(del_calls, del_ticks, sync_calls, sync_ticks);
++                uint64_t del_calls{0}, del_ticks{0}, sync_calls{0}, sync_ticks{0}, idx_watch{0};
++                Unreal::UObjectGlobals::r9_take_index_stats(del_calls, del_ticks, sync_calls, sync_ticks, idx_watch);
+                 const uint64_t p_calls = LuaType::r9prop::take(LuaType::r9prop::calls), p_hits = LuaType::r9prop::take(LuaType::r9prop::hits);
+                 const double p_bridge = tk(LuaType::r9prop::take(LuaType::r9prop::t_bridge)), p_fname = tk(LuaType::r9prop::take(LuaType::r9prop::t_fname));
+                 const double p_custom = tk(LuaType::r9prop::take(LuaType::r9prop::t_custom)), p_find = tk(LuaType::r9prop::take(LuaType::r9prop::t_find));
+                 const double p_handle = tk(LuaType::r9prop::take(LuaType::r9prop::t_handle));
+-                Output::send(STR("[PERF] win_ms={:.0f} frames={} frame_avg_ms={:.1f} frame_max_ms={:.1f} frames_over_40ms={} | pe_calls={} pe_locks={} pe_ms={:.1f} | pump_calls={} pump_ms={:.1f} | run_calls={} run_ms={:.1f} run_max_ms={:.1f} other_ms={:.1f} | walks={} walk_ms={:.1f} walk_avg_ms={:.2f} | api_ms={:.1f}{} | del_calls={} del_ms={:.1f} idx_syncs={} idx_ms={:.1f} | prop calls={} cache_hits={} bridge_ms={:.1f} fname_ms={:.1f} custom_ms={:.1f} find_ms={:.1f} handle_ms={:.1f} |{}\n"),
++                Output::send(STR("[PERF] win_ms={:.0f} frames={} frame_avg_ms={:.1f} frame_max_ms={:.1f} frames_over_40ms={} | pe_calls={} pe_locks={} pe_ms={:.1f} | pump_calls={} pump_ms={:.1f} | run_calls={} run_ms={:.1f} run_max_ms={:.1f} other_ms={:.1f} | walks={} walk_ms={:.1f} walk_avg_ms={:.2f} | api_ms={:.1f}{} | del_calls={} del_ms={:.1f} idx_syncs={} idx_ms={:.1f} idx_watch={} | prop calls={} cache_hits={} bridge_ms={:.1f} fname_ms={:.1f} custom_ms={:.1f} find_ms={:.1f} handle_ms={:.1f} |{}\n"),
+                              win_ms, frames, frames ? frame_sum_ns / 1e6 / static_cast<double>(frames) : 0.0, frame_max_ns / 1e6, frames_over_40ms,
+                              pe_calls, pe_locks, pe_ns / 1e6, pump_calls, pump_ns / 1e6, run_calls, run_ns / 1e6, run_max_ns / 1e6, run_other_ns / 1e6,
+-                             walk_calls, walk_ns / 1e6, walk_calls ? walk_ns / 1e6 / static_cast<double>(walk_calls) : 0.0, fn_total_ms, fn_wide, del_calls, tk(del_ticks), sync_calls, tk(sync_ticks),
++                             walk_calls, walk_ns / 1e6, walk_calls ? walk_ns / 1e6 / static_cast<double>(walk_calls) : 0.0, fn_total_ms, fn_wide, del_calls, tk(del_ticks), sync_calls, tk(sync_ticks), idx_watch,
+                              p_calls, p_hits, p_bridge, p_fname, p_custom, p_find, p_handle, states);
+             }
+             catch (...)

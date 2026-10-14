@@ -1,0 +1,39 @@
+# 45 "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/SettingsManager.cpp"
+namespace RC
+{
+
+    auto SettingsManager::deserialize(std::filesystem::path& file_name) -> void
+    {
+        deserialize(file_name, UE4SSProgram::get_program());
+    }
+
+    auto SettingsManager::deserialize(std::filesystem::path& file_name, UE4SSProgram& receiver) -> void
+
+
+
+    {
+
+        Ini::Parser parser;
+        if (const auto& source = receiver.native_mod_source())
+        {
+            auto settings = source->read("ue4ss/UE4SS-settings.ini");
+            if (!settings) throw std::runtime_error("Native activation is missing ue4ss/UE4SS-settings.ini");
+            if (settings->bytes.find('\0') != settings->bytes.npos)
+                throw std::runtime_error("Native UE4SS settings contain NUL");
+
+
+
+
+            StringType contents;
+            contents.reserve(settings->bytes.size());
+            for (const char c : settings->bytes)
+            {
+                contents.push_back(static_cast<CharType>(static_cast<unsigned char>(c)));
+            }
+            parser.parse(contents);
+        }
+        else
+        {
+
+            auto file = File::open(file_name, File::OpenFor::Reading, File::OverwriteExistingFile::No, File::CreateIfNonExistent::No);
+            parser.parse(file);

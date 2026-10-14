@@ -1,0 +1,24 @@
+LOADMAP-GUARD r2 DETOUR-LAYER HOST TEST — PASS receipt (worker-l11-merge re-run)
+date: 2026-10-05T12:07Z
+
+suite: worker-l11-loadmap-guard/host-test build_and_run_r2.sh + test_detour_refusal_r2.cpp
+(b761074987aff6e5e48a33c21f5481101b71c5d045b6e25ecbbf1b1d85dd5525), copied byte-for-byte into
+worker-l11-merge/work/lg-worker/host-test; ONLY the W= output-root line re-pointed at this worker's
+dir (build artifacts + logs land here; suite logic, flags, unit sha gates unchanged).
+This suite is LuaMod-independent by construction (it exercises the REAL composed polyhook
+owned-memory detour layer the LuaMod eager arms route through); the merged unit's connection to it
+is (a) delta B's R3MarshalPumpPending gate, compile-gated into the merged object
+(813b249d0ba3c16a...), and (b) the lg-r2-staging -> merged cross-diff == delta A exactly
+(work/lg-vs-merged.diff), proving the merged unit carries LG r2's hunks verbatim.
+
+results (this run):
+  PASS exec-only-denied: hook() refused with zero dereference, process survived
+  PASS readable-unregistered: hook() refused at the owned layer, zero bytes mutated, still running
+  PASS owned readable+writeable world: real arm proceeded (hook84/trampoline42/unhook, source restored 42)
+  PASS write-refused world: real arm refused (isGood=false, x64Detour.cpp:492), source42 intact, process survived
+  PASS copy-refused world: real arm rolled back after genuine prefix write, source42 intact, process survived
+  PASS loadmap-guard r2 detour-layer host test: 5/5 phases
+  exit=0; ASan/UBSan log 0 bytes (0 errors)
+  stdout byte-identical to worker-l11-loadmap-guard/host-test/run-r2.stdout (recorded run)
+
+overall: PASS (5/5)

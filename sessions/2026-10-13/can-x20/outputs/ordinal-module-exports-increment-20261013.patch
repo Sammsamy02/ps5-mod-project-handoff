@@ -1,0 +1,323 @@
+--- a/loader/include/pe_loader.h
++++ b/loader/include/pe_loader.h
+@@ -59,6 +59,9 @@
+     // Export lookup after a successful map (start_mod / uninstall_mod /
+     // mbm_mod_entry_v1). Names are matched exactly (x64 exports are flat).
+     void* find_export(const char* name) const;
++    // Resolve the public PE ordinal (ExportDirectory.Base + EAT index).
++    // Refuses holes, forwarders, and non-executable targets.
++    void* find_export_ordinal(uint64_t ordinal) const;
+ 
+     // Export/bookkeeping state; defined in pe_loader.cpp. Owned by the
+     // LoadResult and intentionally never freed: the image is retained for
+--- a/loader/src/pe_loader.cpp
++++ b/loader/src/pe_loader.cpp
+@@ -451,7 +451,9 @@
+                 uint64_t ordinal = 0;
+                 if (thunk & PE_IMPORT_BY_ORDINAL)
+                 {
+-                    ordinal = thunk & 0xFFFFFFFFFFFFull;
++                    if (thunk & 0x7FFFFFFFFFFF0000ull)
++                        return fail(out, "corrupt import ordinal thunk");
++                    ordinal = thunk & 0xFFFFull;
+                 }
+                 else
+                 {
+@@ -548,46 +550,82 @@
+                             false, nullptr, nullptr);
+ }
+ 
++namespace {
++struct ExportView
++{
++    PeExportDirectory directory{};
++    const uint32_t* functions = nullptr;
++};
++
++bool export_view(const LoadResult& result, ExportView& view)
++{
++    if (!result.ok || !result.impl || !result.impl->export_dir_size) return false;
++    const auto& mapped = *result.impl;
++    const auto inside = [&](uint64_t rva, uint64_t bytes) {
++        return rva <= mapped.image_size && bytes <= mapped.image_size - rva;
++    };
++    if (mapped.export_dir_size < sizeof(PeExportDirectory) ||
++        !inside(mapped.export_dir_rva, mapped.export_dir_size)) return false;
++    std::memcpy(&view.directory, mapped.image + mapped.export_dir_rva,
++                sizeof(view.directory));
++    const auto& ex = view.directory;
++    if (!inside(ex.AddressOfFunctions,
++                uint64_t(ex.NumberOfFunctions) * sizeof(uint32_t))) return false;
++    view.functions = reinterpret_cast<const uint32_t*>(mapped.image + ex.AddressOfFunctions);
++    return true;
++}
++
++void* export_target(const LoadResult& result, const ExportView& view,
++                    uint32_t index)
++{
++    const auto& mapped = *result.impl;
++    if (index >= view.directory.NumberOfFunctions) return nullptr;
++    const uint32_t fn_rva = view.functions[index];
++    if (!fn_rva || fn_rva >= mapped.image_size) return nullptr;
++    // Forwarders are strings within the export directory, never callable code.
++    if (fn_rva >= mapped.export_dir_rva &&
++        uint64_t(fn_rva) < uint64_t(mapped.export_dir_rva) + mapped.export_dir_size)
++        return nullptr;
++    for (const auto& range : mapped.executable_ranges)
++        if (fn_rva >= range.begin && fn_rva < range.end)
++            return mapped.image + fn_rva;
++    return nullptr;
++}
++} // namespace
++
+ void* LoadResult::find_export(const char* name) const
+ {
+-    if (!ok || !impl || impl->export_dir_size == 0 || !name) return nullptr;
+-    uint8_t* img = impl->image;
++    ExportView view;
++    if (!name || !export_view(*this, view)) return nullptr;
++    const auto& ex = view.directory;
+     const auto inside = [&](uint64_t rva, uint64_t bytes) {
+         return rva <= impl->image_size && bytes <= impl->image_size - rva;
+     };
+-    if (impl->export_dir_size < sizeof(PeExportDirectory) ||
+-        !inside(impl->export_dir_rva, impl->export_dir_size)) return nullptr;
+-    PeExportDirectory ex;
+-    std::memcpy(&ex, img + impl->export_dir_rva, sizeof(ex));
+     if (!inside(ex.AddressOfNames, uint64_t(ex.NumberOfNames) * sizeof(uint32_t)) ||
+-        !inside(ex.AddressOfNameOrdinals, uint64_t(ex.NumberOfNames) * sizeof(uint16_t)) ||
+-        !inside(ex.AddressOfFunctions, uint64_t(ex.NumberOfFunctions) * sizeof(uint32_t)))
+-        return nullptr;
+-    const uint32_t* names = reinterpret_cast<const uint32_t*>(img + ex.AddressOfNames);
+-    const uint16_t* ords = reinterpret_cast<const uint16_t*>(img + ex.AddressOfNameOrdinals);
+-    const uint32_t* funcs = reinterpret_cast<const uint32_t*>(img + ex.AddressOfFunctions);
++        !inside(ex.AddressOfNameOrdinals,
++                uint64_t(ex.NumberOfNames) * sizeof(uint16_t))) return nullptr;
++    const uint32_t* names = reinterpret_cast<const uint32_t*>(image + ex.AddressOfNames);
++    const uint16_t* ords = reinterpret_cast<const uint16_t*>(image + ex.AddressOfNameOrdinals);
+     for (uint32_t i = 0; i < ex.NumberOfNames; ++i)
+     {
+         const uint32_t name_rva = names[i];
+         if (!inside(name_rva, 1)) return nullptr;
+-        const char* n = reinterpret_cast<const char*>(img + name_rva);
++        const char* n = reinterpret_cast<const char*>(image + name_rva);
+         if (!std::memchr(n, '\0', impl->image_size - name_rva)) return nullptr;
+         if (std::strcmp(n, name) != 0) continue;
+-        if (ords[i] >= ex.NumberOfFunctions) return nullptr;
+-        const uint32_t fn_rva = funcs[ords[i]];
+-        if (!inside(fn_rva, 1)) return nullptr;
+-        // Forwarded exports point inside the export directory itself; this
+-        // loader does not follow forwarders and reports them as unresolved.
+-        if (fn_rva >= impl->export_dir_rva &&
+-            uint64_t(fn_rva) < uint64_t(impl->export_dir_rva) + impl->export_dir_size)
+-            return nullptr;
+-        bool executable = false;
+-        for (const auto& range : impl->executable_ranges)
+-            if (fn_rva >= range.begin && fn_rva < range.end) { executable = true; break; }
+-        if (!executable) return nullptr;
+-        return img + fn_rva;
++        return export_target(*this, view, ords[i]);
+     }
+     return nullptr;
++}
++
++void* LoadResult::find_export_ordinal(uint64_t ordinal) const
++{
++    ExportView view;
++    if (ordinal > UINT16_MAX || !export_view(*this, view)) return nullptr;
++    if (ordinal < view.directory.Base) return nullptr;
++    const uint64_t index = ordinal - view.directory.Base;
++    if (index >= view.directory.NumberOfFunctions) return nullptr;
++    return export_target(*this, view, static_cast<uint32_t>(index));
+ }
+ 
+ namespace {
+--- a/loader/include/guest_pe_loader.h
++++ b/loader/include/guest_pe_loader.h
+@@ -58,7 +58,8 @@
+                   GuestSegmentSwitch& segment, std::vector<uint64_t> callbacks,
+                   bool has_static_tls);
+     static bool disable_thread_notifications(void* user);
+-    static bool lookup_named_export(void* owner, const char* symbol, void** out);
++    static bool lookup_export(void* owner, const char* symbol,
++                              uint64_t ordinal, void** out);
+ 
+     LoadResult load_;
+     StaticTlsBank& bank_;
+--- a/loader/src/guest_pe_loader.cpp
++++ b/loader/src/guest_pe_loader.cpp
+@@ -141,12 +141,13 @@
+     return static_cast<GuestPeModule*>(user)->lifecycle_.disable_thread_notifications();
+ }
+ 
+-bool GuestPeModule::lookup_named_export(void* owner, const char* symbol,
+-                                         void** out)
++bool GuestPeModule::lookup_export(void* owner, const char* symbol,
++                                   uint64_t ordinal, void** out)
+ {
+     auto* module = static_cast<GuestPeModule*>(owner);
+-    if (!module || !module->attached_ || !symbol || !*symbol || !out) return false;
+-    void* address = module->load_.find_export(symbol);
++    if (!module || !module->attached_ || !out || (symbol && !*symbol)) return false;
++    void* address = symbol ? module->load_.find_export(symbol) :
++                             module->load_.find_export_ordinal(ordinal);
+     if (!address) return false;
+     *out = address;
+     return true;
+@@ -158,7 +159,7 @@
+     if (shim_ && !source_path_.empty() && !module_registered_)
+     {
+         if (!shim_->register_mapped_module(source_path_.c_str(), load_.image,
+-                                            lookup_named_export, this))
++                                            lookup_export, this))
+             return GuestNotifyStatus::ModuleRegistrationFailed;
+         module_registered_ = true;
+     }
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -73,8 +73,9 @@
+     // Reserve a mapped PE by the basename of its source path. Reject any
+     // duplicate or built-in DLL name instead of replacing a live module.
+     // The lookup receives its owner context and must refuse until that PE
+-    // has completed process attachment. Ordinal lookup remains unsupported.
+-    using MappedLookup = bool (*)(void* owner, const char* symbol, void** out);
++    // has completed process attachment. A null symbol selects a PE ordinal.
++    using MappedLookup = bool (*)(void* owner, const char* symbol,
++                                  uint64_t ordinal, void** out);
+     bool register_mapped_module(const char* source_path, WinModule handle,
+                                 MappedLookup lookup, void* owner);
+     // Caller must quiesce guest users of the module before removing it.
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -851,12 +851,14 @@
+     }
+     // A module's lookup may resolve forwarded imports itself. Never invoke
+     // external module code while holding the registry mutex.
+-    if (registered && symbol)
++    if (registered)
+     {
+         void* out = nullptr;
+         if (selected.mapped_lookup &&
+-            selected.mapped_lookup(selected.owner, symbol, &out) && out) return out;
+-        if (selected.lookup && selected.lookup(selected.handle, symbol, &out) && out)
++            selected.mapped_lookup(selected.owner, symbol, ordinal, &out) && out)
++            return out;
++        if (symbol && selected.lookup &&
++            selected.lookup(selected.handle, symbol, &out) && out)
+             return out;
+     }
+ 
+--- a/loader/tests/mapped_module_registry_test.cpp
++++ b/loader/tests/mapped_module_registry_test.cpp
+@@ -130,14 +130,39 @@
+     check(!early_consumer.ok && missing_provider,
+           "dependent DLL refuses while provider has not completed attachment");
+ 
++    auto ordinal_bytes = consumer_bytes;
++    const uint64_t ordinal_thunk = 0x8000000000000001ull; // fixture!start_mod
++    std::memcpy(ordinal_bytes.data() + 0x800, &ordinal_thunk, sizeof(ordinal_thunk));
++    auto early_ordinal = cap13::pe_prepare_guest_with_shim(
++        ordinal_bytes.data(), ordinal_bytes.size(), shim, options, bank,
++        consumer_segment, "/mods/ordinal-consumer.dll");
++    bool missing_ordinal = false;
++    for (const auto& name : early_ordinal.missing)
++        if (name == "fixture.dll!#1") missing_ordinal = true;
++    check(!early_ordinal.ok && missing_ordinal,
++          "ordinal import refuses while provider has not completed attachment");
++
++    auto malformed_ordinal = ordinal_bytes;
++    const uint64_t reserved_bits = 0x8000000100000001ull;
++    std::memcpy(malformed_ordinal.data() + 0x800, &reserved_bits,
++                sizeof(reserved_bits));
++    auto malformed = cap13::pe_prepare_guest_with_shim(
++        malformed_ordinal.data(), malformed_ordinal.size(), shim, options, bank,
++        consumer_segment, "/mods/malformed-consumer.dll");
++    check(!malformed.ok && malformed.reason == "corrupt import ordinal thunk",
++          "reserved ordinal thunk bits are rejected as malformed PE");
++
+     check(first.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok &&
+           !first_segment.first_enter_saw_export,
+           "provisional module registration stays hidden during DllMain entry");
+     void* first_export = shim.resolve("FIXTURE.DLL", "start_mod", 0);
+     check(first_export != nullptr &&
+           shim.resolve("fixture.dll", "missing_export", 0) == nullptr &&
+-          shim.resolve("fixture.dll", nullptr, 1) == nullptr,
+-          "attached module publishes validated named export only");
++          shim.resolve("fixture.dll", nullptr, 1) == first_export &&
++          shim.resolve("fixture.dll", nullptr, 0) == nullptr &&
++          shim.resolve("fixture.dll", nullptr, 3) == nullptr &&
++          shim.resolve("fixture.dll", nullptr, 0x10001) == nullptr,
++          "attached module publishes validated name and bounded ordinal exports");
+     shim.register_module("FIXTURE.DLL", reinterpret_cast<void*>(0x300), lookup_ue4ss);
+     check(shim.resolve("fixture.dll", "start_mod", 0) == first_export &&
+           !shim.unregister_mapped_module("fixture.dll",
+@@ -163,6 +188,20 @@
+         check(consumer.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
+               "dependent module detaches before its provider");
+     }
++    auto ordinal_consumer = cap13::pe_prepare_guest_with_shim(
++        ordinal_bytes.data(), ordinal_bytes.size(), shim, options, bank,
++        consumer_segment, "/mods/ordinal-consumer.dll");
++    check(ordinal_consumer.ok && ordinal_consumer.module,
++          "dependent DLL resolves ordinal import from attached mapped provider");
++    if (ordinal_consumer.ok)
++    {
++        const int before_ordinal_calls = ue4ss_calls;
++        check(ordinal_consumer.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok &&
++              ue4ss_calls == before_ordinal_calls + 1,
++              "dependent DllMain calls provider ordinal export through its IAT");
++        check(ordinal_consumer.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
++              "ordinal dependent module detaches before its provider");
++    }
+ 
+     RecordingSwitch second_segment;
+     auto second = cap13::pe_prepare_guest_with_shim(
+@@ -203,6 +242,48 @@
+     check(retry.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
+           "retry image detaches cleanly");
+ 
++    // The unchanged fixture has ExportDirectory at file offset 0x640 and
++    // its first EAT RVA at 0x678. Mutate copies only; do not edit the source.
++    const struct { uint32_t rva; const char* path; const char* label; } bad_exports[] = {
++        {0, "/mods/sparse.dll", "zero EAT slot refuses ordinal export"},
++        {0x2050, "/mods/forwarder.dll", "forwarder RVA refuses ordinal export"},
++        {0x2000, "/mods/data-export.dll", "non-executable RVA refuses ordinal export"},
++    };
++    for (const auto& bad : bad_exports)
++    {
++        auto modified = bytes;
++        std::memcpy(modified.data() + 0x678, &bad.rva, sizeof(bad.rva));
++        RecordingSwitch segment;
++        auto bad_module = cap13::pe_prepare_guest_with_shim(
++            modified.data(), modified.size(), shim, options, bank, segment, bad.path);
++        const bool prepared = bad_module.ok && bad_module.module;
++        const bool attached = prepared &&
++            bad_module.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok;
++        check(attached && shim.resolve(bad.path, nullptr, 1) == nullptr,
++              bad.label);
++        if (attached)
++            check(bad_module.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
++                  "invalid export fixture detaches cleanly");
++    }
++
++    auto rebased_exports = bytes;
++    const uint32_t export_base = 7;
++    std::memcpy(rebased_exports.data() + 0x650, &export_base, sizeof(export_base));
++    RecordingSwitch rebased_segment;
++    auto rebased = cap13::pe_prepare_guest_with_shim(
++        rebased_exports.data(), rebased_exports.size(), shim, options, bank,
++        rebased_segment, "/mods/rebased.dll");
++    const bool rebased_attached = rebased.ok && rebased.module &&
++        rebased.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok;
++    check(rebased_attached &&
++          shim.resolve("rebased.dll", nullptr, 1) == nullptr &&
++          shim.resolve("rebased.dll", nullptr, 7) ==
++              shim.resolve("rebased.dll", "start_mod", 0),
++          "ordinal lookup subtracts the declared export base");
++    if (rebased_attached)
++        check(rebased.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
++              "rebased export fixture detaches cleanly");
++
+     shim.register_module("manual.dll", reinterpret_cast<void*>(0x200), lookup_ue4ss);
+     RecordingSwitch collision_segment;
+     auto collision = cap13::pe_prepare_guest_with_shim(

@@ -1,0 +1,106 @@
+{
+  "worker": "worker-post-seeds-chain",
+  "date": "2026-10-05",
+  "mission": "Trace the post-seeds chain in the receipt-pinned composed units: seeds order vs pool refusal, the 'Stopping mod for uninstall' trigger, the seeds-to-mods-to-pump pipeline, the native Lua read key semantics after the codecvt/path fix, and the Lua state creation prerequisites.",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "local_only": true,
+  "composed_units_verified": {
+    "note": "Unit identity from the composed receipt of the launch-11 combined candidate (prx-candidate-l11-2, built 2026-10-05T18:37, gate GO): .superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/ue4ss-native-supplier-composition-6/run-l11-2/receipt.json selected_runtime_units; bridge from launch11-combined/EDITIONS.json bridge_cli. Which fself pid 672 actually ran is a controller-side fact; these are the units the current staging pins.",
+    "initializer": "outputs/2026-10-04-zcode-controller/launch11-combined/units/UnrealInitializer.cpp sha256 22f062863fe2d599ccbccabec678ccd8f2fbe5f74c677ed9f6377ae116417fb0",
+    "luamod": "outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp sha256 3c39a86b84428e0672a658441108dd546dc8d4cd1484fb107f6a1059927c4874",
+    "program": "outputs/2026-10-04-zcode-team/worker-pad-defer/staging/program-wpd1/UE4SSProgram.cpp sha256 7b5d4636919b2707c85f2c69f50e338079b03d606a7bdf83fbb6df07ff97aa47",
+    "bridge": "outputs/2026-10-04-zcode-controller/launch10-build/final-units/runtime_start_bridge_r14_diag_spanpub.cpp sha256 faec2336fd8f6eb7a42db3eb3c5a3853dfa50f20cfd73c30a328ca3bc138ee27",
+    "seed_validation_header": "outputs/2026-10-04-zcode-controller/launch11-combined/units/SeedValidation.hpp sha256 b3d81b0f57188d0c18ff4d308890035c253625c9f3dc36d16038d38eb6552a01 (kMaxPublishedSpans=64 at line 143)",
+    "seed_table": "outputs/2026-10-04-zcode-controller/launch11-combined/units/SeedTable.h (kBaseObserved=0x400000 L11; pool label 0x9365ec0 L12 -> runtime 0x9765EC0; GUA 0x93ba110 L31 -> 0x97ba110; ctor 0x23d590 L32 -> 0x63d590; gmalloc 0x930add8 L33 -> 0x970add8, instance 0x93089b8 -> 0x97089b8; SCO 0x490aa0 L34 -> 0x890aa0; kGenerated+kRequiredSetComplete true L10/L35)",
+    "native_mod_source": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/Platform/NativeModSource.cpp + include/Platform/NativeModSource.hpp",
+    "runtime_ack": "outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/ue4ss_backend.cpp + runtime_owner.cpp",
+    "string_hpp_fix": "outputs/2026-10-04-zcode-team/worker-iniparser-repro/staged/Helpers/String.hpp sha256 7c983db4548b39b16625f979bfd2256647df0f57788e9ae27672af51b8302524 (pinned as stage-header by launch11_one_pass.py:163)"
+  },
+  "answers": {
+    "Q1_seed_order": {
+      "claim": "consume_required_slot_seeds runs Phase 1 base check -> Phase 2 slot 0 GUA bind -> Phase 2b slot 3 GMalloc bind -> Phase 3 FName pool validation chain -> Phase 4 ctor bind+behavioral probe -> Phase 5 SCO bind. The pool validation (0x9765EC0) happens strictly AFTER both binds, and a pool refusal throws without rolling the earlier binds back, so 'slot 0 bound' and 'slot 3 bound' log lines are printed before any pool refusal can fire.",
+      "pins": [
+        "UnrealInitializer.cpp:833 consume_required_slot_seeds definition",
+        "UnrealInitializer.cpp:837-842 Phase 1 module-view base check",
+        "UnrealInitializer.cpp:845-859 Phase 2 slot 0: require_present 845, classify DataReadable 849, pointer probe 853, SetupGUObjectArrayAddress BIND 857, '[Seeds] slot 0 g_uobject_array bound' LOG 858",
+        "UnrealInitializer.cpp:865-910 Phase 2b slot 3: require_present 865, classify 869, probe 873, weak live-pointer [GMalloc] 879-884, V1 instance 895-900, V2 vptr 901-907, GMalloc bit_cast BIND 908, '[Seeds] slot 3 gmalloc bound ... V1 instance + V2 vptr match' LOG 909",
+        "UnrealInitializer.cpp:916-1039 Phase 3 pool: require_present(ctor slot) 916, pool_runtime = base+0x9365ec0 = 0x9765EC0 (917), classify 920, span snapshot 942-963, capture envelope 970-978, shape+interned-id retry loop 981-1003 (check_pool_shape 991, budget refusal 996-1000, 50ms retry 1002), Blocks[0] entry-0 'None' anchor 1013-1019, 'None'/'ByteProperty' entry ASCII match 1021-1037, '[Seeds] FName pool validated' LOG 1038",
+        "UnrealInitializer.cpp:1041-1064 Phase 4 ctor: classify CodeCallOnly 1049, assign_address 1053, FNAME_Find 'ByteProperty' probe 1054-1055, probe-id check + reset on failure 1056-1061, '[Seeds] slot 2 FName ctor bound' LOG 1063",
+        "UnrealInitializer.cpp:1066-1081 Phase 5 SCO: classify 1075, SetupStaticConstructObjectInternalAddress BIND 1079, LOG 1080",
+        "SeedTable.h:11-12,31-35 labels; runtime = kBaseObserved 0x400000 + label (0x9365ec0 -> 0x9765EC0 pool, matches the mission address)"
+      ],
+      "why_bind_despite_refusal": "Ordering + no rollback: seed_refused (throw std::runtime_error, UnrealInitializer.cpp:687-693 region; same helper used at 851/855/875/883/898/905/945/962/998/1017/...) fires only when Phase 3 reaches the pool; the Phase 2/2b binds at 857/908 already executed and logged. Nothing unbinds GUA or GMalloc on a later seed refusal.",
+      "boot_path_note": "With the staged settings (no DoEarlyScan key; default false, SettingsManager.hpp:43) ScanGame runs exactly ONCE, from UnrealInitializer::Initialize at 1644-1647, inside the PROSPERO try at 1654 whose only catch is DisarmLayoutGate+rethrow (2241-2248). The runtime_error swallow at UE4SSProgram.cpp:1329-1332 belongs to the DoEarlyScan early-scan call site and is DEAD on this configuration. So a pool refusal in this boot propagates: it cannot coexist with a healthy continuing startup."
+    },
+    "Q2_stopping_for_uninstall": {
+      "claim": "'Stopping mod X for uninstall' is the first log line of LuaMod::uninstall(). On PROSPERO it is reached only through UE4SSProgram::uninstall_mods() -> mod->uninstall(), and uninstall_mods() runs only inside shutdown_native_program() (plus the explicit queue_uninstall_mod* flows, which are event-driven and not in this log shape). It is NOT a seeds-refusal-to-mod-loader signal and NOT caused by the 'Mod is absent' error; the seeds refusal reaches it only by aborting init() into the shared shutdown path.",
+      "pins": [
+        "LuaMod.cpp:7039-7051 LuaMod::uninstall(); the log line at 7051; PROSPERO dispatch guard 7042-7049",
+        "UE4SSProgram.cpp:2224-2286 uninstall_mods(): lua mods uninstalled unconditionally (2241-2259, try/catch+std::terminate on PROSPERO 2244-2258), then cpp mods gated on is_installable (2263)",
+        "UE4SSProgram.cpp:544-558 shutdown_native_program(): uninstall_mods() at 546 when s_program==this",
+        "UE4SSProgram.cpp:508-517 ~UE4SSProgram -> shutdown_native_program (511); ctor catch paths 473-504 (494/502); init() error paths 698-702 and 716-718 (join returned with error) and catch 721-751 (shutdown at 740)",
+        "Seeds-refusal propagation: UnrealInitializer.cpp:1178 ScanGame consume -> seed_refused throw -> Initialize (no swallow on this path) -> setup_unreal -> UE4SSProgram.cpp:727-743 init catch -> copy_error_into_message 737 -> shutdown_native_program 740 -> uninstall_mods 546 -> LuaMod.cpp:7051",
+        "Runtime-status link: backend rethrow ue4ss_backend.cpp:67-70 -> RuntimeOwner start-thread catch runtime_owner.cpp:111-118 -> ack->failed(1, error.what()) -> the status 'failed' line carries the '[Seeds] REFUTED: ...' text (RuntimeAckSink::failed 174-177, emit 154-170)",
+        "'Mod is absent' is independent: LuaMod.cpp:941 logs + set_installable(false) 942 + return; it never calls uninstall",
+        "Also CheckStartupWait (UnrealInitializer.cpp:76-85, ThrowIfStoppedAt) turns an owner stop during any initializer wait (pool retry loop 983, object-construction wait 1688) into a throw -> same shutdown -> uninstall chain"
+      ],
+      "candidates_for_pid672": [
+        "A: seeds refused in this boot (immediate refusal classes only: span-table unavailable 943-962, 'None' anchor 1013-1019, entry mismatch 1021-1031, class/presence refusals 849-855/869-875/920-922/1049-1051/1075-1077). The truncated-shape class retried in the loop would burn the full SecondsToScanBeforeGivingUp budget (120s; staged ini line 11; SettingsManager.cpp:146-153 coerces 30->120) and does NOT fit an 11s gap.",
+        "B: seeds passed (log would continue with '[Seeds] FName pool validated', slot 2, slot 4, 'Using engine version', 'Waiting for object construction...') and the mod stop is an owner-initiated stop (StopRuntimeWithAck -> request_shutdown -> event loop exit -> shutdown_native_program) or a later init failure; the runtime-status REFUSED line would then be stale from a previous session.",
+        "C: another init throw (e.g. PostInitialize, required-objects timeout 2143-2153, type system 2156-2159) landing in the same shutdown path."
+      ],
+      "discriminators": [
+        "pid-672 UE4SS.log: presence/absence of '[Seeds] FName pool validated at 0x9765EC0' (1038) after the slot-3 line decides A vs B",
+        "runtime-status pid-672 session block: 'failed' detail containing '[Seeds] REFUTED' vs 'engine-ready'/'mods-started'",
+        "a literal-chronology caveat: per source, 'Setting up mods...' (start_native_mods during backend ctor, UE4SSProgram.cpp:585-628 setup_mods at 616, log at 1811) precedes ALL seeds lines (init() at 655 -> setup_unreal -> Initialize -> ScanGame). The mission's 1-3-before-4 ordering cannot be literal log order on this source; re-check the raw log timestamps."
+      ]
+    },
+    "Q3_post_seeds_chain": {
+      "claim": "Named stages after seeds complete, each with its UE4SS.log evidence line:",
+      "stages": [
+        "S1 seeds consumed: armed log 1153, slots bound 858/909, pool validated 1038, ctor verified 1063, SCO bound 1080; StaticStorage::bScanFullyCompleted=true at 1516",
+        "S2 FName-ctor detour verifier skipped when seed-bound: 1666-1670 (bSeedBoundFNameCtor gate); 'Using engine version: X.Y' 1678; 'Waiting for object construction...' 1685 until UObjectArray::GetNumElements()>=10000 (1689-1700, through the bound GUA); 'Locating KismetStringLibrary...' 1704, Conv_NameToString 1722-1739, CDO 1740-1753",
+        "S3 required objects: Hook::AddRequiredObject list 1756-1803, wait/timeout loop 1808-1870 ('Constructed [n / m]: ...' 1834, timeout warnings 1847/1865)",
+        "S4 engine singletons: Object/Struct/GameEngine/GameMode/Actor/GameViewportClient CDO lookups 1883-1930 (throws 1886/1893/1900/1912/1920)",
+        "S5 hook address resolution: 'Finding GameEngine::LoadMap' 1934 (LoadMapInternal assign 1938); 'Finding GameEngine::Tick' 1943 with seeds-armed vtable fallback 1981-2010 ('Scan failed, falling back to vtable address for GameEngine::Tick' 2008); R3 marshal: detour registrations compiled out, '[R3] refused: EngineTick pre-callback registrations ...' 2039, '[R3] EngineTick detour unavailable; deferring game-thread pump to R3 marshal' 2040, R3MarshalGate::pump_pending=true 2041; InitGameState 2069, BeginPlay 2078, EndPlay 2087, AActor::Tick 2096, GameViewportClient::Tick 2105, ProcessEvent 2114, ProcessConsoleExec 2124, UStruct::Link 2132",
+        "S6 close-out: 'Initializing global FName variables' 2140, required-objects fatal check 2143-2153, 'Initializing type system' 2155, ProcessInternal/ProcessLocalScriptFunction derivation 2174-2235 (Zydis code-read class, settings-gated), Disarm-on-throw 2241-2248, PostInitialize 2250 (GMalloc check 442-445, 'Post-initialization: GMalloc: ... -> ...' 447, searcher pools 460-495)",
+        "S7 program ready: init() 684-688 fire_unreal_init_for_cpp_mods / setup_unreal_properties / share_lua_functions; m_is_program_started=true 691; on_engine_initialized -> backend chain -> ack engine_ready (program 693-697, ue4ss_backend.cpp:33-45); event loop jthread 709",
+        "S8 mods: update()->on_program_start (1586) -> TRY 1510 -> install_lua_mods 1557 (install_mods<LuaMod> 1915, not-installable skip warning 1900) -> LuaMod::on_program_start 1558 -> start_lua_mods 1560 (start_mods<LuaMod> 2014; PROSPERO native branch 2019-2027: startup_mod_names loop, find_mod_by_name(IsInstalled::Yes) 2024, start_mod 2025)",
+        "S9 game-thread pump arm: NOT the EngineTick detour (compiled out 2027-2042); deferred to the R3 FuncPtr-marshal carrier drain in LuaMod (declarations 106-108; carrier post-hook publish 4571, pump_pending consumption 4576-4580; arm_funcptr_marshal_drain 4717+; initializer bridges 2316-2373). Until a carrier is armed and drains, identity publication and query-harness dispatch do not run."
+      ]
+    },
+    "Q4_read_path": {
+      "claim": "NativeModSource::read() matches EXACT UTF-8 logical keys below ue4ss/ (the loadlist-staged file-table strings), never filesystem paths. After the path fix, read() returns the Lua bytes iff normalize_path_for_lua(m_scripts_path/'main.lua') reproduces the staged key byte-for-byte, which for pure-ASCII paths it does.",
+      "pins": [
+        "LuaMod.cpp:6883 native_buffer = m_native_source->read(normalize_path_for_lua(script_path)); nullopt -> return false 6884; script_path = m_scripts_path / STR(\"main.lua\") 6962",
+        "LuaMod.cpp:42-54 local override normalize_path_for_lua = path.string() + backslash->slash; comment names the proven codecvt stride bug; 'using modbridge::normalize_path_for_lua' 54",
+        "NativeModSource.hpp:23-25 'Paths are exact UTF-8 logical keys below ue4ss/, never filesystem paths'; NativeModFile.path is the key",
+        "NativeModSource.cpp:48-55 read(): validate_path 50 (throws), sorted binary search 51-52, absent -> nullopt 53; validate_path 10-45: must start with ue4ss/, no control chars/backslash/colon, strict UTF-8, canonical (no '.', '..', empty parts, no trailing '/')",
+        "Key derivation = loadlist-staged names: lua_mods() rows built from the same file table 77-105: prefix 'ue4ss/Mods/', '<Mod>/Scripts|scripts/', main.lua presence -> row {name, path='ue4ss/Mods/<Mod>', scripts_path='ue4ss/Mods/<Mod>/Scripts'}; ctor consumes found->scripts_path at LuaMod.cpp:945",
+        "So loadlist path == filesystem-looking logical path byte-for-byte on this target; read() never stats a filesystem",
+        "Failure surface: key miss -> 'Failed to execute main script: ...' LuaMod.cpp:6968; key invalid (mangled bytes) -> validate_path throw -> caught 6936 -> 'Exception in load_and_execute_script: ...' 6938",
+        "Fix provenance: launch11_one_pass.py:163 pins Helpers/String.hpp=worker-iniparser-repro staged 7c983db4 (to_utf8_string via RC::Unicode::EncodeUtf8, String.hpp:570-578); the merged LuaMod carries the local path.string() override. Residual honesty: path::string() on this target's wide-char path goes through the libc++ locale codecvt (a different facet from the wstring_convert codecvt_utf8/utf16 do_in/do_out proven broken in worker-construction-error ANALYSIS 3); compile-verified in situ, but no console read-back yet proves byte-exactness at runtime"
+      ]
+    },
+    "Q5_lua_state": {
+      "claim": "The Lua state exists from mod construction (ctor member init), but script execution happens only in start_mod(), which requires: ctor lookup matched (installable), the mod listed in startup_mod_names() (mods.txt :1 or enabled.txt), installed by install_lua_mods, and then main.lua read+loaded+pcall'ed cleanly; the first output line is the script's own top-level log call.",
+      "pins": [
+        "LuaMod.cpp:932 m_lua(LuaMadeSimple::new_state()) in the ctor init list; LuaMadeSimple.cpp (ue4ss-native-lms-port-1 port/first):1088-1090 luaL_newstate",
+        "Enablement: NativeModSource.cpp:106-135 startup_mod_names from ue4ss/Mods/mods.txt rows 'Name:1' (113-133, malformed row throws 128-130) or <Mod>/enabled.txt (134-135)",
+        "Install gate: UE4SSProgram.cpp:1898-1902 not-installable -> 'Was unable to install mod ... not installable' and never set_installed(true); PROSPERO start_mods find_mod_by_name(IsInstalled::Yes) 2024 skips it",
+        "start_mod LuaMod.cpp:6943-6983: prepare_mod 6949 (6798), make_main_state 6950 (1090), setup_lua_global_functions_main_state_only 6951, make_async_state 6952 (1064), start_async_thread 6953, m_is_started=true 6955, setup_custom_module_loader 6959 (1155)",
+        "Execution: load_and_execute_script 6874-6941: native read 6883, chunk name '@'+path 6904, native_lua_chunk 6912 (load errors 'Error loading script' 6916), lua_pcall 6923 (exec errors 'Error executing script' 6927); success returns true 6934",
+        "First output: the chunk's top-level code runs during lua_pcall; main.lua:746 log(\"Loaded v1.0. Clean pickup-only release. F7 opens the menu.\") (pin: worker-executedrain-trace CLAIM hop 1) is what prints as '[Lua] [TownfallItemSpawner] Loaded v1.0...'",
+        "Failure lines to expect if any prerequisite is still unmet: 'Failed to execute main script' 6968 (read miss), 'Error loading script' 6916, 'Error executing script' 6927, 'Exception during mod startup' 6981"
+      ]
+    }
+  },
+  "confidence": {
+    "Q1": "high (direct line-cited source trace on the receipt-pinned composed units)",
+    "Q2": "high for the code path; medium for which trigger fired in pid 672 (console log is ground truth; three candidate triggers enumerated with discriminators)",
+    "Q3": "high (single linear chain, all stages line-cited)",
+    "Q4": "high for key semantics; medium-low residual on path::string() runtime byte-exactness on console (compile-verified only)",
+    "Q5": "high"
+  },
+  "no_claims_beyond_evidence": "No runtime acceptance is claimed. Nothing here asserts the pool passed or failed on pid 672; it enumerates what each outcome would have logged."
+}

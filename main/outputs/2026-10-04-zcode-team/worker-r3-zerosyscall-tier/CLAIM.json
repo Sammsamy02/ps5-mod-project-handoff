@@ -1,0 +1,62 @@
+{
+  "worker": "worker-r3-zerosyscall-tier",
+  "date": "2026-10-04",
+  "mode": "PROPOSALS-ONLY",
+  "task": "Design the R3 zero-syscall tier (UFunction::SetFuncPtr hooking) to build-ready depth; map the Item Spawner's actual interception dependencies against R3; honest verdict on whether the acceptance ladder completes on R3 alone.",
+  "claims": [
+    {
+      "id": "R3-1",
+      "claim": "UFunction::SetFuncPtr hooking exists in-tree at port/unreal/src/UFunction.cpp and performs an in-object FuncPtr field write on a heap UFunction object (no vtable, no mprotect).",
+      "status": "to-verify-by-reading",
+      "evidence_planned": [
+        "SRC port/unreal/src/UFunction.cpp:78-90 direct read",
+        "SRC port/unreal/src/UFunctionStructs.cpp hook body read",
+        "CON igf4 gua_writeback record as prot=3 write proof"
+      ]
+    },
+    {
+      "id": "R3-2",
+      "claim": "The port already has a native (non-Windows) SetFuncPtr route usable on PS5/SysV; any Windows-only guards will be identified exactly.",
+      "status": "to-verify-by-reading",
+      "evidence_planned": [
+        "SRC UFunction.cpp / UFunctionStructs.cpp platform guards",
+        "SRC port/unreal/include/Unreal/UFunction.hpp or Script.hpp declarations"
+      ]
+    },
+    {
+      "id": "R3-3",
+      "claim": "The Item Spawner's chain (keybind -> ExecuteInGameThread -> reflection -> BeginDeferredActorSpawnFromClass) is mapped step-by-step: which steps need EngineTick/ProcessEvent hooks vs which are direct port API calls needing no interception.",
+      "status": "to-verify-by-reading",
+      "evidence_planned": [
+        "TEAM worker-itemspawner-* bundle files",
+        "SRC LuaMod.cpp ExecuteInGameThread / game-thread marshal path",
+        "SRC reflection call sites (FindFirstOf/GetPropertyValue)"
+      ]
+    },
+    {
+      "id": "R3-4",
+      "claim": "An R3-compatible alternative for ExecuteInGameThread (or an honest statement that none exists without EngineTick/ProcessEvent) will be designed or denied with citations.",
+      "status": "to-verify-by-analysis",
+      "evidence_planned": [
+        "SRC LuaMod.cpp:4542-4556 RegisterHook routing",
+        "SRC Hooks.cpp RegisterProcessEventPreCallback",
+        "VTABLE-SWAP-DESIGN.md section 5 R3 and section 6 limits"
+      ]
+    },
+    {
+      "id": "R3-5",
+      "claim": "R3-TIER-DESIGN.md will state the exact composition integration (unit diffs + argv) for the SetFuncPtr route and an explicit verdict on acceptance-ladder completion under R3-only.",
+      "status": "planned",
+      "evidence_planned": [
+        "Composition sites from worker-composition-* / SINI staged initializer citations",
+        "Settings manager gates cited from SRC port"
+      ]
+    }
+  ],
+  "non_claims": [
+    "No claim any SetFuncPtr hook, swap, or Lua RegisterHook has executed in-game.",
+    "No claim EngineTick can be hooked via R3 (it is a C++ virtual, not a UFunction).",
+    "No claim the acceptance ladder currently passes or that any prior worker's probe results are re-verified here.",
+    "Nothing is built, staged, or executed; all deliverables are proposals."
+  ]
+}

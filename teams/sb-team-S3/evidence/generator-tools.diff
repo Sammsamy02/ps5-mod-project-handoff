@@ -1,0 +1,141 @@
+diff -ru branch/outputs/ps5-mod-bridge/tools/profilegen/cli.py generator/outputs/ps5-mod-bridge/tools/profilegen/cli.py
+--- branch/outputs/ps5-mod-bridge/tools/profilegen/cli.py	2026-10-08 00:04:36
++++ generator/outputs/ps5-mod-bridge/tools/profilegen/cli.py	2026-10-13 21:51:56
+@@ -8,7 +8,7 @@
+ import time
+ from typing import List, Optional, Tuple
+ 
+-from . import detectors, emit_seedtable, emit_ue4ss, profile
++from . import detectors, emit_profile, emit_seedtable, emit_ue4ss, profile
+ from .elf import ElfError, ElfImage, EncryptedSelfError, check_not_encrypted_self
+ from .index import ImageIndex
+ from .model import Context
+@@ -99,6 +99,10 @@
+         self.seed_path = None       # where it was written, if it was
+         self.seed_error = None      # why SeedTable.h was not produced (text), if it was not
+         self.seed_requested = False  # --emit-seedtable was given
++        self.profile = None          # emit_profile record (dict) when a profile .ini was built
++        self.profile_path = None     # where the profile .ini was written, if it was
++        self.profile_error = None    # why the profile .ini was not produced (text), if it was not
++        self.profile_requested = False  # --emit-profile was given
+         self.timings = dict(sorted({**ctx.index.timings, **ctx.timings}.items()))
+ 
+ 
+@@ -131,14 +135,32 @@
+     return records, model, path, None
+ 
+ 
++def _emit_profile_ini(doc, elf, out, path, options, result) -> Tuple[List[dict], Optional[str]]:
++    """Write the per-game runtime PROFILE FILE (Team S1 format, B4) to ``path``; return (emit records, error)."""
++    if path is None:
++        return [], None
++    try:
++        rec = emit_profile.emit(doc, elf, path, options or emit_profile.ProfileOptions())
++    except emit_profile.ProfileRefused as exc:
++        return [], str(exc)
++    result.profile, result.profile_path = rec, path
++    rel = os.path.relpath(os.path.abspath(path), os.path.abspath(out)) if out else ".."
++    if not rel.startswith(".."):                       # only files inside the profile folder belong in emit[]
++        return [{"path": rel.replace(os.sep, "/"), "bytes": rec["bytes"], "sha256": rec["sha256"]}], None
++    return [], None
++
++
+ def generate(eboot: str, param: Optional[str] = None, out: Optional[str] = None, load_base: Optional[int] = None,
+              strict: bool = False, only: Optional[List[str]] = None, game_profiles: Optional[str] = None,
+              utc: Optional[str] = None, evidence: bool = True, force: bool = False,
+-             seedtable: Optional[str] = None, seed_options: Optional["emit_seedtable.SeedOptions"] = None) -> Result:
++             seedtable: Optional[str] = None, seed_options: Optional["emit_seedtable.SeedOptions"] = None,
++             profile_ini: Optional[str] = None,
++             profile_options: Optional["emit_profile.ProfileOptions"] = None) -> Result:
+     """Run every detector and (when ``out`` is given) write the profile folder.
+ 
+     Inputs are checked first and nothing is written when one is unusable (``InputError``, ``ElfError``,
+-    ``EncryptedSelfError``).  ``seedtable`` is an explicit path for ``SeedTable.h`` (not written unless asked for)."""
++    ``EncryptedSelfError``).  ``seedtable`` is an explicit path for ``SeedTable.h`` (not written unless asked for).
++    ``profile_ini`` is an explicit path for the per-game runtime PROFILE FILE (Team S1 format, B4)."""
+     t0 = time.time()
+     _check_executable(eboot)
+     param_bytes = None
+@@ -161,9 +183,15 @@
+     result.seed, result.seed_path, result.seed_error = model, written, err
+     if model is not None:
+         ctx.evidence_files["seedtable"] = {"notes": model.notes, "complete": model.complete, "written": written is not None}
++    result.profile_requested = profile_ini is not None
++    profile_records, result.profile_error = _emit_profile_ini(doc, elf, out, profile_ini, profile_options, result)
++    if result.profile is not None:
++        ctx.evidence_files["profile"] = {"required_set_complete": result.profile["required_set_complete"],
++                                         "features": result.profile["features"], "absent": result.profile["absent"],
++                                         "notes": result.profile["notes"], "sha256": result.profile["sha256"]}
+     if out:
+         os.makedirs(out, exist_ok=True)
+-        emitted = emit_ue4ss.emit(doc, out) + seed_records
++        emitted = emit_ue4ss.emit(doc, out) + seed_records + profile_records
+         doc["emit"] = emitted
+         for need, text in (("emit.VTableLayout", "VTableLayout.ini"), ("emit.MemberVariableLayout", "MemberVariableLayout.ini")):
+             if not any(e["path"].endswith(text) for e in emitted):
+@@ -225,6 +253,15 @@
+                          "default) or base_slot = the raw allocator pointer; the header names both")
+     ap.add_argument("--seed-heap-span", metavar="unbounded|omit|LO:HI",
+                     help="kHeapLo/kHeapHi in SeedTable.h: the profile has no heap span, so the default is unbounded")
++    ap.add_argument("--emit-profile", metavar="PATH",
++                    help="also write the per-game runtime PROFILE FILE (Team S1 PROFILE-FORMAT.md, B4) to PATH: the one data "
++                         "file the generic runtime loads instead of the compiled per-game headers. Inside --out it is in emit[]")
++    ap.add_argument("--profile-gmalloc", choices=emit_profile.PROFILE_GMALLOC_CHOICES,
++                    help="which GMalloc variable [seeds] gmalloc_label takes: base_slot (default, what THIS runtime's V1/V2 "
++                         "seed) or dispatch (what FMemory::Malloc/Free load)")
++    ap.add_argument("--exe-path", help="console path of the readable executable copy for the profile (B8 / Team S2); "
++                                       "omitted otherwise")
++    ap.add_argument("--profile-name", help="override the synthesized profile name")
+     ap.add_argument("--quiet", action="store_true")
+     ns = ap.parse_args(argv)
+     unknown = [n for n in (ns.only or []) if n not in {name for name, _fn in detectors.ORDER}]
+@@ -235,12 +272,14 @@
+     try:
+         base = _parse_load_base(ns.load_base)
+         seed_options = emit_seedtable.SeedOptions(ns.seed_gmalloc, ns.seed_heap_span)
+-    except (InputError, emit_seedtable.SeedTableRefused) as exc:
++        profile_options = emit_profile.ProfileOptions(ns.profile_gmalloc, ns.exe_path, ns.profile_name)
++    except (InputError, emit_seedtable.SeedTableRefused, emit_profile.ProfileRefused) as exc:
+         print("profilegen: %s" % exc, file=sys.stderr)
+         return EXIT_INVALID_INPUT
+     try:
+         result = generate(ns.eboot, ns.param, ns.out, base, ns.strict, ns.only, ns.game_profiles, ns.utc,
+-                          not ns.no_evidence, ns.force, ns.emit_seedtable, seed_options)
++                          not ns.no_evidence, ns.force, ns.emit_seedtable, seed_options,
++                          ns.emit_profile, profile_options)
+     except VerifiedProfileError as exc:
+         print("profilegen: %s" % exc, file=sys.stderr)
+         return EXIT_VERIFIED_KEPT
+@@ -266,9 +305,18 @@
+                 str(result.seed.complete).lower()))
+             for n in result.seed.notes:
+                 print("    seedtable: " + n)
++        if result.profile is not None and result.profile_path:
++            print("  profile.ini: %s  (required_set_complete=%s, features: %s)" % (
++                result.profile_path, str(result.profile["required_set_complete"]).lower(),
++                ", ".join("%s=%d" % (k, 1 if v else 0) for k, v in result.profile["features"].items()) or "none"))
++            for fld, why in result.profile["absent"]:
++                print("    profile absent %s: %s" % (fld, why))
+         for u in doc["unresolved"]:
+             print("  unresolved %s: %s" % (u["id"], u["why"]))
+     if result.seed_requested and result.seed_error:
+         print("profilegen: SeedTable.h not written: %s" % result.seed_error, file=sys.stderr)
++        return EXIT_SEEDTABLE_REFUSED
++    if result.profile_requested and result.profile_error:
++        print("profilegen: profile.ini not written: %s" % result.profile_error, file=sys.stderr)
+         return EXIT_SEEDTABLE_REFUSED
+     return 0
+Only in generator/outputs/ps5-mod-bridge/tools/profilegen: emit_profile.py
+diff -ru branch/outputs/ps5-mod-bridge/tools/profilegen/emit_ue4ss.py generator/outputs/ps5-mod-bridge/tools/profilegen/emit_ue4ss.py
+--- branch/outputs/ps5-mod-bridge/tools/profilegen/emit_ue4ss.py	2026-10-08 00:04:36
++++ generator/outputs/ps5-mod-bridge/tools/profilegen/emit_ue4ss.py	2026-10-13 21:55:26
+@@ -47,7 +47,8 @@
+                     "FBoolProperty", "FStructProperty", "FArrayProperty", "FEnumProperty", "FByteProperty", "FClassProperty",
+                     "FDelegateProperty", "FMapProperty", "FSetProperty", "FInterfaceProperty", "FObjectPropertyBase",
+                     "FMulticastDelegateProperty", "FSoftClassProperty", "FFieldPathProperty", "UScriptStruct", "UEnum"]
+-EXTENDED_VTABLES = [("UEngine", "Tick"), ("FProperty", "DestroyValueInternal"), ("FProperty", "InitializeValueInternal")]
++EXTENDED_VTABLES = [("UEngine", "Tick"), ("FProperty", "DestroyValueInternal"), ("FProperty", "InitializeValueInternal"),
++                    ("FProperty", "GetMinAlignment")]
+ _SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "native_layout_schema.json")
+ _schema_cache: Optional[Dict[str, Any]] = None
+ 

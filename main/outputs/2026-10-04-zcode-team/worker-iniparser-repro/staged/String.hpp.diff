@@ -1,0 +1,111 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/first/include/Helpers/String.hpp	2026-10-02 09:35:14
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-iniparser-repro/staged/Helpers/String.hpp	2026-10-05 16:45:30
+@@ -12,6 +12,15 @@
+ #include <cassert>
+ 
+ #include <String/StringType.hpp>
++// worker-iniparser-repro staged fix: explicit UTF-16<->UTF-8 codec. The PS5
++// SDK's prebuilt libc++ locale.cpp.o pairs 2-byte-wchar do_in/do_out wrappers
++// with 4-byte-unit helpers (utf8_to_utf16/utf16_to_utf8 on uint32_t + a /2
++// to_next fixup), so every std::wstring_convert call on a short-wchar target
++// consumes/produces every OTHER character. Route all conversions through
++// RC::Unicode::EncodeUtf8/DecodeUtf8 (Helpers/Utf16Utf8.hpp), which are
++// explicit, locale-free, and correct by construction for the project's
++// 2-byte CharType (static_assert in Utf16Utf8.hpp).
++#include <Helpers/Utf16Utf8.hpp>
+ 
+ namespace RC
+ {
+@@ -178,10 +187,13 @@
+ 
+     auto inline to_wstring(const std::string& input) -> std::wstring
+     {
+-#pragma warning(disable : 4996)
+-        static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter{};
+-        return converter.from_bytes(input);
+-#pragma warning(default : 4996)
++        // worker-iniparser-repro staged fix: was
++        // std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>>{}.from_bytes
++        // (same short-wchar PS5 stride corruption as to_wstring(string_view)).
++        // On the target CharType == wchar_t so the element copy is identity;
++        // on FORCE_U16 host builds the shim carries UTF-16 code units.
++        auto tmp = Unicode::DecodeUtf8(input);
++        return std::wstring{tmp.begin(), tmp.end()};
+     }
+ 
+     auto inline to_wstring(const char* pInput)
+@@ -192,21 +204,27 @@
+ 
+     auto inline to_wstring(std::string_view input) -> std::wstring
+     {
++#ifdef PLATFORM_WINDOWS
+ #if __clang__
+ #pragma clang diagnostic push
+ #pragma clang diagnostic ignored "-Wdeprecated-declarations"
+ #endif
+-#ifdef PLATFORM_WINDOWS
+ #pragma warning(disable : 4996)
+         static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter{};
+         return converter.from_bytes(input.data(), input.data() + input.length());
+ #pragma warning(default : 4996)
+-#else
+-        static std::wstring_convert<std::codecvt_utf8<wchar_t>> converter{};
+-        return converter.from_bytes(input.data(), input.data() + input.length());
+-#endif
+ #if __clang__
+ #pragma clang diagnostic pop
++#endif
++#else
++        // worker-iniparser-repro staged fix: was
++        // std::wstring_convert<std::codecvt_utf8<wchar_t>>{}.from_bytes,
++        // which on the short-wchar PS5 target interleaves a NUL after every
++        // character (4-byte-unit writes into a 2-byte-wchar buffer), turning
++        // every settings ini section/key into garbage that the retained
++        // IniParser rejects with "Syntax error(8 : 2): Expected state
++        // NewLineStarted or StartOfFile, got CreateSectionKey".
++        return to_wstring(std::string{input});
+ #endif
+     }
+ 
+@@ -240,10 +258,13 @@
+ 
+     auto inline to_string(const std::wstring& input) -> std::string
+     {
+-#pragma warning(disable : 4996)
+-        static std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter{};
+-        return converter.to_bytes(input);
+-#pragma warning(default : 4996)
++        // worker-iniparser-repro staged fix: was
++        // std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>>{}.to_bytes,
++        // which on the short-wchar PS5 target returns every other character
++        // (the [::2] corruption observed in the stored IniParser error).
++        // On the target CharType == wchar_t so the element copy is identity.
++        StringType tmp{input.begin(), input.end()};
++        return Unicode::EncodeUtf8(tmp);
+     }
+ 
+     auto inline to_string(const wchar_t* pInput)
+@@ -260,17 +281,12 @@
+ 
+     auto inline to_string(std::u16string_view input) -> std::string
+     {
+-#if __clang__
+-#pragma clang diagnostic push
+-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+-#endif
+-#pragma warning(disable : 4996)
+-        static std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t> converter{};
+-        return converter.to_bytes(input.data(), input.data() + input.length());
+-#pragma warning(default : 4996)
+-#if __clang__
+-#pragma clang diagnostic pop
+-#endif
++        // worker-iniparser-repro staged fix: was
++        // std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>{}.
++        // Route through the explicit codec for uniform behavior across
++        // FORCE_U16 host builds and the short-wchar PROSPERO target.
++        StringType tmp{input.begin(), input.end()};
++        return Unicode::EncodeUtf8(tmp);
+     }
+ 
+     auto inline to_u16string(const std::wstring& input) -> std::u16string

@@ -1,0 +1,76 @@
+--- preserved-resume-v1
++++ standalone-post-package-resume
+@@ -3,6 +3,7 @@
+ from pathlib import Path
+ import sys
+ sys.dont_write_bytecode = True
++sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
+ from admission import Admission, OWN, pin, read, require, sha
+ from composition import write
+ from hooks import install
+@@ -34,12 +35,36 @@
+     return {str(p): sha(p) for p in paths}
+ 
+ 
++def authorize_post_package(admission_path, admission_digest, go_path, go_digest):
++    admission_path = Path(admission_path).resolve()
++    go_path = Path(go_path).resolve()
++    post = read(pin({'path': str(admission_path), 'sha256': admission_digest}, 'standalone post-package admission'))
++    go = read(pin({'path': str(go_path), 'sha256': go_digest}, 'standalone post-package GO'))
++    require(post.get('scope') == 'post-package-only' and post.get('full_build_enabled') is False
++            and post.get('no_compile_link_package') is True, 'post-package-only admission required')
++    require(go.get('r4_post_package_go') is True and go.get('r4_full_build_go') is False
++            and go.get('scope') == 'post-package-only', 'post-package-only GO required')
++    require(go.get('admission_sha256') == admission_digest, 'post-package GO admission mismatch')
++    compiled = read(pin(post['compilation_admission'], 'unchanged actual compilation admission'))
++    pin(post['compilation_go'], 'unchanged actual compilation GO')
++    expected = dict(compiled['execution_source_pins'])
++    expected[str(Path(__file__).resolve())] = sha(Path(__file__))
++    require(post.get('execution_source_pins') == expected
++            and go.get('execution_source_pins') == expected, 'post-package source catalog mismatch')
++    for path, digest in expected.items():
++        pin({'path': path, 'sha256': digest}, 'exact original-five plus standalone wrapper')
++    for key in ('source_manifest', 'profile_json', 'generated_header'):
++        require(post.get(key) == compiled[key], 'post-package ' + key + ' identity mismatch')
++        pin(post[key], 'unchanged post-package source/profile identity')
++    return post
++
++
+ def main():
+     parser = argparse.ArgumentParser(description=__doc__)
+-    parser.add_argument('--admission', required=True)
+-    parser.add_argument('--admission-sha256', required=True)
+-    parser.add_argument('--go', required=True)
+-    parser.add_argument('--go-sha256', required=True)
++    parser.add_argument('--post-admission', required=True)
++    parser.add_argument('--post-admission-sha256', required=True)
++    parser.add_argument('--post-go', required=True)
++    parser.add_argument('--post-go-sha256', required=True)
+     parser.add_argument('--selector-review', required=True)
+     parser.add_argument('--selector-review-sha256', required=True)
+     args = parser.parse_args()
+@@ -48,7 +73,14 @@
+     require(review.get('pass') is True and review.get('findings') == [], 'selector review must pass')
+     require(Path(review['resume_wrapper']['path']).resolve() == Path(__file__).resolve(), 'reviewed wrapper path mismatch')
+     pin(review['resume_wrapper'], 'independently reviewed resume wrapper')
+-    a = Admission.load(args.admission, args.admission_sha256, args.go, args.go_sha256)
++    post = authorize_post_package(args.post_admission, args.post_admission_sha256,
++                                  args.post_go, args.post_go_sha256)
++    a = Admission.load(post['compilation_admission']['path'], post['compilation_admission']['sha256'],
++                       post['compilation_go']['path'], post['compilation_go']['sha256'])
++    for number in (1, 2):
++        recorded = read(OWN / f'runs/run-l19-{number}/receipt.json')
++        require(recorded['r4_execution_admission'] == post['compilation_admission']
++                and recorded['r4_parent_go'] == post['compilation_go'], 'actual compiled pair provenance mismatch')
+     before = built_pins()
+     install(a)
+     import launch19_one_pass as launcher
+@@ -96,6 +128,8 @@
+         'actual_artifacts': artifacts, 'composition_sha256': runtime_hashes,
+         'post_package_resume': {'path': str(Path(__file__).resolve()), 'sha256': sha(Path(__file__))},
+         'selector_review': review_pin, 'explicit_composed_selection': selection,
++        'post_package_admission': {'path': str(Path(args.post_admission).resolve()), 'sha256': args.post_admission_sha256},
++        'post_package_go': {'path': str(Path(args.post_go).resolve()), 'sha256': args.post_go_sha256},
+         'compiled_package_files_unchanged': before,
+         'scope_note': 'Actual full pair attempt6 stopped at ambiguous size heuristic; only post-package gates resumed, no repeated compile/link/package',
+         'console_contact': False, 'upload': 'HOLD'})

@@ -1,0 +1,46 @@
+--- .superpowers/native-dependency-spike/ue4ss-native-read-lease-1/include/OwnedMappedImageCaller.hpp
++++ .superpowers/native-dependency-spike/ue4ss-native-ps-scan-provider-1/include/OwnedMappedImageCaller.hpp
+@@ -7,14 +7,14 @@
+ // Synchronous mapped resolver caller. No discovery, registration or engine
+ // identity assertion. Context must already own actual described bytes.
+ class OwnedMappedImageCaller final {
+-    RC::Platform::NativeProgramContext context_;
++    std::shared_ptr<const ModuleSnapshot> source_;
+     std::vector<PLH::OwnedMemory::ReadRange> ranges_;
+     PLH::OwnedMemory::ReadLease lease_;
+     PsMappedImageCaller caller_;
+-    static auto ranges(const RC::Platform::NativeProgramContext& context) {
+-        if (!context.module_source) throw std::invalid_argument("Mapped resolver requires module owner");
++    static auto ranges(const std::shared_ptr<const ModuleSnapshot>& source) {
++        if (!source) throw std::invalid_argument("Mapped resolver requires module owner");
+         std::vector<PLH::OwnedMemory::ReadRange> result;
+-        for (const auto& range : context.module_source->ReadableRanges().at(ScanTarget::MainExe))
++        for (const auto& range : source->ReadableRanges().at(ScanTarget::MainExe))
+             result.push_back({range.data, range.size});
+         return result;
+     }
+@@ -41,14 +41,21 @@
+         }
+         return false;
+     }
++static auto context_for(const std::shared_ptr<const ModuleSnapshot>& source) {
++        RC::Platform::NativeProgramContext context{};context.module_source=source;return context;
++    }
+ public:
+     OwnedMappedImageCaller(const RC::Platform::NativeProgramContext& context,uint32_t format,
+         uint64_t text_base,uint64_t image_base=0,PsMappedExtent eh_frame={},
+         PsMappedExtent eh_frame_hdr={},PsMappedExtent pe_exception_directory={})
+-      :context_(context),ranges_(ranges(context_)),lease_(ranges_),
+-       caller_(context_,segments(lease_),format,text_base,image_base,eh_frame,eh_frame_hdr,pe_exception_directory) {
++      :OwnedMappedImageCaller(context.module_source,format,text_base,image_base,eh_frame,eh_frame_hdr,pe_exception_directory) {}
++    OwnedMappedImageCaller(std::shared_ptr<const ModuleSnapshot> source,uint32_t format,
++        uint64_t text_base,uint64_t image_base=0,PsMappedExtent eh_frame={},
++        PsMappedExtent eh_frame_hdr={},PsMappedExtent pe_exception_directory={})
++      :source_(std::move(source)),ranges_(ranges(source_)),lease_(ranges_),
++       caller_(context_for(source_),segments(lease_),format,text_base,image_base,eh_frame,eh_frame_hdr,pe_exception_directory) {
+         if(!permits_code(text_base)) throw std::invalid_argument("Mapped text base must be registered readable executable bytes");
+-        const auto& main=context_.module_source->Views().array[static_cast<size_t>(ScanTarget::MainExe)];
++        const auto& main=source_->Views().array[static_cast<size_t>(ScanTarget::MainExe)];
+         if(format==PS_MAPPED_IMAGE_PE64 && image_base!=reinterpret_cast<uintptr_t>(main.image_base))
+             throw std::invalid_argument("Mapped PE base differs from retained module image");
+     }

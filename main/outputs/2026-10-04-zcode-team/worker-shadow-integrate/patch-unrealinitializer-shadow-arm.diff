@@ -1,0 +1,120 @@
+--- a/UnrealInitializer.cpp
++++ b/UnrealInitializer.cpp
+@@ -15,6 +15,9 @@
+ #if defined(__PROSPERO__)
+ #include <PsScanAbi.h>
+ #include <OwnedMappedScanSource.hpp>
++#include <cstdio> // [Shadow] decrypted-eboot read (fopen route proven live by the bridge probes)
++#include <vector> // [Shadow]
++#include "shadow_arm.hpp" // [Shadow] worker-shadow-integrate staged unit (host-verified; see patch + ADMISSION.md)
+ #endif
+ #include <Unreal/PlatformModuleSnapshot.hpp>
+ #include <Unreal/VersionedContainer/Container.hpp>
+@@ -853,7 +856,94 @@
+             UObjectGlobals::SetupStaticConstructObjectInternalAddress(reinterpret_cast<void*>(sco_runtime));
+             Output::send(STR("[Seeds] slot 4 static_construct_object_internal bound at {} (code; identity and ABI unverified)\n"),
+                          reinterpret_cast<void*>(sco_runtime));
++        }
++
++        // =====================================================================================
++        // [Shadow] THIRD arm (worker-shadow-integrate; INTEGRATION.md section 1.3).
++        // Strictly additive: runs AFTER the required slots are seed-bound.
++        //   - REQUIRED slots (0/2/3/4) stay seed-authoritative: the shadow scan
++        //     is a CROSS-CHECK only (agreement logs confidence; disagreement is
++        //     a loud refusal naming both values — never a silent override).
++        //   - OPTIONAL slots (fname_tostring, gnatives, fuobject_hash_tables_get,
++        //     console_manager_singleton) become shadow-RESOLVABLE once a pinned,
++        //     uniqueness-audited sig exists; until then their documented
++        //     fallbacks stay in force (none pinned at this staging).
++        //   - Identity gate: sha256(decrypted eboot) must equal
++        //     SeedTable::kImageSha256 before anything is scanned.
++        //   - Slide: the SAME per-launch base check the seed path uses
++        //     (module_view_base(), the bridge-installed MainExe view base) —
++        //     same boot, same capture, never a cached slide.
++        // The armed shadow ModuleSource (ModuleSnapshot over the private
++        // readable copy) is retained here for the scan path; the bridge's live
++        // ModuleSource keeps its duties (FindExport etc.) unchanged.
++        // =====================================================================================
++        static std::shared_ptr<const Platform::ModuleSnapshot> ShadowSource{};
++
++        // [Shadow] IO seam: read the decrypted eboot once (the homebrew staging
++        // retains it; profile key identity.executable_console_path — worker-code-scan
++        // INTEGRATION.md section 5; NID-routed fopen proven live by the bridge
++        // probes). NOTE for composition: repin this path to the game profile
++        // value; it is the single open repin of the staged patch.
++        static constexpr const char* kDecryptedEbootPath = "/data/homebrew/townfall-ps5-ue56-v1/decrypted/eboot.bin";
++
++        static auto read_decrypted_eboot(std::vector<uint8_t>& bytes) -> bool
++        {
++            FILE* fh = std::fopen(kDecryptedEbootPath, "rb");
++            if (fh == nullptr)
++            {
++                return false;
++            }
++            std::fseek(fh, 0, SEEK_END);
++            const long size = std::ftell(fh);
++            std::fseek(fh, 0, SEEK_SET);
++            if (size <= 0)
++            {
++                std::fclose(fh);
++                return false;
++            }
++            bytes.resize(static_cast<size_t>(size));
++            const bool ok = std::fread(bytes.data(), 1, bytes.size(), fh) == bytes.size();
++            std::fclose(fh);
++            return ok;
+         }
++
++        static auto shadow_arm_stage() -> void
++        {
++            std::vector<uint8_t> eboot;
++            if (!read_decrypted_eboot(eboot))
++            {
++                seed_refused(fmt::format("[Shadow] cannot read the decrypted eboot at '{}' (staging path; repin to profile identity.executable_console_path)", kDecryptedEbootPath));
++            }
++
++            namespace shadowarm = rc::shadowarm;
++            shadowarm::ShadowArmInput in{};
++            in.eboot = eboot.data();
++            in.eboot_size = eboot.size();
++            in.bridge_observed_base = module_view_base(); // same-capture bridge geometry (0 = no geometry -> arm refuses)
++            in.pins.base_observed = SeedTableNS::kBaseObserved;
++            in.pins.image_sha256 = SeedTableNS::kImageSha256.data();
++            in.pins.image_extent = 0xbc602c8ull; // pinned whole-image extent (game profile)
++            in.pins.required[0] = {&shadowarm::kGuaXref, SeedTableNS::kGUObjectArray.label};
++            in.pins.required[1] = {&shadowarm::kFNameCtor, SeedTableNS::kFNameCtorWchar.label};
++            in.pins.required[2] = {&shadowarm::kGMallocStore, SeedTableNS::kGMalloc.label};
++            in.pins.required[3] = {&shadowarm::kScoPrologue, SeedTableNS::kStaticConstructObject.label};
++            // Optional slots: sigs NOT pinned at this staging — fallbacks stay.
++            in.optional[0] = {"fname_tostring", nullptr};
++            in.optional[1] = {"gnatives", nullptr};
++            in.optional[2] = {"fuobject_hash_tables_get", nullptr};
++            in.optional[3] = {"console_manager_singleton", nullptr};
++            in.log = [](void*, const char* msg) { Output::send(STR("{}\n"), ensure_str(msg)); };
++
++            shadowarm::ShadowArmReport report{};
++            const auto status = shadowarm::shadow_arm(in, &report);
++            if (status != shadowarm::ShadowArmStatus::Armed)
++            {
++                // Every refusal is loud and terminal for this launch, exactly
++                // like the seed refusals above (never replay, never re-rate).
++                seed_refused(std::string{report.detail});
++            }
++            ShadowSource = report.snapshot; // keep the readable copy alive for the scan path
++        }
+     }
+ #endif
+ 
+@@ -950,6 +1040,12 @@
+             // the retry loop below would only ever end in "PS scan timed out".
+             // Pool validation retries inside the same budget.
+             SeedArming::consume_required_slot_seeds(std::chrono::seconds(UnrealConfig.SecondsToScanBeforeGivingUp));
++
++            // [Shadow] THIRD arm (worker-shadow-integrate): identity-gated
++            // shadow_init + scan_pattern cross-check of the four REQUIRED
++            // seeds over the private readable copy; optional slots reported.
++            // Refusals inside are loud and terminal (seed_refused class).
++            SeedArming::shadow_arm_stage();
+         }
+         else
+         {

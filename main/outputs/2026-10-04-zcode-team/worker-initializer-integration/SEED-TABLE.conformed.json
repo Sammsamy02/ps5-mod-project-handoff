@@ -1,0 +1,71 @@
+{
+  "format_version": 2,
+  "conformed_from": {
+    "source": "worker-seed-table-derivation/SEED-TABLE.json (raw provenance, 2026-10-04)",
+    "note": "Normalized to the canonical SEED-TABLE-FORMAT.md v2 schema by worker-initializer-integration; values are the derivation worker's, unchanged. The derivation dialect (N_-prefixed slot keys, seeded/linked fields, image.translation_rule) is accepted by gen_seed_table.py and normalized there; this file is the canonical-form snapshot consumed for the shipped SeedTable.h.",
+    "source_records_tick_correction": "runtime Tick = base + linked 0x2fac8c0 = 0x33ac8c0; linked 0x33ac8c0 decodes mid-instruction and contains ud2 — the previously circulated 0x37AC8C0 was a base-convention error (runtime mislabeled as linked). Tick is NOT seeded; the vtable fallback owns it."
+  },
+  "image": {
+    "path": ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+    "sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+    "bytes": 194241424
+  },
+  "base": {
+    "observed": "0x400000",
+    "provenance": "live base proven in-game by the B/D/E/C window anchors (all >= 0x7c26782 live) and the GUA validation at 0x97ba110; translation_rule runtime = linked_vaddr + 0x400000 (worker-seed-table-derivation SEED-TABLE.json image.translation_rule)"
+  },
+  "fname_remedy": {
+    "pool_label": "0x9365ec0",
+    "heap_span": { "lo": "0x8018c000", "hi": "0x100118000" },
+    "provenance": "FNAME-VERDICT.md section 4: interning core 0x242470 LEA-references the FNamePool singleton at file-image 0x9365ec0 (runtime 0x9765ec0), inside the LOAD7 BSS/RW span; heap span per igf6 vmmap Blocks[0] bound. Structural constants only — slot values come from the seed table."
+  },
+  "slots": {
+    "g_uobject_array": {
+      "slot_id": 0,
+      "kind": "data",
+      "present": true,
+      "label": "0x93ba110",
+      "runtime_expected": "0x97ba110",
+      "evidence": "validated in-game: layout A, 0x97ba110, 71959 objects, read+write (zcode_anchor_validation_RESULTS + zcode_igf6_RESULTS; worker-checkpoint-reconcile/CURRENT-STATE.md:7) + offline corroboration: 1565 rip-relative lea/mov code sites target linked 0x93ba110 exactly, 0 mov-imm32 refs (derive_seed_constants.py pass B, derivation.json ref_counts)",
+      "derivation": {
+        "anchor_bytes": "validated in-game GUA array-header words (layout A); segment phdr 7 RW-, BSS past filesz end 0x93085f2 inside memsz end 0x9633418",
+        "rip_arithmetic": "runtime 0x97ba110 = linked 0x93ba110 + base 0x400000; first_ref_sites 0x2b1e57, 0x2b212a, 0x2b2399, 0x2b25f0, 0x2b27fc, 0x2b329e",
+        "uniqueness": "1565 code refs all target this one address (0 immediate refs); the only REQUIRED slot with live structural validation"
+      }
+    },
+    "fname_ctor_wchar": {
+      "slot_id": 2,
+      "kind": "code",
+      "present": true,
+      "label": "0x23d590",
+      "runtime_expected": "0x63d590",
+      "evidence": "derived-static-strong: shipped resolve_ctor_elf route executed offline with full read access — five UTF-16 module-name anchors, lea xref census 10284/5/2/18/2 sites matching worker-fname-fc1-materialize diagnostics, five-anchor cluster, mov edx,1 + nearest e8 rel32 consensus 3/4 windows = 0x23d590 (1 outlier 0x23d8a0, itself a valid nearby prologue); cross-checked 3 ways against FNAME-VERDICT.md, calls_by_anchor.materialized.json (9 call sites re-verified) and FC1 fixtures",
+      "derivation": {
+        "anchor_bytes": "prologue 554889e553504889f04889fb4885f674 at linked 0x23d590 (file_off 0x241590, phdr 0)",
+        "rip_arithmetic": "runtime 0x63d590 = linked 0x23d590 + base 0x400000",
+        "uniqueness": "independent offline route + 3-way cross-check (FNAME-VERDICT / fc1-materialize / runtime-probe fixtures); in-game unverified — behavioral ByteProperty probe is the in-unit check"
+      }
+    },
+    "gmalloc": {
+      "slot_id": 3,
+      "kind": "data",
+      "present": false,
+      "label": null,
+      "runtime_expected": null,
+      "evidence": "under-determined on this image with defensible static evidence: 14 shipped idiom patterns 0 hits image-wide; '/proc/meminfo' and 'Refusing to run with the root privileges.' anchors absent (0 hits); DeleteFile UTF-16 anchor's containing function (root 0xb3670) disassembled — no GMalloc shape, only rip-relative touch is the stack-protector guard slot; depth-recursion artifacts rejected (derivation.json gmalloc_rejection_note). Per the binding standard the slot stays unseeded; GMalloc remains null so upstream PostInitialize throws loudly"
+    },
+    "static_construct_object_internal": {
+      "slot_id": 4,
+      "kind": "code",
+      "present": true,
+      "label": "0x490aa0",
+      "runtime_expected": "0x890aa0",
+      "evidence": "derived-static-strong + recorded candidate agreement: UTF-16 anchor 'NewObject with empty name can't be used to create default' at linked 0x7999084 (unique); 1918 lea rip-relative xref windows; capstone decode — dominant final consecutive near-call pair (0x493530 -> 0x490aa0) in 744/1918 windows and dominant terminal near-call in 744 windows (the shipped route's documented 'params ctor; SCO' sequence); prologue 554889e54157415641554154534881ec byte-identical to worker-anchor-validation expected_bytes extracted at file_off 0x494aa0; recorded in-game candidate 0x890aa0 (worker-igf5-diagnosis-rebuild ingame_config.h)",
+      "derivation": {
+        "anchor_bytes": "prologue 554889e54157415641554154534881ec at linked 0x490aa0 (file_off 0x494aa0, phdr 0)",
+        "rip_arithmetic": "runtime 0x890aa0 = linked 0x490aa0 + base 0x400000",
+        "uniqueness": "population statistic 744/1918 windows + prologue byte match + cross-worker file-offset agreement; strict first-6-ref intersection documented empty with the mixed-window explanation (SEED-TABLE.json slot 4 note)"
+      }
+    }
+  }
+}

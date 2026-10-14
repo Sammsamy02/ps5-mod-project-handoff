@@ -1,0 +1,31 @@
+{
+  "marker": "modbridge.claim",
+  "schema": 1,
+  "worker": "worker-mutex-deadlock",
+  "team": "2026-10-04-zcode-team",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "claimed_at": "2026-10-04",
+  "role": "Investigate and fix the mutex-integration host hang: build.py --host-only --entry --clock --workers --sync --init-once --mutex followed by test-sdk-driver normal blocks forever during exit; suspected pthread-key abandonment destructor vs PE worker-thread exit/join lifecycle (mb_win_workers) interaction.",
+  "scope": {
+    "output_dir": "outputs/2026-10-04-zcode-team/worker-mutex-deadlock/",
+    "reads": [
+      "outputs/ps5-mod-bridge/windows-candidate/{owned_runtime.c,tests/worker-fixture.c,tests/worker-mutex.h} (read-only)",
+      "outputs/ps5-mod-bridge/windows-services/mb_win_mutex.{h,c} (read-only)",
+      "outputs/ps5-mod-bridge/windows-services/mb_win_workers.{h,c} and any mb_win_* files needed for the reproduction (read-only)"
+    ],
+    "writes": [
+      "CLAIM.json",
+      "REPORT.md",
+      "vendored patched copies + unified diffs + minimal alarm-guarded reproducer under this worker dir only"
+    ]
+  },
+  "bounds": {
+    "nested_subagents": false,
+    "network": false,
+    "console_contact": false,
+    "existing_files_immutable": true,
+    "bounded_timeouts": "every reproduction wrapped in alarm()/timeout so nothing hangs the session",
+    "max_tool_calls": 45
+  },
+  "honesty": "All reproductions run on vendored copies inside this worker dir; the shipped sources are never modified. Any fix is delivered as a unified diff for controller review, not applied. If reproduction fails within budget, the deliverable is the trace-up-to-where plus narrowed hypotheses."
+}

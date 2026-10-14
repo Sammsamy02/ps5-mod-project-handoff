@@ -1,0 +1,274 @@
+--- base/src/deletefile_candidate.rs
++++ successor/src/deletefile_candidate.rs
+@@ -8,17 +8,18 @@
+ fn index(r:Register)->Option<usize>{let r=r.full_register();r.is_gpr64().then(||r as usize-Register::RAX as usize)}
+ fn get(regs:&[Origin;16],r:Register)->Origin{index(r).map(|i|regs[i]).unwrap_or(Origin::Unknown)}
+ fn set(regs:&mut[Origin;16],r:Register,value:Origin){if let Some(i)=index(r){regs[i]=value;}}
+-fn decode(image:&OwnedImage<'_>,ip:u64)->Result<Instruction,()>{let mut d=Decoder::with_ip(64,image.memory.range_from(ip)?,ip,DecoderOptions::NONE);let i=d.decode();if i.is_invalid(){Err(())}else{Ok(i)}}
++fn decode(image:&OwnedImage<'_>,ip:u64,code:Option<&[core::ops::Range<u64>]>)->Result<Instruction,()>{let mut d=Decoder::with_ip(64,image.memory.range_from(ip)?,ip,DecoderOptions::NONE);let i=d.decode();if i.is_invalid()||code.is_some_and(|ranges|i.next_ip()<=ip||!ranges.iter().any(|r|r.start<=ip&&i.next_ip()<=r.end)){Err(())}else{Ok(i)}}
+ fn input_null_test(i:&Instruction)->bool{i.code()==Code::Test_rm64_r64&&i.op0_register()==Register::RDI&&i.op1_register()==Register::RDI}
+ // An actual encoded null branch must return. This never invents an FDE/root.
+-fn null_return(image:&OwnedImage<'_>,mut ip:u64,end:u64)->Result<bool,()>{for _ in 0..8{if ip>=end{return Ok(false);}let i=decode(image,ip)?;if i.next_ip()>end{return Ok(false);}if i.flow_control()==FlowControl::Return{return Ok(true);}if i.flow_control()!=FlowControl::Next||i.is_ip_rel_memory_operand(){return Ok(false);}if !matches!(i.mnemonic(),Mnemonic::Pop|Mnemonic::Add|Mnemonic::Nop){return Ok(false);}ip=i.next_ip();}Ok(false)}
+-pub fn prove_direct_sysv_free(image:&OwnedImage<'_>,entry:u64)->Result<Vec<CandidateProof>,()>{
++fn null_return(image:&OwnedImage<'_>,mut ip:u64,end:u64,code:Option<&[core::ops::Range<u64>]> )->Result<bool,()>{for _ in 0..8{if ip>=end{return Ok(false);}let i=decode(image,ip,code)?;if i.next_ip()>end{return Ok(false);}if i.flow_control()==FlowControl::Return{return Ok(true);}if i.flow_control()!=FlowControl::Next||i.is_ip_rel_memory_operand(){return Ok(false);}if !matches!(i.mnemonic(),Mnemonic::Pop|Mnemonic::Add|Mnemonic::Nop){return Ok(false);}ip=i.next_ip();}Ok(false)}
++pub fn prove_direct_sysv_free(image:&OwnedImage<'_>,entry:u64)->Result<Vec<CandidateProof>,()>{prove_direct_sysv_free_inner(image,entry,false,None)}
++fn prove_direct_sysv_free_inner(image:&OwnedImage<'_>,entry:u64,refuse_indirect_unknown:bool,code:Option<&[core::ops::Range<u64>]>)->Result<Vec<CandidateProof>,()>{
+  if image.kind!=ImageKind::Elf{return Ok(vec![]);}
+- let bound=entry.checked_add(1000).ok_or(())?;let first=decode(image,entry)?;if !input_null_test(&first){return Ok(vec![]);}let branch=decode(image,first.next_ip())?;
+- if branch.mnemonic()!=Mnemonic::Je||branch.flow_control()!=FlowControl::ConditionalBranch||!null_return(image,branch.near_branch_target(),bound)?{return Ok(vec![]);}
++ let bound=entry.checked_add(1000).ok_or(())?;let first=decode(image,entry,code)?;if !input_null_test(&first){return Ok(vec![]);}let branch=decode(image,first.next_ip(),code)?;
++ if branch.mnemonic()!=Mnemonic::Je||branch.flow_control()!=FlowControl::ConditionalBranch||!null_return(image,branch.near_branch_target(),bound,code)?{return Ok(vec![]);}
+  let mut regs=[Origin::Unknown;16];set(&mut regs,Register::RDI,Origin::IncomingPointer);let mut queue=vec![(branch.next_ip(),regs,None::<u64>)];let mut seen=Vec::new();let mut proofs=Vec::new();let mut factory=InstructionInfoFactory::new();
+  while let Some((ip,mut regs,mut tested_slot))=queue.pop(){
+-  if ip<entry||ip>=bound{return Err(());}if seen.contains(&(ip,regs,tested_slot)){continue;}if seen.len()>=1024{return Err(());}seen.push((ip,regs,tested_slot));let i=decode(image,ip)?;if i.next_ip()>bound{return Err(());}
++  if ip<entry||ip>=bound{return Err(());}if seen.contains(&(ip,regs,tested_slot)){continue;}if seen.len()>=1024{return Err(());}seen.push((ip,regs,tested_slot));let i=decode(image,ip,code)?;if i.next_ip()>bound{return Err(());}
+   let destination=i.op0_register();let mut value=None;
+   if i.code()==Code::Test_rm64_r64&&i.op0_register()==i.op1_register(){if let Origin::Receiver(slot)=get(&regs,i.op0_register()){tested_slot=Some(slot);}}
+   if i.code()==Code::Cmp_rm64_imm8&&i.op0_kind()==OpKind::Memory&&i.memory_base()==Register::RIP&&i.immediate8()==0{tested_slot=Some(i.ip_rel_memory_address());}
+@@ -37,6 +38,9 @@
+    }
+    if !proven_virtual{return Err(());}
+   }
++  // The mapped strategy must not turn a qualifying unknown register-indirect
++  // path into an empty proof: it can conceal a competing singleton candidate.
++  if refuse_indirect_unknown&&matches!(i.flow_control(),FlowControl::IndirectCall|FlowControl::IndirectBranch)&&!proven_virtual{return Err(());}
+   for used in factory.info(&i).used_registers(){if matches!(used.access(),OpAccess::Write|OpAccess::CondWrite|OpAccess::ReadWrite|OpAccess::ReadCondWrite){set(&mut regs,used.register(),Origin::Unknown);}}
+   if let Some(value)=value{set(&mut regs,destination,value);}
+   match i.flow_control(){
+@@ -51,16 +55,23 @@
+  }
+  proofs.sort_by_key(|p|(p.slot,p.direct_callee,p.receiver_call,p.vtable_offset));proofs.dedup();Ok(proofs)
+ }
+-pub fn prove_deletefile_candidates(ctx:&AsyncContext<'_>)->Result<Vec<CandidateProof>,ResolveError>{
++pub fn prove_deletefile_candidates(ctx:&AsyncContext<'_>)->Result<Vec<CandidateProof>,ResolveError>{prove_deletefile_candidates_inner(ctx,false,None)}
++pub(crate) fn prove_mapped_deletefile_candidates(ctx:&AsyncContext<'_>,code:&[core::ops::Range<u64>])->Result<Vec<CandidateProof>,ResolveError>{prove_deletefile_candidates_inner(ctx,true,Some(code))}
++fn prove_deletefile_candidates_inner(ctx:&AsyncContext<'_>,refuse_incomplete:bool,code:Option<&[core::ops::Range<u64>]>)->Result<Vec<CandidateProof>,ResolveError>{
+  if ctx.image().kind!=ImageKind::Elf{return Err(ResolveError::new_msg("SysV ELF candidate only"));}
+  let strings=ctx.scan(util::utf16_pattern("DeleteFile %s\0"));let refs=util::scan_xrefs(ctx,&strings);let mut proofs=Vec::new();
+  for xref in refs {
+-  let first=decode(ctx.image(),xref)?;if first.code()!=Code::Lea_r64_m||first.memory_base()!=Register::RIP||!strings.contains(&first.ip_rel_memory_address()){continue;}
+-  let bytes=ctx.image().memory.range_from(xref)?;let mut d=Decoder::with_ip(64,&bytes[..bytes.len().min(256)],xref,DecoderOptions::NONE);let mut instructions=Vec::new();for instruction in d.iter(){if instruction.is_invalid(){break;}let stop=matches!(instruction.flow_control(),FlowControl::Return|FlowControl::UnconditionalBranch|FlowControl::IndirectBranch);instructions.push(instruction);if stop{break;}}
++  if code.is_some_and(|ranges|!ranges.iter().any(|r|r.contains(&xref))){continue;}
++  let first=decode(ctx.image(),xref,code)?;if first.code()!=Code::Lea_r64_m||first.memory_base()!=Register::RIP||!strings.contains(&first.ip_rel_memory_address()){continue;}
++  let bytes=ctx.image().memory.range_from(xref)?;let mut d=Decoder::with_ip(64,&bytes[..bytes.len().min(256)],xref,DecoderOptions::NONE);let mut instructions=Vec::new();for instruction in d.iter(){if instruction.is_invalid()||code.is_some_and(|ranges|instruction.next_ip()<=instruction.ip()||!ranges.iter().any(|r|r.start<=instruction.ip()&&instruction.next_ip()<=r.end)){break;}let stop=matches!(instruction.flow_control(),FlowControl::Return|FlowControl::UnconditionalBranch|FlowControl::IndirectBranch);instructions.push(instruction);if stop{break;}}
+   for window in instructions.windows(4){let [load,test,skip,call]=window else{unreachable!()};
+    if load.code()!=Code::Mov_r64_rm64||load.op0_register()!=Register::RDI||load.op1_kind()!=OpKind::Memory||!matches!(load.memory_base(),Register::RBP|Register::RSP)||load.memory_index()!=Register::None||!input_null_test(test)||skip.mnemonic()!=Mnemonic::Je||call.code()!=Code::Call_rel32_64||skip.near_branch_target()!=call.next_ip(){continue;}
+    // Only an encoded direct call entry is considered. Missing roots stay absent.
+-   if let Ok(found)=prove_direct_sysv_free(ctx.image(),call.near_branch_target()){proofs.extend(found);}
++   match prove_direct_sysv_free_inner(ctx.image(),call.near_branch_target(),refuse_incomplete,code){
++    Ok(found)=>proofs.extend(found),
++    Err(())if refuse_incomplete=>return Err(ResolveError::new_msg("qualifying mapped SysV free path incomplete")),
++    Err(())=>{},
++   }
+   }
+  }
+  Ok(proofs)
+--- base/src/fname_call.rs
++++ successor/src/fname_call.rs
+@@ -50,7 +50,12 @@
+ }
+ pub fn resolve(ctx:&AsyncContext<'_>,bytes:&[u8])->Result<Candidate,Error>{
+  if ctx.image().kind!=ImageKind::Elf{return Err(Error::NoCandidate);}
+- let code=executable_ranges(bytes)?;let mut groups:Vec<BTreeMap<u64,Vec<u64>>>=Vec::new();
++ let code=executable_ranges(bytes)?;resolve_with_ranges(ctx,&code)
++}
++/// Existing bounded SysV call analysis using explicit executable range facts.
++pub(crate) fn resolve_with_ranges(ctx:&AsyncContext<'_>,code:&[core::ops::Range<u64>])->Result<Candidate,Error>{
++ if ctx.image().kind!=ImageKind::Elf{return Err(Error::NoCandidate);}
++ let mut groups:Vec<BTreeMap<u64,Vec<u64>>>=Vec::new();
+  for name in NAMES {
+   let pattern=alloc::format!("\0{name}\0");
+   let strings:BTreeSet<_>=ctx.scan(util::utf16_pattern(&pattern)).into_iter().filter_map(|a|a.checked_add(2)).collect();
+--- base/src/lib.rs
++++ successor/src/lib.rs
+@@ -331,3 +331,7 @@
+ #[cfg(test)]mod property_owned_controls;
+ 
+ mod mapped_metadata;
++
++#[cfg(test)]mod mapped_candidate_controls;
++
++pub mod mapped_candidates;
+--- base/src/mapped_candidate_controls.rs
++++ successor/src/mapped_candidate_controls.rs
+@@ -0,0 +1,82 @@
++use alloc::{vec,vec::Vec};
++use std::fs;
++use object::{Object,ObjectSymbol};
++use object::read::elf::{FileHeader,ProgramHeader};
++use crate::ps_scan_abi::{PsMappedSegment,PsMappedImageViewV1,PsMappedExtent};
++struct Fixture{storage:Vec<u8>,loads:Vec<(usize,usize,u32)>,text:usize,symbols:alloc::collections::BTreeMap<String,usize>}
++impl Fixture{
++ fn load(name:&str)->Self{
++  let bytes=fs::read(alloc::format!("candidate-fixtures/{name}.elf")).unwrap();let h=object::elf::FileHeader64::<object::LittleEndian>::parse(&*bytes).unwrap();let e=object::LittleEndian;let ph=h.program_headers(e,&*bytes).unwrap();let mut loads=vec![];let mut max=0;
++  for p in ph{if p.p_type(e)==object::elf::PT_LOAD{let address=p.p_vaddr(e)as usize;let size=p.p_memsz(e)as usize;assert!(address+size<=1024*1024);max=max.max(address+size);let flags=p.p_flags(e);loads.push((address,size,(if flags&4!=0{1}else{0})|(if flags&2!=0{2}else{0})|(if flags&1!=0{4}else{0})));}}
++  let mut storage=vec![0;max];for p in ph{if p.p_type(e)==object::elf::PT_LOAD{let address=p.p_vaddr(e)as usize;let offset=p.p_offset(e)as usize;let n=p.p_filesz(e)as usize;storage[address..address+n].copy_from_slice(&bytes[offset..offset+n]);}}
++  let file=object::File::parse(&*bytes).unwrap();let symbols=file.symbols().filter_map(|s|s.name().ok().map(|n|(n.to_string(),s.address()as usize))).collect();let text=loads.iter().find(|x|x.2&4!=0).unwrap().0;
++  Self{storage,loads,text,symbols}
++ }
++ fn address(&self,offset:usize)->u64{self.storage.as_ptr()as usize as u64+offset as u64}
++ fn segments(&self)->Vec<PsMappedSegment>{self.loads.iter().filter(|x|x.1!=0).map(|&(offset,size,permissions)|PsMappedSegment{bytes:self.storage[offset..offset+size].as_ptr(),size,runtime_address:self.address(offset),permissions,reserved:0}).collect()}
++ fn view(&self,segments:&[PsMappedSegment])->PsMappedImageViewV1{PsMappedImageViewV1{abi_version:1,format:1,segments:segments.as_ptr(),segment_count:segments.len(),text_base:self.address(self.text),image_base:0,eh_frame:PsMappedExtent{address:0,size:0},eh_frame_hdr:PsMappedExtent{address:0,size:0},pe_exception_directory:PsMappedExtent{address:0,size:0}}}
++ fn symbol(&self,name:&str)->u64{self.address(self.symbols[name])}
++}
++fn candidate(view:&PsMappedImageViewV1,id:u32)->(i32,u64){
++ match id{
++  1=>{let mut out=crate::PsObjectArrayStaticCandidate::default();let status=unsafe{crate::mapped_candidates::ps_guobject_array_cfg_mapped_v1(view,&mut out)};if status==0{assert_ne!(out.allocation_entry,out.free_entry);assert_eq!(out.evidence_flags&63,63);}else{assert_eq!(out.address,0);} (status,out.address)},
++  2=>{let mut out=crate::mapped_candidates::PsMappedFNameCandidateV1::default();let status=unsafe{crate::mapped_candidates::ps_fname_ctor_call_mapped_v1(view,&mut out)};if status==0{assert!(out.anchor_call_counts.iter().all(|n|*n>0));}else{assert_eq!(out.address,0);} (status,out.address)},
++  3=>{let mut out=crate::mapped_candidates::PsMappedGMallocCandidateV1::default();let status=unsafe{crate::mapped_candidates::ps_gmalloc_deletefile_candidate_mapped_v1(view,&mut out)};if status==0{assert!(out.proof_count>0);assert_eq!(out.vtable_offset,16);}else{assert_eq!(out.address,0);} (status,out.address)},
++  _=>unreachable!()
++ }
++}
++#[test]
++fn mapped_pic_candidates_use_actual_supplied_operands(){
++ let a=Fixture::load("positive");let b=Fixture::load("positive");assert_ne!(a.storage.as_ptr(),b.storage.as_ptr());
++ for f in [&a,&b]{let spans=f.segments();let view=f.view(&spans);for(id,name)in [(1,"candidate_gu"),(2,"candidate_ctor"),(3,"candidate_malloc")]{let(status,address)=candidate(&view,id);assert_eq!(status,0,"strategy{id}");assert_eq!(address,f.symbol(name));}}
++}
++#[test]
++fn mapped_candidates_require_complete_writable_slot_roles(){
++ let f=Fixture::load("positive");let mut spans=f.segments();
++ for s in &mut spans{if s.permissions&2!=0{s.permissions&=!2;}}
++ assert_eq!(candidate(&f.view(&spans),3).0,5,"readonly GMalloc slot must refuse");
++ let mut spans=f.segments();let slot=f.symbol("candidate_gu");
++ let index=spans.iter().position(|s|s.runtime_address<=slot&&slot<s.runtime_address+s.size as u64).unwrap();
++ let s=&mut spans[index];let shift=(slot-s.runtime_address)as usize;s.bytes=unsafe{s.bytes.add(shift)};s.runtime_address=slot;s.size=1;
++ assert_eq!(candidate(&f.view(&spans),1).0,5,"one supplied slot byte is insufficient for candidate admission");
++}
++#[test]
++fn mapped_candidates_preserve_missing_and_incomplete_refusals(){
++ for(name,id,expected)in [("missing-free",1,3),("incomplete-gu",1,5),("incomplete-malloc",3,5)]{
++  let f=Fixture::load(name);let spans=f.segments();assert_eq!(candidate(&f.view(&spans),id).0,expected,"{}",name);
++ }
++}
++#[test]
++fn mapped_candidates_preserve_ambiguity_clobber_and_relevant_incomplete_competitor(){
++ for(name,id,expected)in [("ambiguous-gu",1,4),("ambiguous-fname",2,4),("ambiguous-malloc",3,4),("bad-argument",1,3),("bad-argument",2,3),("incomplete-malloc-competitor",3,5)]{
++  let f=Fixture::load(name);let spans=f.segments();assert_eq!(candidate(&f.view(&spans),id).0,expected,"{}",name);
++ }
++}
++#[test]
++fn candidate_outputs_clear_on_invalid_view_and_preserve_original_dispatch(){
++ use crate::mapped_candidates::*;
++ assert_eq!(core::mem::size_of::<PsMappedFNameCandidateV1>(),32);assert_eq!(core::mem::offset_of!(PsMappedFNameCandidateV1,reserved),28);
++ assert_eq!(core::mem::size_of::<PsMappedGMallocCandidateV1>(),40);assert_eq!(core::mem::offset_of!(PsMappedGMallocCandidateV1,proof_count),32);
++ let f=Fixture::load("positive");let mut spans=f.segments();let view=f.view(&spans);
++ for id in [2,3,5]{let mut original=crate::mapped_api::PsMappedCoreResult::default();assert_eq!(unsafe{crate::mapped_api::ps_resolve_mapped_core_v1(&view,id,&mut original)},3);assert_eq!(original.address,0);}
++ let mut out=PsMappedGMallocCandidateV1{address:123,..Default::default()};assert_eq!(unsafe{ps_gmalloc_deletefile_candidate_mapped_v1(core::ptr::null(),&mut out)},1);assert_eq!(out.address,0);
++ let mut bad=f.view(&spans);bad.format=2;assert_eq!(unsafe{ps_gmalloc_deletefile_candidate_mapped_v1(&bad,&mut out)},2);
++ spans[0].runtime_address+=1;assert_eq!(candidate(&f.view(&spans),3).0,2);
++ assert_eq!(unsafe{ps_gmalloc_deletefile_candidate_mapped_v1(&view,core::ptr::null_mut())},1);
++}
++#[test]
++fn mapped_gmalloc_requires_executable_null_return_path(){
++ use iced_x86::{Decoder,DecoderOptions};
++ let f=Fixture::load("positive");let entry=f.symbol("malloc_free");let offset=(entry-f.address(0))as usize;
++ let mut decoder=Decoder::with_ip(64,&f.storage[offset..],entry,DecoderOptions::NONE);let _=decoder.decode();let branch=decoder.decode();let null_return=branch.near_branch_target();
++ let mut result=vec![];
++ for s in f.segments(){
++  if s.runtime_address<=null_return&&null_return<s.runtime_address+s.size as u64{
++   let left=(null_return-s.runtime_address)as usize;assert!(left>0);
++   result.push(PsMappedSegment{bytes:s.bytes,size:left,runtime_address:s.runtime_address,permissions:s.permissions,reserved:0});
++   result.push(PsMappedSegment{bytes:unsafe{s.bytes.add(left)},size:1,runtime_address:null_return,permissions:1,reserved:0});
++   if left+1<s.size{result.push(PsMappedSegment{bytes:unsafe{s.bytes.add(left+1)},size:s.size-left-1,runtime_address:null_return+1,permissions:s.permissions,reserved:0});}
++  }else{result.push(s);}
++ }
++ assert_eq!(candidate(&f.view(&result),3).0,5,"non-executable decoded null-return path must refuse");
++}
+--- base/src/mapped_candidates.rs
++++ successor/src/mapped_candidates.rs
+@@ -0,0 +1,49 @@
++//! Additive owned mapped candidates. No original strategy fallback or engine
++//! assignment; candidates are evidence only, not singleton/function identity.
++use alloc::collections::BTreeSet;
++use core::mem::{align_of,size_of};
++use crate::{mapped_api,mapped_image::{MappedImage,EXECUTE,WRITE},ps_scan_abi::PsMappedImageViewV1,resolvers::AsyncContext,ImageKind,PsObjectArrayStaticCandidate};
++#[repr(C)]#[derive(Clone,Copy,Default)]
++pub struct PsMappedFNameCandidateV1{pub address:u64,pub anchor_call_counts:[u32;5],pub reserved:u32}
++#[repr(C)]#[derive(Clone,Copy,Default)]
++pub struct PsMappedGMallocCandidateV1{pub address:u64,pub direct_callee:u64,pub receiver_call:u64,pub vtable_offset:u64,pub proof_count:u32,pub reserved:u32}
++const _:()={assert!(size_of::<PsObjectArrayStaticCandidate>()==48);assert!(size_of::<PsMappedFNameCandidateV1>()==32);assert!(size_of::<PsMappedGMallocCandidateV1>()==40);};
++fn aligned<T>(p:*const T)->bool{!p.is_null()&&(p as usize)%align_of::<T>()==0}
++unsafe fn image<'a>(view:*const PsMappedImageViewV1)->Result<MappedImage<'a>,i32>{
++ if !aligned(view){return Err(1);}
++ let mapped=unsafe{mapped_api::from_view(&*view)}.map_err(|_|2)?;
++ if mapped.image().kind!=ImageKind::Elf{return Err(2);}
++ Ok(mapped)
++}
++fn role(image:&MappedImage<'_>,address:u64,size:usize,required:u32)->bool{image.permissions(address,size).is_some_and(|p|p&required==required)}
++fn error(e:crate::object_cfg::Error)->i32{match e{crate::object_cfg::Error::Malformed=>2,crate::object_cfg::Error::NoCandidate=>3,crate::object_cfg::Error::Ambiguous=>4,crate::object_cfg::Error::Incomplete=>5}}
++/// Same immutable/lifetime/nonalias borrow obligations as mapped_core_v1. Valid
++/// aligned output cleared on every subsequent failure. Status0 means candidate.
++#[unsafe(no_mangle)]pub unsafe extern "C" fn ps_guobject_array_cfg_mapped_v1(view:*const PsMappedImageViewV1,out:*mut PsObjectArrayStaticCandidate)->i32{
++ if !aligned(out){return 1;}unsafe{out.write(Default::default())};
++ let mapped=match unsafe{image(view)}{Ok(v)=>v,Err(e)=>return e};
++ let spans=match crate::object_cfg::FileImage::from_mapped(mapped.segments()){Ok(v)=>v,Err(e)=>return error(e)};
++ match crate::object_cfg::resolve_image(&spans){Ok(proof)=>{if !role(&mapped,proof.address,8,WRITE)||![proof.allocation_entry,proof.free_entry,proof.allocation_call,proof.free_call].into_iter().all(|a|role(&mapped,a,1,EXECUTE)){return 5;}unsafe{out.write(proof)};0},Err(e)=>error(e)}
++}
++#[unsafe(no_mangle)]pub unsafe extern "C" fn ps_fname_ctor_call_mapped_v1(view:*const PsMappedImageViewV1,out:*mut PsMappedFNameCandidateV1)->i32{
++ if !aligned(out){return 1;}unsafe{out.write(Default::default())};
++ let mapped=match unsafe{image(view)}{Ok(v)=>v,Err(e)=>return e};
++ let code=mapped.segments().iter().filter(|s|s.permissions&EXECUTE!=0).map(|s|s.runtime_address..s.runtime_address+s.bytes.len()as u64).collect::<alloc::vec::Vec<_>>();
++ let ctx=AsyncContext{exe:mapped.image()};
++ match crate::fname_call::resolve_with_ranges(&ctx,&code){
++  Ok(proof)=>{if !role(&mapped,proof.address,1,EXECUTE){return 5;}let out_value=PsMappedFNameCandidateV1{address:proof.address,anchor_call_counts:core::array::from_fn(|i|proof.calls_by_anchor[i].len()as u32),reserved:0};unsafe{out.write(out_value)};0},
++  Err(e)=>match e{crate::fname_call::Error::NoCandidate=>3,crate::fname_call::Error::Ambiguous=>4,crate::fname_call::Error::Malformed=>2,crate::fname_call::Error::Incomplete=>5},
++ }
++}
++#[unsafe(no_mangle)]pub unsafe extern "C" fn ps_gmalloc_deletefile_candidate_mapped_v1(view:*const PsMappedImageViewV1,out:*mut PsMappedGMallocCandidateV1)->i32{
++ if !aligned(out){return 1;}unsafe{out.write(Default::default())};
++ let mapped=match unsafe{image(view)}{Ok(v)=>v,Err(e)=>return e};let ctx=AsyncContext{exe:mapped.image()};
++ let code=mapped.segments().iter().filter(|s|s.permissions&EXECUTE!=0).map(|s|s.runtime_address..s.runtime_address+s.bytes.len()as u64).collect::<alloc::vec::Vec<_>>();
++ let proofs=match crate::deletefile_candidate::prove_mapped_deletefile_candidates(&ctx,&code){Ok(v)=>v,Err(_)=>return 5};
++ let slots=proofs.iter().map(|p|p.slot).collect::<BTreeSet<_>>();
++ if slots.is_empty(){return 3;}if slots.len()!=1{return 4;}
++ if !proofs.iter().all(|p|role(&mapped,p.slot,8,WRITE)&&role(&mapped,p.direct_callee,1,EXECUTE)&&role(&mapped,p.receiver_call,1,EXECUTE)){return 5;}
++ let Ok(proof_count)=u32::try_from(proofs.len())else{return 5;};
++ let proof=&proofs[0];let out_value=PsMappedGMallocCandidateV1{address:proof.slot,direct_callee:proof.direct_callee,receiver_call:proof.receiver_call,vtable_offset:proof.vtable_offset,proof_count,reserved:0};
++ unsafe{out.write(out_value)};0
++}
+--- base/src/mapped_image.rs
++++ successor/src/mapped_image.rs
+@@ -60,6 +60,7 @@
+   Ok(Self{image,segments})
+  }
+  pub fn image(&self)->&OwnedImage<'_>{&self.image}
++ pub(crate) fn segments(&self)->&[MappedSegment<'a>]{&self.segments}
+  pub fn permissions(&self,address:u64,size:usize)->Option<u32>{
+   if size==0{return None;}
+   let end=address.checked_add(size as u64)?;
+--- base/src/object_cfg.rs
++++ successor/src/object_cfg.rs
+@@ -27,6 +27,19 @@
+   // Aliased load labels would make executable/global classification ambiguous.
+   for i in 0..spans.len(){for j in 0..i{if spans[i].va<spans[j].va+spans[j].mem&&spans[j].va<spans[i].va+spans[i].mem{return Err(Error::Malformed);}}}
+   if spans.iter().all(|s|s.flags&1==0||s.data.is_empty()){return Err(Error::Malformed);}
++  Ok(Self{spans})
++ }
++ /// Construct only from validated actual-pointer borrowed mapped segments.
++ pub(crate) fn from_mapped(segments:&[crate::mapped_image::MappedSegment<'a>])->Result<Self,Error>{
++  let mut spans=vec![];
++  for segment in segments {
++   if segment.bytes.is_empty()||segment.runtime_address!=segment.bytes.as_ptr()as usize as u64||segment.permissions&1==0||segment.permissions&!7!=0{return Err(Error::Malformed);}
++   segment.runtime_address.checked_add(segment.bytes.len()as u64).ok_or(Error::Malformed)?;
++   let flags=((segment.permissions&1)<<2)|(segment.permissions&2)|((segment.permissions&4)>>2);
++   spans.push(Span{va:segment.runtime_address,mem:segment.bytes.len()as u64,flags,data:segment.bytes});
++  }
++  for i in 0..spans.len(){for j in 0..i{if spans[i].va<spans[j].va+spans[j].mem&&spans[j].va<spans[i].va+spans[i].mem{return Err(Error::Malformed);}}}
++  if spans.iter().all(|s|s.flags&1==0){return Err(Error::Malformed);}
+   Ok(Self{spans})
+  }
+  fn executable(&self,ip:u64)->Option<&Span<'a>>{self.spans.iter().find(|s|s.flags&1!=0&&s.va<=ip&&ip<s.va+s.data.len() as u64)}
+@@ -128,7 +141,12 @@
+ /// Returns one operand-derived static file-image label only. It never reads the
+ /// candidate's file data or zero-fill tail, and supplies no runtime base/contents.
+ pub fn resolve_owned_file(bytes:&[u8])->Result<PsObjectArrayStaticCandidate,Error>{
+- let image=FileImage::parse(bytes)?;let anchors=anchors(&image)?;let anchor_addresses:Vec<u64>=anchors.iter().map(|(_,at)|*at).collect();let roots=image.encoded_call_targets_near(&anchor_addresses,RADIUS,ROOT_LIMIT)?;
++ let image=FileImage::parse(bytes)?;resolve_image(&image)
++}
++/// Identical evidence matcher over supplied image spans; result scope is a
++/// candidate only, never singleton identity, register dataflow or callable ABI.
++pub(crate) fn resolve_image(image:&FileImage<'_>)->Result<PsObjectArrayStaticCandidate,Error>{
++ let anchors=anchors(image)?;let anchor_addresses:Vec<u64>=anchors.iter().map(|(_,at)|*at).collect();let roots=image.encoded_call_targets_near(&anchor_addresses,RADIUS,ROOT_LIMIT)?;
+  let mut matching=BTreeMap::new();let mut incomplete=false;
+  for root in roots{match cfg(&image,root,&anchors){Ok(c) if !c.roles.is_empty()=>{matching.insert(root,c);},Ok(_)=>{},Err(_)=>{incomplete=true;}}}
+  // An incomplete root may conceal another diagnostic path. Never promote a

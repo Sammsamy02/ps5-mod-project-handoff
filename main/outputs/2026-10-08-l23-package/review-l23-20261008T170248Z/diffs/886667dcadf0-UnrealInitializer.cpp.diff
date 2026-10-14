@@ -1,0 +1,62 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l22-runtime/profile/units/UnrealInitializer.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l23-runtime/typescan-r2/candidate/src/UnrealInitializer.cpp
+@@ -1,4 +1,5 @@
+ #include "ThreadNameRuntime.hpp"
++#include "NativePropertyPointerGuard.hpp"
+ #include "CandidateBindingData.hpp"
+ #include "ThreadNamePackageAdmission.hpp"
+ #include <stdexcept>
+@@ -782,6 +783,8 @@
+         extern "C" int bridge_code_cache_signature(uint64_t,uint64_t,const uint8_t*,size_t);
+ 
+         extern "C" int bridge_image_range(uint64_t,size_t,rc::imagecoverage::Hit*);
++        #include "NativePropertyReadBackend.inl"
++
+         static const char* l14_verdict(admission::Verdict v) {
+             switch(v) {
+             case admission::Verdict::Readable:return "readable";
+@@ -1639,6 +1642,7 @@
+         // successful publish closes the gate before propagating.
+         try
+         {
++        NativePropertyGuard::Install(SeedArming::PropertyReadBytes,SeedArming::PropertyImageClassRange);
+ #endif
+ 
+         // Second pass
+@@ -1695,6 +1699,7 @@
+         }
+         catch (...)
+         {
++            NativePropertyGuard::Revoke();
+             RC::Platform::QueryHarness::Global().DisarmLayoutGate();
+             throw;
+         }
+@@ -1810,6 +1815,12 @@
+ 
+     auto Initialize(const Config& In_UnrealConfig) -> void
+     {
++#ifdef __PROSPERO__
++        struct GuardStartupScope {
++            bool complete=false;
++            ~GuardStartupScope() { if(!complete) NativePropertyGuard::Revoke(); }
++        } property_guard_scope;
++#endif
+         if (!StaticStorage::bPreInitCompleted)
+         {
+             PreInitialize(In_UnrealConfig);
+@@ -2420,11 +2431,15 @@
+             // Post-arm startup failure: close the gate first, then
+             // preserve the original failure (closed gate refuses and
+             // counts every later dispatch - honest negative evidence).
++            NativePropertyGuard::Revoke();
+             RC::Platform::QueryHarness::Global().DisarmLayoutGate();
+             throw;
+         }
+ #endif
+         PostInitialize(UnrealConfig);
++#ifdef __PROSPERO__
++        property_guard_scope.complete=true;
++#endif
+     }
+ }
+ 

@@ -1,0 +1,137 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/include/LuaType/LuaUObject.hpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l22-runtime/diagnostics/include/LuaType/LuaUObject.hpp
+@@ -2,6 +2,7 @@
+ 
+ #define NOMINMAX
+ 
++#include <L22Diagnostics/Logging.hpp>
+ #include <format>
+ #include <functional>
+ #include <type_traits>
+@@ -339,7 +340,7 @@
+             error_message.append(fmt::format("    CreateNewIfGetNonTrivialLocal: {}\n", create_new_if_get_non_trivial_local));
+             throw_error_internal_append_args(error_message, args...);
+             error_message.append(get_stack_dump());
+-            lua.throw_error(error_message);
++            L22Diagnostics::throw_lua_error(lua, error_message, "property/UObject");
+         }
+     };
+ 
+@@ -514,7 +515,7 @@
+ 
+                 if (!lua_object.get_remote_cpp_object())
+                 {
+-                    lua.throw_error("Tried calling a member function but the UObject instance is nullptr\n");
++                    L22Diagnostics::throw_lua_error(lua, "Tried calling a member function but the UObject instance is nullptr\n", "property/UObject");
+                 }
+                 return 0;
+             });
+@@ -591,7 +592,7 @@
+ 
+                     if (!lua.is_string(2))
+                     {
+-                        lua.throw_error("Function 'GetProperty' requires a string as the first parameter");
++                        L22Diagnostics::throw_lua_error(lua, "Function 'GetProperty' requires a string as the first parameter", "property/UObject");
+                     }
+                     auto property_name = ensure_str(lua.get_string(2));
+ 
+@@ -663,7 +664,7 @@
+ 
+                 if (!lua.is_integer())
+                 {
+-                    lua.throw_error(error_overload_not_found);
++                    L22Diagnostics::throw_lua_error(lua, error_overload_not_found, "property/UObject");
+                 }
+ 
+                 Unreal::EObjectFlags object_flags = static_cast<Unreal::EObjectFlags>(lua.get_integer());
+@@ -687,7 +688,7 @@
+ 
+                 if (!lua.is_integer())
+                 {
+-                    lua.throw_error(error_overload_not_found);
++                    L22Diagnostics::throw_lua_error(lua, error_overload_not_found, "property/UObject");
+                 }
+ 
+                 Unreal::EObjectFlags object_flags = static_cast<Unreal::EObjectFlags>(lua.get_integer());
+@@ -711,7 +712,7 @@
+ 
+                 if (!lua.is_integer())
+                 {
+-                    lua.throw_error(error_overload_not_found);
++                    L22Diagnostics::throw_lua_error(lua, error_overload_not_found, "property/UObject");
+                 }
+ 
+                 Unreal::EInternalObjectFlags object_internal_flags = static_cast<Unreal::EInternalObjectFlags>(lua.get_integer());
+@@ -734,19 +735,19 @@
+ 
+                 if (!lua.is_string())
+                 {
+-                    lua.throw_error(error_overload_not_found);
++                    L22Diagnostics::throw_lua_error(lua, error_overload_not_found, "property/UObject");
+                 }
+                 auto cmd = ensure_str(lua.get_string());
+ 
+                 if (lua.get_stack_size() < 2)
+                 {
+-                    lua.throw_error(error_overload_not_found);
++                    L22Diagnostics::throw_lua_error(lua, error_overload_not_found, "property/UObject");
+                 }
+                 lua.discard_value();
+ 
+                 if (!lua.is_userdata())
+                 {
+-                    lua.throw_error(error_overload_not_found);
++                    L22Diagnostics::throw_lua_error(lua, error_overload_not_found, "property/UObject");
+                 }
+                 auto executor = lua.get_userdata<LuaType::UObject>();
+ 
+@@ -789,6 +790,8 @@
+ 
+       private:
+         auto static prepare_to_handle(const Operation operation, const LuaMadeSimple::Lua& lua) -> void
++        {
++        try
+         {
+             auto& lua_object = lua.get_userdata<SelfType>();
+             auto* object = lua_object.get_remote_cpp_object();
+@@ -819,6 +822,7 @@
+             }
+ 
+             Unreal::FName property_name = Unreal::FName(member_name, Unreal::FNAME_Find);
++            L22Diagnostics::record_member_lookup(member_name, property_name.GetComparisonIndex());
+             Unreal::FField* field = LuaCustomProperty::StaticStorage::property_list.find_or_nullptr(object, member_name);
+ 
+             if (!field)
+@@ -837,7 +841,19 @@
+             }
+ 
+             handle_unreal_property_value(operation, lua, object, property_name, field);
+-        }
++        
++        }
++        catch (const std::exception& error)
++        {
++            L22Diagnostics::error("property access/set", error.what());
++            throw;
++        }
++        catch (...)
++        {
++            L22Diagnostics::error("property access/set", "non-standard C++ exception");
++            throw;
++        }
++    }
+     };
+ 
+     template <typename ParamType>
+@@ -935,9 +951,9 @@
+                 // We can either throw an error and kill the execution
+                 /**/
+                 StringType property_type_name = property_type.ToString();
+-                lua.throw_error(fmt::format(
++                L22Diagnostics::throw_lua_error(lua, fmt::format(
+                         "[LocalUnrealParam::prepare_to_handle] Tried accessing unreal property without a registered handler. Property type '{}' not supported.",
+-                        to_string(property_type_name)));
++                        to_string(property_type_name)), "property/UObject");
+                 //*/
+ 
+                 // Or we can treat unhandled property types as some sort of generic type

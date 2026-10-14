@@ -1,0 +1,341 @@
+# ENGINE DELETE-LISTENER FUNCTIONS — BINARY RECEIPTS (agent AE, 2026-10-08)
+#
+# Image: outputs/2026-10-04-zcode-team/worker-game-version/console-decrypted-eboot.bin
+#   sha256 3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc
+#   194241424 bytes; ELF64 x86-64; exec PT_LOAD vaddr 0 size 0x7479b1c;
+#   observed runtime base 0x400000 (seed-table base.observed).
+# GUObjectArray: file-image 0x93BA110 (runtime 0x97BA110, seed slot 0); BSS.
+#
+# All disassembly below is raw capstone output; annotations are in [].
+# PLT stubs (import names are Sony-NID-obfuscated; usage-count behavioral ID):
+#   0x7471EE0 lock-primitive   (7126 call sites engine-wide)  [pthread_mutex_lock]
+#   0x7471EF0 thread-self      (7083 sites)                   [pthread_self]
+#   0x7471F20 unlock-primitive (7140 sites)                   [pthread_mutex_unlock]
+#   0x7471E90 memmove          (6839 sites)
+# Calibration: PLT 0x7472200 == abort (Z11 ground truth) resolves through the
+# same JMPREL->GOT chain, proving the resolution mechanism on this image.
+
+## FUObjectArray::AddUObjectDeleteListener(FUObjectDeleteListener*) [file-image 0x4841A0]
+# entry 0x4841a0 (runtime 0x8841a0); prologue bytes: 55 48 89 e5 41 57 41 56 53 50 48 8d 5f 78 49 89
+  004841a0: push      rbp
+  004841a1: mov       rbp, rsp
+  004841a4: push      r15
+  004841a6: push      r14
+  004841a8: push      rbx
+  004841a9: push      rax
+  004841aa: lea       rbx, [rdi + 0x78]
+  004841ae: mov       r14, rdi
+  004841b1: mov       r15, rsi
+  004841b4: mov       rdi, rbx
+  004841b7: call      0x7471ee0
+  004841bc: test      eax, eax
+  004841be: jne       0x4841cc
+  004841c0: call      0x7471ef0
+  004841c5: mov       qword ptr [r14 + 0x80], rax
+  004841cc: mov       rcx, qword ptr [r14 + 0x88]
+  004841d3: lea       rax, [rcx + 1]
+  004841d7: mov       qword ptr [r14 + 0x88], rax
+  004841de: mov       eax, dword ptr [r14 + 0x70]
+  004841e2: cmp       eax, dword ptr [r14 + 0x74]
+  004841e6: jne       0x484204
+  004841e8: lea       rsi, [r14 + 0x68]
+  004841ec: lea       rdx, [r14 + 0x74]
+  004841f0: mov       edi, 0x808
+  004841f5: call      0x298a0
+  004841fa: mov       rcx, qword ptr [r14 + 0x88]
+  00484201: dec       rcx
+  00484204: lea       edx, [rax + 1]
+  00484207: cdqe      
+  00484209: mov       dword ptr [r14 + 0x70], edx
+  0048420d: mov       rdx, qword ptr [r14 + 0x68]
+  00484211: mov       qword ptr [rdx + rax*8], r15
+  00484215: mov       qword ptr [r14 + 0x88], rcx
+  0048421c: test      rcx, rcx
+  0048421f: jne       0x484234
+  00484221: mov       rdi, rbx
+  00484224: mov       qword ptr [r14 + 0x80], 0
+  0048422f: call      0x7471f20
+  00484234: add       rsp, 8
+  00484238: pop       rbx
+  00484239: pop       r14
+  0048423b: pop       r15
+  0048423d: pop       rbp
+  0048423e: ret       
+
+# [AE] rdi=this(&GUObjectArray), rsi=Listener. Acquires the critical section at
+#      this+0x78 (mutex @+0x78 via PLT lock; owner=pthread-self @+0x80; recursion
+#      count @+0x88). NO Contains/dedup. Appends to TArray{Data@+0x68, Num@+0x70,
+#      Max@+0x74}. Growth: 0x298A0(elem|align<<8 = 0x808, &Data, &Max) -> 0x62FC0
+#      -> 0xBEF20 engine FMemory::Realloc. Releases lock when recursion reaches 0.
+
+## FUObjectArray::RemoveUObjectDeleteListener(FUObjectDeleteListener*) [file-image 0x484240]
+# entry 0x484240 (runtime 0x884240); prologue bytes: 55 48 89 e5 41 57 41 56 41 54 53 48 8d 5f 78 49
+  00484240: push      rbp
+  00484241: mov       rbp, rsp
+  00484244: push      r15
+  00484246: push      r14
+  00484248: push      r12
+  0048424a: push      rbx
+  0048424b: lea       rbx, [rdi + 0x78]
+  0048424f: mov       r14, rdi
+  00484252: mov       r12, rsi
+  00484255: mov       rdi, rbx
+  00484258: call      0x7471ee0
+  0048425d: test      eax, eax
+  0048425f: jne       0x48426d
+  00484261: call      0x7471ef0
+  00484266: mov       qword ptr [r14 + 0x80], rax
+  0048426d: mov       rdx, qword ptr [r14 + 0x88]
+  00484274: mov       rax, qword ptr [r14 + 0x68]
+  00484278: lea       rcx, [rdx + 1]
+  0048427c: mov       qword ptr [r14 + 0x88], rcx
+  00484283: movsxd    rcx, dword ptr [r14 + 0x70]
+  00484287: test      rcx, rcx
+  0048428a: je        0x484324
+  00484290: mov       r8, rcx
+  00484293: lea       r15, [r14 + 0x68]
+  00484297: mov       edi, 1
+  0048429c: movabs    r10, 0x100000000
+  004842a6: xor       r9d, r9d
+  004842a9: xor       esi, esi
+  004842ab: shl       r8, 3
+  004842af: nop       
+  004842b0: cmp       qword ptr [rax + r9], r12
+  004842b4: je        0x4842c6
+  004842b6: add       rsi, r10
+  004842b9: inc       edi
+  004842bb: add       r9, 8
+  004842bf: cmp       r8, r9
+  004842c2: jne       0x4842b0
+  004842c4: jmp       0x484324
+  004842c6: test      edi, edi
+  004842c8: je        0x484324
+  004842ca: mov       edx, ecx
+  004842cc: sub       edx, edi
+  004842ce: je        0x4842fe
+  004842d0: test      edx, edx
+  004842d2: mov       r8d, 1
+  004842d8: cmovle    r8d, edx
+  004842dc: sar       rsi, 0x20
+  004842e0: sub       ecx, r8d
+  004842e3: movsxd    rdx, r8d
+  004842e6: lea       rdi, [rax + rsi*8]
+  004842ea: movsxd    rcx, ecx
+  004842ed: shl       rdx, 3
+  004842f1: lea       rsi, [rax + rcx*8]
+  004842f5: call      0x7471e90
+  004842fa: mov       ecx, dword ptr [r14 + 0x70]
+  004842fe: dec       ecx
+  00484300: lea       r8, [r14 + 0x74]
+  00484304: mov       edi, 8
+  00484309: mov       esi, 8
+  0048430e: mov       rdx, r15
+  00484311: mov       dword ptr [r14 + 0x70], ecx
+  00484315: call      0x27140
+  0048431a: mov       rdx, qword ptr [r14 + 0x88]
+  00484321: dec       rdx
+  00484324: mov       qword ptr [r14 + 0x88], rdx
+  0048432b: test      rdx, rdx
+  0048432e: jne       0x484343
+  00484330: mov       rdi, rbx
+  00484333: mov       qword ptr [r14 + 0x80], 0
+  0048433e: call      0x7471f20
+  00484343: pop       rbx
+  00484344: pop       r12
+  00484346: pop       r14
+  00484348: pop       r15
+  0048434a: pop       rbp
+  0048434b: ret       
+
+# [AE] Same lock idiom. Linear Contains scan over Data[0..Num). Swap-with-last via
+#      memmove PLT (0x7471E90); Num--; optional shrink via 0x27140 (same engine
+#      allocator chain). 69+ engine call sites (subsystem dtors/self-removal).
+
+## FUObjectArray listener shutdown-notify (OnUObjectArrayShutdown dispatch) [0x4843A0]
+# entry 0x4843a0 (runtime 0x8843a0); prologue bytes: 55 48 89 e5 41 57 41 56 53 50 4c 8d 77 78 48 89
+  004843a0: push      rbp
+  004843a1: mov       rbp, rsp
+  004843a4: push      r15
+  004843a6: push      r14
+  004843a8: push      rbx
+  004843a9: push      rax
+  004843aa: lea       r14, [rdi + 0x78]
+  004843ae: mov       rbx, rdi
+  004843b1: mov       rdi, r14
+  004843b4: call      0x7471ee0
+  004843b9: test      eax, eax
+  004843bb: jne       0x4843c9
+  004843bd: call      0x7471ef0
+  004843c2: mov       qword ptr [rbx + 0x80], rax
+  004843c9: inc       qword ptr [rbx + 0x88]
+  004843d0: movsxd    r15, dword ptr [rbx + 0x70]
+  004843d4: test      r15, r15
+  004843d7: jle       0x4843fc
+  004843d9: inc       r15
+  004843dc: nop       dword ptr [rax]
+  004843e0: mov       rax, qword ptr [rbx + 0x68]
+  004843e4: mov       rdi, qword ptr [rax + r15*8 - 0x10]
+  004843e9: mov       rax, qword ptr [rdi]
+  004843ec: call      qword ptr [rax + 0x18]
+  004843ef: dec       r15
+  004843f2: cmp       r15, 1
+  004843f6: ja        0x4843e0
+  004843f8: mov       r15d, dword ptr [rbx + 0x70]
+  004843fc: test      r15d, r15d
+  004843ff: jne       0x484423
+  00484401: dec       qword ptr [rbx + 0x88]
+  00484408: je        0x484446
+  0048440a: movsxd    r14, dword ptr [rbx + 0x60]
+  0048440e: test      r14, r14
+  00484411: jg        0x484462
+  00484413: test      r14d, r14d
+  00484416: jne       0x484491
+  00484418: add       rsp, 8
+  0048441c: pop       rbx
+  0048441d: pop       r14
+  0048441f: pop       r15
+  00484421: pop       rbp
+  00484422: ret       
+
+# [AE] Under the +0x78 lock: loop A iterates {Data@0x68, Num@0x70} calling
+#      [vptr+0x18] = SLOT 3 (OnUObjectArrayShutdown) — the DELETE listeners;
+#      loop B iterates {Data@0x58, Num@0x60} — the CREATE listeners.
+#      => LAYOUT PROOF: create TArray @0x58, delete TArray @0x68, lock @0x78.
+#      ensure() failure branches pass line numbers 0x221/0x229 (545/553 decimal).
+
+## delete-listener NotifyUObjectDeleted dispatch (GC/object-destruction path) [0x484062]
+# context inside the enclosing function (entry near 0x484000):
+  00484000: pop       rdi
+  00484001: js        0x48404c
+  00484003: mov       esi, edi
+  00484005: mov       r15, rsi
+  00484008: mov       rdi, rbx
+  0048400b: call      0x7471ee0
+  00484010: test      eax, eax
+  00484012: jne       0x484020
+  00484014: call      0x7471ef0
+  00484019: mov       qword ptr [r14 + 0x80], rax
+  00484020: mov       rax, qword ptr [r14 + 0x88]
+  00484027: lea       rcx, [rax + 1]
+  0048402b: mov       qword ptr [r14 + 0x88], rcx
+  00484032: movsxd    r13, dword ptr [r14 + 0x70]
+  00484036: test      r13, r13
+  00484039: jle       0x484078
+  0048403b: mov       r12d, dword ptr [r15 + 0xc]
+  0048403f: inc       r13
+  00484042: nop       word ptr cs:[rax + rax]
+  00484050: mov       rax, qword ptr [r14 + 0x68]
+  00484054: mov       rsi, r15
+  00484057: mov       edx, r12d
+  0048405a: mov       rdi, qword ptr [rax + r13*8 - 0x10]
+  0048405f: mov       rax, qword ptr [rdi]
+  00484062: call      qword ptr [rax + 0x10]
+  00484065: dec       r13
+  00484068: cmp       r13, 1
+  0048406c: ja        0x484050
+  0048406e: mov       rax, qword ptr [r14 + 0x88]
+  00484075: dec       rax
+  00484078: mov       qword ptr [r14 + 0x88], rax
+  0048407f: test      rax, rax
+  00484082: jne       0x484097
+  00484084: mov       rdi, rbx
+  00484087: mov       qword ptr [r14 + 0x80], 0
+  00484092: call      0x7471f20
+  00484097: add       rsp, 8
+  0048409b: pop       rbx
+  0048409c: pop       r12
+  0048409e: pop       r13
+# [AE] Under the +0x78 lock: iterates {Data@0x68, Num@0x70}, loads rsi=object,
+#      edx=index (from the FUObjectItem at +0xc), rdi=listener, and calls
+#      [vptr+0x10] = SLOT 2 (NotifyUObjectDeleted). This is the dispatch our
+#      unlocked hand-rolled registration used to race — and the loop that will
+#      legitimately call our listeners once registered via the engine Add.
+
+## Engine FMemory::Realloc(void* Ptr, SIZE_T Size, uint32 Align) [0xBEF20]
+# entry 0xbef20 (runtime 0x4bef20); prologue bytes: 55 48 89 e5 41 57 41 56 41 54 53 4c 8d 35 1e 1a
+  000bef20: push      rbp
+  000bef21: mov       rbp, rsp
+  000bef24: push      r15
+  000bef26: push      r14
+  000bef28: push      r12
+  000bef2a: push      rbx
+  000bef2b: lea       r14, [rip + 0x9291a1e]
+  000bef32: mov       rbx, rdi
+  000bef35: mov       ecx, edx
+  000bef37: mov       rdx, rsi
+  000bef3a: mov       rdi, qword ptr [r14]
+  000bef3d: test      rdi, rdi
+  000bef40: jne       0xbef50
+  000bef42: movzx     eax, byte ptr [rip + 0x926d0ff]
+  000bef49: test      al, al
+  000bef4b: je        0xbef62
+  000bef4d: mov       rdi, qword ptr [r14]
+  000bef50: mov       rax, qword ptr [rdi]
+  000bef53: mov       rsi, rbx
+  000bef56: call      qword ptr [rax + 0x40]
+  000bef59: pop       rbx
+  000bef5a: pop       r12
+  000bef5c: pop       r14
+  000bef5e: pop       r15
+  000bef60: pop       rbp
+  000bef61: ret       
+
+# [AE] lea r14,[rip+0x9291A1E] -> ENGINE GMalloc POINTER VARIABLE at file-image
+#      0x9340950 (runtime 0x9740950); rdi=[GMalloc] (the FMalloc object);
+#      rax=[rdi] (vtable); call [rax+0x40] = GMalloc vtable slot +0x40 = Realloc.
+#      The listener-array growth therefore runs through the engine's OWN GMalloc
+#      binding — our port's GMalloc variable/repoint is never consulted.
+
+## Engine container ResizeAllocation [0x62FC0]
+# entry 0x62fc0 (runtime 0x462fc0); prologue bytes: 55 48 89 e5 53 50 48 89 fb 48 8b 3f 48 85 ff 0f
+  00062fc0: push      rbp
+  00062fc1: mov       rbp, rsp
+  00062fc4: push      rbx
+  00062fc5: push      rax
+  00062fc6: mov       rbx, rdi
+  00062fc9: mov       rdi, qword ptr [rdi]
+  00062fcc: test      rdi, rdi
+  00062fcf: sete      al
+  00062fd2: test      edx, edx
+  00062fd4: sete      sil
+  00062fd8: test      sil, al
+  00062fdb: jne       0x63001
+  00062fdd: test      edx, edx
+  00062fdf: js        0x63008
+  00062fe1: lea       rax, [rcx - 0x80000000]
+  00062fe8: cmp       rax, -0x80000000
+  00062fee: jbe       0x63008
+  00062ff0: mov       esi, edx
+  00062ff2: mov       edx, r8d
+  00062ff5: imul      rsi, rcx
+  00062ff9: call      0xbef20
+  00062ffe: mov       qword ptr [rbx], rax
+  00063001: add       rsp, 8
+  00063005: pop       rbx
+  00063006: pop       rbp
+  00063007: ret       
+
+# [AE] (&Data, OldMax-or-NewMax counts, elemsize, align) -> overflow checks ->
+#      0xBEF20 FMemory::Realloc(old ptr, NewMax*elemsize, align); stores new Data.
+
+## Engine Add/Remove call sites with this=&GUObjectArray (presence proof)
+# 14 'lea rdi,[rip+GUObjectArray]; mov/lea rsi,<listener>; call 0x4841A0' sites:
+#   0x003B75F6
+#   0x003EB898
+#   0x004653CF
+#   0x00465747
+#   0x00465AD7
+#   0x004B4F93
+#   0x022351F5
+#   0x02418ABA
+#   0x02E28919
+#   0x02E81F69
+#   0x031C1EFD
+#   0x037D2AB6
+#   0x037D2E63
+#   0x04B5447C
+# Example (0x4653CF): lea rdi,[rip+GUO]; lea rsi,[rip+<STATIC listener object>];
+#   call 0x4841A0 — an engine subsystem registering a global delete listener at
+#   boot. This is why the family survived dead-stripping (unlike Z6's diagnostics
+#   family): shipping engine code calls it.
+# Remove (0x484240) is called from 69+ lea-rdi sites (subsystem dtors etc.).

@@ -1,0 +1,62 @@
+{
+  "worker": "worker-mfa-activation-audit",
+  "date": "2026-10-04",
+  "restart": true,
+  "scope": "Static audit of mfa_activate(...) and the staged activation package for the composition-5 first launch. Read-only outside this worker dir. No console contact, no nested subagents, no target execution. Prior attempt died after writing CLAIM.json only; that claim set is superseded by this confirmed version.",
+  "claims": [
+    {
+      "id": "MFA-1",
+      "claim": "mfa_activate has exactly one implementation in every composition tree: runtime/modforge_activation.c (authoritative takeover copy sha256 f97d1d2094b090be..., all four vendored copies byte-identical). Every refusal branch enumerated in ACTIVATION-PREDICTION.md with exact code + message from that file.",
+      "evidence": [
+        ".superpowers/native-dependency-spike/claude-takeover-43a96969/source/runtime/modforge_activation.c:311-495",
+        ".superpowers/native-dependency-spike/claude-takeover-43a96969/source/runtime/modforge_activation.h:46-60",
+        "outputs/2026-10-04-zcode-team/worker-d1-chain-relink/composition/vendored/modforge_activation.c",
+        "outputs/2026-10-04-zcode-team/worker-f-r2-fix/composition/vendored/modforge_activation.c",
+        "outputs/2026-10-04-zcode-team/worker-installer-composition/composition/vendored/modforge_activation.c",
+        "outputs/2026-10-04-zcode-team/worker-zip-to-mfb/composition/vendored/modforge_activation.c"
+      ]
+    },
+    {
+      "id": "MFA-2",
+      "claim": "Staged package cross-check: loadlist.txt (446B sha256 49ab7a3a40ee15d3090a542a6e7150307b4d001a08aa3386de66c04b6981e3bf) parses under the C grammar (header modforge-loadlist\\t1; 1 title, 1 engine, 1 framework, 1 mod, 7 file rows of exactly 4 fields: role, path, size; NO sha column in the console grammar). All 7 listed sizes equal the actual final-package byte counts exactly (779, 588, 186, 2960, 21415, 0, 9962). Every mfa_activate validation PASSES; verdict GO.",
+      "evidence": [
+        "outputs/2026-10-04-zcode-team/worker-loadlist-final/final-package/loadlist.txt",
+        ".superpowers/native-dependency-spike/claude-takeover-43a96969/source/runtime/modforge_loadlist.h:144-206",
+        ".superpowers/native-dependency-spike/claude-takeover-43a96969/source/docs/FORMATS.md (Load list section)"
+      ]
+    },
+    {
+      "id": "MFA-3",
+      "claim": "preload_roles NULL default {lua_mod, config, script} covers all 7 loadlist rows (roles used: config x4, lua_mod x3). No row falls outside the default set; nothing is skipped. There is no MFA_E_ROLE error: out-of-set roles would be listed but not preloaded, never refused.",
+      "evidence": [
+        ".superpowers/native-dependency-spike/claude-takeover-43a96969/source/runtime/modforge_activation.c:281-295",
+        "outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_module_entry.c:248-250"
+      ]
+    },
+    {
+      "id": "MFA-4",
+      "claim": "runtime-status.txt has exactly two in-process writers, lifetime-exclusive: (1) RuntimeAckSink (opened inside PrepareActivatedUE4SSRuntime only after mfa_activate succeeded; emits activated/engine-ready/mods-started/failed/stopped); (2) the entry's write_status_failed on terminal failure paths where no sink is active. Overlap edge (prepare-throws after sink open) is sequential: sink's own failed() line, rethrow, then the entry's O_TRUNC open replaces the session; never concurrent. mfa_status_open O_CREAT does not create the parent dir; the staged root exists, and if it did not, mfa_activate would already have failed MFA_E_NO_LOADLIST and write_status_failed silently no-ops.",
+      "evidence": [
+        "outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_module_entry.c:194-226",
+        ".superpowers/native-dependency-spike/claude-takeover-43a96969/source/runtime/modforge_activation.c:599-624",
+        "outputs/2026-10-04-zcode-team/worker-runtime-ack/host-test/apply/outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/runtime_owner.cpp:130-198",
+        "outputs/2026-10-04-zcode-team/worker-runtime-ack/host-test/apply/outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/ue4ss_backend.cpp:84-115",
+        "outputs/2026-10-04-zcode-team/worker-query-s2-arm/integration-patch/new-units/runtime_ack_supplier.cpp:44-95"
+      ]
+    },
+    {
+      "id": "MFA-5",
+      "claim": "ACTIVATION-PREDICTION.md delivered with the ordered go/no-go verdict (GO) and the exact first-recorded-failure signature template for UE4SS.log: 'modbridge module_start failed: mfa_activate_failed code=<n> detail=<name> <message> <path>'.",
+      "evidence": [
+        "outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_module_entry.c:166-192,250-268",
+        "outputs/2026-10-04-zcode-team/worker-mfa-activation-audit/ACTIVATION-PREDICTION.md"
+      ]
+    }
+  ],
+  "bounds": {
+    "writes": "outputs/2026-10-04-zcode-team/worker-mfa-activation-audit/ only",
+    "console": "none",
+    "target_execution": "none",
+    "subagents": "none"
+  }
+}

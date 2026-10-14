@@ -1,0 +1,20 @@
+# B7 noexcept / destructor baseline (check D): functions that reach Lua and are noexcept or destructors.
+# A Lua error crossing one of these is std::terminate under B7. Each entry says why none can be crossed. Format: file|function ## reason
+.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/Mod/CppUserModBase.cpp|CppUserModBase::~CppUserModBase ## FALSE-POSITIVE: name collision (get_events_safe -> callback); no Lua
+.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/FSoftObjectPath.cpp|FSoftObjectPath::~FSoftObjectPath ## FALSE-POSITIVE: name collision (SubPathRef -> GetLayout -> ...); no Lua
+outputs/2026-10-08-l22-runtime/diagnostics/include/L22Diagnostics/Logging.hpp|error ## logging wrapper; swallows everything by design
+outputs/2026-10-08-l22-runtime/diagnostics/include/L22Diagnostics/Logging.hpp|observe ## logging wrapper; swallows everything by design
+outputs/2026-10-08-l26-build-variants/staging-copyin-probe/UnrealInitializer.cpp|first_tick_ufunc_selftest ## FALSE-POSITIVE: L"..." literal read as a Lua state; engine UFunction call only
+outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMadeSimple/LuaMadeSimple.cpp|lua_cpp_probe ## B7 startup probe (noexcept): raise and yield happen inside lua_pcall / lua_resume; lua_newstate returns NULL on failure
+outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp|Cancel ## L23 probe (noexcept): logging only
+outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp|Poll ## L23 probe (noexcept): logging only
+outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp|Queue ## L23 probe (noexcept): the only raising call is the lua_pcall of request()
+outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp|VmtEngineTickDrain ## LATENT-H4: top-level engine tick drain; Lua work runs through call_function (pcall)
+outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp|callback ## L23 probe (noexcept): every raising Lua call runs under lua_pcall
+outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp|vmt_engine_tick_drain ## LATENT-H4: wrapper of VmtEngineTickDrain
+outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaUObject.cpp|~FNativeUFunctionCall ## destructor calls luaL_unref on refs it owns; it never runs while a Lua error unwinds (the inner pcall boundary sits below it)
+outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMadeSimple/LuaMadeSimple.cpp|diag_report ## B6 diagnostics (noexcept): only lua_getstack/lua_getinfo("n"), which cannot raise
+outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMadeSimple/LuaMadeSimple.cpp|diag_check_raise ## B6 diagnostics (noexcept): calls diag_report only
+outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMadeSimple/LuaMadeSimple.cpp|diag_fn_return ## B6 diagnostics (noexcept): calls diag_report only
+outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMadeSimple/LuaMadeSimple.cpp|after_pcall ## B6 diagnostics (noexcept): calls diag_report only
+outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp|on_leak ## B6 [LOCKLEAK] hook (noexcept): log line only

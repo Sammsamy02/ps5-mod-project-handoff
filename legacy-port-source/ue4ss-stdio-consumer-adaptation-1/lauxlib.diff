@@ -1,0 +1,53 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/deps/first/LuaRaw/src/lauxlib.c
++++ /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-stdio-consumer-adaptation-1/patched/lauxlib.c
+@@ -1,6 +1,7 @@
+ /*
+ ** $Id: lauxlib.c $
+ ** Auxiliary functions for building Lua libraries
++** Local native adaptation: public stdio function calls avoid SDK FILE macros.
+ ** See Copyright Notice in lua.h
+ */
+ 
+@@ -727,7 +728,7 @@
+     /* 'fread' can return > 0 *and* set the EOF flag. If next call to
+        'getF' called 'fread', it might still wait for user input.
+        The next check avoids this problem. */
+-    if (feof(lf->f)) return NULL;
++    if ((feof)(lf->f)) return NULL;
+     *size = fread(lf->buff, 1, sizeof(lf->buff), lf->f);  /* read block */
+   }
+   return lf->buff;
+@@ -753,9 +754,9 @@
+ ** (as no chunk can start with 0xEF).
+ */
+ static int skipBOM (FILE *f) {
+-  int c = getc(f);  /* read first character */
+-  if (c == 0xEF && getc(f) == 0xBB && getc(f) == 0xBF)  /* correct BOM? */
+-    return getc(f);  /* ignore BOM and return next char */
++  int c = fgetc(f);  /* read first character */
++  if (c == 0xEF && fgetc(f) == 0xBB && fgetc(f) == 0xBF)  /* correct BOM? */
++    return fgetc(f);  /* ignore BOM and return next char */
+   else  /* no (valid) BOM */
+     return c;  /* return first character */
+ }
+@@ -772,9 +773,9 @@
+   int c = *cp = skipBOM(f);
+   if (c == '#') {  /* first line is a comment (Unix exec. file)? */
+     do {  /* skip first line */
+-      c = getc(f);
++      c = fgetc(f);
+     } while (c != EOF && c != '\n');
+-    *cp = getc(f);  /* next character after comment, if present */
++    *cp = fgetc(f);  /* next character after comment, if present */
+     return 1;  /* there was a comment */
+   }
+   else return 0;  /* no comment */
+@@ -813,7 +814,7 @@
+     lf.buff[lf.n++] = c;  /* 'c' is the first character of the stream */
+   errno = 0;
+   status = lua_load(L, getF, &lf, lua_tostring(L, -1), mode);
+-  readstatus = ferror(lf.f);
++  readstatus = (ferror)(lf.f);
+   if (filename) fclose(lf.f);  /* close file (even in case of errors) */
+   if (readstatus) {
+     lua_settop(L, fnameindex);  /* ignore results from 'lua_load' */

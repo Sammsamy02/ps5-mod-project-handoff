@@ -1,0 +1,68 @@
+{
+  "worker": "worker-loader-instrument",
+  "date": "2026-10-05",
+  "scope": "Host-side rebuild + verification of the ploader-return-message-1 diagnostic lineage; optional secondary file-log variant. NO console contact, NO staging, NO game claims.",
+  "source": {
+    "diagnostic_main_c": {
+      "path": ".superpowers/native-dependency-spike/ploader-return-message-1/diagnostic/main.c",
+      "sha256": "7f352dcd03bf2ea0b282b8d74ba6b8d5d4b47ebd8ba74a5c04ef59bbb7e045d1",
+      "baseline_main_c_sha256": "2b521cd7751636d10291bf14435bebe9590213c2208d9a2dc7f9f49cab09330b",
+      "diff_verdict": "EXACTLY ONE line changed vs baseline: FAIL notify gains rc=0x%08x with (unsigned)rc argument. notify() is vsnprintf-based (varargs-safe); rc is the inject_prx int return. Makefiles byte-identical (81ca2d58e927a82b4a15ee0efd6042dc791acce2c05d5b6f9d2722a5a553c37b). No other delta."
+    },
+    "filelog_main_c": {
+      "path": "outputs/2026-10-04-zcode-team/worker-loader-instrument/build-filelog/main.c",
+      "sha256": "bf802944d27eed83659e173e9813f75d980d243a7c92b25285e1c58d3b76588b",
+      "diff_vs_diagnostic": "Minimal: one new static log_result() (fopen RESULT_LOG_PATH 'a' / fprintf / fclose, silent-return on open failure) + one call site after the OK/FAIL notify. Log path /data/plugins/ploader-results.log; line format '%s %s path=%s rc=0x%08x dt=%ldms loader=ploader-diag-filelog built=' __DATE__ ' ' __TIME__."
+    }
+  },
+  "build_command": {
+    "argv": ["/usr/bin/make", "--no-print-directory", "all"],
+    "cwd_per_variant": "build-diagnostic/ and build-filelog/ under this worker dir",
+    "environment_overrides": {
+      "PS5_PAYLOAD_SDK": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk",
+      "LLVM_CONFIG": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin/llvm-config"
+    },
+    "effective_compile": "prospero-clang -Wall -g -O2 -o ploader.elf main.c (upstream Makefile, unmodified)",
+    "precedent": "worker-staging-next/ploader-build and ploader-return-message-1/commands.json record the identical invocation"
+  },
+  "artifacts": {
+    "diagnostic_rebuild": {
+      "path": "outputs/2026-10-04-zcode-team/worker-loader-instrument/build-diagnostic/ploader.elf",
+      "bytes": 142904,
+      "sha256": "279c14532be884ef79009362eede432a58175ae7cc9c179b2ebf2c71af485353",
+      "build_exit": 0,
+      "stderr_bytes": 0
+    },
+    "diagnostic_prior_receipt_bound_artifact": {
+      "path": ".superpowers/native-dependency-spike/ploader-return-message-1/diagnostic/ploader.elf",
+      "bytes": 142968,
+      "sha256": "009445ab35ecf447696a325c88c617d469d5b6cc966ccece914bdc09577f706d",
+      "note": "Pre-existing build with full receipt chain (commands.json, verification.json, inputs.json 2847 pins, REPORT.md)."
+    },
+    "filelog_variant": {
+      "path": "outputs/2026-10-04-zcode-team/worker-loader-instrument/build-filelog/ploader.elf",
+      "bytes": 143224,
+      "sha256": "9dccfef1b04b303a628cbbac87d1030e5c6f1a8d16706cba03f474a28ee17628",
+      "build_exit": 0,
+      "stderr_bytes": 0
+    }
+  },
+  "reproducibility": {
+    "text_rodata_identical_to_prior_artifact": true,
+    "text": { "bytes": 48318, "sha256_prefix": "7936851221bbd6c9", "identical": true },
+    "rodata": { "bytes": 5130, "sha256_prefix": "ad0eef2a235693d6", "identical": true },
+    "file_size_delta_explanation": "64 B total file delta vs the prior artifact is debug metadata only (-g embeds the build cwd in .debug_str/.debug_line_str). Code and rodata are byte-identical. Whole-file sha256 equality is NOT claimed across build directories."
+  },
+  "strings_verification": {
+    "rc_format_in_diagnostic_rebuild": true,
+    "rc_format_string": "[%s] FAIL (%ldms, rc=0x%08x): %s",
+    "rc_format_in_prior_artifact_009445ab": true,
+    "rc_format_absent_in_baseline_artifact_720b1989": true,
+    "filelog_strings_present": ["/data/plugins/ploader-results.log", "ploader-diag-filelog"]
+  },
+  "elf_class": {
+    "magic": "7f454c46 (plain ELF, NOT FSELF)",
+    "max_p_offset_plus_p_filesz_both_new_artifacts": 98332,
+    "strip_tail_fallback_law": "If the channel ever serves a stripped view, accepted fallback length is 98332 bytes with body bytes 64..end identical and magic intact (same law and same value as the worker-staging-next receipt for the 4c339235 artifact)."
+  }
+}

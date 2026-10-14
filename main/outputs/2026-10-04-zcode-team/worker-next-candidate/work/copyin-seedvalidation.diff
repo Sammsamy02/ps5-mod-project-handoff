@@ -1,0 +1,97 @@
+--- outputs/2026-10-04-zcode-controller/launch11-combined/units/SeedValidation.hpp	2026-10-05 19:40:27
++++ outputs/2026-10-04-zcode-team/worker-copyin-unit/staging/SeedValidation.hpp	2026-10-05 20:39:16
+@@ -427,6 +427,54 @@
+     //      an evidence-backed source. A header constant and an available
+     //      trampoline are build evidence only, never a successful target
+     //      test.
++    //
++    // v5.1 third source — KernelWriteCopyin (worker-copyin-unit, staged
++    // against the worker-write-copyin design note,
++    // outputs/2026-10-04-zcode-team/worker-write-copyin/results/
++    // verdict-and-design-note.json). On-target standalone payload evidence
++    // (builds prospero-186dab02e289 / prospero-98d370be8eeb, 2026-10-06):
++    // write(2)-copyin of [addr, addr+len) into a REAL bridge-owned file
++    // under /data is a kernel-mediated read AND a readability oracle:
++    //   (a) loaded-image .bss / stack / malloc-heap sources transfer
++    //       byte-true (rc==len, host-verified file contents);
++    //   (b) munmap hole, constructed PROT_NONE, DM-class 0x22C0000000 and
++    //       high unmapped 0x4000000000 all refuse with EFAULT leaving the
++    //       sink byte-empty (all-or-nothing per copyin call; no partial
++    //       transfer ever observed);
++    //   (c) /dev/null as the sink is VACUOUS (rc==len, nothing copied) —
++    //       a real file sink is mandatory and every success classification
++    //       verifies the sink byte length.
++    // KernelWriteCopyin is therefore BOTH authorization AND execution: a
++    // READABLE verdict means the bytes of the full required read range were
++    // already transferred into the bridge-owned sink — the bounds_source
++    // records this as "kernel-write-copyin-read", and the initializer's
++    // entry-0 anchor verification reads the SAME sink bytes (never a direct
++    // block read on this path).
++    //
++    // ADDRESS-CLASS CAVEAT (documented, not a blocker): the kernel enforces
++    // a SOURCE-REGION-CLASS allowlist on copyin — a runtime mmap(MAP_ANON)
++    // page that is directly CPU-readable still EFAULTs (proven twice in the
++    // standalone campaign). EFAULT therefore does NOT imply unmapped: it
++    // implies "kernel refuses this source" (unmapped OR PROT_NONE OR
++    // non-allowlisted class). For this classifier the source class of a
++    // probed address is ADDRESS-CLASS-UNKNOWN: a refused verdict (0) is
++    // honest "not kernel-copyin-readable" and must never be read as a
++    // CPU-readability claim in either direction. The game's own image/heap/
++    // stack regions are the classes that succeeded standalone, but in-game
++    // semantics remain a hypothesis on the untestable-until-game-run list;
++    // a single in-game smoke probe settles it.
++    //
++    // SHAPE LAW (governs sizing; the 16 MiB-class cap question resolves to
++    // this, not to a new constant): an 8-byte probe gives unambiguous
++    // refusal codes; larger ranges step page-granular (a copyin call is
++    // all-or-nothing per call, so a range spanning readable+hole refuses
++    // whole — verification is at page granularity); per-call bytes are
++    // budget-capped by the bridge function (16 MiB class, same class as the
++    // range verdict cap). Raw rc AND errno are captured separately: the
++    // write route uses the -1/errno wrapper convention (unlike mincore's
++    // raw-positive trampoline form) and the classifier accepts BOTH
++    // conventions without conflating them — the sink byte count is the
++    // disambiguator, never the rc shape alone.
+     enum class RangeMappedVerdict : int8_t
+     {
+         Unavailable = -1, // kernel refused the call class (any other errno)
+@@ -435,8 +483,14 @@
+     };
+     enum class ReadableCoverageSource : uint8_t
+     {
+-        None = 0,          // no supported source for this address today
+-        ListedSpan = 1,    // listing READ bit (cannot cover listing gaps)
++        None = 0,              // no supported source for this address today
++        ListedSpan = 1,        // listing READ bit (cannot cover listing gaps)
++        KernelWriteCopyin = 2, // write(2)-copyin owned-read probe READABLE:
++                               // the full required read range was already
++                               // transferred into the bridge-owned sink
++                               // (authorization AND execution in one event;
++                               // caller consults it only AFTER a Mapped
++                               // range verdict, per the ordering rationale)
+     };
+     struct ListingGapResolution
+     {
+@@ -469,6 +523,22 @@
+         {
+             return {true, "listed-span-plus-range-verdict", "listing READ bit covers the range; range verdict corroborates"};
+         }
++        if (readable_source == ReadableCoverageSource::KernelWriteCopyin)
++        {
++            // v5.1: the probe's verdict is evidence-backed (worker-write-copyin
++            // standalone payload, builds 186dab02e289 / 98d370be8eeb) and is
++            // BOTH authorization AND execution: a READABLE classification
++            // means write(2) already copied the FULL required read range into
++            // the bridge-owned sink (any EFAULT would have classified
++            // refused and this branch would not be reached). bounds_source
++            // records the provenance; the entry-0 anchor verification reads
++            // the SAME sink bytes (owned-read discipline end to end).
++            return {true, "kernel-write-copyin-read",
++                    "write(2)-copyin probe transferred the full required read range into the bridge-owned sink "
++                    "(kernel-mediated owned read; EFAULT on any page of the range would have refused): the read "
++                    "already happened, so this source is authorization AND execution together; the entry-0 anchor "
++                    "verification reads the SAME sink bytes"};
++        }
+         return {false, nullptr,
+                 "kernel range verdict: MAPPED over the full required read range, but read permission is UNPROVEN for a listing-absent address "
+                 "(mapped!=readable; exec-only mappings exist in this process) and no supported readable-coverage source exists for listing-absent "

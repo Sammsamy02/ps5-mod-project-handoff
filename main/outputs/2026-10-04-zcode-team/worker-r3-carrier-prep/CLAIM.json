@@ -1,0 +1,59 @@
+{
+  "worker": "worker-r3-carrier-prep",
+  "date": "2026-10-04",
+  "mode": "OFFLINE-DERIVATION-ONLY",
+  "task": "Close what is closable OFFLINE about R3 open fact F-1 (does a FuncPtr-marshal calibration carrier exist on Townfall): precise carrier requirements, ranked candidate UFunction enumeration (UE5.6 knowledge + pinned-image evidence), per-candidate calibration protocol + probe record shapes, and the launch-10/11 ridealong probe spec extending the fc1/qdrv1 lineage. No console contact, no nested subagents, nothing executed in-game, no source staged.",
+  "read_order_contract": [
+    "TEAM:worker-r3-zerosyscall-tier/R3-TIER-DESIGN.md (F-1 owner; sections 4.2, 4.3, 6 read in full)",
+    "TEAM:worker-launch10-matrix-prep/LAUNCH10-MATRIX.md (launch-10/11 vocabulary, rows R5/R9 both-fail branch)",
+    "TEAM:worker-initializer-integration/SEED-TABLE-FORMAT.md (seeded FName ctor + GUA binding semantics)",
+    "TEAM:worker-record-sink-addon/STAGE-PLAN-QDRV1.md + TEAM:worker-fc1-validator-probe/STAGE-PLAN.md (ridealong record-shape lineage)",
+    "TEAM:worker-itemspawner-bundle main.lua (the 6 ExecuteInGameThread call sites, IS:694-731)"
+  ],
+  "claims": [
+    {
+      "id": "CCP-1",
+      "claim": "The pinned decrypted eboot (sha256 3b6cfad4..., 194241424 B) parses as ELF64 with program headers intact; segment vaddr ranges are offline-derivable and cross-check retained launch facts (PT_LOAD RW seg7 vaddr 0x913c000 is exactly the L7 span whose runtime bias 0x953c000 igf3 predicted; text is an X-only segment).",
+      "status": "verified-this-session",
+      "evidence": [
+        "shasum -a 256 decrypted-eboot.bin == 3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+        "p_headers parsed: 14 phdrs; seg0 PT_LOAD flags=0x1(X) vaddr 0x0 filesz 0x7479b1c; seg1 R vaddr 0x747c000; seg3/seg7 RW vaddr 0x7ebc000/0x913c000; seg8 R vaddr 0x9633420"
+      ]
+    },
+    {
+      "id": "CCP-2",
+      "claim": "ATTEMPTED AND REFUTED, recorded as a negative result: the hypothesis that native-ness is offline-resolvable via FClassFunctionLinkInfo-style {name-ptr, thunk-ptr} data tables is FALSE for this image. All three offline oracles were run against the pinned eboot: (a) in-place absolute pointer pairs — 0 hits including on must-be-native positive controls; (b) DT_RELA addend pairs (1,649,556 R_X86_64_RELATIVE entries parsed, addends indexed) — exactly 1 blind {rodata-string, text-thunk} adjacent pair in the entire image (a false positive 'pt'); (c) rip-relative LEA code references — POSITIVE (9,248 sites; every candidate name referenced from a class-construction region that calls the FName ctor 0x23d590, the seeded slot-2 label). CONSEQUENCE: UFunction native-ness (FUNC_Native) is NOT offline-resolvable for this build with the attempted oracles; what IS offline-closed is name-level existence and class-construction-region membership. Native-ness, invocation rate, and thread identity remain launch facts (calibration step 1 reads FunctionFlags data-side in-game).",
+      "status": "refuted-by-oracle-this-session",
+      "evidence": [
+        "image-oracle-results.json (string hits, 0 native pairs everywhere incl. LineTraceSingle positive control)",
+        "lea-refs.json (LEA reference sites per name; ReceiveTick 9 sites: ctor cluster 0x2b45bfc-0x2b45cd4 + game-region 0x4409eb1/0x4414368/0x44179a4/0x442fb44)",
+        "ctor-windows.json (ctor window analysis; recurring 0x1ba04 immediate decodes to non-flags garbage under port UnrealFlags.hpp EFunctionFlags — flags immediate NOT reliably extractable without a real disassembler)",
+        "rela index derived at .superpowers/native-observations/townfall-static-executable-2026-10-02/rela_index.bin (1,649,556 relative relocs; 1,337,475 text addends; not copied into deliverables, 25 MB)"
+      ]
+    },
+    {
+      "id": "CCP-3",
+      "claim": "A ranked candidate list of calibration carriers is delivered with per-candidate offline records (exact UTF-16 name-string vaddr, LEA reference sites, ctor-region membership, class attribution confidence, thread-admissibility), reducing F-1 from 'does ANY viable carrier exist' to the strictly smaller in-game question 'is one of these N image-confirmed reflected-name UFunctions (a) FUNC_Native (or a gate decision recorded otherwise), (b) invoked at an acceptable game-thread rate, (c) game-thread-identity-stable'.",
+      "status": "delivered-this-session",
+      "evidence": ["CARRIER-CANDIDATES.md sections 3-4"]
+    },
+    {
+      "id": "CCP-4",
+      "claim": "The launch-10/11 ridealong probe spec (worker-r3-carrier-prep lineage extension of fc1pool/qdrv1) is a standalone data-side prx that can only deliver the carrier-NAME census via the fc1-proven FName pool decode plus GUA admission/non-interference records; invocation-rate measurement requires the R3 in-runtime calibration (R3-TIER-DESIGN 4.2) and is NOT claimed by the ridealong. The census needs no UObject/UClass field offsets (B0-independent); only fc1-validated pool structure offsets.",
+      "status": "designed-this-session",
+      "evidence": ["CARRIER-CANDIDATES.md section 6"]
+    },
+    {
+      "id": "CCP-5",
+      "claim": "HONEST F-1 VERDICT: F-1 is NARROWED, not CLOSED. Offline evidence can establish which candidate UFunctions exist as registered natives in the shipped image; it cannot establish their live invocation rate, game-thread identity stability, or absence of player-action gating. Those remain launch-calibration facts (R3-TIER-DESIGN 4.2 steps 2-6). If the oracle finds zero viable native candidates in the image, F-1 would be refutable offline at the name level; the actual oracle outcome is recorded in CARRIER-CANDIDATES.md and REPORT.md with raw numbers.",
+      "status": "verdict-delivered",
+      "evidence": ["CARRIER-CANDIDATES.md section 7", "REPORT.md"]
+    }
+  ],
+  "non_claims": [
+    "No claim any carrier has been hooked, armed, or measured in-game; no claim F-1 is closed true.",
+    "No claim about kernel, console, or provider behavior; nothing executed outside this workspace's read-only image scan.",
+    "No claim that UE5.6 engine-knowledge attributions (which engine class declares which candidate) are exact; they are confidence-labeled and the image oracle is the decider for native-ness.",
+    "No claim the ridealong prx exists; the spec is a proposal for a builder worker, nothing staged."
+  ]
+}

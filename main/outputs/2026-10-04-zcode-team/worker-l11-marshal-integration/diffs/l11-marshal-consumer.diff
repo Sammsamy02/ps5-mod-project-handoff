@@ -1,0 +1,81 @@
+--- a/LuaMod.cpp
++++ b/LuaMod.cpp
+@@ -4735,6 +4735,64 @@
+         return true;
+     }
+ 
++#ifdef __PROSPERO__
++    // =====================================================================================
++    // [R3] THE CALIBRATION CONSUMER (launch-11 marshal-integration; the driver of the
++    // arming service R3-TIER-DESIGN 5.2 item 4 scopes and DIFF 1 deliberately left
++    // unimplemented — worker-r3-diffs-authoring REPORT 4: "the only intended caller of
++    // arm_funcptr_marshal_drain"). Lifecycle (R3D 4.4a): called ONCE at the top of
++    // LuaMod::on_program_start() — after setup_unreal() (the object world exists) and
++    // before start_lua_mods() — and BEFORE this function's first eager detour
++    // registration, so the deferral window is used before anything that can throw under
++    // BOTH_FAIL. Arming is GATED on the initializer's own deferral state (DIFF 2's
++    // pump_pending via R3MarshalPumpPending): in the W-works world the initializer owns
++    // the pump and this consumer performs no store at all — behavior-identical launch-10.
++    // Selection is the bounded ranked stand-in for the in-game rate calibration (R3D 4.2
++    // steps 2-4 stay the F-1 falsifier): the candidate set is CARRIER-CANDIDATES §3's
++    // offline-closed space in rank order; resolution is DATA-SIDE ONLY via
++    // StaticFindObject (the same route the Lua RegisterHook native branch uses); the
++    // first candidate that passes arm_funcptr_marshal_drain's own precheck wins and
++    // lower ranks are never touched. Rank 3 ("Tick", owner ambiguous offline) is
++    // deliberately EXCLUDED — an unknown-owner arm is worse than a loud failure; the
++    // cc1/in-runtime census resolves its owner before it may join this table.
++    // No new imports: StringType, StaticFindObject, FName, Output are all already
++    // included/used in this TU; FNAME_Add is never issued (lookup-only names).
++    // =====================================================================================
++    static auto r3_marshal_calibration_consumer() -> void
++    {
++        if (is_funcptr_marshal_armed())
++        {
++            return; // idempotent: a re-entered on_program_start can never re-arm
++        }
++        if (!Unreal::R3MarshalPumpPending())
++        {
++            Output::send(STR("[R3] marshal not armed: initializer owns the game-thread pump (pump_pending=false)\n"));
++            return;
++        }
++        static constexpr const CharType* k_r3_marshal_carrier_candidates[]{
++            STR("Actor:ReceiveTick"),                     // CARRIER-CANDIDATES §3 rank 1
++            STR("AnimInstance:BlueprintUpdateAnimation"), // §3 rank 2 (thread_risk recorded there)
++        };
++        for (const CharType* candidate_name : k_r3_marshal_carrier_candidates)
++        {
++            const StringType candidate_string{candidate_name};
++            Unreal::UFunction* carrier = Unreal::UObjectGlobals::StaticFindObject<Unreal::UFunction*>(nullptr, nullptr, candidate_string);
++            if (!carrier)
++            {
++                Output::send(STR("[R3] marshal carrier candidate not found: {} (not interned, or class not constructed yet)\n"), candidate_string);
++                continue;
++            }
++            if (arm_funcptr_marshal_drain(carrier, carrier->GetFName()))
++            {
++                return; // armed: the marshal is now the game-thread pump
++            }
++            // Refused loudly by r3_marshal_carrier_precheck (null FuncPtr / script-only /
++            // non-native): fall through to the next rank. No store happened.
++        }
++        Output::send<LogLevel::Warning>(STR("[R3] marshal arm failed: no ranked candidate passed the carrier precheck; closures will queue until a carrier arms\n"));
++    }
++#endif
++
+     // Helper to ensure engine tick hook is registered
+     auto LuaMod::ensure_engine_tick_hooked() -> void
+     {
+@@ -7255,6 +7313,13 @@
+     auto LuaMod::on_program_start() -> void
+     {
+         Unreal::UObjectArray::AddUObjectDeleteListener(&LuaType::FLuaObjectDeleteListener::s_lua_object_delete_listener);
++#ifdef __PROSPERO__
++        // [R3] launch-11 marshal consumer (see r3_marshal_calibration_consumer): must run
++        // BEFORE the RegisterLoadMapPreCallback below — the first eager detour registration
++        // in this function, which is exactly the class of registration that throws under
++        // BOTH_FAIL. Ordering obligation of R3D 4.4a's deferral window.
++        r3_marshal_calibration_consumer();
++#endif
+         const Unreal::Hook::FCallbackOptions common_opts {false, false, STR("UE4SS"), STR("LuaModImpl")};
+         Unreal::Hook::RegisterLoadMapPreCallback(
+                 [](Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) {

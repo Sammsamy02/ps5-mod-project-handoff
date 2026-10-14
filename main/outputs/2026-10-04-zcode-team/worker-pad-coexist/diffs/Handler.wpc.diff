@@ -1,0 +1,85 @@
+--- composition-base/input-handler/Handler.cpp	2026-10-02 11:40:15
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-pad-coexist/staging/input-handler-coexist/Handler.cpp	2026-10-05 14:54:41
+@@ -56,7 +56,24 @@
+         // unsuccessful replacement leaves current ownership/activation untouched.
+         auto event_update_lock = std::lock_guard(m_event_mutex);
+         if (!m_platform_handler) m_source_injected_mode = true;
+-        if (!input_source || !input_source->is_available()) return false;
++        if (!input_source) return false;
++        // worker-pad-coexist: DEFERRED ATTACH. An injected provider that is not
++        // (yet) available no longer refuses init. The live evidence (launch-10
++        // pids 317/341/355/370) is the host game holding the exclusive pad
++        // handle from before injection; wpd1 made startup survive by NOT
++        // supplying such a source, which also made recovery unreachable. The
++        // deferred-attached source is polled by process_event below and recovers
++        // through its own poll()-side retry on the sole processing thread - same
++        // thread as every other source call, never a cross-thread re-injection.
++        // An unavailable candidate never displaces an existing attachment.
++        if (!input_source->is_available())
++        {
++            if (m_platform_handler) return false;
++            m_platform_handler = input_source;
++            m_source_injected_mode = true;
++            m_injected_source = std::move(input_source);
++            return true;
++        }
+         if (!activate_input_source(input_source)) return false;
+         m_source_injected_mode = true;
+         m_injected_source = std::move(input_source);
+@@ -65,7 +82,15 @@
+ 
+     auto Handler::process_event() -> void
+     {
+-        if (m_platform_handler == nullptr || !m_platform_handler->is_available())
++        // worker-pad-coexist: the availability gate moved INTO the source's own
++        // processing path. A deferred-attached source must be polled so its
++        // bounded event-driven retry can run (PS5PadSource::poll returns no
++        // events while unavailable); every other attached source already returns
++        // empty events through its own unavailable path. m_platform_handler is
++        // only ever assigned by init/activate paths (activated source, or the
++        // deferred attach above), so process_event stays same-thread serialized
++        // per the Handler.hpp lifecycle contract.
++        if (m_platform_handler == nullptr)
+         {
+             return;
+         }
+@@ -106,7 +131,12 @@
+     {
+         auto event_update_lock = std::lock_guard(m_event_mutex);
+         if (static_cast<size_t>(key) >= max_keys) throw std::out_of_range("Input key is outside the supported key range");
+-        if (m_source_injected_mode && !is_input_available()) throw std::runtime_error("Input registration unavailable: no active input source");
++        // worker-pad-coexist: registration requires an INJECTED SOURCE, not
++        // current availability. The deferred-attached provider is a real input
++        // source; its binds must register at mod load (the load banner rung)
++        // and fire when the poll-side retry later opens the pad. With no
++        // injected source at all the refusal is unchanged.
++        if (m_source_injected_mode && !m_injected_source) throw std::runtime_error("Input registration unavailable: no active input source");
+         if (!callback) throw std::invalid_argument("Input callback is empty");
+         KeyData& key_data = m_key_set.key_data[key].emplace_back();
+         key_data.callback = callback;
+@@ -120,7 +150,8 @@
+     {
+         auto event_update_lock = std::lock_guard(m_event_mutex);
+         if (static_cast<size_t>(key) >= max_keys) throw std::out_of_range("Input key is outside the supported key range");
+-        if (m_source_injected_mode && !is_input_available()) throw std::runtime_error("Input registration unavailable: no active input source");
++        // worker-pad-coexist: same deferred-attach tolerance as above.
++        if (m_source_injected_mode && !m_injected_source) throw std::runtime_error("Input registration unavailable: no active input source");
+         if (!callback) throw std::invalid_argument("Input callback is empty");
+         KeyData& key_data = m_key_set.key_data[key].emplace_back();
+         key_data.callback = callback;
+@@ -209,7 +240,14 @@
+         if (m_source_injected_mode)
+         {
+             next_input_source = m_injected_source;
+-            if (!next_input_source || !next_input_source->is_available()) return false;
++            // worker-pad-coexist: the injected-source identity check is
++            // decoupled from current availability. The program unit calls this
++            // right after init with the constant configured name; a
++            // deferred-attached (not yet opened) provider is still the supplied
++            // provider and must not fail the composition's validation gate.
++            // activate_input_source below never displaces the attachment and
++            // never activates a different source in injected mode.
++            if (!next_input_source) return false;
+             if (source != "Default" && source != next_input_source->get_name()) return false;
+         }
+         else if (source == "Default")

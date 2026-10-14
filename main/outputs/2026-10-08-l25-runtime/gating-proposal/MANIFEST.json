@@ -1,0 +1,60 @@
+{
+  "part": "gating-proposal",
+  "author": "agent Z15",
+  "date": "2026-10-08",
+  "status": "REVIEWED-READY PROPOSAL — code included, NOT wired into any build; decision item for Claude in the l25 packet",
+  "scope": "Mac-local analysis only; no builds, no console, no network; nothing outside outputs/2026-10-08-l25-runtime/gating-proposal/ and the l25-prep report was written; typescan-r4 CHANGES.json, build scripts and every consumed file untouched (read-only)",
+  "recommendation_implemented": "agent-Q l25 report section 4: call the owner-gate leave() at the end of bridge_copyin_initializer_complete() (one logical change, bridge-side) — 'safe to suspend … Recommend gating in l26 as a controller decision'",
+  "primary_diff": {
+    "file": "gating-patch.diff",
+    "sha256": "5692775cb6ac83bdf53a669acaa8eecfdce3f012f6ebab964def5670cf7d75e3",
+    "against": {
+      "path": "outputs/2026-10-08-l25-runtime/copyin-probe/candidate/lifecycle/runtime_start_bridge.cpp",
+      "sha256": "f510c01484e3edcc21960fb0bb5c23562e548522b30cc629e43baf3dd1911712",
+      "why_this_is_the_consumed_file": "agent-Q's l25 observation candidate is what the l25 packaging driver hard-wires as the staged outer_bridge (l25_packaging_driver.py:100-115 asserts l24 base 89e4b643… and pins candidate f510c014…); the l26 packaging therefore composes from f510c014… under the plan of record"
+    },
+    "ready_made_candidate": {
+      "path": "candidate-l25base/lifecycle/runtime_start_bridge.cpp",
+      "sha256": "50caba3bbde74879902702c95f73ddfea729062b733e7ca34e42c9a8cce328a6"
+    }
+  },
+  "fallback_diff": {
+    "file": "gating-patch-lineage-fallback.diff",
+    "sha256": "eec68e65144626aacea14bbddcc5fcbe915f235e7af52bfb36ab3a00e22fd550",
+    "against": {
+      "path": "outputs/2026-10-08-l24-package/lineage/lifecycle/runtime_start_bridge.cpp",
+      "sha256": "89e4b64344fe0acd5cb5cf30156420f3f73c994f7ccdc949ab66b50a1a6f0eac",
+      "why": "use ONLY if l25 packaging does not adopt agent-Q's bridge candidate (WIRING.md allows the bridge change to ride the next packaging); this is the file the shipped l24 package actually compiled and linked"
+    },
+    "ready_made_candidate": {
+      "path": "candidate-lineage/lifecycle/runtime_start_bridge.cpp",
+      "sha256": "e5fd4efc0fd6df87cff70bf6a521103fdee0b6a05d8483173343f7ba22ffffbb"
+    }
+  },
+  "consumption_evidence": {
+    "bridge_l24": [
+      "STAGED-SOURCE-PINS.json:449-450 pins outputs/2026-10-08-l24-package/lineage/lifecycle/runtime_start_bridge.cpp sha 89e4b643…",
+      "BUILD-INPUTS.json:252-253 pins outer_bridge input sha 89e4b643… (staged from 2026-10-08-combined-outer-lifecycle/candidate-v2/runtime_start_bridge.cpp)",
+      "agent-O §0b receipt method: last build's pins are the sanctioned replacement channel; verified on disk, not assumed"
+    ],
+    "bridge_l25_plan": "l25_packaging_driver.py:100-115 'copyin_probe_wiring' substitutes outer_bridge with agent-Q candidate f510c014… after asserting the 89e4b643… base",
+    "runtime_owner_unit": {
+      "consumed": "outputs/2026-10-07-l19-r3-full-build/units/runtime_owner.cpp",
+      "sha256": "532b899133ba8f4d6d6c815aef7ad3bb7f3fa2efcb0cd5ce2d66a2f919f771c3",
+      "evidence": "l24 pass1 COMPOSITION-RECEIPT.json unit 'runtime_owner' source pin (hash verified on disk); l25 build_runtime.py has NO replacement row for it (profile/typescan-r4/thread CHANGES.json scanned), so l25 retains the l24 pin",
+      "l25_overlay_candidate_exists": false,
+      "note": "the gating change does NOT target runtime_owner.cpp: RuntimeOwner has no admission-completion hook (backend_->initialize blocks until shutdown, runtime_owner.cpp:91-103 arms the gate via CopyinOwnerScope and can only release at return); the gate object g_copyin_initializer_owner lives in the bridge TU (bridge:916), so the leave() must be bridge-side — exactly agent-Q's recommendation"
+    },
+    "gate_class": "l13_sink::InitializerOwner, CopyinStartup.hpp sha b300cb59f41c7b552c66672439521285edbd6b0c1cbbb5ac04065cb114af7900 — byte-identical in outputs/2026-10-08-l24-package/lineage/ and outputs/2026-10-07-l19-r3-full-build/units/"
+  },
+  "host_compile_proof": {
+    "dir": "compile-proof/",
+    "harness": "gate_region_proof.cpp (sha 11861cc9…)",
+    "verbatim_pieces": [
+      "CopyinStartup.hpp b300cb59… (gate class)",
+      "extracted_gate_functions.inc 62823a6f… = sed 1071,1149 of the patched primary candidate (enter / PATCHED complete / leave)"
+    ],
+    "result": "clang++ -std=c++20 -Wall -Wextra: PASS plain (exit 0) and PASS with -fsanitize=address,undefined -fno-sanitize-recover=all (exit 0); ALL CHECKS PASSED — gating property holds (init thread refused after complete()), second complete() and shutdown leave() both no-ops, l25 state note still records state=3 pre-gating, foreign threads always refused, explicit re-arm still possible"
+  },
+  "diff_checks": "patch --dry-run applies cleanly against each pristine base; pure additions (grep -c '^-[^-]' = 0 both); brace balance unchanged; no new symbols (complete() already references only g_copyin_initializer_owner and diagnostic_event, both already in the TU)"
+}

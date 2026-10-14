@@ -1,0 +1,131 @@
+{
+  "schema": 1,
+  "table_id": "pak-seam-pin-pass-v1",
+  "generated_by": "agent-HJ 2026-10-10 (offline pin pass for GL PAK-RUNTIME-MOUNT-DESIGN.md; assignment item: GPlatformFileManager/FPakPlatformFile vtable identity + OpenRead/FileSize slots)",
+  "laws": {
+    "inherits": "blade-prep/per-version-table.json laws block (rule10 version-keyed, labels_are_image_relative, confirm_law) governs this data",
+    "rela_law": "ph3 pointer words are zero in the raw decrypted file; all vtable values are R_X86_64_RELATIVE relocations (DT_RELA 0x9653430 size 0x2607ee8). Vtable reconstruction = GMalloc-pass law.",
+    "no_rtti": "typeinfo slots are zero; dynsym names Sony-obfuscated; identities derive from code shape + strings, not typeinfo",
+    "confidence_meaning": "static evidence density only; NO pin has console confirmation; live admission still requires prologue-signature + live base + vptr census agreement (pin law)"
+  },
+  "image_facts": {
+    "canonical": {
+      "path": "/tmp/eboot-3bc-verify.bin",
+      "sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+      "size": 194241424,
+      "note": "hash re-verified this session; identical to the .superpowers townfall-static-executable-2026-10-02 pin and HA MANIFEST entry 1258"
+    },
+    "cross_snapshots_identical_at_all_pins": [
+      {"name": "T1", "sha256": "0a9c60b6e66bcc2b501cadd8e1e8ae3c87cddc8cbbe2a6fe8ea3572535ce7082"},
+      {"name": "T2", "sha256": "c23fb977e511aa0768053e58091f78b75b295e95046e8b4a248d984bc4a9dd53"},
+      {"name": "T3", "sha256": "e1538d9c76632988b510da846c07f291b2ac42be9aa69de1a6fe51c2b4182146"}
+    ],
+    "cross_snapshot_note": "the four images differ only in the first 4KiB (ELF/SCE header page) and dynamic-metadata tail 0xb93c000-0xb93e000; every pin below re-derived byte-identically on all four",
+    "negative_control": {
+      "image": "outputs/2026-10-08-l25-prep/FZ-GAME2/astro-inner-decrypted.elf",
+      "sha256": "7723d150328e8dd6dcf733731466390ebdab458918f5c75e6534ce7df442844b",
+      "result": "0/244 UE markers (FZ-GAME2 receipt) + 0 hits for both discriminating anchors in this file"
+    }
+  },
+  "pins": {
+    "fplatformfilemanager_get": {
+      "label": {"name": "FPlatformFileManager::Get()", "image_vaddr": "0xb8ed0", "status": "measured", "confidence": 0.95},
+      "shape": "movzx eax,byte[0x932a438]; test al,al; jne +8; lea rax,[0x932a428]; ret | lazy path: __cxa_guard_acquire(PLT 0x7471eb0)(0x932a438) then mov qword[0x932a428],0; guard_release(0x7471ec0); returns &0x932a428",
+      "prefix_bytes_hex": "0F B6 05 61 15 27 09 84 C0 74 08 48 8D 05 46 15 27 09 C3 55 48 89 E5 48",
+      "call_sites": "157 E8 sites; used by the mount helper itself at 0x176f2bc",
+      "confirm_when": "console: call returns a pointer whose [+0] is a vptr-bearing IPlatformFile whose vtable matches a chain class (e.g. 0x7fee8c0-family or 0x7ebc6a0-family relocated)"
+    },
+    "gplatformfilemanager_static": {
+      "label": {"name": "GPlatformFileManager (singleton object)", "image_vaddr": "0x932a428", "status": "measured", "confidence": 0.9},
+      "member_layout": {"+0x00": "TopPlatformFile (IPlatformFile*, active chain head)", "+0x10": "cxa guard byte (0x932a438)"},
+      "open_question": {"member": "[+0x08]", "hypothesis": "engine-wide FPakPlatformFile holder slot (pak module factory installs new FPakPlatformFile at [arg+8] and releases the old via deleting dtor +0x8; lazy accessor 0xb8aa0 reads [mgr+8])", "status": "unconfirmed - Phase 0 one-read: check [0x932a428+8] vptr == live FPakPlatformFile vtable"}
+    },
+    "getplatformfile": {
+      "label": {"name": "FPlatformFileManager::GetPlatformFile()", "image_vaddr": "0xb8a70", "status": "measured", "confidence": 0.95},
+      "shape": "mov rax,[rdi]; test; jne +1; ret | lazy build via 0x4ca0 (GetDefaultPlatformFile)",
+      "prefix_bytes_hex": "48 8B 07 48 85 C0 74 01 C3 55 48 89 E5 53 50 48",
+      "call_sites": "135 E8 sites; used by the mount helper at 0x176f2c4",
+      "default_physical_instance": {"image_vaddr": "0x9308808", "guard": "0x9308810", "ctor": "0x5b80", "vtable": "0x7ebc6a0"}
+    },
+    "fpakplatformfile_vtable": {
+      "label": {"name": "FPakPlatformFile vtable (data anchor)", "image_vaddr": "0x7fee8c0", "status": "measured", "confidence": 0.97},
+      "geometry": "ph3 RELRO; 16-byte header (offset_to_top=0, typeinfo=NULL) + 74 slots (0x248 bytes); ends at 0x7feeb00/0x7feeb08 NULL boundary before FPakFile vtable 0x7feeb10",
+      "derivation": "unique RELA slot containing Initialize 0x1769ee0 at 0x7fee8e8; start proven by (a) 2 quiet header qwords at 0x7fee8b0/0x7fee8b8, (b) inline ctor vptr store 'lea rax,[0x7fee8c0]; mov [r14],rax' at 0x178aa1c, (c) dtor self-LEA at 0x1765308",
+      "construction": {"factory": "0x178a9e0 (module vtable 0x7feffa0 slot2)", "object_size": "0xF0", "base_ctor": "0x84ca0", "inner_member": "[this+0x8]", "dtor_pair": ["0x17652f0 (complete)", "0x17656a0 (deleting)"]}
+    },
+    "iplatformfile_slots_this_build": {
+      "status": "measured", "confidence": "per-entry",
+      "vtable_order_measured": [
+        {"byte_offset": 0, "method": "~dtor (complete) 0x17652f0"},
+        {"byte_offset": 8, "method": "~dtor (deleting) 0x17656a0"},
+        {"byte_offset": 16, "method": "stub 0xb290 (unoverridden, name unknown)"},
+        {"byte_offset": 24, "method": "stub 0xe0 return-false (unoverridden, name unknown)"},
+        {"byte_offset": 32, "method": "ShouldBeUsed 0x1769df0 (-NoPak cmdline shape)"},
+        {"byte_offset": 40, "method": "Initialize 0x1769ee0 (assert string proven)"},
+        {"byte_offset": 56, "method": "slot called by chain walk (InitializeAfterProjectFilePath-shaped, stub here)"},
+        {"byte_offset": 96, "method": "real 0x1771240, FString-arg, UNLABELED [GAP]"},
+        {"byte_offset": 104, "method": "GetLowerLevel 0xb3500 'mov rax,[rdi+8]; ret' (chain-walk proven)"},
+        {"byte_offset": 112, "method": "SetLowerLevel-shaped 0xb3510 'mov [rdi+8],rsi'"},
+        {"byte_offset": 120, "method": "GetTypeName 0x17643d0 -> L'PakFile'"},
+        {"byte_offset": 128, "method": "FileExists 0x177c2c0", "confidence": 0.97, "evidence": "call sites 0x176ec9d (mount helper inner-check), 0x176f2f6 (utoc companion check), 0x1719880; impl = pak-map probe 0x1765d30 then inner-forward at +0x80; verifies GL's +0x80"},
+        {"byte_offset": 136, "method": "FileSize 0x177c360", "confidence": 0.9, "evidence": "int64 return (physical impl 0x7810 returns stat size in rax); signed-failure 'js' usage at .ucas partition query 0x171ba72; exists(+0x80)->size(+0x88) pairing at 0x1719880/0x17198a8; impl self-forwards +0x88 on inner"},
+        {"byte_offset": 184, "method": "OpenRead 0x177c6f0", "confidence": 0.93, "evidence": "FPakFile ctor 0x17722d2 'call [rax+0xb8]' with filename-only arg, handle stored at [pak+0x2d0]; impl self-forwards +0xb8 on inner"},
+        {"byte_offset": 264, "method": "OpenAsyncRead-class 0x1770e40, UNLABELED, heavily used by IoStore [GAP -> Phase 0]"},
+        {"byte_offset": 272, "method": "0x1769800, UNLABELED, used by pak scan + IoStore [GAP -> Phase 0]"},
+        {"byte_offset": 448, "method": "IterateDirectory 0x1769150", "confidence": 0.97, "evidence": "call site 0x1769ac4 in the per-folder *.pak scan; verifies GL's +0x1c0"},
+        {"byte_offset": 456, "method": "IterateDirectoryRecursively-class 0x1767e60"}
+      ],
+      "layout_crosscheck": "17 pak-module impls forward to inner at their OWN offset; +0xd8/+0x118/+0x1f8 are pure same-offset forwarders (0xe3240/0xe3ab0/0xe3c10)",
+      "note": "slot names follow measured semantics; stock-source ordering differs (UE5.6 inserted virtuals before ShouldBeUsed and between GetTypeName and FileExists) - derive from binary, never from source memory"
+    },
+    "mount_helper_abi_refined": {
+      "label": {"name": "mount-one-pak helper", "image_vaddr": "0x176ec30", "status": "measured", "confidence": 0.97},
+      "abi": "RDI=this(FPakPlatformFile*); RSI=&{TCHAR* PakPath@0; int32 Priority@8; TCHAR* MountPoint@0x10; ...; bool Flag@0x1c}; RDX=FString* OutError (nullable); RCX=TRefCountPtr<FPakFile>* OutPak (nullable); returns bool",
+      "corrections_vs_gl_design": ["RDX is OutError, not priority (priority rides args+8; wrapper 0x176b900 computes it via ranker 0x1770140 when passed -1)", "mount record: FString PakPath@+0x00, FString MountPoint@+0x10, int32 Priority@+0x20, 16B guid@+0x24, int32@+0x34 (0x38 bytes)"],
+      "utoc_tail": {"exists": true, "gate": "[this+0xc0] flag + FileExists(.utoc)", "container_ctor": "0x177fc90 (0xB0 bytes) installed at [pak+0x328]", "registry_call": "0x175a4d0 with [this+0xd0]", "note": "static existence only; late store-merge semantics remain A2/Phase-0 open"},
+      "_P_bump": "priority += 100 x digit-position (imul ebx, r14d, 0x64 at 0x176f152)"
+    },
+    "fpakfile_facts": {
+      "label": {"name": "FPakFile ctor", "image_vaddr": "0x1771fa0", "status": "measured", "confidence": 0.95},
+      "alloc_size": "0x330", "vtable": "0x7feeb10 (+ secondary vptr 0x7feeb60 at +0x10)", "refcount": "[pak+8] lock inc/dec", "file_handle": "[pak+0x2d0] via inner OpenRead (+0xb8)", "validation_flag": "[pak+0x2e1]"
+    },
+    "findfiles_visitor": {
+      "label": {"name": "*.pak scan visitor vtable", "image_vaddr": "0x7fef0b0", "status": "measured", "confidence": 0.9},
+      "slots": ["0x177e3c0", "0x177e220", "0x120", "0x177e260 (Visit)"],
+      "verdict": "Visit file-branch: wildcard+extension match, appends to TArray@visitor+0x10; DIRECTORY branch returns true immediately - NO subfolder recursion; Paks/~mods/ is NOT scanned by pak discovery on this build (static finding; Phase 0 still observes live enumerations)"
+    }
+  },
+  "anchors": {
+    "fpakplatformfile_ctor_site": {
+      "wildcard_pattern": "48 8D 05 ?? ?? ?? ?? 4D 8D 7E 38 C5 F8 57 C0 4C 89 E7 49 89 06",
+      "townfall_hits": 1, "townfall_hit_vaddr": "0x178aa1c",
+      "astro_hits": 0,
+      "use": "primary discovery anchor: LEA disp yields the FPakPlatformFile vtable vaddr; then RELA-reconstruct and verify slot layout"
+    },
+    "mount_helper_body": {
+      "wildcard_pattern": "49 8B 7F 08 4C 89 EE 48 8B 07 FF 90 80 00 00 00 84 C0 0F 84 ?? ?? ?? ?? BF 30 03 00 00 E8 ?? ?? ?? ?? 49 8B 77 08 41 0F B6 4F 30 45 0F B6 C6 48 89 C7 4C 89 EA 4C 89 BD",
+      "townfall_hits": 1, "townfall_hit_vaddr": "0x176ec93",
+      "astro_hits": 0,
+      "use": "mount-helper locator (FileExists inner-check -> 0x330 FPakFile alloc -> ctor call sequence)"
+    },
+    "generic_shapes_rejected_as_anchors": [
+      {"pattern": "prologue-only push rbp/rbp rsp/5 regs/sub rsp 0x438 + GOT load", "reason": "21 Townfall hits, 7 Astro hits - not discriminating"},
+      {"pattern": "lazy-singleton accessor body (movzx guard/test/jne/lea/ret)", "reason": "2413 Townfall hits, 62 Astro hits - shape validator only, never a discovery anchor"}
+    ]
+  },
+  "confirm_when": [
+    "live admission on console: image sha + prologue signatures + live base, then vptr census: [0x932a428+0] chain walk must match a known vtable identity (0x7fee8c0 / 0x7ebc6a0 families relocated)",
+    "Phase 0 observation arm: log +0x80/+0x88/+0xb8/+0x108/+0x110/+0x1c0 calls with layer + this-pointer to settle which slots serve utoc/ucas reads (B2 seam) and the utoc open path",
+    "Phase 0 one-read: [0x932a428+8] vptr check to confirm the FPakPlatformFile holder-slot hypothesis",
+    "same-version foreign title (none local): anchors relocate, slot layout should hold - test before trusting transfers"
+  ],
+  "receipts": [
+    "outputs/2026-10-08-l25-prep/PAK-PIN-PASS.md (this pass)",
+    "outputs/2026-10-08-l25-prep/PAK-RUNTIME-MOUNT-DESIGN.md (GL, assignment source)",
+    "outputs/2026-10-04-zcode-team/worker-kernel-pak/PAK-OVERLAY.md + evidence/eboot-re-findings.json (prior [RE] facts re-verified here)",
+    "outputs/2026-10-08-l25-prep/blade-prep/per-version-table.json (schema + image_facts_positive_control)",
+    "outputs/2026-10-08-l25-prep/evidence/tmp-preserved-20261010/MANIFEST.json entries 1257-1271 (T1/T2/T3 hash-only class, re-verified)",
+    "outputs/2026-10-08-l25-prep/FZ-GAME2/astro-static-facts.json (negative control)",
+    "tool: outputs/2026-10-08-l25-prep/phasea-tools/pak_vtable_pins.py"
+  ]
+}

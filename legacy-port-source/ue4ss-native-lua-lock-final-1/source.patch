@@ -1,0 +1,18 @@
+--- original/platform_locks.c
++++ src/platform_locks.c
+@@ -37,8 +37,13 @@
+ }
+ 
+ void LuaLockFinal(lua_State *L) {
+-    /* Process-lifetime mutex: Lua states/coroutines can overlap. */
+-    (void)L;
++    /* luai_userstateclose runs for a complete main state inside lua_close.
++       lua_close acquired the lock but does not call lua_unlock afterwards.
++       Balance exactly that entry; retain the process-lifetime mutex for other
++       live states/coroutines and preserve any outer recursive acquisition.
++       Failed partial opens and coroutine frees do not call this hook.
++       As with Lua itself, callers must quiesce uses before closing a state. */
++    LuaUnlock(L);
+ }
+ 
+ void LuaLock(lua_State *L) {

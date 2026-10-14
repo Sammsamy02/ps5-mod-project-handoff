@@ -1,0 +1,56 @@
+STAGED DIFF — NOT APPLIED (composition-time hook, worker-insession-refusal 2026-10-05)
+
+Target TU: the runtime owner, exact staging copy
+  outputs/2026-10-04-zcode-team/worker-ack-integration-deep/vendored/bootstrap/runtime_owner.cpp
+(sha256 recorded in REPORT.md). ONE addition covering the ASYNC refusal case:
+when prepare succeeded, module_start already returned 0, and the seeds/pool
+refusal surfaces later on the RuntimeOwner init thread (ScanGame ->
+consume_required_slot_seeds -> seed_refused, UnrealInitializer.cpp:756-762/
+:854-856, surfacing through Initialize :1814/:1826; caught by UE4SSProgram::
+init's catch at wpd1:727-743 -> shutdown_native_program :520-577, the
+uninstall path), the failure lands in THIS catch. Recording the refused flag
+here keeps the in-session service's refused-mode triage line truthful for
+the async case too.
+
+--- a/runtime_owner.cpp
++++ b/runtime_owner.cpp
+@@ (include block) @@
+ #include "runtime_owner.hpp"
+ #include <stdexcept>
++extern "C" void insession_cmd2_note_initializer_refused(void); // worker-insession-refusal
+@@ RuntimeOwner::initialize(), the catch (const std::exception& error) arm
+@@ (after ack_->failed(...), before the closing brace):
+     catch (const std::exception& error)
+     {
+         std::lock_guard lock(signals_->mutex);
+         signals_->status = {RuntimeState::Failed, error.what()};
+         // RUNTIME-ACK point 4: genuine startup error, including a typed
+         // deadline/cancellation converted to an error by the backend.
+         if (ack_) ack_->failed(1, error.what());
++        insession_cmd2_note_initializer_refused(); // worker-insession-refusal: recoverable refusal on the init thread
+     }
+@@ and the catch (...) arm (same point):
+     catch (...)
+     {
+         std::lock_guard lock(signals_->mutex);
+         signals_->status = {RuntimeState::Failed, "Native runtime initialization failed with an unknown exception"};
+         if (ack_) ack_->failed(1, "Native runtime initialization failed with an unknown exception");
++        insession_cmd2_note_initializer_refused(); // worker-insession-refusal
+     }
+
+NOTES:
+- The call is noexcept and bounded (one atomic exchange + one bounded
+  UE4SS.log append the first time; later calls are no-ops). It must never
+  mask or replace the ack (it does not: it writes a DIFFERENT channel).
+- The DECLARATION could instead come from a shared header; the local
+  extern "C" declaration mirrors the r14 precedent
+  (runtime_start_bridge_r14_diag_spanpub.cpp:119-121).
+- StartupCancelled (owner-requested native shutdown) is a NORMAL startup
+  exit (wpd1:474-480 keeps it error-free); it reaches the same catch arm
+  through the backend's error conversion (ue4ss_backend.cpp:67-71 comment:
+  "Program::init handles typed cooperative cancellation separately" — the
+  StartupCancelled path returns without error from init, so it does NOT
+  reach this catch on the cooperative path). If a composition still routes
+  a cooperative cancellation through this catch, the refused-mode line is a
+  one-line cosmetic mislabel during teardown — bounded and harmless, never
+  an effect; reconcile at composition review if observed.

@@ -1,0 +1,87 @@
+
+== 1. build engine-level layout packs from local evidence ==
+checked rows=105 (members=81 vtables=24) two-source=94 legacy=11 uepseudo-corroboration=74/81 agree ue4.26-candidate-rows=489 shipped-packs=1 arming_cleared=false digest=4711476663f42838e3afd6bd5b788a4a38cc57962b255e69202cc7cd3f99aaf5
+STEP PASS: build engine-level layout packs from local evidence
+
+== 2. patch set matches PATCH/MANIFEST.json ==
+checked 3 pinned patch files; mismatched=[]
+STEP PASS: patch set matches PATCH/MANIFEST.json
+
+== 3. C++ generator tests (clang++ -std=c++20, strict warnings as errors) ==
+PASS: 29 checks (member_rows=81 vtable_rows=24, R11 exact; UE4.26 fail-closed; identity image-derived; build-id note reader ok)
+STEP PASS: C++ generator tests (clang++ -std=c++20, strict warnings as errors)
+
+== 4. Python image-identity self-test (generic, image-derived) ==
+{
+ "cell": {
+  "format": 1,
+  "pointer_size": 8,
+  "major": 5,
+  "minor": 6,
+  "target": "prospero-x86_64-sysv",
+  "non_shipping": false,
+  "stats": false
+ },
+ "identity": {
+  "engine_revision": "5.6.1-0+++UE5",
+  "build_id": "04bb4330a7d71dcefe1cc2c4d19769d500000000"
+ },
+ "image": {
+  "size": 194241424,
+  "extent": 197526216,
+  "base": 0
+ },
+ "version_sources": {
+  "store": "5.6",
+  "axes_fingerprint": "5.6",
+  "axes_present_count": 54
+ },
+ "patch": 1,
+ "build_configuration": 1,
+ "stats_axis": 1
+}
+SELF-TEST PASS: image-derived identity matches expected
+derived identity == saved evidence (1 file compared)
+STEP PASS: Python image-identity self-test (generic, image-derived)
+
+== 5. shipped files carry no game identity ==
+PASS: no game identity in shipped files (checked 3 files)
+STEP PASS: shipped files carry no game identity
+
+== 6. shadow compiled x86-64 SysV against the real R11 declaration ==
+parsed=1 verdict=MATCH pack=ue5.6-prospero-x86_64-sysv-shipping-statsoff member_rows=81 vtable_rows=24 reason=pack and renderer reproduce the compiled layout byte-for-byte (drift check, not arming)
+checked 1 declaration (sha ab8750c5a7aabfeb6692140ecb5b4bae8e74659f40f0f6ab9be4ddd9f6abec9e)
+STEP PASS: shadow compiled x86-64 SysV against the real R11 declaration
+
+== 7. apply_cap02.py on a scratch copy of the live candidate + G2 pin rule ==
+pre-checks PASS: checked 7 items (1 CHANGES row(s), 2 headers, 3 pinned patch files, patch dry-run)
+DRY RUN: nothing written. Re-run with --execute to apply.
+pre-checks PASS: checked 7 items (1 CHANGES row(s), 2 headers, 3 pinned patch files, patch dry-run)
+APPLIED: candidate/src/UE4SSProgram.cpp fe9fe7bc1f85 -> ad3ae621a7c8; 1 row(s) synced; 2 headers added; backup CHANGES.json.pre-cap02-20261013; post-check 3 items PASS
+second apply refused (expected)
+G2-style pin check: unpatched copy 39 pins, patched copy 39 pins + 2 new headers
+drift added by cap02: []; cap02 row drifts: False; header hash mismatches: []
+STEP PASS: apply_cap02.py on a scratch copy of the live candidate + G2 pin rule
+
+== 8. gates on the patched scratch tree (no_detour, fs_throw, field_gate) ==
+  scanned 50 C++ sources under 1 root(s)
+  LoadMap detour-arm family in tree: present (pure-VMT rule ACTIVE for patches)
+NO-DETOUR GATE: PASS (0 detour-attempt sites; 0 notes/exemptions)
+FS-THROW GATE: checked 50 files (25575 PS5-live code lines); 54 std::filesystem call sites: 19 error_code overloads, 0 approved, 35 violations; 5 matches in host-only regions skipped
+fs_throw site lines: unpatched=35 patched=35
+  accepted FIELD-GATE-OK src/UObjectArray.cpp:261 FUObjectItem::RefCount  reason: FUObjectItem::RefCount is not in the PS5 layout; GetRefCountInternal has no caller in this runtime (round-10 grep), and if one is ever added the generated acces
+FIELD GATE: 0 unproven member read(s); accepted: 1 FIELD-GATE-OK with reason, 0 opt-in baseline debt; 0 bare FIELD-GATE-OK rejected
+FIELD GATE: PASS
+field_gate rc: unpatched=0 patched=0
+FIELD GATE: 49 distinct engine fields read: 48 proven, 1 not in this game's layout data
+FIELD GATE: 0 unproven member read(s); accepted: 1 FIELD-GATE-OK with reason, 0 opt-in baseline debt; 0 bare FIELD-GATE-OK rejected
+FIELD GATE: PASS
+field_gate verdict lines compared: 3
+field_gate files scanned: unpatched=41 patched=43 (expect +2 new headers)
+STEP PASS: gates on the patched scratch tree (no_detour, fs_throw, field_gate)
+
+== 9. PATCH/02 stays marked NOT SHIPPABLE ==
+PATCH/02 banner present; not in MANIFEST; not referenced by apply script (3 checks)
+STEP PASS: PATCH/02 stays marked NOT SHIPPABLE
+
+ALL CAP02 HOST TESTS PASSED (9 of 9 steps)

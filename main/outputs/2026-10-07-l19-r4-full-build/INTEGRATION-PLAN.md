@@ -1,0 +1,26 @@
+R4 preparation is on HOLD. The isolated directory carries all 14 root pipeline files from the proven R3 build byte-for-byte, including packaging, ODR, typed imports, source/object selection and strong layout-provider gates. Historical inputs are preserved; the active source-freeze directory and BUILD-GO do not exist. No compilation, link or packaging is authorized by this preparation.
+
+The separate affected recipe is bound to R3's actual 369 selected units, 386 composition inputs, and the independently reviewed 147-unit FField-header census. Every affected unit replaces its own existing input position. No new unit or fixed dependency is introduced. The other 222 selected unit objects and 17 fixed inputs remain pinned to their existing immutable provenance. Unchanged sources and objects still undergo the whole-selected gate.
+
+Pass 1 may reuse the 144 already compiled objects only after checking their receipt and owner audit, original source/object/dependency pins, current source/object/dependency pins, actual accepted FField.hpp dependency, and every dependency hash against the unchanged baseline pins plus the explicitly accepted owner source/header. The three held units—Program, initializer, binding—compile freshly against their final reviewed sources. A changed dependency prevents reuse.
+
+Pass 2 must independently compile all 147 affected units. Its source paths, header paths and allowed flags must equal the admitted pass-1 recipe except for object/dependency output positions. Keep the accepted pass-1 header path stable when reusing objects; changing a header's physical path may change emitted source-location strings and would require fresh pass-1 compilation too. Program alone receives the exact quoted `RC_NATIVE_LAYOUT_DECLARATIONS_HEADER` macro and mandatory selected provider/profile include paths. Every fresh .d walk is checked. No generic retained-unit allow-list expansion or unpinned command change is permitted.
+
+The R3 fixed composition script's retained allow-list does not cover all 147 consumers. The execution edition must use a separate explicitly audited R4 composition-recipe path rather than widening the frozen allow-list. That path substitutes the accepted objects into the exact R3 input order, links the full composition, and writes a compatible selected-unit/source/object/dependency receipt. All existing downstream package and final gates consume that receipt. Its admitted set must equal the census's 147 names exactly; a subset or any extra name refuses. This execution hook remains to be implemented and independently reviewed once final inputs are supplied.
+
+The original merged LuaMod source is unchanged. The actual pass-1 LuaMod object is byte-identical to R3, SHA256 `457ca039e51074c22bfe0519ebb1b555f6aa52666fde6301be5d2daa300a644b`. Preserve its existing exact comparator. Pass 2 must reproduce that comparator with the accepted FField.hpp present in its dependency walk. Do not change the frozen source or comparator expectation to accommodate a discrepancy.
+
+Before execution, the parent must supply and bind:
+
+- Independently accepted native totals and engine slots, with authenticated image/evidence receipts.
+- Final complete profile, generated RuntimeBuildProfile, source freeze and independent profile/initializer/binding review.
+- The immutable 69-member/7-slot compiled declaration pair, its exact profile digest, text hashes, generated-header hash and source provenance. Actual final staging and initializer tests must accept the complete pair and refuse wrong image/base/axes/settings, malformed pairs and missing/conflicting required facts before publication/calls.
+- The frozen Program/helper and independent loader review, with generated-header selection explicitly in its compile recipe and actual .d dependencies.
+- The owner source/header audit, all-147 recipe/input manifest, whole dependency pins and source delta against R3. Never update a frozen expected pin in place.
+- Current XOM audit, source-selection/ODR/provider gates, and an explicit local-only R4 parent GO binding this entire chain.
+
+The execution entry must require both the preserved original readiness checks and the additional R4 recipe/profile/declaration audit chain before writes or subprocess compilation. The present PREP-HOLD must remain until that reviewed execution edition is ready. Merely changing its readiness string cannot authorize a build.
+
+After each full composition, preserve all 369 source/object/link-order and 386-input hashes; require the exact strong GetStagedNativeLayoutFacts consumer/provider relationship and every mandatory helper/header dependency, plus all existing entry/export/ODR, LuaMod, receipt coverage and package gates. Verify actual 206 typed imports and encoded library/module identities against final l18, with no additions, removals or binding/type changes. Retain all 20 static checks. The second complete build must match the first composition and PRX byte-for-byte and settle the final twin gate to GO.
+
+Preparation receipts make no claim about runtime acceptance, menu/spawn, deployment or console execution. The original external 17/1 layout files, Lua mod, settings, R3 sources and artifacts remain immutable. Final evidence must report the actual final counts and hashes rather than copy R3 result claims.

@@ -1,0 +1,276 @@
+--- a/luamod-l11-merged/LuaMod.cpp
++++ b/luamod-gate5-loadmap-r3/LuaMod.cpp
+@@ -4538,8 +4538,142 @@
+                     std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.end()));
+                 LuaMod::m_pending_delayed_game_thread_actions.clear();
+             }
++        }
++    }
++
++    // =====================================================================================
++    // [R3][worker-gate5-loadmap r3] Deferred LoadMap arm (distinct ID: l11-loadmap-defer-r3).
++    // Closes the residual RUNBOOK §5.2 loss left open by l11-loadmap-defer-r2: in the R3
++    // marshal world the r2 gate skips LuaMod's eager LoadMap arms and declares the Lua
++    // RegisterLoadMapPreHook/PostHook callbacks "accepted but never invoked" for the
++    // process lifetime. r3 keeps r2's boot-time deferral (log hygiene + R3D §5.3 item 3)
++    // but QUEUES the delivery instead of retiring it: after the FuncPtr-marshal world is
++    // PROVEN live (a funcptr_marshal_hook invocation that published the game-thread
++    // identity, IS the published game thread, and owns the action dispatch), a ONE-SHOT
++    // deferred arm registers the exact same pre/post LoadMap callbacks the eager block
++    // would have. From that point every real UEngine::LoadMap event delivers the queued
++    // Lua callbacks through the armed detour (Hooks AddCallback -> EnsureHooked ->
++    // ActivateHook -> PLH hook), INCLUDING callbacks registered after the attempt (mod
++    // scripts load asynchronously relative to carrier ticks, so queue state at attempt
++    // time must not gate the attempt; the delivery lambda iterates the live vectors at
++    // fire time). Ordering safety: the pending flag is set in on_program_start BEFORE
++    // the marshal consumer can arm the pump, so no drain can precede the flag.
++    // FAIL-CLOSED: an attempted arm that fails is NEVER silent — the composed layer's
++    // own loud refusal pair fires per failed side (InstallHook's Warning, e.g. "Tried
++    // to install hook but hooking is disabled for this function." / "...function is
++    // unavailable.", plus AddCallback's Error "[UE4SS.LoadMap.LuaModImpl] Failed to add
++    // hook, detour installation likely failed!"), and this TU adds an explicit Error
++    // naming exactly what stays undelivered. As composed, bHookLoadMap has no INI
++    // mapping (UnrealInitializer.hpp:144 default false; no SettingsManager key), so the
++    // expected composed-world refusal is the hooking-disabled pair — reported loudly,
++    // once, and never downgraded to a silent skip. Exactly one attempt per process
++    // (atomic exchange); this is the r2 deferral LANDING, not a runtime re-arm of the
++    // initializer's own registrations (DIFF-2 header law untouched).
++    // =====================================================================================
++
++    // The LoadMap pre/post Lua-delivery bodies, verbatim from the eager block they serve
++    // (only the m_load_map_*_callbacks access gained its LuaMod:: qualification for file
++    // scope). Both the eager block (W-works world, pump_pending=false) and the one-shot
++    // deferred arm (R3 marshal world) pass these, so delivery semantics — game-thread
++    // pre/post-LoadMap timing, 5 pushed args, bool-or-nil return contract — are
++    // identical whichever path arms.
++    static auto lua_load_map_pre_callback(Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) -> void
++    {
++        TRY([&] {
++            for (const auto& callback_data : LuaMod::m_load_map_pre_callbacks)
++            {
++                for (const auto& [lua_ptr, registry_index] : callback_data.registry_indexes)
++                {
++                    const auto& lua = *lua_ptr;
++
++                    lua.registry().get_function_ref(registry_index.lua_index);
++                    static auto s_object_property_name = Unreal::FName(STR("ObjectProperty"), Unreal::FNAME_Find);
++                    LuaType::RemoteUnrealParam::construct(lua, &Engine, s_object_property_name);
++                    LuaType::RemoteUnrealParam::construct(lua, &WorldContext.GetThisCurrentWorld(), s_object_property_name);
++                    LuaType::FURL::construct(lua, URL);
++                    LuaType::RemoteUnrealParam::construct(lua, &PendingGame, s_object_property_name);
++                    callback_data.lua->set_string(to_string(*Error));
++                    lua.call_function(5, 1);
++
++                    if (callback_data.lua->is_nil())
++                    {
++                        callback_data.lua->discard_value();
++                    }
++                    else if (!callback_data.lua->is_bool())
++                    {
++                        throw std::runtime_error{"A callback for 'LoadMap' must return bool or nil"};
++                    }
++                    else
++                    {
++                        CallbackIterationData.TrySetReturnValue(callback_data.lua->get_bool());
++                    }
++                }
++            }
++        });
++    }
++
++    static auto lua_load_map_post_callback(Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) -> void
++    {
++        TRY([&] {
++            for (const auto& callback_data : LuaMod::m_load_map_post_callbacks)
++            {
++                for (const auto& [lua_ptr, registry_index] : callback_data.registry_indexes)
++                {
++                    const auto& lua = *lua_ptr;
++
++                    lua.registry().get_function_ref(registry_index.lua_index);
++                    static auto s_object_property_name = Unreal::FName(STR("ObjectProperty"), Unreal::FNAME_Find);
++                    LuaType::RemoteUnrealParam::construct(lua, &Engine, s_object_property_name);
++                    LuaType::RemoteUnrealParam::construct(lua, &WorldContext.GetThisCurrentWorld(), s_object_property_name);
++                    LuaType::FURL::construct(lua, URL);
++                    LuaType::RemoteUnrealParam::construct(lua, &PendingGame, s_object_property_name);
++                    callback_data.lua->set_string(to_string(*Error));
++                    lua.call_function(5, 1);
++
++                    if (callback_data.lua->is_nil())
++                    {
++                        callback_data.lua->discard_value();
++                    }
++                    else if (!callback_data.lua->is_bool())
++                    {
++                        throw std::runtime_error{"A callback for 'LoadMap' must return bool or nil"};
++                    }
++                    else
++                    {
++                        CallbackIterationData.TrySetReturnValue(callback_data.lua->get_bool());
++                    }
++                }
++            }
++        });
++    }
++
++    // One-shot deferred arm; called ONLY from funcptr_marshal_hook after the marshal
++    // world is proven (identity published + published game thread + dispatch owner).
++    // PROSPERO-only state + entry point (both callers are inside __PROSPERO__ blocks);
++    // the delivery bodies above compile in every world (the eager block uses them).
++#ifdef __PROSPERO__
++    static std::atomic<bool> m_loadmap_deferred_arm_pending{false};
++    static std::atomic<bool> m_loadmap_deferred_arm_attempted{false};
++    static auto try_deferred_loadmap_arm() -> void
++    {
++        if (!m_loadmap_deferred_arm_pending.load(std::memory_order_acquire)) return; // W-works world (or nothing deferred)
++        if (m_loadmap_deferred_arm_attempted.exchange(true, std::memory_order_acq_rel)) return; // exactly one attempt per process
++        m_loadmap_deferred_arm_pending.store(false, std::memory_order_release);
++        const Unreal::Hook::FCallbackOptions deferred_opts{false, false, STR("UE4SS"), STR("LuaModImpl")};
++        const auto pre_id = Unreal::Hook::RegisterLoadMapPreCallback(&lua_load_map_pre_callback, deferred_opts);
++        const auto post_id = Unreal::Hook::RegisterLoadMapPostCallback(&lua_load_map_post_callback, deferred_opts);
++        if (pre_id != Unreal::Hook::ERROR_ID && post_id != Unreal::Hook::ERROR_ID)
++        {
++            Output::send(STR("[R3] LoadMap detour armed (deferred arm; marshal world proven): queued Lua RegisterLoadMapPreHook/PostHook callbacks deliver on real LoadMap events\n"));
++            return;
+         }
++        // Fail-closed: the failed side above already emitted the composed layer's loud
++        // refusal pair (InstallHook Warning + AddCallback "[UE4SS.LoadMap.LuaModImpl]
++        // Failed to add hook, detour installation likely failed!" Error). Never a silent
++        // skip: name exactly what stays undelivered, once, for the process lifetime.
++        Output::send<LogLevel::Error>(STR("[R3] LoadMap deferred arm refused (pre id {:X}, post id {:X}): queued Lua RegisterLoadMapPreHook/PostHook callbacks stay undelivered for this process lifetime (no re-arm); mod loading and every other surface are unaffected\n"), pre_id, post_id);
+     }
++#endif
+ 
+     // =====================================================================================
+     // [R3] The FuncPtr-marshal drain body (DIFF 1; R3D 4.1/4.3). Registered as a
+@@ -4588,6 +4722,11 @@
+         NativeLuaActionDispatchScope action_dispatch;
+         if (!action_dispatch.owns_dispatch())
+             return;
++        // [R3][worker-gate5-loadmap r3] The marshal world is now PROVEN live (identity
++        // published, this IS the published game thread, dispatch owned): land the
++        // deferred LoadMap arm exactly once. No-op unless the r3 gate queued it in
++        // on_program_start; if the arm is refused it refuses LOUDLY (fail-closed).
++        try_deferred_loadmap_arm();
+ #endif
+         {
+             std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+@@ -7439,91 +7578,44 @@
+         // than left emergent from the owned layer's refusals. Deferral predicate = the
+         // initializer's own pump decision (R3MarshalPumpPending, declared in this TU at
+         // line 93 by the marshal consumer — zero new imports). W-works world
+-        // (pump_pending=false): the block below runs unchanged. Lua-side loss:
+-        // RegisterLoadMapPreHook/PostHook callbacks are still accepted (they append to
+-        // m_load_map_pre/post_callbacks and mod scripts keep loading) but are never
+-        // invoked; TownfallItemSpawner main.lua:731-747 loses its per-map state reset
+-        // (menu close, UI refs, item/ownedActor caches, pagination/selection reset).
++        // (pump_pending=false): the block below runs unchanged. Lua-side loss (as of
++        // [R3][worker-gate5-loadmap r3], which supersedes r2's "accepted but never
++        // invoked" for the LoadMap pair ONLY): RegisterLoadMapPreHook/PostHook callbacks
++        // are still accepted (they append to m_load_map_pre/post_callbacks and mod
++        // scripts keep loading) and a one-shot deferred arm (try_deferred_loadmap_arm at
++        // funcptr_marshal_hook) re-attempts this exact registration once the marshal
++        // world is proven live — on success TownfallItemSpawner main.lua:731-744's
++        // per-map state reset delivers again; on refusal the loss is reported LOUDLY
++        // (fail-closed), never silently. The sibling registrations below keep the full
++        // r2 law (accepted, never invoked, no re-arm).
+         // Reachability: at walkguard fold-0 the initializer's walks refuse loudly
+         // BEFORE on_program_start (failed(1,<msg>) ack chain), so this gate is reached
+         // only in worlds where the walks were admitted (fold-1) or seeded.
+         // =================================================================================
+         if (Unreal::R3MarshalPumpPending())
+         {
+-            Output::send<LogLevel::Warning>(STR("[R3] LoadMap detour registrations deferred: in this world the initializer deferred its own detour registrations (R3 marshal owns the game-thread pump), so these eager arms are futile by the same law (owned-memory layer soft-refuses every live game-text access; each arm would log PLH SEV + an Error line and register nothing); LoadMap/InitGameState/BeginPlay/EndPlay/StaticConstructObject/ULocalPlayerExec/CallFunctionByNameWithArguments/ProcessConsoleExec/custom-event script hooks stay unregistered for this process lifetime (no re-arm); Lua-side RegisterLoadMapPreHook/PostHook callbacks are accepted but never invoked\n"));
++            // [R3][worker-gate5-loadmap r3] narrows r2's all-lifetime loss: the sibling
++            // registrations below stay unregistered for this process lifetime (unchanged
++            // r2 law), while the LoadMap pre/post Lua callbacks are QUEUED and a one-shot
++            // deferred arm is attempted once the FuncPtr-marshal world is proven live
++            // (funcptr_marshal_hook -> try_deferred_loadmap_arm, declared above). If that
++            // arm is refused, the refusal is LOUD (the composed layer's InstallHook
++            // Warning + AddCallback Error pair plus the arm's own explicit Error) —
++            // never a silent skip. The flag is set BEFORE the marshal consumer below can
++            // arm the pump, so no drain can precede it.
++            m_loadmap_deferred_arm_pending.store(true, std::memory_order_release);
++            Output::send<LogLevel::Warning>(STR("[R3] LoadMap detour registrations deferred: in this world the initializer deferred its own detour registrations (R3 marshal owns the game-thread pump), so these eager arms are futile by the same law (owned-memory layer soft-refuses every live game-text access; each arm would log PLH SEV + an Error line and register nothing); InitGameState/BeginPlay/EndPlay/StaticConstructObject/ULocalPlayerExec/CallFunctionByNameWithArguments/ProcessConsoleExec/custom-event script hooks stay unregistered for this process lifetime (no re-arm); LoadMap is the exception: Lua-side RegisterLoadMapPreHook/PostHook callbacks are queued and a one-shot deferred arm is attempted when the marshal world is proven live; if that arm is refused the refusal is loud and the queued callbacks stay undelivered for this process lifetime\n"));
+         }
+         else
+ #endif
+         {
+-        Unreal::Hook::RegisterLoadMapPreCallback(
+-                [](Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) {
+-                    TRY([&] {
+-                        for (const auto& callback_data : m_load_map_pre_callbacks)
+-                        {
+-                            for (const auto& [lua_ptr, registry_index] : callback_data.registry_indexes)
+-                            {
+-                                const auto& lua = *lua_ptr;
++        // [R3][worker-gate5-loadmap r3] delivery bodies moved to file-scope
++        // lua_load_map_pre_callback / lua_load_map_post_callback (see funcptr_marshal_hook
++        // region above) so the one-shot deferred arm registers the SAME callbacks;
++        // W-works behavior (arm here, deliver on real LoadMap events) is unchanged.
++        Unreal::Hook::RegisterLoadMapPreCallback(&lua_load_map_pre_callback, common_opts);
+ 
+-                                lua.registry().get_function_ref(registry_index.lua_index);
+-                                static auto s_object_property_name = Unreal::FName(STR("ObjectProperty"), Unreal::FNAME_Find);
+-                                LuaType::RemoteUnrealParam::construct(lua, &Engine, s_object_property_name);
+-                                LuaType::RemoteUnrealParam::construct(lua, &WorldContext.GetThisCurrentWorld(), s_object_property_name);
+-                                LuaType::FURL::construct(lua, URL);
+-                                LuaType::RemoteUnrealParam::construct(lua, &PendingGame, s_object_property_name);
+-                                callback_data.lua->set_string(to_string(*Error));
+-                                lua.call_function(5, 1);
+-
+-                                if (callback_data.lua->is_nil())
+-                                {
+-                                    callback_data.lua->discard_value();
+-                                }
+-                                else if (!callback_data.lua->is_bool())
+-                                {
+-                                    throw std::runtime_error{"A callback for 'LoadMap' must return bool or nil"};
+-                                }
+-                                else
+-                                {
+-                                    CallbackIterationData.TrySetReturnValue(callback_data.lua->get_bool());
+-                                }
+-                            }
+-                        }
+-                    });
+-                }, common_opts);
+-
+-        Unreal::Hook::RegisterLoadMapPostCallback(
+-                [](Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) {
+-                    TRY([&] {
+-                        for (const auto& callback_data : m_load_map_post_callbacks)
+-                        {
+-                            for (const auto& [lua_ptr, registry_index] : callback_data.registry_indexes)
+-                            {
+-                                const auto& lua = *lua_ptr;
+-
+-                                lua.registry().get_function_ref(registry_index.lua_index);
+-                                static auto s_object_property_name = Unreal::FName(STR("ObjectProperty"), Unreal::FNAME_Find);
+-                                LuaType::RemoteUnrealParam::construct(lua, &Engine, s_object_property_name);
+-                                LuaType::RemoteUnrealParam::construct(lua, &WorldContext.GetThisCurrentWorld(), s_object_property_name);
+-                                LuaType::FURL::construct(lua, URL);
+-                                LuaType::RemoteUnrealParam::construct(lua, &PendingGame, s_object_property_name);
+-                                callback_data.lua->set_string(to_string(*Error));
+-                                lua.call_function(5, 1);
+-
+-                                if (callback_data.lua->is_nil())
+-                                {
+-                                    callback_data.lua->discard_value();
+-                                }
+-                                else if (!callback_data.lua->is_bool())
+-                                {
+-                                    throw std::runtime_error{"A callback for 'LoadMap' must return bool or nil"};
+-                                }
+-                                else
+-                                {
+-                                    CallbackIterationData.TrySetReturnValue(callback_data.lua->get_bool());
+-                                }
+-                            }
+-                        }
+-                    });
+-                }, common_opts);
++        Unreal::Hook::RegisterLoadMapPostCallback(&lua_load_map_post_callback, common_opts);
+ 
+         Unreal::Hook::RegisterInitGameStatePreCallback([]([[maybe_unused]] Unreal::Hook::TCallbackIterationData<void>& CallbackIterationData, [[maybe_unused]] Unreal::AGameModeBase* Context) {
+             TRY([&] {

@@ -1,0 +1,2031 @@
+import * as param from './parameters';
+import * as types from './types';
+import * as graphQL from './typesGraphQL';
+import Quota from './Quota';
+
+import * as FormData from 'form-data';
+import * as fs from 'fs';
+import * as http from 'http';
+import * as https from 'https';
+import * as os from 'os';
+import * as process from 'process';
+import * as url from 'url';
+import * as setCookieParser from 'set-cookie-parser';
+import * as format from 'string-template';
+import * as jwt from 'jsonwebtoken';
+import { HTTPError, NexusError, RateLimitError, TimeoutError, ParameterInvalid, ProtocolError, JwtExpiredError, GraphError, IGraphErrorDetail, IGraphErrorEntry } from './customErrors';
+import { IGraphQLError, LogFunc } from './types';
+import { RatingOptions } from '.';
+
+type REST_METHOD = 'DELETE' | 'POST';
+
+//#region REST
+interface IRequestArgs {
+  headers?: any;
+  cookies?: any;
+  path?: any;
+  data?: any;
+  method?: REST_METHOD;
+  requestConfig?: {
+    timeout: number,
+    noDelay: boolean,
+  };
+  responseConfig?: {
+    timeout: number,
+  };
+}
+
+/** What a request has already spent on its own retries, carried across them. */
+interface IRetryAttempts {
+  refresh?: number;
+  rateLimit?: number;
+}
+
+function translateMessage(message: string): string {
+  return {
+    'TOO_SOON_AFTER_DOWNLOAD': 'You have to wait 15 minutes before endorsing a mod.',
+    'NOT_DOWNLOADED_MOD': 'You have not downloaded this mod (with this account).',
+  }[message] ?? message;
+}
+
+function chunkify<T>(input: T[], maxSize: number): T[][] {
+  const res: T[][] = [];
+  for (let i = 0; i < input.length; i += maxSize) {
+      const chunk = input.slice(i, i + maxSize);
+      res.push(chunk);
+  }
+  return res;
+}
+
+/**
+ * Report the budget the server says we have left. Sent on every response, including the ones the
+ * callers below have already turned into an error, so it has to be read before any of them bail
+ * out - otherwise a throttled client never learns the budget is gone.
+ */
+function readRateLimit(response: http.IncomingMessage,
+                       onUpdateLimit: (daily: number, hourly: number) => void) {
+  const hourlyLimit = response?.headers?.['x-rl-hourly-remaining'];
+  const dailyLimit = response?.headers?.['x-rl-daily-remaining'];
+
+  if ((hourlyLimit !== undefined) && (dailyLimit !== undefined)) {
+    onUpdateLimit(parseInt(dailyLimit.toString(), 10), parseInt(hourlyLimit.toString(), 10));
+  }
+}
+
+function handleRestResult(resolve, reject, url: string, error: any,
+                          response: http.IncomingMessage, body: string, onUpdateLimit: (daily: number, hourly: number) => void) {
+  readRateLimit(response, onUpdateLimit);
+  if (response?.statusCode === 429) {
+    return reject(new RateLimitError());
+  }
+
+  if (error !== null) {
+    // might be a nexus error with body actually
+    try {
+      const data = JSON.parse(body);
+      const message = data.message ?? data.error;
+      if (message) {
+
+        // assume a 401 is a token expiry issue
+        if ((response.statusCode === 401)) {
+          // It's nasty to rely on this string, but 401 doesn't always mean token expiry. And 401 is the recommended token expiry HTTP code:
+          // https://tools.ietf.org/html/rfc6750
+          //return reject(new JwtExpiredError());
+        }
+
+        return reject(new NexusError(translateMessage(message), response.statusCode, url, message, data.error_description));
+      }
+    } catch (_e) {
+      // nop, just allow other error handling code to run
+    }
+
+    if ((error.code === 'ETIMEDOUT') || (error.code === 'ESOCKETTIMEOUT')) {
+      return reject(new TimeoutError('request timed out: ' + url));
+    } else if (error.code === 'EPROTO') {
+      const message = error.message.indexOf('wrong version number') !== -1 
+        ? 'protocol version mismatch between client and server (if using a proxy/vpn, please ensure it supports TLS 1.2 and above)'
+        : error.message;
+      return reject(new ProtocolError('Security protocol error: ' + message));
+    }
+    return reject(error);
+  }
+
+  try {
+    if ((response.statusCode === 521)
+        || (body === 'Bad Gateway')) {
+      // in this case the body isn't something the api sent so it probably can't be parsed
+      return reject(new NexusError('API currently offline', response.statusCode, url, body));
+    }
+
+    if (response.statusCode === 202) {
+      // server accepted our request but didn't produce a result in time (for an internal timeout).
+      // As a result we simply don't know if the request was processed or not.
+      // If it was a simple data query, this is the same as a timeout. If it was a query that
+      // has a side effect (e.g. endorsing a mod) we don't know if it succeeded
+      return reject(new TimeoutError('Not processed in time'));
+    }
+
+    const data = JSON.parse(body || '{}');
+
+    if ((response.statusCode < 200) || (response.statusCode >= 300)) {
+      const message = data.message || data.error || response.statusMessage;
+      return reject(new NexusError(message, response.statusCode, url, message));
+    }
+
+    // Append response headers to data
+    const cookies = setCookieParser.parse(response, { map: true });
+    if (cookies['jwt_fingerprint'] !== undefined) {
+      data['jwt_fingerprint'] = cookies['jwt_fingerprint'].value;
+    }
+
+    resolve(data);
+  } catch (err) {
+    if ((body.length > 0) && (body[0] === '<')) {
+      // if the body starts with a < it's probably an html page (which is always the case in previous cases)
+      // if it is an html page, it has to be coming from a load balancer or firewall or something that apparently doesn't
+      // give a shit about the content type we asked for, so the API is apparently not reachable atm.
+      return reject(new NexusError('API currently not reachable, please try again later.',
+                                   response.statusCode, url, 'API_UNREACHABLE'));
+    }
+    const ecMatch = body.match(/error code: ([0-9]+)/);
+    if (ecMatch !== null) {
+      return reject(new ProtocolError(`Network error ${ecMatch[1]}`));
+    }
+    reject(new Error(`failed to parse server response for request "${url}": ${err.message}`));
+  }
+}
+
+function lib(inputUrl: string): typeof http | typeof https {
+  return url.parse(inputUrl).protocol === 'http:'
+    ? http
+    : https;
+}
+
+function restGet(inputUrl: string, args: IRequestArgs, onUpdateLimit: (daily: number, hourly: number) => void): Promise<any> {
+  return new Promise<any>((resolve, reject) => {
+    const finalURL = format(inputUrl, args.path || {});
+    const headers = parseRequestCookies(args).headers;
+    if (headers?.hasOwnProperty?.('APIKEY') && (headers['APIKEY'] === undefined)) {
+      delete headers['APIKEY'];
+    }
+    const req = lib(inputUrl).get({
+      ...url.parse(finalURL),
+      headers,
+      timeout: args.requestConfig.timeout,
+    }, (res: http.IncomingMessage) => {
+      const { statusCode, statusMessage } = res;
+      const contentType = res.headers['content-type'];
+
+      let err: string;
+
+      //(res);
+
+      if ((statusCode === 401)) {
+        // assume a 401 is a token expiry error
+        //return reject(new JwtExpiredError());
+        //return reject(new HTTPError(statusCode, err, '', finalURL));
+      }
+
+      readRateLimit(res, onUpdateLimit);
+
+      if (statusCode === 429) {
+        res.resume();
+        return reject(new RateLimitError());
+      }
+
+      if (statusCode >= 300) {
+        err = 'Request Failed';
+      } else if (!/^application\/json/.test(contentType)) {
+        err = `Invalid content-type ${contentType}`;
+      }
+
+      if (err !== undefined) {
+        res.resume();
+        return reject(new HTTPError(statusCode, err, '', finalURL));
+      }
+
+      res.setEncoding('utf8');
+      let rawData = '';
+      res
+        .on('data', (chunk) => { rawData += chunk; })
+        .on('error', err => {
+          handleRestResult(resolve, reject, inputUrl, err, res, rawData, onUpdateLimit);
+        })
+        .on('end', () => {
+          handleRestResult(resolve, reject, inputUrl, null, res, rawData, onUpdateLimit);
+        });
+    });
+    req.on('error', err => {
+      reject(err);
+    });
+  });
+}
+
+function restPost(method: REST_METHOD, inputUrl: string, args: IRequestArgs, onUpdateLimit: (daily: number, hourly: number) => void): Promise<any> {
+  const stackErr = new Error();
+  return new Promise<any>((resolve, reject) => {
+    const finalURL = format(inputUrl, args.path);
+    const body = JSON.stringify(args.data) + '\r\n';
+    const buffer = Buffer.from(body, 'utf8');
+
+    const headers = {
+      ...parseRequestCookies(args).headers,
+      'Connection': 'keep-alive',
+      'Content-Length': buffer.byteLength,
+    };
+
+    if (process.env.APIKEYMASTER !== undefined) {
+      headers['apikeymaster'] = process.env.APIKEYMASTER;
+    }
+
+    const req = lib(inputUrl).request({
+      ...url.parse(finalURL),
+      method,
+      headers,
+      timeout: args.requestConfig.timeout,
+    }, (res: http.IncomingMessage) => {
+      res.setEncoding('utf8');
+      let rawData = '';
+
+      res
+        .on('data', (chunk) => { rawData += chunk; })
+        .on('error', err => {
+          handleRestResult(resolve, reject, inputUrl, err, res, rawData, onUpdateLimit);
+        })
+        .on('end', () => {
+          const { statusCode } = res;
+          const contentType = res.headers['content-type'];
+
+          let err: Error = null;
+          if (![200, 201].includes(statusCode)) {
+            err = new HTTPError(res.statusCode, res.statusMessage, rawData, finalURL);
+          } else if (!/^application\/json/.test(contentType)) {
+            err = new Error(`Invalid content-type ${contentType}`);
+          }
+
+          handleRestResult(resolve, reject, inputUrl, err, res, rawData, onUpdateLimit);
+        });
+    });
+
+    req.on('error', err => {
+      reject(err);
+    });
+
+    req.write(buffer);
+    req.end();
+  });
+}
+
+function parseRequestCookies(args: IRequestArgs): IRequestArgs {
+  const cookieString = Object.keys(args.cookies ?? {}).map( (key) => `${key}=${args.cookies[key]}`).join('; ');
+  if (cookieString) {
+    args.headers['Cookie'] = cookieString;
+  }
+
+  return args;
+}
+
+function rest(url: string, args: IRequestArgs, onUpdateLimit: (daily: number, hourly: number) => void, method?: REST_METHOD): Promise<any> {
+  return args.data !== undefined
+    ? restPost(method || 'POST', url, args, onUpdateLimit)
+    : restGet(url, args, onUpdateLimit);
+}
+
+function transformJwtToValidationResult(oAuthCredentials: types.IOAuthCredentials): types.IValidateKeyResponse {
+  const tokenData = jwt.decode(oAuthCredentials.token);
+  return {
+    user_id: tokenData.user.id,
+    key: null,
+    name: tokenData.user.username,
+    is_premium: tokenData.user.membership_roles.includes('premium'),
+    is_supporter: tokenData.user.membership_roles.includes('supporter'),
+    email: tokenData.user.email,
+    profile_url: tokenData.user.avatar,
+  };  
+}
+
+//#endregion
+
+/**
+ * Main class of the api
+ *
+ * @class Nexus
+ */
+class Nexus {
+  private mBaseData: IRequestArgs;
+  private mBaseURL = param.API_URL;
+  private mUserServiceBaseURL = param.USER_SERVICE_API_URL;
+  private mGraphBaseURL = param.GRAPHQL_URL;
+  private mQuota: Quota;
+  private mValidationResult: types.IValidateKeyResponse;
+  private mRateLimit: { daily: number, hourly: number } = { daily: 1000, hourly: 100 };
+  private mLogCB: LogFunc = () => undefined;
+  private mOAuthCredentials: types.IOAuthCredentials;
+  private mOAuthConfig: types.IOAuthConfig;
+  private mJWTRefreshCallback: (credentials: types.IOAuthCredentials) => void;
+  private mJwtRefreshPromise: Promise<types.IOAuthCredentials> | undefined;
+  private mTokenProvider: types.AccessTokenProvider | undefined;
+  private mProvidedToken: string | undefined;
+  private mCachedPreferences: Partial<types.IPreference> | undefined;
+
+  //#region Constructor and maintenance
+
+  /**
+   * Constructor
+   * please don't use this directly, use Nexus.create
+   * @param appName {string} Name of the client application
+   * @param appVersion {string} Version number of the client application (Needs to be semantic format)
+   * @param defaultGame {string} (nexus) id of the game requests are made for. Can be overridden per request
+   * @param timeout {number} Request timeout in milliseconds. Defaults to 30 seconds
+   */
+  constructor(appName: string, appVersion: string, defaultGame: string, timeout?: number) {
+    this.mBaseData = {
+      headers: {
+        'Content-Type': 'application/json',
+        'Protocol-Version': param.PROTOCOL_VERSION,
+        'Application-Name': appName,
+        'Application-Version': appVersion,
+        'User-Agent': `NexusApiClient/${param.PROTOCOL_VERSION} (${os.type()} ${os.release()}; ${process.arch})`
+                    + ` Node/${process.versions.node}`,
+      },
+      cookies: {},
+      path: {
+        gameId: defaultGame,
+      },
+      requestConfig: {
+        timeout: timeout || param.DEFAULT_TIMEOUT_MS,
+        noDelay: true,
+      },
+      responseConfig: {
+        timeout: timeout || param.DEFAULT_TIMEOUT_MS,
+      },
+    };
+
+    this.mQuota = new Quota(param.QUOTA_MAX, param.QUOTA_MAX, param.QUOTA_RATE_MS, this.mBaseData.requestConfig!.timeout);
+  }
+
+  /**
+   * create a Nexus instance and immediately verify the API Key
+   * 
+   * @param apiKey {string} the api key to use for connections
+   * @param appName {string} name of the client application
+   * @param appVersion {string} Version number of the client application (Needs to be semantic format)
+   * @param defaultGame {string} (nexus) id of the game requests are made for. Can be overridden per request
+   * @param timeout {number} Request timeout in milliseconds. Defaults to 5000ms
+   */
+  public static async create(apiKey: string, appName: string, appVersion: string, defaultGame: string, timeout?: number): Promise<Nexus> {
+    const res = new Nexus(appName, appVersion, defaultGame, timeout);
+    res.mValidationResult = await res.setKey(apiKey);
+    return res;
+  }
+  
+  public setLogger(logCB: LogFunc): void {
+    this.mLogCB = logCB;
+  }
+
+  /**
+   * create a Nexus instance using OAUTH credentials
+   * @param credentials {types.IOAuthCredentials} the credentials
+   * @param config {types.IOAuthConfig} client config
+   * @param appName {string} name of the client application
+   * @param appVersion {string} Version number of the client application (Needs to be semantic format)
+   * @param defaultGame {string} (nexus) id of the game requests are made for. Can be overridden per request
+   * @param timeout {number} Request timeout in milliseconds. Defaults to 5000ms
+   * @param onJWTRefresh {callback} callback invoked when a JWT refresh was necessary so that the app can store the updated tokens.
+   * @returns 
+   */
+  public static async createWithOAuth(credentials: types.IOAuthCredentials | undefined, config: types.IOAuthConfig, appName: string, appVersion: string, defaultGame: string, timeout?: number, onJWTRefresh?: (credentials: types.IOAuthCredentials) => void): Promise<Nexus> {
+    const res = new Nexus(appName, appVersion, defaultGame, timeout);
+    res.oAuthCredentials = credentials;
+    res.mOAuthConfig = config;
+    res.mJWTRefreshCallback = onJWTRefresh;
+    res.oAuthCredentials = await res.handleJwtRefresh();
+    return res;
+  }
+
+  /**
+   * change the default game id
+   * @param gameId {string} game id
+   */
+  public setGame(gameId: string): void {
+    this.mBaseData.path.gameId = gameId;
+  }
+
+  /**
+   * update fetch validation info (including premium state) with the same key
+   */
+  public async revalidate(): Promise<types.IValidateKeyResponse> {
+    const key = this.mBaseData.headers?.APIKEY;
+    this.mLogCB('info', 'revalidate', { isUndefined: key === undefined });
+    if (key !== undefined) {
+      this.mValidationResult = await this.setKey(key);
+    }
+    return this.mValidationResult;
+  }
+
+  /**
+   * retrieve the result of the last key validation.
+   * This is useful primarily after creating the object with Nexus.create
+   */
+  public getValidationResult(): types.IValidateKeyResponse {
+    return this.mValidationResult;
+  }
+
+  /**
+   * Let the application own the OAuth session. Every request asks `provider` for the token to
+   * send, and asks again with the rejected token after a 401; a rejection from the provider fails
+   * that request. Reads the first token right away, which refreshes an expired one.
+   */
+  public async setTokenProvider(provider: types.AccessTokenProvider): Promise<types.IValidateKeyResponse | undefined> {
+    this.mTokenProvider = provider;
+    this.mOAuthCredentials = undefined;
+    this.mOAuthConfig = undefined;
+    this.mJWTRefreshCallback = undefined;
+    this.applyProvidedToken(await provider());
+    return this.mValidationResult;
+  }
+
+  /**
+   * The OAuth access token for a request made outside this client, refreshed first if it is about
+   * to expire. Pass the token a 401 came back for to force a refresh; if that token has already
+   * been replaced, the current one is returned without another refresh. Rejects when a forced
+   * refresh is refused.
+   * @param rejectedToken {string} the token a 401 came back for, if this is a retry
+   * @returns the token to send, or undefined without OAuth credentials
+   */
+  public getAccessToken(rejectedToken?: string): Promise<string | undefined> {
+    return rejectedToken === undefined
+      ? this.currentAccessToken()
+      : this.renewAccessToken(rejectedToken);
+  }
+
+  public async setOAuthCredentials(credentials: types.IOAuthCredentials,
+                                   config: types.IOAuthConfig,
+                                   onJWTRefresh: (credentials: types.IOAuthCredentials) => void)
+                                   : Promise<types.IValidateKeyResponse> {
+    this.oAuthCredentials = credentials;
+    this.mOAuthConfig = config;
+    this.mJWTRefreshCallback = onJWTRefresh;
+    const decoded = jwt.decode(credentials.token);
+    const userInfo = await this.userById({ avatar: true }, decoded.user.id);
+    return {
+      key: '',
+      email: '',
+      is_premium: decoded.user.membership_roles.includes('premium'),
+      is_supporter: decoded.user.membership_roles.includes('supporter'),
+      name: decoded.user.username,
+      profile_url: userInfo.avatar,
+      user_id: decoded.user.id,
+    };
+  }
+
+  /**
+   * change the API Key and validate it This can also be used to unset the key
+   * @param apiKey the new api key to set
+   * @returns A promise that resolves to the user info on success or null if the apikey was undefined
+   */
+  public async setKey(apiKey: string): Promise<types.IValidateKeyResponse> {
+    this.mLogCB('info', 'assigning api key', { isUndefined: apiKey === undefined });
+    if (apiKey === undefined) {
+      delete this.mBaseData.headers.APIKEY;
+    } else {
+      this.mBaseData.headers.APIKEY = apiKey;
+    }
+    if (apiKey !== undefined) {
+      try {
+        this.mValidationResult = await this.validateKey(apiKey);
+        return this.mValidationResult;
+      }
+      catch (err) {
+        this.mValidationResult = null;
+        throw err;
+      }
+    } else {
+      this.mValidationResult = null;
+      return null;
+    }
+  }
+
+  public getRateLimits(): { daily: number, hourly: number } {
+    return this.mRateLimit;
+  }
+
+  //#endregion
+
+  //#region Account
+
+  /**
+   * validate a specific API key
+   * This does not update the request quota or the cached validation result so it's
+   * not useful for re-checking the key after a validation error.
+   * @param key the API key to validate. Tests the current one if left undefined
+   */
+  public async validateKey(key?: string): Promise<types.IValidateKeyResponse> {
+    // key validation doesn't have to check quota because it doesn't require/consume tickets
+    return this.request(this.mBaseURL + '/users/validate',
+                this.args({ headers: this.filter({ APIKEY: key }) }));
+  }
+
+  /**
+ * Get user info from an oauth token
+ */
+  public async getUserInfo(): Promise<types.IUserInfo> {
+    await this.mQuota.wait();
+    const oAuthUserInfoPromise = this.request(`${this.mUserServiceBaseURL}/oauth/userinfo`, this.args({}));
+    const preferencePromise = this.getPreferences({
+      adult: true,
+      adultBlurImages: true,
+    });
+    const [oAuthUserInfo, preferences] = await Promise.all([oAuthUserInfoPromise, preferencePromise]);
+    return {
+      ...oAuthUserInfo,
+      preferences,
+    };
+  }
+
+  /**
+   * Get list of all mods being tracked by the user
+   */
+  public async getTrackedMods(): Promise<types.ITrackedMod[]> {
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/user/tracked_mods',
+                this.args({}));
+  }
+
+  /**
+   * start tracking a mod
+   * @param modId id of the mod
+   * @param gameId id of the game
+   */
+  public async trackMod(modId: string, gameId?: string): Promise<types.ITrackResponse> {
+    if (!this.isValidValue(parseInt(modId, 10))) {
+      return Promise.reject(new ParameterInvalid('Invalid modId: must be a positive integer.'));
+    }
+    await this.mQuota.wait();
+      return this.request(this.mBaseURL + '/user/tracked_mods', this.args({
+        data: {
+          domain_name: gameId || this.mBaseData.path.gameId,
+          mod_id: parseInt(modId, 10),
+        },
+      }))
+      .catch(err => (err.statusCode === 422)
+        // 422 means already tracked, don't feel like this is an error
+        ? Promise.resolve({ message: err.message })
+        : Promise.reject(err));
+  }
+
+  /**
+   * stop tracking a mod
+   * @param modId id of the mod
+   * @param gameId id of the game
+   */
+  public async untrackMod(modId: string, gameId?: string): Promise<types.ITrackResponse> {
+    if (!this.isValidValue(parseInt(modId, 10))) {
+      return Promise.reject(new ParameterInvalid('Invalid modId: must be a positive integer.'));
+    }
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/user/tracked_mods', this.args({
+      data: {
+        domain_name: gameId || this.mBaseData.path.gameId,
+        mod_id: parseInt(modId, 10),
+      },
+    }), 'DELETE');
+  }
+
+  //#endregion
+
+  //#region Lists
+
+  /**
+   * retrieve a list of all games currently supported by Nexus Mods
+   * @returns list of games
+   */
+  public async getGames(): Promise<types.IGameListEntry[]> {
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/games', this.args({}));
+  }
+
+  /**
+   * get list of the latest added mods
+   * @param gameId id of the game to query
+   */
+  public async getLatestAdded(gameId?: string): Promise<types.IModInfo[]> {
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/games/{gameId}/mods/latest_added', this.args({
+      path: this.filter({ gameId }),
+    }));
+  }
+
+  /**
+   * get list of the latest updated mods
+   * @param gameId id of the game to query
+   */
+  public async getLatestUpdated(gameId?: string): Promise<types.IModInfo[]> {
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/games/{gameId}/mods/latest_updated', this.args({
+      path: this.filter({ gameId }),
+    }));
+  }
+
+  /**
+   * get list of trending mods
+   * @param gameId id of the game to query
+   */
+  public async getTrending(gameId?: string): Promise<types.IModInfo[]> {
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/games/{gameId}/mods/trending', this.args({
+      path: this.filter({ gameId }),
+    }));
+  }
+
+  /**
+   * get list of endorsements the user has given
+   */
+  public async getEndorsements(): Promise<types.IEndorsement[]> {
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/user/endorsements', this.args({}));
+  }
+
+  /**
+   * get list of colourschemes
+   */
+  public async getColourschemes(): Promise<types.IColourScheme[]> {
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/colourschemes', this.args({}));
+  }
+
+  /**
+   * get list of colorschemes
+   */
+  public async getColorschemes() {
+    return this.getColourschemes();
+  }
+
+  //#endregion
+
+  //#region Game info
+
+  /**
+   * retrieve details about a specific game
+   * @param gameId {string} (nexus) game id to request
+   */
+  public async getGameInfo(gameId?: string): Promise<types.IGameInfo> {
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/games/{gameId}', this.args({
+      path: this.filter({ gameId }),
+    }));
+  }
+
+  /**
+   * retrieve list of mods for a game that has recently been updated
+   * @param period {string} rough time range to retrieve. This is limited to specific periods
+   *                        (1d, 1w, 1m) because the list is cached on the server
+   * @param gameId {string} (nexus) game id to request
+   */
+  public async getRecentlyUpdatedMods(period: types.UpdatePeriod, gameId?: string): Promise<types.IUpdateEntry[]> {
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/games/{gameId}/mods/updated?period={period}', this.args({
+      path: this.filter({ gameId, period }),
+    }));
+  }
+
+  //#endregion
+
+  //#region Mod info/management
+
+  /**
+   * Endorse/Unendorse a mod
+   * @param modId {number} (nexus) id of the mod to endorse
+   * @param modVersion {string} version of the mod the user has installed (has to correspond to a version that actually exists)
+   * @param endorseStatus {'endorse' | 'abstain'} the new endorsement state
+   * @param gameId {string} (nexus) id of the game to endorse
+   */
+  public async endorseMod(modId: number, modVersion: string,
+                          endorseStatus: 'endorse' | 'abstain', gameId?: string): Promise<types.IEndorseResponse> {
+    if (['endorse', 'abstain'].indexOf(endorseStatus) === -1) {
+      return Promise.reject(new Error('invalid endorse status, should be "endorse" or "abstain"'));
+    }
+    if (!this.isValidValue(modId)) {
+      return Promise.reject(new ParameterInvalid('Invalid modId: must be a positive integer.'));
+    }
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/games/{gameId}/mods/{modId}/{endorseStatus}', this.args({
+      path: this.filter({ gameId, modId, endorseStatus }),
+      data: this.filter({ Version: modVersion }),
+    }));
+  }
+
+  /*
+   * check if a mod id/file id value is valid - i.e. a positive integer; Vortex allows users to input
+   * mod/file ids through the interface so it's very possible for the modId to be incorrect.
+   * 
+   * additionally, we do not control how extension authors are calling the api functionality,
+   * so it's very possible for community extensions to call the api functions incorrectly.
+   * @param value {number} (nexus) id of the mod/file in numeric format
+  */
+  private isValidValue = (value: number) => !Number.isNaN(value) && Number.isInteger(value) && value > 0;
+
+  /**
+   * retrieve details about a mod
+   * @param modId {number} (nexus) id of the mod
+   * @param gameId {string} (nexus) game id
+   */
+  public async getModInfo(modId: number, gameId?: string): Promise<types.IModInfo> {
+    if (!this.isValidValue(modId)) {
+      return Promise.reject(new ParameterInvalid('Invalid modId: must be a positive integer.'));
+    }
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/games/{gameId}/mods/{modId}', this.args({
+      path: this.filter({ modId, gameId }),
+    }));
+  }
+
+  /**
+   * retrieve all changelogs for a mod
+   * @param modId {number} (nexus) id of the mod
+   * @param gameId {string} (nexus) game id
+   */
+  public async getChangelogs(modId: number, gameId?: string): Promise<types.IChangelogs> {
+    if (!this.isValidValue(modId)) {
+      return Promise.reject(new ParameterInvalid('Invalid modId: must be a positive integer.'));
+    }
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/games/{gameId}/mods/{modId}/changelogs', this.args({
+      path: this.filter({ modId, gameId }),
+    }));
+  }
+
+  /**
+   * get list of all files uploaded for a mod
+   * @param modId {number} (nexus) id of the mod
+   * @param gameId {string} (nexus) game id
+   */
+  public async getModFiles(modId: number, gameId?: string): Promise<types.IModFiles> {
+    if (!this.isValidValue(modId)) {
+      return Promise.reject(new ParameterInvalid('Invalid modId: must be a positive integer.'));
+    }
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/games/{gameId}/mods/{modId}/files', this.args({
+      path: this.filter({ modId, gameId }),
+    }));
+  }
+
+  //#endregion
+
+  //#region File info
+  /**
+   * get details about a file
+   * @param modId (nexus) id of the mod
+   * @param fileId (nexus) id of the file
+   * @param gameId (nexus) id of the game
+   */
+  public async getFileInfo(modId: number,
+                           fileId: number,
+                           gameId?: string): Promise<types.IFileInfo> {
+    if (!this.isValidValue(modId) || !this.isValidValue(fileId)) {
+      return Promise.reject(new ParameterInvalid('Invalid mod/file id: must be a positive integer.'));
+    }
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/games/{gameId}/mods/{modId}/files/{fileId}', this.args({
+      path: this.filter({ modId, fileId, gameId }),
+    }));
+  }
+
+  /**
+   * generate download links for a file
+   * If the user isn't premium on Nexus Mods, this requires a key that can only
+   * be generated on the website. The key is part of the nxm links that are generated by the "Download with Manager" buttons.
+   * @param modId id of the mod
+   * @param fileId id of the file
+   * @param key a download key
+   * @param expires expiry time of the key
+   * @param gameId id of the game
+   */
+  public async getDownloadURLs(modId: number,
+                               fileId: number,
+                               key?: string,
+                               expires?: number,
+                               gameId?: string): Promise<types.IDownloadURL[]> {
+    if (!this.isValidValue(modId) || !this.isValidValue(fileId)) {
+      return Promise.reject(new ParameterInvalid('Invalid mod/file id: must be a positive integer.'));
+    }
+    await this.mQuota.wait();
+    let urlPath = '/games/{gameId}/mods/{modId}/files/{fileId}/download_link';
+    if ((key !== undefined) && (expires !== undefined)) {
+      urlPath += '?key={key}&expires={expires}';
+    }
+    return this.request(this.mBaseURL + urlPath,
+                this.args({ path: this.filter({ modId, fileId, gameId, key, expires }) }));
+  }
+
+  /**
+   * find information about a file based on its md5 hash
+   * This can be used to find info about a file when you don't have its modid and fileid
+   * Note that technically there may be multiple results for the same md5 hash, either the same
+   * file uploaded in different places or (less likely) different files that just happen to have
+   * the same hash.
+   * This function will return all of them, you will have to sort out from the result which file
+   * you were actually looking for (e.g. by comparing size)
+   * @param hash the md5 hash of the file
+   * @param gameId the game to search in
+   */
+  public async getFileByMD5(hash: string, gameId?: string): Promise<types.IMD5Result[]> {
+    await this.mQuota.wait();
+    const urlPath = '/games/{gameId}/mods/md5_search/{hash}';
+    try {
+    return this.request(this.mBaseURL + urlPath,
+                this.args({path: this.filter({ gameId, hash })}));
+    } catch (err) {
+      if (err.code === '422') {
+        throw new ParameterInvalid(err.message);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  //#endregion
+
+  //#region GraphQL convenience
+
+  public async userById(query: graphQL.IUserQuery, userId: number): Promise<types.IGraphUser> {
+    await this.mQuota.wait();
+
+    const res = await this.requestGraph<types.IGraphUser>(
+      'user',
+      {
+        id: { type: 'Int', optional: false },
+      }, query,  { id: userId },
+      this.args({ path: this.filter({}) }));
+
+    return res;
+  }
+
+  /**
+   * Retrieve user preferences for the authenticated user
+   * @param query the preference fields to fetch
+   * @param useCache if true, returns cached preferences if available (default: true)
+   * @returns partial preference data based on the query
+   */
+  public async getPreferences(query: graphQL.IPreferenceQuery, useCache: boolean = true): Promise<Partial<types.IPreference>> {
+    if (useCache && this.mCachedPreferences !== undefined) {
+      return this.mCachedPreferences;
+    }
+
+    await this.mQuota.wait();
+
+    const res = await this.requestGraph<types.IPreference>(
+      'preferences',
+      {},
+      query,
+      {},
+      this.args({ path: this.filter({}) })
+    );
+
+    this.mCachedPreferences = res;
+    return res;
+  }
+
+  /**
+   * Clear the cached user preferences
+   */
+  public clearPreferencesCache(): void {
+    this.mCachedPreferences = undefined;
+  }
+
+  /**
+   * retrieve mod information about a list of mods by their uid
+   * @param query the information to fetch
+   * @param uids list of uids to fetch
+   * @param count how many uids to request per page. Clamped to [1, MODS_BY_UID_MAX_COUNT],
+   *              defaults to MODS_BY_UID_MAX_COUNT
+   * @returns partial mod information
+   * @note uids are numericals but since they are 64bit values (first 32bit identify the game,
+   *       the second 32bit block identifies the mod) clients should use BigInt to do the math and
+   *       then pass them in as strings
+   */
+  public async modsByUid(query: graphQL.IModQuery,
+                         uids: string[],
+                         count?: number): Promise<Partial<types.IMod>[]> {
+    const res: Partial<types.IMod>[] = [];
+
+    const parameters: graphQL.GraphQueryParameters = {
+      uids: { type: '[ID!]', optional: false },
+      count: { type: 'Int', optional: true },
+    };
+
+    // A ModPage returns at most MODS_BY_UID_MAX_COUNT nodes, so never chunk larger than that.
+    const chunkSize = count !== undefined
+      ? Math.min(Math.max(Math.floor(count), 1), param.MODS_BY_UID_MAX_COUNT)
+      : param.MODS_BY_UID_MAX_COUNT;
+
+    // request a count matching each chunk (floored at MODS_BY_UID_DEFAULT_COUNT).
+    for (const chunk of chunkify(uids, chunkSize)) {
+      await this.mQuota.wait();
+
+      const chunkCount = Math.max(chunk.length, param.MODS_BY_UID_DEFAULT_COUNT);
+      res.push(...(await this.requestGraph<{ nodes: types.IMod[] }>(
+        'modsByUid',
+        parameters,
+        { nodes: query }, { uids: chunk, count: chunkCount },
+        this.args({ path: this.filter({}) }))).nodes);
+    }
+
+    return res;
+  }
+
+  /**
+   * retrieve mod information about a list of mods by their uid
+   * @param query the information to fetch
+   * @param uids list of uids to fetch
+   * @returns partial mod information
+   * @note uids are numericals but since they are 64bit values (first 32bit identify the game,
+   *       the second 32bit block identifies the mod) clients should use BigInt to do the math and
+   *       then pass them in as strings
+   */
+  public async modFilesByUid(query: graphQL.IModFileQuery
+                             , uids: string[])
+                             : Promise<Partial<types.IModFile>[]> { 
+    const res: Partial<types.IModFile>[] = [];
+    for (const chunk of chunkify(uids, param.MAX_BATCH_SIZE)) {
+      await this.mQuota.wait();
+
+      res.push(...(await this.requestGraph<{ nodes: types.IModFile[] }>(
+        'modFilesByUid',
+        {
+          uids: { type: '[ID!]', optional: false },
+        },
+        { nodes: query }, { uids: chunk },
+        this.args({ path: this.filter({}) }))).nodes);
+    }
+
+    return res;
+  }
+
+  /**
+   * retrieve mod information about a list of mods by their md5 hash
+   * @param query the information to fetch
+   * @param md5Hashes list of hashes to fetch
+   * @returns list of hash results
+   */
+  public async fileHashes(query: graphQL.IFileHashQuery
+                          , md5Hashes: string[])
+                          : Promise<{ data: Partial<types.IFileHash>[], errors: IGraphQLError[] }> {
+    const startTime = Date.now();
+    const results: { data: Partial<types.IFileHash>[], errors: IGraphQLError[] } = {
+      data: [], errors: undefined,
+    };
+
+    for (const chunk of chunkify(md5Hashes, param.MAX_BATCH_SIZE)) {
+      await this.mQuota.wait();
+
+      const inner = await this.requestGraphWithErrors<types.IFileHash[]>(
+        'fileHashes',
+        {
+          md5s: { type: '[String!]', optional: false },
+        },
+        query, { md5s: chunk },
+        this.args({ path: this.filter({}) }));
+      results.data.push(...inner.data);
+      if (inner.errors !== undefined) {
+        if (results.errors === undefined) {
+          results.errors = [];
+        }
+        results.errors.push(...inner.errors);
+      }
+    }
+    this.mLogCB('info', 'fileHashes', {
+      time: Date.now() - startTime,
+      count: results.data.length,
+      hashes: results.data?.map(x => x.md5).join(', '),
+      errors: results.errors?.length ?? 0,
+    });
+    return results;
+  }
+
+  /**
+   * retrieve mod file contents with pagination and filtering
+   * @param query the information to fetch for the page structure
+   * @param filter optional search and filter criteria
+   * @param offset pagination offset for record positioning
+   * @param count number of records to return per page
+   * @returns paginated mod file content data with facets and metadata
+   */
+  /**
+   * Recursively converts filter values to strings for GraphQL API compatibility
+   */
+  private convertFilterValuesToStrings(filter: types.IModFileContentSearchFilter): types.IModFileContentSearchFilter {
+    const converted: any = {};
+
+    // Handle nested filters recursively
+    if (filter.filter !== undefined) {
+      converted.filter = filter.filter.map(f => this.convertFilterValuesToStrings(f));
+    }
+
+    // Copy operator if present
+    if (filter.op !== undefined) {
+      converted.op = filter.op;
+    }
+
+    // Convert all filter field values to strings
+    const filterFields = [
+      'fileId', 'modId', 'gameId', 'filePathWildcard',
+      'filePathPartsExact', 'fileNameWildcard', 'fileExtensionExact', 'fileSize'
+    ];
+
+    for (const field of filterFields) {
+      if (filter[field] !== undefined) {
+        converted[field] = filter[field].map((filterValue: any) => ({
+          op: filterValue.op,
+          value: String(filterValue.value)
+        }));
+      }
+    }
+
+    return converted;
+  }
+
+  public async modFileContents(
+    query: graphQL.IModFileContentPageQuery,
+    filter?: types.IModFileContentSearchFilter,
+    offset?: number,
+    count?: number
+  ): Promise<Partial<types.IModFileContentPage>> {
+    await this.mQuota.wait();
+
+    const parameters: graphQL.GraphQueryParameters = {};
+    const variables: any = {};
+
+    if (filter !== undefined) {
+      parameters.filter = { type: 'ModFileContentSearchFilter', optional: true };
+      variables.filter = this.convertFilterValuesToStrings(filter);
+    }
+    if (offset !== undefined) {
+      parameters.offset = { type: 'Int', optional: true };
+      variables.offset = offset;
+    }
+    if (count !== undefined) {
+      parameters.count = { type: 'Int', optional: true };
+      variables.count = count;
+    }
+
+    const res = await this.requestGraph<types.IModFileContentPage>(
+      'modFileContents',
+      parameters,
+      query,
+      variables,
+      this.args({ path: this.filter({}) })
+    );
+
+    return res;
+  }
+
+  /**
+   * retrieve mod requirements including DLC requirements, mods requiring this mod, and nexus requirements
+   * @param query the information to fetch
+   * @param modId the mod ID to get requirements for
+   * @param gameId the game domain name
+   * @returns mod requirements data including DLC, dependent mods, and nexus requirements
+   */
+  public async modRequirements(
+    query: graphQL.IModRequirementsQuery,
+    modId: number,
+    gameId: string
+  ): Promise<Partial<types.IModRequirements>> {
+    await this.mQuota.wait();
+
+    const parameters: graphQL.GraphQueryParameters = {
+      modId: { type: 'Int', optional: false },
+      gameDomainName: { type: 'String', optional: false },
+    };
+
+    const variables = {
+      modId,
+      gameDomainName: gameId,
+    };
+
+    const res = await this.requestGraph<types.IModRequirements>(
+      'modRequirements',
+      parameters,
+      query,
+      variables,
+      this.args({ path: this.filter({}) })
+    );
+
+    return res;
+  }
+
+  public async sendMetric(eventType: string, entityType: string, entityId: string, metadata: Record<string, any>, clientString?: string): Promise<types.ICreateCollectionResult> {
+    await this.mQuota.wait();
+
+    return await this.mutateGraph<{success: boolean}>(
+      'trackAppMetric',
+      {
+        eventType: { type: 'AppMetricEventType', optional: false },
+        entityType: { type: 'AppMetricEntityType', optional: false },
+        entityId: { type: 'String', optional: false },
+        metadata: { type: 'JSON', optional: false },
+        clientString: { type: 'String', optional: true },
+      },
+      { eventType, entityType, entityId, metadata, clientString },
+      this.args({ path: this.filter({}) }),
+      { success: true },
+    );
+  }
+
+  //#endregion
+
+  //#region Collection
+
+  public async getCollectionDownloadLink(downloadLink: string): Promise<types.IDownloadURL[]> {
+    await this.mQuota.wait();
+    const res = await this.request(param.BASE_URL + downloadLink, this.args({}));
+    return res.download_links ?? [res.download_link];
+  }
+
+  public async createCollection(data: types.ICollectionPayload,
+                                assetFileUUID: string,
+                                retQuery?: graphQL.ICreateCollectionQuery)
+                                : Promise<types.ICreateCollectionResult> {
+    await this.mQuota.wait();
+
+    return await this.mutateGraph(
+      'createCollection',
+      {
+        collectionData: { type: 'CollectionPayload', optional: false },
+        uuid: { type: 'String', optional: false },
+      },
+      { collectionData: data, uuid: assetFileUUID },
+      this.args({ path: this.filter({}) }),
+      retQuery ?? this.defaultCreateQuery(),
+      // ['collection { id, slug }' as any, 'revision { id, revision }', 'success'],
+    );
+  }
+
+  public async updateCollection(data: types.ICollectionPayload,
+                                assetFileUUID: string,
+                                collectionId: number,
+                                retQuery?: graphQL.ICreateCollectionQuery)
+                                : Promise<types.ICreateCollectionResult> {
+    await this.mQuota.wait();
+
+    return await this.mutateGraph(
+      'updateCollection',
+      {
+        collectionData: { type: 'CollectionPayload', optional: false },
+        uuid: { type: 'String', optional: false },
+        collectionId: { type: 'Int', optional: false },
+      },
+      { collectionData: data, uuid: assetFileUUID, collectionId },
+      this.args({ path: this.filter({}) }),
+      retQuery ?? this.defaultCreateQuery(),
+    );
+  }
+
+  public async createOrUpdateRevision(data: types.ICollectionPayload,
+                                      assetFileUUID: string,
+                                      collectionId: number,
+                                      retQuery?: graphQL.ICreateCollectionQuery)
+                                      : Promise<types.ICreateCollectionResult> {
+    await this.mQuota.wait();
+
+    return await this.mutateGraph(
+      'createOrUpdateRevision',
+      {
+        collectionData: { type: 'CollectionPayload', optional: false },
+        uuid: { type: 'String', optional: false },
+        collectionId: { type: 'Int', optional: false },
+      },
+      { collectionData: data, uuid: assetFileUUID, collectionId },
+      this.args({ path: this.filter({}) }),
+      retQuery ?? this.defaultCreateQuery(),
+    );
+  }
+
+  public async editCollection(collectionId: number,
+                              name: string,
+                              summary?: string,
+                              description?: string,
+                              category?: number)
+                              : Promise<boolean> {
+    await this.mQuota.wait();
+
+    return (await this.mutateGraph<{ collection: types.ICollection, success: boolean }>(
+      'editCollection',
+      {
+        collectionId: { type: 'Int', optional: false },
+        name: { type: 'String', optional: true },
+        summary: { type: 'String', optional: true },
+        description: { type: 'String', optional: true },
+        categoryId: { type: 'ID', optional: true },
+      },
+      { collectionId, name, summary, description, category },
+      this.args({ path: this.filter({}) }),
+      { success: true },
+    )).success;
+  }
+
+  public async publishRevision(revisionId: number): Promise<boolean> {
+    await this.mQuota.wait();
+
+    return (await this.mutateGraph<{success: boolean}>(
+      'publishRevision',
+      {
+        revisionId: { type: 'Int', optional: false },
+      },
+      { revisionId },
+      this.args({ path: this.filter({}) }),
+      { success: true },
+    )).success;
+  }
+
+  public async attachCollectionsToCategory(categoryId: number, collectionIds: number[]): Promise<boolean> {
+    await this.mQuota.wait();
+
+    return (await this.mutateGraph<{success: boolean}>(
+      'attachCollectionsToCategory',
+      {
+        id: { type: 'ID', optional: false },
+        collectionIds: { type: '[Int!]', optional: false },
+      },
+      { id: categoryId, collectionIds },
+      this.args({ path: this.filter({}) }),
+      { success: true },
+    )).success;
+  }
+
+  /**
+   * get meta information about a collection
+   * @param query selects the information to fetch
+   * @param slug the text-id of the collection to fetch
+   * @param ignoreAdultBlock if false this query will obey the users choice regarding showing
+   *                         adult content. We assume most applications deal mostly with collections
+   *                         that were already downloaded so this makes little sence, hence this
+   *                         defaults to true
+   * @returns the requested meta information about the collection
+   */
+  public async getCollectionGraph(query: graphQL.ICollectionQuery,
+                                  slug: string,
+                                  ignoreAdultBlock: boolean = true)
+                                  : Promise<Partial<types.ICollection>> {
+    await this.mQuota.wait();
+
+    const res = await this.requestGraph<types.ICollection>(
+      'collection',
+      {
+        slug: { type: 'String', optional: false },
+        viewAdultContent: { type: 'Boolean', optional: true }
+      },
+      query, { slug, viewAdultContent: ignoreAdultBlock },
+      this.args({ path: this.filter({}) }));
+
+    return res;
+  }
+
+  public async getCollectionListGraph(query: graphQL.ICollectionQuery, gameId?: string, count?: number, offset?: number): Promise<Partial<types.ICollection>[]> {
+    await this.mQuota.wait();
+
+    interface ICollectionList {
+      nodes: types.ICollection[];
+    }
+
+    const res = await this.requestGraph<ICollectionList>(
+      'collections',
+      {
+        gameDomain: { type: 'String', optional: false },
+        count: { type: 'Int', optional: true },
+        offset: { type: 'Int', optional: true },
+        // categoryId
+        // sortBy
+        // sortDirection
+      },
+      { nodes: query }, { gameDomain: gameId || this.mBaseData.path.game, count, offset },
+      this.args({ path: this.filter({}) }));
+
+    return res.nodes;
+  }
+
+  /**
+   * Search and browse collections using the collectionsV2 GraphQL query
+   * @param query selects the information to fetch from each collection
+   * @param options search options including gameId, pagination, sorting, filters, and search string
+   * @returns search results with nodes array and totalCount for pagination
+   */
+  public async searchCollectionsGraph(
+    query: graphQL.ICollectionQuery,
+    options: types.ICollectionSearchOptions
+  ): Promise<types.ICollectionSearchResult> {
+    await this.mQuota.wait();
+
+    const {
+      gameId,
+      count = 20,
+      offset = 0,
+      sort = { field: 'endorsements', direction: 'DESC' },
+      search,
+      categoryName,
+      collectionStatuses = ['listed', 'published', 'under_moderation', 'unlisted'],
+      userId,
+      adultContent,
+    } = options;
+
+    // Build the sort parameter based on the field
+    const sortParam: any = {};
+    sortParam[sort.field] = { direction: sort.direction };
+
+    // Build the filter object
+    const filter: any = {
+      collectionStatus: collectionStatuses.map(status => ({ op: 'EQUALS', value: status })),
+      gameDomain: [{ op: 'EQUALS', value: gameId }],
+      op: 'AND',
+    };
+
+    // Add category filter if provided
+    if (categoryName && categoryName.length > 0) {
+      filter.categoryName = categoryName;
+    }
+
+    // Add generalSearch if search query is provided
+    if (search && search.trim()) {
+      filter.generalSearch = [{ op: 'WILDCARD', value: search.trim() }];
+    }
+
+    // Add userId filter if provided
+    if (userId !== undefined) {
+      filter.userId = [{ op: 'EQUALS', value: userId }];
+    }
+
+    if (adultContent !== undefined) {
+      filter.adultContent = [{ op: 'EQUALS', value: adultContent }];
+    }
+
+    // Build variables for the collectionsV2 query
+    const variables = {
+      count,
+      offset,
+      filter,
+      sort: sortParam,
+    };
+
+    interface ICollectionSearchResponse {
+      totalCount: number;
+      nodes: types.ICollection[];
+    }
+
+    const res = await this.requestGraph<ICollectionSearchResponse>(
+      'collectionsV2',
+      {
+        count: { type: 'Int', optional: true },
+        filter: { type: 'CollectionsSearchFilter', optional: true },
+        offset: { type: 'Int', optional: true },
+        sort: { type: '[CollectionsSearchSort!]', optional: true },
+      },
+      {
+        totalCount: true,
+        nodes: query,
+      },
+      variables,
+      this.args({ path: this.filter({}) })
+    );
+
+    return {
+      nodes: res.nodes || [],
+      totalCount: res.totalCount || 0,
+    };
+  }
+
+  /**
+   * get list of own curated collections, optionally paginated and/or filtered for a game
+   * @param query selects the information to fetch
+   * @param gameId if set, only collections for that game are returned.
+   *               Unlike most queries, we do not fall back to the "global" game if this is undefined,
+   *               instead _all_ collections are returned
+   * @param count maximum number of items to return
+   * @param offset offset of items to return, for pagination
+   * @returns list of collections
+   */
+  public async getMyCollections(query: graphQL.ICollectionQuery, gameId?: string, count?: number, offset?: number): Promise<Partial<types.ICollection>[]> {
+    await this.mQuota.wait();
+
+    interface ICollectionList {
+      nodes: types.ICollection[];
+    }
+
+    const res = await this.requestGraph<ICollectionList>(
+      'myCollections',
+      {
+        gameDomain: { type: 'String', optional: true },
+        count: { type: 'Int', optional: true },
+        offset: { type: 'Int', optional: true },
+        viewAdultContent: { type: 'Boolean', optional: false },
+        viewUnlisted: { type: 'Boolean', optional: false },
+        viewUnderModeration: { type: 'Boolean', optional: false },
+      },
+      { nodes: query }, {
+        gameDomain: gameId,
+        count, offset,
+        viewAdultContent: true,
+        viewUnlisted: true,
+        viewUnderModeration: true,
+      },
+      this.args({ path: this.filter({}) }));
+    return res.nodes;
+  }
+
+  /**
+   * get meta information about a collection revision
+   * @param query selects the information to fetch
+   * @param collectionSlug text id identifying the collection
+   * @param revisionNumber the revision number ("version") to fetch
+   * @param ignoreAdultBlock if false this query will obey the users choice regarding showing
+   *                         adult content. We assume most applications deal mostly with collections
+   *                         that were already downloaded so this makes little sence, hence this
+   *                         defaults to true
+   * @returns the requested information about the revision
+   */
+  public async getCollectionRevisionGraph(query: graphQL.IRevisionQuery,
+                                          collectionSlug: string,
+                                          revisionNumber: number,
+                                          ignoreAdultBlock: boolean = true)
+                                          : Promise<Partial<types.IRevision>> {
+    await this.mQuota.wait();
+
+    const parameters: graphQL.GraphQueryParameters = {
+        slug: { type: 'String', optional: false },
+        viewAdultContent: { type: 'Boolean', optional: true },
+      };
+
+    const variables = { slug: collectionSlug, viewAdultContent: ignoreAdultBlock };
+
+    if (!!revisionNumber) {
+      parameters['revision'] = { type: 'Int', optional: false };
+      variables['revision'] = revisionNumber;
+    }
+
+    const res = await this.requestGraph<types.IRevision>(
+      'collectionRevision', parameters, query, variables,
+      this.args({ path: this.filter({}) }));
+
+    return res;
+  }
+
+  public async getRevisionUploadUrl(): Promise<types.IPreSignedUrl> {
+    await this.mQuota.wait();
+
+    const res = await this.requestGraph<types.IPreSignedUrl>(
+      'collectionRevisionUploadUrl',
+      {
+      }, {
+        url: true,
+        uuid: true,
+      }, {
+
+      },
+      this.args({ path: this.filter({}) }));
+
+    return res;
+  }
+
+  /**
+   * endorse a collection
+   * @param collectionId the collection to endorse
+   * @param endorseStatus the new endorsement status
+   * @param gameId id of the game
+   */
+  public async endorseCollection(collectionId: number, endorseStatus: 'abstain' | 'endorse', gameId?: string) {
+    if (['endorse', 'abstain'].indexOf(endorseStatus) === -1) {
+      return Promise.reject(new Error('invalid endorse status, should be "endorse" or "abstain"'));
+    }
+
+    await this.mQuota.wait();
+
+    return (await this.mutateGraph<{ success: boolean }>(
+      'endorse',
+      {
+        abstain: { type: 'Boolean', optional: true },
+        modelId: { type: 'Int', optional: false },
+        modelType: { type: 'String', optional: false },
+      },
+      { abstain: endorseStatus === 'abstain', modelId: collectionId, modelType: 'Collection' },
+      this.args({ path: this.filter({}) }),
+      { success: true, endorsement: { status: true } },
+    ));
+  }
+
+  /**
+   * rate a collection revision (how well it worked, not whether the user liked the content, use endorsements for that!)
+   * @param collectionId collection id
+   * @param rating the rating: positive, negative or abstained
+   * @param gameId id of the game
+   */
+  public async rateRevision(revisionId: number, rating: RatingOptions) {
+    await this.mQuota.wait();
+
+    return (await this.mutateGraph<{success: boolean, averageRating: types.IRating }>(
+      'rate',
+      {
+        id: { type: 'ID', optional: false },
+        type: { type: 'Ratable', optional: false },
+        rating: { type: 'RatingOptions', optional: false },
+      },
+      { id: revisionId, type: 'CollectionRevision', rating },
+      this.args({ path: this.filter({}) }),
+      { success: true, averageRating: { average: true, positive: true, total: true } },
+    ));
+
+     /*
+    return await this.request(this.mBaseURL + '/ratings', this.args({
+      data: {
+        rating,
+        game_domain_name: gameId || this.mBaseData.path.gameId,
+        rateable_type: 'revision',
+        rateable_id: revisionId,
+      },
+    }), 'POST');
+    */
+  }
+
+  //#endregion
+
+  //#region Media
+
+  /**
+   * get informationo about a collection video
+   * @param collectionId id of the collection
+   */
+  public async getCollectionVideo(collectionId: number, videoId: string): Promise<any[]> {
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/collections/{collectionId}/videos', this.args({
+      path: this.filter({ collectionId }),
+    }));
+  }
+
+  //#endregion
+
+  //#region Feedback
+
+  // these apis are only intended for the use in Vortex and don't make sense
+  // for third party applications
+
+  /**
+   * get list of issues reported by this user
+   * FOR INTERNAL USE ONLY
+   */
+  public async getOwnIssues(): Promise<types.IIssue[]> {
+    await this.mQuota.wait();
+    return this.request(this.mBaseURL + '/feedbacks/list_user_issues/', this.args({}))
+      .then(obj => obj.issues);
+  }
+
+  /**
+   * send a feedback message
+   * FOR INTERNAL USE ONLY
+   *
+   * @param title title of the message
+   * @param message content
+   * @param fileBundle path to an archive that is sent along
+   * @param anonymous whether the report should be made anonymously
+   * @param groupingKey a key that is used to group identical reports
+   * @param id reference id
+   */
+  public async sendFeedback(title: string,
+                            message: string,
+                            fileBundle: string,
+                            anonymous: boolean,
+                            groupingKey?: string,
+                            id?: string): Promise<types.IFeedbackResponse> {
+    await this.mQuota.wait();
+    if (message.length === 0) {
+      return Promise.reject(new Error('Feedback message can\'t be empty'));
+    }
+    const token = anonymous ? undefined : await this.currentAccessToken();
+    return this.checkFileSize(fileBundle)
+      .then(() => new Promise<types.IFeedbackResponse>((resolve, reject) => {
+        const form = new FormData();
+        form.append("feedback_text", message);
+        form.append("feedback_title", title.substr(0, 255));
+
+        if (fileBundle !== undefined) {
+          form.append('feedback_file', fs.createReadStream(fileBundle));
+        }
+        if (groupingKey !== undefined) {
+          form.append('grouping_key', groupingKey);
+        }
+        if (id !== undefined) {
+          form.append('reference', id);
+        }
+        const headers = { ...this.mBaseData.headers, ...form.getHeaders() };
+
+        if (anonymous) {
+          delete headers['APIKEY'];
+        } else if (token !== undefined) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const inputUrl = anonymous
+          ? `${param.API_URL}/feedbacks/anonymous`
+          : `${param.API_URL}/feedbacks`;
+
+        const req = lib(inputUrl).request({
+          ...url.parse(inputUrl),
+          method: 'POST',
+          headers,
+          timeout: 30000,
+        }, (res: http.IncomingMessage) => {
+          res.setEncoding('utf8');
+          let rawData = '';
+          res
+            .on('data', (chunk) => { rawData += chunk; })
+            .on('error', err => {
+              return reject(err);
+            })
+            .on('end', () => {
+              if (res.statusCode >= 400) {
+                return reject(new HTTPError(res.statusCode, res.statusMessage, rawData, inputUrl));
+              } else {
+                return resolve(JSON.parse(rawData));
+              }
+            });
+        });
+
+        req.on('error', err => reject(err));
+
+        form.pipe(req);
+        // req.end();
+      }));
+  }
+
+  //#endregion
+
+  //#region Implementation
+
+  private defaultCreateQuery() {
+    return {
+      collection: { id: true, slug: true },
+      revision: { id: true, revisionNumber: true },
+      success: true,
+    };
+  }
+
+  private checkFileSize(filePath: string): Promise<void> {
+    if (filePath === undefined) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      fs.stat(filePath, (err: Error, stats: fs.Stats) => {
+        if (err !== null) {
+          return reject(err);
+        }
+
+        if (stats.size > param.MAX_FILE_SIZE) {
+          return reject(new ParameterInvalid('The attachment is too large'));
+        }
+
+        resolve();
+      });
+    });
+  }
+
+  private async request(url: string, args: IRequestArgs, method?: REST_METHOD,
+                        attempts: IRetryAttempts = {}): Promise<any> {
+    const { refresh: refreshAttempts = 0, rateLimit: rateLimitAttempts = 0 } = attempts;
+    // Refresh the access token ahead of expiry so we don't pay the cost of a 401 round-trip.
+    // Skip on the refresh endpoint itself to avoid recursion (handleJwtRefresh calls request()).
+    let sentToken: string | undefined;
+    if (!this.isRefreshTokenUrl(url)) {
+      sentToken = await this.currentAccessToken();
+      if (sentToken !== undefined && args.headers !== undefined) {
+        args.headers['Authorization'] = `Bearer ${sentToken}`;
+      }
+    }
+    try {
+      return await rest(url, args, (daily: number, hourly: number) => {
+        this.mRateLimit = { daily, hourly };
+        this.mQuota.updateLimit(daily > 0 ? daily : hourly);
+      }, method);
+    } catch (err) {
+      if (err instanceof RateLimitError) {
+        // block() reports the hour's budget as spent, and waiting doesn't get it back
+        if (!this.mQuota.block() && (rateLimitAttempts < param.MAX_RATE_LIMIT_RETRIES)) {
+          await this.mQuota.wait();
+          return await this.request(url, args, method,
+                                    { ...attempts, rateLimit: rateLimitAttempts + 1 });
+        }
+      }
+
+      // The budget is per request: a shared counter let concurrent 401s waiting on the same
+      // in-flight refresh exhaust it, and the ones over the limit leaked the raw 401.
+      if (err.statusCode === 401 && sentToken !== undefined && refreshAttempts < param.MAX_JWT_REFRESH_TRIES) {
+        // retry only with a different token; otherwise the 401 stands
+        const renewed = await this.renewAccessToken(sentToken);
+        if (renewed === undefined || renewed === sentToken) {
+          throw err;
+        }
+        return await this.request(url, this.args(args), method,
+                                  { ...attempts, refresh: refreshAttempts + 1 });
+      }
+
+      throw err;
+    } finally {
+      this.mQuota.finishInit();
+    }
+  }
+
+  private makeQueryImpl<T>(query: any, variables: any, indent: string) {
+    return Object.keys(query).filter(key => key[0] !== '$').reduce((prev, key) => {
+      if (query[key] !== false) {
+        prev += (indent + key);
+        if (typeof query[key] !== 'boolean') {
+          const filter = query[key]['$filter'];
+          if (filter !== undefined) {
+            const filterText = Object.keys(filter)
+              .map(key => `${key}: ${filter[key]}`)
+              .join(', ');
+            prev += `(${filterText})`;
+          }
+          prev = prev +
+            ' {\n'
+            + this.makeQueryImpl(query[key], variables, indent + '  ')
+            + `${indent}}`;
+        }
+        return prev + '\n';
+      }
+      return prev;
+    }, '') + indent;
+  }
+
+  private makeParameters(parameters: graphQL.GraphQueryParameters) {
+    const serParameter = (par: { type: graphQL.GraphQLType, optional: boolean }) => {
+      return `${par.type}${par.optional ? '' : '!'}`;
+    }
+    let parString = Object.keys(parameters)
+      .map(key => `\$${key}: ${serParameter(parameters[key])}`)
+      .join(', ');
+    if (parString.length > 0) {
+      parString = `(${parString})`;
+    }
+    return parString;
+  }
+
+  private makeFilter(parameters: graphQL.GraphQueryParameters) {
+    let filtString = Object.keys(parameters)
+      .map(key => `${key}: \$${key}`)
+      .join(', ');
+    if (filtString.length > 0) {
+      filtString = `(${filtString})`;
+    }
+    return filtString;
+  }
+
+  private makeQuery<T>(name: string, parameters: graphQL.GraphQueryParameters, query: any, variables: any) {
+    const pars = this.makeParameters(parameters);
+    const filters = this.makeFilter(parameters);
+    return `query ${name}${pars} {\n`
+      + `  ${name}${filters} {${this.makeQueryImpl(query, variables, '    ')}`
+      + '  }\n'
+      + '}';
+  }
+
+  private makeMutation<T>(name: string,
+                          parameters: graphQL.GraphQueryParameters,
+                          retValues: any): string {
+    const pars = this.makeParameters(parameters);
+    const filters = this.makeFilter(parameters);
+    return `mutation ${name}${pars} {\n`
+      + `  ${name}${filters} { ${this.makeQueryImpl(retValues, {}, '    ')} }`
+      + '}';
+  }
+
+  private genError(input: IGraphQLError[], query?: string): GraphError {
+    // be defensive: the server doesn't guarantee the shape of an error response, so
+    // an error formatter must never itself throw or it masks the real failure.
+    const errors: IGraphQLError[] = Array.isArray(input) ? input : [];
+    const message = errors.map(err => err.message).join(', ');
+    const codeEntry = errors.find(iter => iter.extensions?.code !== undefined);
+    const code = codeEntry?.extensions?.code;
+    const rawDetail = codeEntry?.extensions?.detail;
+    const details: IGraphErrorDetail[] =
+      (Array.isArray(rawDetail) ? rawDetail : []).map(this.convertErrDetail);
+    const entries: IGraphErrorEntry[] = errors.map(err => ({
+      message: err.message,
+      path: err.path,
+      locations: err.locations,
+      code: err.extensions?.code,
+    }));
+    return new GraphError(message, code, details, entries, query);
+  }
+
+  private async requestGraph<T>(root: string, parameters: graphQL.GraphQueryParameters, query: any,
+                                variables: any, args: IRequestArgs): Promise<T> {
+    const queryStr = this.makeQuery<T>(root, parameters, query, variables);
+    args.data = { query: queryStr, variables };
+
+    const res = await this.request(this.mGraphBaseURL, args, 'POST');
+    if (res.data) {
+      return res.data[root];
+    } else {
+      throw this.genError(res.errors, queryStr);
+    }
+  }
+
+  private async requestGraphWithErrors<T>(root: string
+                                          , parameters: graphQL.GraphQueryParameters
+                                          , query: any
+                                          , variables: any
+                                          , args: IRequestArgs)
+                                          : Promise<{ data: T, errors: IGraphQLError[] }> {
+    const queryStr = this.makeQuery<T>(root, parameters, query, variables);
+    args.data = { query: queryStr, variables };
+
+    const res = await this.request(this.mGraphBaseURL, args, 'POST');
+    if (res.data) {
+      return { data: res.data[root], errors: res.errors };
+    } else {
+      throw this.genError(res.errors, queryStr);
+    }
+  }
+
+  private convertErrDetail(det: any): IGraphErrorDetail {
+    return {
+      attribute: det.attribute,
+      code: det.code,
+      entity: det.entity,
+      message: det.message,
+      type: det.type,
+      value: det.value,
+    };
+  }
+
+  private async mutateGraph<T>(name: string, parameters: graphQL.GraphQueryParameters,
+                               data: any, args: IRequestArgs,
+                               retValues: any): Promise<T> {
+    const queryStr = this.makeMutation<T>(name, parameters, retValues);
+    args.data = { query: queryStr, variables: data };
+    const res = await this.request(this.mGraphBaseURL, args, 'POST');
+    if (!!(res.data?.[name])) {
+      return res.data[name];
+    } else {
+      throw this.genError(res.errors, queryStr);
+    }
+  }
+
+  private set oAuthCredentials(credentials: types.IOAuthCredentials) {
+    this.mOAuthCredentials = credentials;
+    // this.mBaseData.headers['Authorization'] = `Bearer ${credentials.token}`;
+    // this.mBaseData.cookies['jwt_fingerprint'] = credentials.fingerprint;
+    this.mValidationResult = transformJwtToValidationResult(this.mOAuthCredentials);
+  }
+
+
+
+  /** The token to send with a request: the provider's, else our own credentials, refreshed if due. */
+  private async currentAccessToken(): Promise<string | undefined> {
+    if (this.mTokenProvider !== undefined) {
+      const token = await this.mTokenProvider();
+      this.applyProvidedToken(token);
+      return token;
+    }
+    if (this.mOAuthCredentials === undefined) {
+      return undefined;
+    }
+    if (this.mOAuthConfig !== undefined) {
+      await this.ensureFreshToken();
+    }
+    return this.mOAuthCredentials.token;
+  }
+
+  /**
+   * The replacement for a token the site rejected with a 401, or undefined when there is none.
+   * Refreshes our own credentials only while the rejected token is still current, so concurrent
+   * 401s on one stale token share a single refresh. Rejects when the refresh is refused.
+   */
+  private async renewAccessToken(rejectedToken: string): Promise<string | undefined> {
+    if (this.mTokenProvider !== undefined) {
+      const token = await this.mTokenProvider(rejectedToken);
+      this.applyProvidedToken(token);
+      return token;
+    }
+    if (this.mOAuthCredentials === undefined || this.mOAuthConfig === undefined) {
+      return undefined;
+    }
+    if (rejectedToken === this.mOAuthCredentials.token) {
+      this.oAuthCredentials = await this.handleJwtRefresh();
+    }
+    return this.mOAuthCredentials.token;
+  }
+
+  /** Keep the validation result in step with the account the provided token describes. */
+  private applyProvidedToken(token: string | undefined) {
+    if (token === this.mProvidedToken) {
+      return;
+    }
+    this.mProvidedToken = token;
+    try {
+      this.mValidationResult = token !== undefined
+        ? transformJwtToValidationResult({ token, refreshToken: '', fingerprint: '' })
+        : undefined;
+    } catch {
+      this.mValidationResult = undefined;
+    }
+  }
+
+  private isRefreshTokenUrl(targetUrl: string): boolean {
+    return targetUrl.startsWith(`${param.USER_SERVICE_API_URL}/oauth/token`);
+  }
+
+  private isTokenExpiringSoon(leewayMs: number = param.JWT_REFRESH_LEEWAY_MS): boolean {
+    if (this.mOAuthCredentials?.token === undefined) {
+      return false;
+    }
+    try {
+      const decoded: any = jwt.decode(this.mOAuthCredentials.token);
+      if (typeof decoded?.exp !== 'number') {
+        return false;
+      }
+      return decoded.exp * 1000 - Date.now() <= leewayMs;
+    } catch {
+      return false;
+    }
+  }
+
+  private async ensureFreshToken(): Promise<void> {
+    // Nothing to refresh if we never received OAuth credentials/config.
+    if (this.mOAuthCredentials === undefined || this.mOAuthConfig === undefined) {
+      return;
+    }
+    if (!this.isTokenExpiringSoon()) {
+      return;
+    }
+    try {
+      this.oAuthCredentials = await this.handleJwtRefresh();
+    } catch (err) {
+      // Swallow: the upcoming request will hit 401 and the reactive path can try again.
+      this.mLogCB('info', 'proactive JWT refresh failed', { message: err?.message });
+    }
+  }
+
+  private async handleJwtRefresh(): Promise<types.IOAuthCredentials> {
+    // Coalesce concurrent refresh attempts (proactive + reactive) into a single token request.
+    if (this.mJwtRefreshPromise !== undefined) {
+      return this.mJwtRefreshPromise;
+    }
+    const clear = () => { this.mJwtRefreshPromise = undefined; };
+    this.mJwtRefreshPromise = this.doJwtRefresh().then(
+      (creds) => { clear(); return creds; },
+      (err) => { clear(); throw err; },
+    );
+    return this.mJwtRefreshPromise;
+  }
+
+  private async doJwtRefresh(): Promise<types.IOAuthCredentials> {
+    const data = {
+      client_id: this.mOAuthConfig.id,
+      refresh_token: this.mOAuthCredentials.refreshToken,
+      grant_type: 'refresh_token',
+    };
+    if (this.mOAuthConfig.secret !== undefined) {
+      data['client_secret'] = this.mOAuthConfig.secret;
+    }
+    const refreshResult = await this.request(`${param.USER_SERVICE_API_URL}/oauth/token`, this.args({
+      data
+    }));
+
+    const newOAuthCredentials: types.IOAuthCredentials = {
+      token: refreshResult.access_token,
+      refreshToken: refreshResult.refresh_token,
+      fingerprint: refreshResult.jwt_fingerprint,
+    };
+
+    this.mJWTRefreshCallback?.(newOAuthCredentials);
+
+    return newOAuthCredentials;
+  }
+
+  private filter(obj: any): any {
+    const result = {};
+    Object.keys(obj).forEach((key) => {
+      if (obj[key] !== undefined) {
+        result[key] = obj[key];
+      }
+    });
+    return result;
+  }
+
+  private args(customArgs: IRequestArgs) {
+    const result: IRequestArgs = { ...this.mBaseData };
+    if (this.mOAuthCredentials !== undefined) {
+      result.headers['Authorization'] = `Bearer ${this.mOAuthCredentials.token}`;
+      // result.cookies['jwt_fingerprint'] = this.mOAuthCredentials.fingerprint;
+    }
+    for (const key of Object.keys(customArgs)) {
+      result[key] = {
+        ...result[key],
+        ...customArgs[key],
+      };
+    }
+    return result;
+  }
+  //#endregion
+}
+
+export default Nexus;

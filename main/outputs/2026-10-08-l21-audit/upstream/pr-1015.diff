@@ -1,0 +1,1683 @@
+diff --git a/UE4SS/include/LuaType/LuaFString.hpp b/UE4SS/include/LuaType/LuaFString.hpp
+index 0a1e64805..e5206251c 100644
+--- a/UE4SS/include/LuaType/LuaFString.hpp
++++ b/UE4SS/include/LuaType/LuaFString.hpp
+@@ -1,36 +1,5 @@
+ #pragma once
+ 
+-#include <LuaType/LuaUObject.hpp>
++// Forward include of this to the new Lua Unreal String file for backwards compatability
++#include <LuaType/LuaUnrealString.hpp>
+ 
+-namespace RC::Unreal
+-{
+-    class FString;
+-}
+-
+-namespace RC::LuaType
+-{
+-    struct FStringName
+-    {
+-        constexpr static const char* ToString()
+-        {
+-            return "FString";
+-        }
+-    };
+-    class FString : public LocalObjectBase<Unreal::FString, FStringName>
+-    {
+-      private:
+-        explicit FString(Unreal::FString* object);
+-
+-      public:
+-        FString() = delete;
+-        auto static construct(const LuaMadeSimple::Lua&, Unreal::FString*) -> const LuaMadeSimple::Lua::Table;
+-        auto static construct(const LuaMadeSimple::Lua&, BaseObject&) -> const LuaMadeSimple::Lua::Table;
+-
+-      private:
+-        auto static setup_metamethods(BaseObject&) -> void;
+-
+-      private:
+-        template <LuaMadeSimple::Type::IsFinal is_final>
+-        auto static setup_member_functions(const LuaMadeSimple::Lua::Table&) -> void;
+-    };
+-} // namespace RC::LuaType
+diff --git a/UE4SS/include/LuaType/LuaUObject.hpp b/UE4SS/include/LuaType/LuaUObject.hpp
+index ea9a9e1a1..00b30511e 100644
+--- a/UE4SS/include/LuaType/LuaUObject.hpp
++++ b/UE4SS/include/LuaType/LuaUObject.hpp
+@@ -384,6 +384,8 @@ namespace RC::LuaType
+     RC_UE4SS_API auto push_nameproperty(const PusherParams&) -> void;
+     RC_UE4SS_API auto push_textproperty(const PusherParams&) -> void;
+     RC_UE4SS_API auto push_strproperty(const PusherParams&) -> void;
++    RC_UE4SS_API auto push_utf8strproperty(const PusherParams&) -> void;
++    RC_UE4SS_API auto push_ansistrproperty(const PusherParams&) -> void;
+     RC_UE4SS_API auto push_softobjectproperty(const PusherParams&) -> void;
+     RC_UE4SS_API auto push_interfaceproperty(const PusherParams&) -> void;
+ 
+diff --git a/UE4SS/include/LuaType/LuaUnrealString.hpp b/UE4SS/include/LuaType/LuaUnrealString.hpp
+new file mode 100644
+index 000000000..d5c75b1b1
+--- /dev/null
++++ b/UE4SS/include/LuaType/LuaUnrealString.hpp
+@@ -0,0 +1,423 @@
++#pragma once
++
++#include <LuaType/LuaUObject.hpp>
++#include <Helpers/String.hpp>
++#include <Unreal/Core/Containers/FString.hpp>
++#include <Unreal/Core/Containers/FUtf8String.hpp>
++#include <Unreal/Core/Containers/FAnsiString.hpp>
++
++namespace RC::LuaType
++{
++    // Base template for all string types
++    template<typename UnrealStringType, typename StringNameType>
++    class TLuaStringBase : public LocalObjectBase<UnrealStringType, StringNameType>
++    {
++        using BaseClass = LocalObjectBase<UnrealStringType, StringNameType>;
++        
++    protected:
++        explicit TLuaStringBase(UnrealStringType* object) 
++            : BaseClass(std::move(UnrealStringType(*object)))
++        {
++        }
++
++    public:
++        TLuaStringBase() = delete;
++
++        static auto construct(const LuaMadeSimple::Lua& lua, UnrealStringType* unreal_object) -> const LuaMadeSimple::Lua::Table
++        {
++            TLuaStringBase lua_object{unreal_object};
++
++            auto metatable_name = StringNameType::ToString();
++
++            LuaMadeSimple::Lua::Table table = lua.get_metatable(metatable_name);
++            if (lua.is_nil(-1))
++            {
++                lua.discard_value(-1);
++                lua.prepare_new_table();
++                setup_metamethods(lua_object);
++                setup_member_functions<LuaMadeSimple::Type::IsFinal::Yes>(lua, table);
++                lua.new_metatable<TLuaStringBase>(metatable_name, lua_object.get_metamethods());
++            }
++
++            // Transfer the object & its ownership fully to Lua
++            lua.transfer_stack_object(std::move(lua_object), metatable_name, lua_object.get_metamethods());
++
++            return table;
++        }
++
++        static auto construct(const LuaMadeSimple::Lua& lua, BaseClass& construct_to) -> const LuaMadeSimple::Lua::Table
++        {
++            LuaMadeSimple::Lua::Table table = LuaMadeSimple::Type::RemoteObject<UnrealStringType>::construct(lua, construct_to);
++
++            setup_member_functions<LuaMadeSimple::Type::IsFinal::No>(lua, table);
++
++            setup_metamethods(construct_to);
++
++            return table;
++        }
++
++    private:
++        static auto setup_metamethods(BaseClass& base_object) -> void
++        {
++
++        }
++
++        template <LuaMadeSimple::Type::IsFinal is_final>
++        static auto setup_member_functions(const LuaMadeSimple::Lua& lua, const LuaMadeSimple::Lua::Table& table) -> void
++        {
++            table.add_pair("ToString", [](const LuaMadeSimple::Lua& lua) -> int {
++                auto& lua_object = lua.get_userdata<TLuaStringBase>();
++                push_string_to_lua(lua, lua_object.get_local_cpp_object());
++                return 1;
++            });
++
++            table.add_pair("Empty", [](const LuaMadeSimple::Lua& lua) -> int {
++                auto& lua_object = lua.get_userdata<TLuaStringBase>();
++                lua_object.get_local_cpp_object().Empty();
++                return 0;
++            });
++
++            table.add_pair("Clear", [](const LuaMadeSimple::Lua& lua) -> int {
++                auto& lua_object = lua.get_userdata<TLuaStringBase>();
++                lua_object.get_local_cpp_object().Empty();
++                return 0;
++            });
++
++            table.add_pair("Len", [](const LuaMadeSimple::Lua& lua) -> int {
++                auto& lua_object = lua.get_userdata<TLuaStringBase>();
++                lua.set_integer(lua_object.get_local_cpp_object().Len());
++                return 1;
++            });
++
++            table.add_pair("IsEmpty", [](const LuaMadeSimple::Lua& lua) -> int {
++                auto& lua_object = lua.get_userdata<TLuaStringBase>();
++                lua.set_bool(lua_object.get_local_cpp_object().IsEmpty());
++                return 1;
++            });
++
++            table.add_pair("Append", [](const LuaMadeSimple::Lua& lua) -> int {
++                auto& lua_object = lua.get_userdata<TLuaStringBase>(1, true); // preserve_stack = true
++
++                if (lua.is_string(2))
++                {
++                    std::string_view str_view = lua.get_string(2);
++                    append_string(lua_object.get_local_cpp_object(), str_view);
++                }
++                else if (lua.is_userdata(2))
++                {
++                    auto& other = lua.get_userdata<TLuaStringBase>(2, true); // preserve_stack = true
++                    append_from_object(lua_object.get_local_cpp_object(), other.get_local_cpp_object());
++                }
++                else
++                {
++                    lua.throw_error("Append requires a string argument");
++                }
++
++                return 0;
++            });
++
++            table.add_pair("Find", [](const LuaMadeSimple::Lua& lua) -> int {
++                auto& lua_object = lua.get_userdata<TLuaStringBase>(1, true); // preserve_stack = true
++
++                if (!lua.is_string(2))
++                {
++                    lua.throw_error("Find requires a string argument");
++                }
++
++                std::string_view search = lua.get_string(2);
++                int32_t result = find_substring(lua_object.get_local_cpp_object(), search);
++
++                if (result == Unreal::INDEX_NONE)
++                {
++                    lua.set_nil();
++                }
++                else
++                {
++                    lua.set_integer(result + 1); // Convert to 1-based Lua indexing
++                }
++
++                return 1;
++            });
++
++            table.add_pair("StartsWith", [](const LuaMadeSimple::Lua& lua) -> int {
++                auto& lua_object = lua.get_userdata<TLuaStringBase>(1, true); // preserve_stack = true
++
++                if (!lua.is_string(2))
++                {
++                    lua.throw_error("StartsWith requires a string argument");
++                }
++
++                std::string_view prefix = lua.get_string(2);
++                bool result = starts_with(lua_object.get_local_cpp_object(), prefix);
++                lua.set_bool(result);
++
++                return 1;
++            });
++
++            table.add_pair("EndsWith", [](const LuaMadeSimple::Lua& lua) -> int {
++                auto& lua_object = lua.get_userdata<TLuaStringBase>(1, true); // preserve_stack = true
++
++                if (!lua.is_string(2))
++                {
++                    lua.throw_error("EndsWith requires a string argument");
++                }
++
++                std::string_view suffix = lua.get_string(2);
++                bool result = ends_with(lua_object.get_local_cpp_object(), suffix);
++                lua.set_bool(result);
++
++                return 1;
++            });
++
++            table.add_pair("ToUpper", [](const LuaMadeSimple::Lua& lua) -> int {
++                auto& lua_object = lua.get_userdata<TLuaStringBase>();
++                auto upper = to_upper(lua_object.get_local_cpp_object());
++                construct(lua, &upper);
++                return 1;
++            });
++
++            table.add_pair("ToLower", [](const LuaMadeSimple::Lua& lua) -> int {
++                auto& lua_object = lua.get_userdata<TLuaStringBase>();
++                auto lower = to_lower(lua_object.get_local_cpp_object());
++                construct(lua, &lower);
++                return 1;
++            });
++
++            if constexpr (is_final == LuaMadeSimple::Type::IsFinal::Yes)
++            {
++                table.add_pair("type", [](const LuaMadeSimple::Lua& lua) -> int {
++                    lua.set_string(StringNameType::ToString());
++                    return 1;
++                });
++            }
++        }
++
++        // Specialized string operations for different string types
++        
++        // FString specializations
++        static void push_string_to_lua(const LuaMadeSimple::Lua& lua, const Unreal::FString& str)
++        {
++            const TCHAR* string_data = *str;
++            if (string_data)
++            {
++                std::string utf8_string = to_utf8_string(string_data);
++                lua.set_string(utf8_string.data(), utf8_string.length());
++            }
++            else
++            {
++                lua.set_string("", 0);
++            }
++        }
++
++        static std::string get_string_from_object(const Unreal::FString& str)
++        {
++            return to_utf8_string(*str);
++        }
++
++        static void append_string(Unreal::FString& str, std::string_view append)
++        {
++            auto converted = ensure_str(std::string(append));
++            str.Append(converted.c_str());
++        }
++
++        static void append_from_object(Unreal::FString& str, const Unreal::FString& other)
++        {
++            str.Append(other);
++        }
++
++        static int32_t find_substring(const Unreal::FString& str, std::string_view search)
++        {
++            auto converted = ensure_str(std::string(search));
++            return str.Find(converted.c_str());
++        }
++
++        static bool starts_with(const Unreal::FString& str, std::string_view prefix)
++        {
++            auto converted = ensure_str(std::string(prefix));
++            return str.StartsWith(converted.c_str());
++        }
++
++        static bool ends_with(const Unreal::FString& str, std::string_view suffix)
++        {
++            auto converted = ensure_str(std::string(suffix));
++            return str.EndsWith(converted.c_str());
++        }
++
++        static Unreal::FString to_upper(const Unreal::FString& str)
++        {
++            return str.ToUpper();
++        }
++
++        static Unreal::FString to_lower(const Unreal::FString& str)
++        {
++            return str.ToLower();
++        }
++
++        // FUtf8String specializations
++        static void push_string_to_lua(const LuaMadeSimple::Lua& lua, const Unreal::FUtf8String& str)
++        {
++            const Unreal::UTF8CHAR* string_data = *str;
++            if (string_data)
++            {
++                lua.set_string(reinterpret_cast<const char*>(string_data), str.Len());
++            }
++            else
++            {
++                lua.set_string("", 0);
++            }
++        }
++
++        static std::string get_string_from_object(const Unreal::FUtf8String& str)
++        {
++            return std::string(reinterpret_cast<const char*>(*str), str.Len());
++        }
++
++        static void append_string(Unreal::FUtf8String& str, std::string_view append)
++        {
++            std::string temp(append);
++            str.Append(reinterpret_cast<const Unreal::UTF8CHAR*>(temp.c_str()));
++        }
++
++        static void append_from_object(Unreal::FUtf8String& str, const Unreal::FUtf8String& other)
++        {
++            str.Append(other);
++        }
++
++        static int32_t find_substring(const Unreal::FUtf8String& str, std::string_view search)
++        {
++            std::string temp(search);
++            return str.Find(reinterpret_cast<const Unreal::UTF8CHAR*>(temp.c_str()));
++        }
++
++        static bool starts_with(const Unreal::FUtf8String& str, std::string_view prefix)
++        {
++            std::string temp(prefix);
++            return str.StartsWith(reinterpret_cast<const Unreal::UTF8CHAR*>(temp.c_str()));
++        }
++
++        static bool ends_with(const Unreal::FUtf8String& str, std::string_view suffix)
++        {
++            std::string temp(suffix);
++            return str.EndsWith(reinterpret_cast<const Unreal::UTF8CHAR*>(temp.c_str()));
++        }
++
++        static Unreal::FUtf8String to_upper(const Unreal::FUtf8String& str)
++        {
++            return str.ToUpper();
++        }
++
++        static Unreal::FUtf8String to_lower(const Unreal::FUtf8String& str)
++        {
++            return str.ToLower();
++        }
++
++        // FAnsiString specializations
++        static void push_string_to_lua(const LuaMadeSimple::Lua& lua, const Unreal::FAnsiString& str)
++        {
++            const Unreal::ANSICHAR* string_data = *str;
++            if (string_data)
++            {
++                lua.set_string(string_data, str.Len());
++            }
++            else
++            {
++                lua.set_string("", 0);
++            }
++        }
++
++        static std::string get_string_from_object(const Unreal::FAnsiString& str)
++        {
++            return std::string(*str, str.Len());
++        }
++
++        static void append_string(Unreal::FAnsiString& str, std::string_view append)
++        {
++            std::string temp(append);
++            str.Append(temp.c_str());
++        }
++
++        static void append_from_object(Unreal::FAnsiString& str, const Unreal::FAnsiString& other)
++        {
++            str.Append(other);
++        }
++
++        static int32_t find_substring(const Unreal::FAnsiString& str, std::string_view search)
++        {
++            std::string temp(search);
++            return str.Find(temp.c_str());
++        }
++
++        static bool starts_with(const Unreal::FAnsiString& str, std::string_view prefix)
++        {
++            std::string temp(prefix);
++            return str.StartsWith(temp.c_str());
++        }
++
++        static bool ends_with(const Unreal::FAnsiString& str, std::string_view suffix)
++        {
++            std::string temp(suffix);
++            return str.EndsWith(temp.c_str());
++        }
++
++        static Unreal::FAnsiString to_upper(const Unreal::FAnsiString& str)
++        {
++            return str.ToUpper();
++        }
++
++        static Unreal::FAnsiString to_lower(const Unreal::FAnsiString& str)
++        {
++            return str.ToLower();
++        }
++    };
++
++    // FString
++    struct FStringName
++    {
++        constexpr static const char* ToString() { return "FString"; }
++    };
++    
++    class FString : public TLuaStringBase<Unreal::FString, FStringName>
++    {
++        friend class TLuaStringBase<Unreal::FString, FStringName>;
++        
++        explicit FString(Unreal::FString* object) : TLuaStringBase(object) {}
++        
++    public:
++        FString() = delete;
++        using TLuaStringBase::construct;
++    };
++
++    // FUtf8String
++    struct FUtf8StringName
++    {
++        constexpr static const char* ToString() { return "FUtf8String"; }
++    };
++    
++    class FUtf8String : public TLuaStringBase<Unreal::FUtf8String, FUtf8StringName>
++    {
++        friend class TLuaStringBase<Unreal::FUtf8String, FUtf8StringName>;
++        
++        explicit FUtf8String(Unreal::FUtf8String* object) : TLuaStringBase(object) {}
++        
++    public:
++        FUtf8String() = delete;
++        using TLuaStringBase::construct;
++    };
++
++    // FAnsiString
++    struct FAnsiStringName
++    {
++        constexpr static const char* ToString() { return "FAnsiString"; }
++    };
++    
++    class FAnsiString : public TLuaStringBase<Unreal::FAnsiString, FAnsiStringName>
++    {
++        friend class TLuaStringBase<Unreal::FAnsiString, FAnsiStringName>;
++        
++        explicit FAnsiString(Unreal::FAnsiString* object) : TLuaStringBase(object) {}
++        
++    public:
++        FAnsiString() = delete;
++        using TLuaStringBase::construct;
++    };
++}
+\ No newline at end of file
+diff --git a/UE4SS/include/SDKGenerator/UEHeaderGenerator.hpp b/UE4SS/include/SDKGenerator/UEHeaderGenerator.hpp
+index 709ace773..ca8e5dee0 100644
+--- a/UE4SS/include/SDKGenerator/UEHeaderGenerator.hpp
++++ b/UE4SS/include/SDKGenerator/UEHeaderGenerator.hpp
+@@ -328,7 +328,11 @@ namespace RC::UEGenerator
+         auto static get_property_access_modifier(FProperty* property) -> AccessModifier;
+         auto static get_function_access_modifier(UFunction* function) -> AccessModifier;
+         auto static create_string_literal(const StringType& string) -> StringType;
++        auto static create_utf8_string_literal(const StringType& string) -> StringType;
++        auto static create_ansi_string_literal(const StringType& string) -> StringType;
+         auto static get_header_name_for_object(UObject* object, bool get_existing_header = false) -> StringType;
+         auto static generate_cross_module_include(UObject* object, const StringType& module_name, const StringType& fallback_name) -> StringType;
++    private:
++        auto static create_string_literal_with_macro(const StringType& string, const StringType& macro_name) -> StringType;
+     };
+ } // namespace RC::UEGenerator
+diff --git a/UE4SS/src/LuaType/LuaFSoftObjectPath.cpp b/UE4SS/src/LuaType/LuaFSoftObjectPath.cpp
+index 0622f0ad4..0cb401d2b 100644
+--- a/UE4SS/src/LuaType/LuaFSoftObjectPath.cpp
++++ b/UE4SS/src/LuaType/LuaFSoftObjectPath.cpp
+@@ -2,7 +2,7 @@
+ #include <Helpers/String.hpp>
+ #include <LuaType/LuaFName.hpp>
+ #include <LuaType/LuaFSoftObjectPath.hpp>
+-#include <LuaType/LuaFString.hpp>
++#include <LuaType/LuaUnrealString.hpp>
+ 
+ namespace RC::LuaType
+ {
+diff --git a/UE4SS/src/LuaType/LuaFString.cpp b/UE4SS/src/LuaType/LuaFString.cpp
+deleted file mode 100644
+index c570d7bd2..000000000
+--- a/UE4SS/src/LuaType/LuaFString.cpp
++++ /dev/null
+@@ -1,90 +0,0 @@
+-#include <Helpers/String.hpp>
+-#include <LuaType/LuaFString.hpp>
+-#pragma warning(disable : 4005)
+-#include <Unreal/FString.hpp>
+-#pragma warning(default : 4005)
+-
+-namespace RC::LuaType
+-{
+-    FString::FString(Unreal::FString* object) : LocalObjectBase<Unreal::FString, FStringName>(std::move(Unreal::FString(*object)))
+-    {
+-    }
+-
+-    auto FString::construct(const LuaMadeSimple::Lua& lua, Unreal::FString* unreal_object) -> const LuaMadeSimple::Lua::Table
+-    {
+-        LuaType::FString lua_object{unreal_object};
+-
+-        auto metatable_name = ClassName::ToString();
+-
+-        LuaMadeSimple::Lua::Table table = lua.get_metatable(metatable_name);
+-        if (lua.is_nil(-1))
+-        {
+-            lua.discard_value(-1);
+-            lua.prepare_new_table();
+-            setup_metamethods(lua_object);
+-            setup_member_functions<LuaMadeSimple::Type::IsFinal::Yes>(table);
+-            lua.new_metatable<LuaType::FString>(metatable_name, lua_object.get_metamethods());
+-        }
+-
+-        // Transfer the object & its ownership fully to Lua
+-        lua.transfer_stack_object(std::move(lua_object), metatable_name, lua_object.get_metamethods());
+-
+-        return table;
+-    }
+-
+-    auto FString::construct(const LuaMadeSimple::Lua& lua, BaseObject& construct_to) -> const LuaMadeSimple::Lua::Table
+-    {
+-        LuaMadeSimple::Lua::Table table = LuaMadeSimple::Type::RemoteObject<Unreal::FString>::construct(lua, construct_to);
+-
+-        setup_member_functions<LuaMadeSimple::Type::IsFinal::No>(table);
+-
+-        setup_metamethods(construct_to);
+-
+-        return table;
+-    }
+-
+-    auto FString::setup_metamethods([[maybe_unused]] BaseObject& base_object) -> void
+-    {
+-        // FString has no metamethods
+-    }
+-
+-    template <LuaMadeSimple::Type::IsFinal is_final>
+-    auto FString::setup_member_functions(const LuaMadeSimple::Lua::Table& table) -> void
+-    {
+-        table.add_pair("ToString", [](const LuaMadeSimple::Lua& lua) -> int {
+-            auto& lua_object = lua.get_userdata<LuaType::FString>();
+-
+-            const CharType* string_data = *lua_object.get_local_cpp_object();
+-            if (string_data)
+-            {
+-                lua.set_string(to_string(string_data));
+-            }
+-            else
+-            {
+-                lua.set_string("");
+-            }
+-
+-            return 1;
+-        });
+-
+-        table.add_pair("Clear", [](const LuaMadeSimple::Lua& lua) -> int {
+-            auto& lua_object = lua.get_userdata<LuaType::FString>();
+-
+-            lua_object.get_local_cpp_object().Clear();
+-
+-            return 0;
+-        });
+-
+-        if constexpr (is_final == LuaMadeSimple::Type::IsFinal::Yes)
+-        {
+-            table.add_pair("type", [](const LuaMadeSimple::Lua& lua) -> int {
+-                lua.set_string(ClassName::ToString());
+-                return 1;
+-            });
+-
+-            // If this is the final object then we also want to finalize creating the table
+-            // If not then it's the responsibility of the overriding object to call 'make_global()'
+-            // table.make_global(ClassName::ToString());
+-        }
+-    }
+-} // namespace RC::LuaType
+diff --git a/UE4SS/src/LuaType/LuaUObject.cpp b/UE4SS/src/LuaType/LuaUObject.cpp
+index 19a8ba693..3bbd229f0 100644
+--- a/UE4SS/src/LuaType/LuaUObject.cpp
++++ b/UE4SS/src/LuaType/LuaUObject.cpp
+@@ -2,7 +2,7 @@
+ #include <LuaType/LuaAActor.hpp>
+ #include <LuaType/LuaCustomProperty.hpp>
+ #include <LuaType/LuaFName.hpp>
+-#include <LuaType/LuaFString.hpp>
++#include <LuaType/LuaUnrealString.hpp>
+ #include <LuaType/LuaFText.hpp>
+ #include <LuaType/LuaFWeakObjectPtr.hpp>
+ #include <LuaType/LuaTArray.hpp>
+@@ -1667,6 +1667,90 @@ namespace RC::LuaType
+         params.throw_error("push_strproperty", "Operation not supported");
+     }
+ 
++    auto push_utf8strproperty(const PusherParams& params) -> void
++    {
++        Unreal::FUtf8String* string = static_cast<Unreal::FUtf8String*>(params.data);
++        if (!string)
++        {
++            params.throw_error("push_utf8strproperty", "data pointer is nullptr");
++        }
++
++        switch (params.operation)
++        {
++        case Operation::GetNonTrivialLocal:
++        case Operation::Get:
++            LuaType::FUtf8String::construct(params.lua, string);
++            return;
++        case Operation::Set: {
++            if (params.lua.is_string(params.stored_at_index))
++            {
++                auto lua_string = params.lua.get_string(params.stored_at_index);
++                *string = Unreal::FUtf8String(reinterpret_cast<const Unreal::UTF8CHAR*>(lua_string.data()));
++            }
++            else if (params.lua.is_userdata(params.stored_at_index))
++            {
++                auto& rhs = params.lua.get_userdata<LuaType::FUtf8String>(params.stored_at_index);
++                *string = rhs.get_local_cpp_object();
++            }
++            else
++            {
++                params.throw_error("push_utf8strproperty", "Utf8StrProperty can only be set to a string or FUtf8String");
++            }
++            return;
++        }
++        case Operation::GetParam:
++            RemoteUnrealParam::construct(params.lua, params.data, params.base, params.property);
++            return;
++        default:
++            params.throw_error("push_utf8strproperty", "Unhandled Operation");
++            break;
++        }
++
++        params.throw_error("push_utf8strproperty", "Operation not supported");
++    }
++
++    auto push_ansistrproperty(const PusherParams& params) -> void
++    {
++        Unreal::FAnsiString* string = static_cast<Unreal::FAnsiString*>(params.data);
++        if (!string)
++        {
++            params.throw_error("push_ansistrproperty", "data pointer is nullptr");
++        }
++
++        switch (params.operation)
++        {
++        case Operation::GetNonTrivialLocal:
++        case Operation::Get:
++            LuaType::FAnsiString::construct(params.lua, string);
++            return;
++        case Operation::Set: {
++            if (params.lua.is_string(params.stored_at_index))
++            {
++                auto lua_string = params.lua.get_string(params.stored_at_index);
++                *string = Unreal::FAnsiString(lua_string.data());
++            }
++            else if (params.lua.is_userdata(params.stored_at_index))
++            {
++                auto& rhs = params.lua.get_userdata<LuaType::FAnsiString>(params.stored_at_index);
++                *string = rhs.get_local_cpp_object();
++            }
++            else
++            {
++                params.throw_error("push_ansistrproperty", "AnsiStrProperty can only be set to a string or FAnsiString");
++            }
++            return;
++        }
++        case Operation::GetParam:
++            RemoteUnrealParam::construct(params.lua, params.data, params.base, params.property);
++            return;
++        default:
++            params.throw_error("push_ansistrproperty", "Unhandled Operation");
++            break;
++        }
++
++        params.throw_error("push_ansistrproperty", "Operation not supported");
++    }
++
+     auto push_softobjectproperty(const PusherParams& params) -> void
+     {
+         auto soft_ptr = static_cast<Unreal::FSoftObjectPtr*>(params.data);
+diff --git a/UE4SS/src/Mod/LuaMod.cpp b/UE4SS/src/Mod/LuaMod.cpp
+index 510761c5d..f0d382a5a 100644
+--- a/UE4SS/src/Mod/LuaMod.cpp
++++ b/UE4SS/src/Mod/LuaMod.cpp
+@@ -18,6 +18,7 @@
+ #include <LuaType/LuaCustomProperty.hpp>
+ #include <LuaType/LuaFName.hpp>
+ #include <LuaType/LuaFText.hpp>
++#include <LuaType/LuaUnrealString.hpp>
+ #include <LuaType/LuaFOutputDevice.hpp>
+ #include <LuaType/LuaModRef.hpp>
+ #include <LuaType/LuaUClass.hpp>
+@@ -45,11 +46,14 @@
+ #include <Unreal/Property/FMapProperty.hpp>
+ #include <Unreal/Property/FNameProperty.hpp>
+ #include <Unreal/Property/FObjectProperty.hpp>
+-#include <Unreal/Property/FStrProperty.hpp>
++#include <Unreal/CoreUObject/UObject/FStrProperty.hpp>
++#include <Unreal/Core/Containers/FUtf8String.hpp>
++#include <Unreal/Core/Containers/FAnsiString.hpp>
+ #include <Unreal/Property/FStructProperty.hpp>
+ #include <Unreal/Property/FTextProperty.hpp>
+ #include <Unreal/Property/FWeakObjectProperty.hpp>
+ #include <Unreal/Property/NumericPropertyTypes.hpp>
++#include <Unreal/CoreUObject/UObject/FUtf8StrProperty.hpp>
+ #include <Unreal/TypeChecker.hpp>
+ #include <Unreal/UAssetRegistry.hpp>
+ #include <Unreal/UAssetRegistryHelpers.hpp>
+@@ -869,6 +873,10 @@ namespace RC
+         }
+         add_property_type_table<Unreal::FTextProperty>(lua, property_types_table, "TextProperty");
+         add_property_type_table<Unreal::FStrProperty>(lua, property_types_table, "StrProperty");
++        if (Unreal::Version::IsAtLeast(5, 6))
++        {
++            add_property_type_table<Unreal::FUtf8StrProperty>(lua, property_types_table, "Utf8StrProperty");
++        }
+ 
+         property_types_table.make_global("PropertyTypes");
+     }
+@@ -3863,6 +3871,51 @@ No overload found for function 'UnrealVersion:IsAbove'.
+         lua_setglobal(lua.get_lua_state(), "FText");
+         // FText Class -> END
+ 
++        // FString Class -> START
++        // Pre-load the global FString constructor
++        lua.register_function("FString",
++                              [](const LuaMadeSimple::Lua& lua) -> int {
++                                  if (lua.get_stack_size() < 1 || !lua.is_string())
++                                  {
++                                      lua.throw_error("FString constructor requires a string argument");
++                                  }
++                                  std::string_view str = lua.get_string();
++                                  auto fstring = Unreal::FString(ensure_str(std::string(str)).c_str());
++                                  LuaType::FString::construct(lua, &fstring);
++                                  return 1;
++                              });
++        // FString Class -> END
++
++        // FUtf8String Class -> START
++        // Pre-load the global FUtf8String constructor
++        lua.register_function("FUtf8String",
++                              [](const LuaMadeSimple::Lua& lua) -> int {
++                                  if (lua.get_stack_size() < 1 || !lua.is_string())
++                                  {
++                                      lua.throw_error("FUtf8String constructor requires a string argument");
++                                  }
++                                  std::string_view str = lua.get_string();
++                                  auto utf8string = Unreal::FUtf8String(reinterpret_cast<const Unreal::UTF8CHAR*>(str.data()));
++                                  LuaType::FUtf8String::construct(lua, &utf8string);
++                                  return 1;
++                              });
++        // FUtf8String Class -> END
++
++        // FAnsiString Class -> START
++        // Pre-load the global FAnsiString constructor
++        lua.register_function("FAnsiString",
++                              [](const LuaMadeSimple::Lua& lua) -> int {
++                                  if (lua.get_stack_size() < 1 || !lua.is_string())
++                                  {
++                                      lua.throw_error("FAnsiString constructor requires a string argument");
++                                  }
++                                  std::string_view str = lua.get_string();
++                                  auto ansistring = Unreal::FAnsiString(str.data());
++                                  LuaType::FAnsiString::construct(lua, &ansistring);
++                                  return 1;
++                              });
++        // FAnsiString Class -> END
++
+         // FPackageName -> START
+         auto package_name = lua.prepare_new_table();
+         package_name.set_has_userdata(false);
+diff --git a/UE4SS/src/SDKGenerator/Common.cpp b/UE4SS/src/SDKGenerator/Common.cpp
+index 78d5e7eb4..b5fd65cf3 100644
+--- a/UE4SS/src/SDKGenerator/Common.cpp
++++ b/UE4SS/src/SDKGenerator/Common.cpp
+@@ -21,6 +21,7 @@
+ #include <Unreal/Property/FStructProperty.hpp>
+ #include <Unreal/Property/FWeakObjectProperty.hpp>
+ #include <Unreal/Property/NumericPropertyTypes.hpp>
++#include <Unreal/CoreUObject/UObject/FUtf8StrProperty.hpp>
+ #include <Unreal/UClass.hpp>
+ #include <Unreal/UFunction.hpp>
+ #include <Unreal/UEnum.hpp>
+@@ -484,6 +485,10 @@ namespace RC::UEGenerator
+         {
+             return STR("FString");
+         }
++        else if (property->IsA<FUtf8StrProperty>())
++        {
++            return STR("FUtf8String");
++        }
+         else if (property->IsA<FTextProperty>())
+         {
+             return STR("FText");
+@@ -801,6 +806,10 @@ namespace RC::UEGenerator
+         {
+             return STR("FString");
+         }
++        else if (field_class_name == STR("Utf8StrProperty"))
++        {
++            return STR("FUtf8String");
++        }
+         else if (field_class_name == STR("TextProperty"))
+         {
+             return STR("FText");
+diff --git a/UE4SS/src/SDKGenerator/UEHeaderGenerator.cpp b/UE4SS/src/SDKGenerator/UEHeaderGenerator.cpp
+index 78a569956..6923a66d8 100644
+--- a/UE4SS/src/SDKGenerator/UEHeaderGenerator.cpp
++++ b/UE4SS/src/SDKGenerator/UEHeaderGenerator.cpp
+@@ -33,7 +33,9 @@
+ #include <Unreal/Property/FNameProperty.hpp>
+ #include <Unreal/Property/FObjectProperty.hpp>
+ #include <Unreal/Property/FSetProperty.hpp>
+-#include <Unreal/Property/FStrProperty.hpp>
++#include <Unreal/CoreUObject/UObject/FStrProperty.hpp>
++#include <Unreal/CoreUObject/UObject/FUtf8StrProperty.hpp>
++#include <Unreal/CoreUObject/UObject/FAnsiStrProperty.hpp>
+ #include <Unreal/Property/FSoftClassProperty.hpp>
+ #include <Unreal/Property/FSoftObjectProperty.hpp>
+ #include <Unreal/Property/FStructProperty.hpp>
+@@ -1349,7 +1351,7 @@ namespace RC::UEGenerator
+                 super_and_no_access = private_access_modifier;
+             }
+ 
+-            if (string_value_string != STR(""))
++            if (!string_value_string.empty())
+             {
+                 const StringType result_value = create_string_literal(string_value_string);
+                 if (!super_and_no_access)
+@@ -1364,6 +1366,78 @@ namespace RC::UEGenerator
+             return;
+         }
+ 
++        // UTF8 String properties
++        if (property->IsA<FUtf8StrProperty>())
++        {
++            FUtf8String* string_value = property->ContainerPtrToValuePtr<FUtf8String>(object);
++            // Convert UTF8 to native string type for comparison and generation
++            const char* utf8_cstr = reinterpret_cast<const char*>(**string_value);
++            const StringType string_value_string = to_generic_string(utf8_cstr);
++
++            // Ensure property either does not exist in parent class or is overriden in the CDO for the child class
++            if (super_property != nullptr)
++            {
++                FUtf8String* super_string_value = super_property->ContainerPtrToValuePtr<FUtf8String>(super_object);
++                const char* super_utf8_cstr = reinterpret_cast<const char*>(**super_string_value);
++                const StringType super_string_value_string = to_generic_string(super_utf8_cstr);
++                if (string_value_string == super_string_value_string)
++                {
++                    return;
++                }
++                super_and_no_access = private_access_modifier;
++            }
++
++            if (!string_value_string.empty())
++            {
++                // Create UTF8TEXT literal for UTF8 strings
++                const StringType result_value = create_utf8_string_literal(string_value_string);
++                if (!super_and_no_access)
++                {
++                    generate_simple_assignment_expression(property, result_value, implementation_file, property_scope);
++                }
++                else
++                {
++                    generate_advanced_assignment_expression(property, result_value, implementation_file, property_scope, property_type);
++                }
++            }
++            return;
++        }
++
++        // ANSI String properties
++        if (property->IsA<FAnsiStrProperty>())
++        {
++            FAnsiString* string_value = property->ContainerPtrToValuePtr<FAnsiString>(object);
++            // Convert ANSI to native string type for comparison and generation
++            const StringType string_value_string = to_generic_string(**string_value);
++
++            // Ensure property either does not exist in parent class or is overriden in the CDO for the child class
++            if (super_property != nullptr)
++            {
++                FAnsiString* super_string_value = super_property->ContainerPtrToValuePtr<FAnsiString>(super_object);
++                const StringType super_string_value_string = to_generic_string(**super_string_value);
++                if (string_value_string == super_string_value_string)
++                {
++                    return;
++                }
++                super_and_no_access = private_access_modifier;
++            }
++
++            if (!string_value_string.empty())
++            {
++                // ANSI strings use plain string literals (no TEXT macro)
++                const StringType result_value = create_ansi_string_literal(string_value_string);
++                if (!super_and_no_access)
++                {
++                    generate_simple_assignment_expression(property, result_value, implementation_file, property_scope);
++                }
++                else
++                {
++                    generate_advanced_assignment_expression(property, result_value, implementation_file, property_scope, property_type);
++                }
++            }
++            return;
++        }
++
+         // Text properties are treated as FText::FromString, although it's not ideal
+         if (property->IsA<FTextProperty>())
+         {
+@@ -1958,57 +2032,94 @@ namespace RC::UEGenerator
+     }
+ 
+     auto UEHeaderGenerator::create_string_literal(const StringType& string) -> StringType
++    {
++        return create_string_literal_with_macro(string, STR("TEXT"));
++    }
++
++    auto UEHeaderGenerator::create_utf8_string_literal(const StringType& string) -> StringType
++    {
++        return create_string_literal_with_macro(string, STR("UTF8TEXT"));
++    }
++
++    auto UEHeaderGenerator::create_ansi_string_literal(const StringType& string) -> StringType
++    {
++        // ANSI strings don't use a macro, just quotes
++        return create_string_literal_with_macro(string, {});
++    }
++
++    auto UEHeaderGenerator::create_string_literal_with_macro(const StringType& string, const StringType& macro_name) -> StringType
+     {
+         StringType result;
+-        result.append(STR("TEXT(\""));
++        
++        // Open the literal
++        if (!macro_name.empty())
++        {
++            result.append(macro_name);
++            result.append(STR("(\""));
++        }
++        else
++        {
++            result.append(STR("\""));
++        }
+ 
+         bool previous_character_was_hex = false;
+-
+         const CharType* ptr = string.c_str();
++        
+         while (CharType ch = *ptr++)
+         {
+             switch (ch)
+             {
+-            case STR('\r'): {
++            case STR('\r'):
+                 continue;
+-            }
+-            case STR('\n'): {
++            case STR('\n'):
+                 result.append(STR("\\n"));
+                 previous_character_was_hex = false;
+                 break;
+-            }
+-            case STR('\\'): {
++            case STR('\t'):
++                result.append(STR("\\t"));
++                previous_character_was_hex = false;
++                break;
++            case STR('\\'):
+                 result.append(STR("\\\\"));
+                 previous_character_was_hex = false;
+                 break;
+-            }
+-            case STR('\"'): {
++            case STR('\"'):
+                 result.append(STR("\\\""));
+                 previous_character_was_hex = false;
+                 break;
+-            }
+-            default: {
+-                if (ch < 31 || ch >= 128)
++            default:
++                // Only escape control characters (< 32)
++                // For ANSI (no macro), also escape > 127
++                if (ch < 32 || (macro_name.empty() && ch > 127))
+                 {
+-                    result.append(fmt::format(STR("\\x{:04X}"), ch));
++                    result.append(fmt::format(STR("\\x{:02X}"), static_cast<unsigned char>(ch)));
+                     previous_character_was_hex = true;
+                 }
+                 else
+                 {
+-                    // We close and open the literal (with TEXT) here in order to ensure that successive hex characters aren't
+-                    // appended to the hex sequence, causing a different number
++                    // Handle hex digit continuation
+                     if (previous_character_was_hex && iswxdigit(ch) != 0)
+                     {
+-                        result.append(STR("\")TEXT(\""));
++                        if (!macro_name.empty())
++                        {
++                            result.append(STR("\")"));
++                            result.append(macro_name);
++                            result.append(STR("(\""));
++                        }
++                        else
++                        {
++                            result.append(STR("\"\""));  // String concatenation for ANSI
++                        }
+                     }
+                     previous_character_was_hex = false;
+                     result.push_back(ch);
+                 }
+                 break;
+             }
+-            }
+         }
+-        result.append(STR("\")"));
++        
++        // Close the literal
++        result.append(!macro_name.empty() ? STR("\")") : STR("\""));
+         return result;
+     }
+ 
+@@ -2701,6 +2812,14 @@ namespace RC::UEGenerator
+         {
+             return STR("FString");
+         }
++        else if (property->IsA<FUtf8StrProperty>())
++        {
++            return STR("FUtf8String");
++        }
++        else if (property->IsA<FAnsiStrProperty>())
++        {
++            return STR("FAnsiString");
++        }
+         else if (property->IsA<FTextProperty>())
+         {
+             return STR("FText");
+@@ -3221,8 +3340,16 @@ namespace RC::UEGenerator
+ 
+                 // Force const reference when we're dealing with strings, and they are not passed by reference
+                 // UHT for whatever reason completely strips const and reference flags from string properties, but happily generates them in boilerplate code
++                static const FName StrPropertyFName(STR("StrProperty"));
++                static const FName Utf8StrPropertyFName(STR("Utf8StrProperty"));
++                static const FName AnsiStrPropertyFName(STR("AnsiStrProperty"));
++
++                const FName property_class_fname = property->GetClass().GetFName();
+                 const bool should_force_const_ref =
+-                        ((property_flags & (CPF_ReferenceParm | CPF_OutParm)) == 0) && (property->GetClass().GetName() == STR("StrProperty"));
++                        ((property_flags & (CPF_ReferenceParm | CPF_OutParm)) == 0) &&
++                        (property_class_fname == StrPropertyFName ||
++                         property_class_fname == Utf8StrPropertyFName ||
++                         property_class_fname == AnsiStrPropertyFName);
+ 
+                 // Append const keyword to the parameter declaration if it is marked as const parameter
+                 if ((property_flags & CPF_ConstParm) != 0 || should_force_const_ref)
+@@ -3417,6 +3544,14 @@ namespace RC::UEGenerator
+         {
+             return STR("TEXT(\"\")");
+         }
++        if (field_class_name == STR("Utf8StrProperty"))
++        {
++            return STR("UTF8TEXT(\"\")");
++        }
++        if (field_class_name == STR("AnsiStrProperty"))
++        {
++            return STR("\"\"");
++        }
+         if (field_class_name == STR("TextProperty"))
+         {
+             return STR("FText::GetEmpty()");
+diff --git a/UE4SS/src/UE4SSProgram.cpp b/UE4SS/src/UE4SSProgram.cpp
+index 1663147fa..aff38da8a 100644
+--- a/UE4SS/src/UE4SSProgram.cpp
++++ b/UE4SS/src/UE4SSProgram.cpp
+@@ -1139,6 +1139,8 @@ namespace RC
+         LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("NameProperty")).GetComparisonIndex(), &LuaType::push_nameproperty);
+         LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("TextProperty")).GetComparisonIndex(), &LuaType::push_textproperty);
+         LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("StrProperty")).GetComparisonIndex(), &LuaType::push_strproperty);
++        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("Utf8StrProperty")).GetComparisonIndex(), &LuaType::push_utf8strproperty);
++        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("AnsiStrProperty")).GetComparisonIndex(), &LuaType::push_ansistrproperty);
+         LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("SoftObjectProperty")).GetComparisonIndex(), &LuaType::push_softobjectproperty);
+         LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("SoftClassProperty")).GetComparisonIndex(), &LuaType::push_softobjectproperty);
+         LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("InterfaceProperty")).GetComparisonIndex(), &LuaType::push_interfaceproperty);
+diff --git a/assets/Changelog.md b/assets/Changelog.md
+index aa1553562..73504b662 100644
+--- a/assets/Changelog.md
++++ b/assets/Changelog.md
+@@ -61,9 +61,15 @@ Added search filter: `IncludeClassNames`. ([UE4SS #472](https://github.com/UE4SS
+ 
+ Added ability to call UFunctions directly from the GUI. ([UE4SS #851](https://github.com/UE4SS-RE/RE-UE4SS/pull/851))
+ 
+-### UHT Dumper 
++### UHT Dumper
++
++Added support for generating `FUtf8String` and `FAnsiString` properties in UHT-compatible headers ([UE4SS #1015](https://github.com/UE4SS-RE/RE-UE4SS/pull/1015))
++
++### Lua API
++
++Added support for `FUtf8String` and `FAnsiString` Unreal string types with string manipulation API ([UE4SS #1015](https://github.com/UE4SS-RE/RE-UE4SS/pull/1015))
++- Refactored FString implementation to use unified `TLuaStringBase` template for code reuse and consistency
+ 
+-### Lua API 
+ 
+ **Updated Lua version to 5.4.7** ([UE4SS #887](https://github.com/UE4SS-RE/RE-UE4SS/pull/887))
+ - This is necessary to compile with Clang.
+diff --git a/assets/Mods/shared/Types.lua b/assets/Mods/shared/Types.lua
+index c95d230e9..06d187324 100644
+--- a/assets/Mods/shared/Types.lua
++++ b/assets/Mods/shared/Types.lua
+@@ -715,17 +715,156 @@ function UFunction:GetFunctionFlags() end
+ function UFunction:SetFunctionFlags(Flags) end
+ 
+ 
+----A TArray of characters
++---Unreal Engine's standard wide-character string type (TCHAR-based)
+ ---@class FString
+ local FString = {}
+ 
+----Returns a string that Lua can understand
++---Returns a UTF-8 encoded Lua string
+ ---@return string
+ function FString:ToString() end
+ 
+----Clears the string by setting the number of elements in the TArray to 0
++---Empties the string by removing all characters
++function FString:Empty() end
++
++---Empties the string by removing all characters (identical to Empty)
+ function FString:Clear() end
+ 
++---Returns the length of the string in characters
++---@return integer
++function FString:Len() end
++
++---Returns true if the string is empty
++---@return boolean
++function FString:IsEmpty() end
++
++---Appends the given string to the end of this string
++---@param str string|FString A Lua string or another FString to append
++function FString:Append(str) end
++
++---Finds the first occurrence of the search string
++---@param search string A Lua string to search for
++---@return integer|nil 1-based index of first occurrence, or nil if not found
++function FString:Find(search) end
++
++---Checks if the string starts with the given prefix
++---@param prefix string A Lua string to check
++---@return boolean
++function FString:StartsWith(prefix) end
++
++---Checks if the string ends with the given suffix
++---@param suffix string A Lua string to check
++---@return boolean
++function FString:EndsWith(suffix) end
++
++---Returns a new FString with all characters converted to uppercase
++---@return FString
++function FString:ToUpper() end
++
++---Returns a new FString with all characters converted to lowercase
++---@return FString
++function FString:ToLower() end
++
++
++---Unreal Engine's UTF-8 encoded string type
++---@class FUtf8String
++local FUtf8String = {}
++
++---Returns a UTF-8 encoded Lua string
++---@return string
++function FUtf8String:ToString() end
++
++---Empties the string by removing all characters
++function FUtf8String:Empty() end
++
++---Empties the string by removing all characters (identical to Empty)
++function FUtf8String:Clear() end
++
++---Returns the number of UTF-8 code units (bytes), not Unicode code points
++---For "Hello 你好", returns 14 (bytes), not 8 (characters)
++---@return integer
++function FUtf8String:Len() end
++
++---Returns true if the string is empty
++---@return boolean
++function FUtf8String:IsEmpty() end
++
++---Appends the given string to the end of this string
++---@param str string|FUtf8String A Lua string or another FUtf8String to append
++function FUtf8String:Append(str) end
++
++---Finds the first occurrence of the search string
++---@param search string A Lua string to search for
++---@return integer|nil 1-based index of first occurrence, or nil if not found
++function FUtf8String:Find(search) end
++
++---Checks if the string starts with the given prefix
++---@param prefix string A Lua string to check
++---@return boolean
++function FUtf8String:StartsWith(prefix) end
++
++---Checks if the string ends with the given suffix
++---@param suffix string A Lua string to check
++---@return boolean
++function FUtf8String:EndsWith(suffix) end
++
++---Returns a new FUtf8String with all characters converted to uppercase
++---@return FUtf8String
++function FUtf8String:ToUpper() end
++
++---Returns a new FUtf8String with all characters converted to lowercase
++---@return FUtf8String
++function FUtf8String:ToLower() end
++
++
++---Unreal Engine's ANSI-encoded string type
++---@class FAnsiString
++local FAnsiString = {}
++
++---Returns an ANSI encoded Lua string
++---@return string
++function FAnsiString:ToString() end
++
++---Empties the string by removing all characters
++function FAnsiString:Empty() end
++
++---Empties the string by removing all characters (identical to Empty)
++function FAnsiString:Clear() end
++
++---Returns the length of the string in characters (each ANSI character is 1 byte)
++---@return integer
++function FAnsiString:Len() end
++
++---Returns true if the string is empty
++---@return boolean
++function FAnsiString:IsEmpty() end
++
++---Appends the given string to the end of this string
++---@param str string|FAnsiString A Lua string or another FAnsiString to append
++function FAnsiString:Append(str) end
++
++---Finds the first occurrence of the search string
++---@param search string A Lua string to search for
++---@return integer|nil 1-based index of first occurrence, or nil if not found
++function FAnsiString:Find(search) end
++
++---Checks if the string starts with the given prefix
++---@param prefix string A Lua string to check
++---@return boolean
++function FAnsiString:StartsWith(prefix) end
++
++---Checks if the string ends with the given suffix
++---@param suffix string A Lua string to check
++---@return boolean
++function FAnsiString:EndsWith(suffix) end
++
++---Returns a new FAnsiString with all characters converted to uppercase
++---@return FAnsiString
++function FAnsiString:ToUpper() end
++
++---Returns a new FAnsiString with all characters converted to lowercase
++---@return FAnsiString
++function FAnsiString:ToLower() end
++
+ 
+ ---@class FieldClass : LocalObject
+ local FieldClass = {}
+diff --git a/deps/first/LuaMadeSimple/include/LuaMadeSimple/LuaMadeSimple.hpp b/deps/first/LuaMadeSimple/include/LuaMadeSimple/LuaMadeSimple.hpp
+index 8295b86c5..b631ab492 100644
+--- a/deps/first/LuaMadeSimple/include/LuaMadeSimple/LuaMadeSimple.hpp
++++ b/deps/first/LuaMadeSimple/include/LuaMadeSimple/LuaMadeSimple.hpp
+@@ -521,7 +521,9 @@ namespace RC::LuaMadeSimple
+ 
+         [[nodiscard]] RC_LMS_API auto is_string(int32_t force_index = 1) const -> bool;
+         [[nodiscard]] RC_LMS_API auto get_string(int32_t force_index = 1) const -> std::string_view;
+-        RC_LMS_API auto set_string(std::string_view) const -> void;
++        RC_LMS_API auto set_string(std::string_view str) const -> void;
++        RC_LMS_API auto set_string(const char* str, size_t len) const -> void;
++        RC_LMS_API auto set_string(const uint8_t* str, size_t len) const -> void;
+ 
+         // is_number == lua_isnumber, which returns true if the value is a number or a string convertible to a number
+         [[nodiscard]] RC_LMS_API auto is_number(int32_t force_index = 1) const -> bool;
+diff --git a/deps/first/LuaMadeSimple/src/LuaMadeSimple.cpp b/deps/first/LuaMadeSimple/src/LuaMadeSimple.cpp
+index f96ca6851..7cbe218ea 100644
+--- a/deps/first/LuaMadeSimple/src/LuaMadeSimple.cpp
++++ b/deps/first/LuaMadeSimple/src/LuaMadeSimple.cpp
+@@ -665,9 +665,19 @@ namespace RC::LuaMadeSimple
+         return string;
+     }
+ 
+-    auto Lua::set_string(std::string_view string) const -> void
++    auto Lua::set_string(const char* str, size_t len) const -> void
+     {
+-        lua_pushstring(get_lua_state(), string.data());
++        lua_pushlstring(get_lua_state(), str, len);
++    }
++
++    auto Lua::set_string(const uint8_t* str, size_t len) const -> void
++    {
++        lua_pushlstring(get_lua_state(), reinterpret_cast<const char*>(str), len);
++    }
++
++    auto Lua::set_string(std::string_view str) const -> void
++    {
++        lua_pushlstring(get_lua_state(), str.data(), str.length());
+     }
+ 
+     auto Lua::is_number(int32_t force_index) const -> bool
+diff --git a/docs/SUMMARY.md b/docs/SUMMARY.md
+index 9d8c8b5dd..43dc24ecc 100644
+--- a/docs/SUMMARY.md
++++ b/docs/SUMMARY.md
+@@ -40,6 +40,8 @@
+     - [UEnum](./lua-api/classes/uenum.md)
+     - [AActor](./lua-api/classes/aactor.md)
+     - [FString](./lua-api/classes/fstring.md)
++    - [FAnsiString](./lua-api/classes/fansistring.md)
++    - [FUtf8String](./lua-api/classes/futf8string.md)
+     - [FName](./lua-api/classes/fname.md)
+     - [FText](./lua-api/classes/ftext.md)
+     - [FieldClass](./lua-api/classes/fieldclass.md)
+diff --git a/docs/lua-api/classes/fansistring.md b/docs/lua-api/classes/fansistring.md
+new file mode 100644
+index 000000000..2f1552a27
+--- /dev/null
++++ b/docs/lua-api/classes/fansistring.md
+@@ -0,0 +1,97 @@
++# FAnsiString
++
++`FAnsiString` is Unreal Engine's ANSI-encoded string type, using single-byte character encoding.
++
++## Inheritance
++[LocalObject](./localobject.md)
++
++## Related Types
++- [FString](./fstring.md) - Wide-character (TCHAR) string type
++- [FUtf8String](./futf8string.md) - UTF-8 encoded string type
++
++## Methods
++
++### ToString()
++
++- **Return type:** `string`
++- **Returns:** a Lua string with ANSI encoding.
++
++### Empty()
++
++- Empties the string by removing all characters.
++
++### Clear()
++
++- Empties the string by removing all characters (identical to Empty).
++
++### Len()
++
++- **Return type:** `integer`
++- **Returns:** the length of the string in characters (each ANSI character is 1 byte).
++
++### IsEmpty()
++
++- **Return type:** `boolean`
++- **Returns:** `true` if the string is empty, `false` otherwise.
++
++### Append(string)
++
++- **Parameter:** `string` - A Lua string or another FAnsiString to append
++- Appends the given string to the end of this string.
++
++### Find(search)
++
++- **Parameter:** `search` - A Lua string to search for
++- **Return type:** `integer` or `nil`
++- **Returns:** 1-based index of the first occurrence of the search string, or `nil` if not found.
++
++### StartsWith(prefix)
++
++- **Parameter:** `prefix` - A Lua string to check
++- **Return type:** `boolean`
++- **Returns:** `true` if the string starts with the given prefix, `false` otherwise.
++
++### EndsWith(suffix)
++
++- **Parameter:** `suffix` - A Lua string to check
++- **Return type:** `boolean`
++- **Returns:** `true` if the string ends with the given suffix, `false` otherwise.
++
++### ToUpper()
++
++- **Return type:** `FAnsiString`
++- **Returns:** a new FAnsiString with all characters converted to uppercase.
++
++### ToLower()
++
++- **Return type:** `FAnsiString`
++- **Returns:** a new FAnsiString with all characters converted to lowercase.
++
++## Example Usage
++
++```lua
++-- FAnsiString for ANSI-encoded data
++local ansiString = FAnsiString("Hello ANSI")
++print(ansiString:ToString()) -- Output: "Hello ANSI"
++
++ansiString:Append(" World")
++print(ansiString:ToString()) -- Output: "Hello ANSI World"
++
++if ansiString:EndsWith("World") then
++    print("String ends with World!")
++end
++
++local lowerString = ansiString:ToLower()
++print(lowerString:ToString()) -- Output: "hello ansi world"
++
++local index = ansiString:Find("ANSI")
++if index then
++    print("Found at index: " .. index)
++end
++```
++
++## Notes
++
++- `FAnsiString` uses single-byte ANSI encoding, making it suitable for ASCII-compatible text.
++- This type is useful when interfacing with legacy systems or APIs that expect ANSI strings.
++- For international text support, consider using [FUtf8String](./futf8string.md) or [FString](./fstring.md) instead.
+diff --git a/docs/lua-api/classes/fstring.md b/docs/lua-api/classes/fstring.md
+index 26254f0bc..ac08e180f 100644
+--- a/docs/lua-api/classes/fstring.md
++++ b/docs/lua-api/classes/fstring.md
+@@ -1,17 +1,86 @@
+ # FString
+ 
+-`FString` is a [TArray](./tarray.md) of characters.
++`FString` is Unreal Engine's standard wide-character string type (TCHAR-based).
+ 
+ ## Inheritance
+-[RemoteObject](./remoteobject.md)
++[LocalObject](./localobject.md)
++
++## Related Types
++- [FUtf8String](./futf8string.md) - UTF-8 encoded string type
++- [FAnsiString](./fansistring.md) - ANSI encoded string type
+ 
+ ## Methods
+ 
+ ### ToString()
+ 
+ - **Return type:** `string`
+-- **Returns:** a string that Lua can understand.
++- **Returns:** a UTF-8 encoded Lua string.
++
++### Empty()
++
++- Empties the string by removing all characters.
+ 
+ ### Clear()
+ 
+-- Clears the string by setting the number of elements in the `TArray` to 0.
+\ No newline at end of file
++- Empties the string by removing all characters (identical to Empty).
++
++### Len()
++
++- **Return type:** `integer`
++- **Returns:** the length of the string in characters.
++
++### IsEmpty()
++
++- **Return type:** `boolean`
++- **Returns:** `true` if the string is empty, `false` otherwise.
++
++### Append(string)
++
++- **Parameter:** `string` - A Lua string or another FString to append
++- Appends the given string to the end of this string.
++
++### Find(search)
++
++- **Parameter:** `search` - A Lua string to search for
++- **Return type:** `integer` or `nil`
++- **Returns:** 1-based index of the first occurrence of the search string, or `nil` if not found.
++
++### StartsWith(prefix)
++
++- **Parameter:** `prefix` - A Lua string to check
++- **Return type:** `boolean`
++- **Returns:** `true` if the string starts with the given prefix, `false` otherwise.
++
++### EndsWith(suffix)
++
++- **Parameter:** `suffix` - A Lua string to check
++- **Return type:** `boolean`
++- **Returns:** `true` if the string ends with the given suffix, `false` otherwise.
++
++### ToUpper()
++
++- **Return type:** `FString`
++- **Returns:** a new FString with all characters converted to uppercase.
++
++### ToLower()
++
++- **Return type:** `FString`
++- **Returns:** a new FString with all characters converted to lowercase.
++
++## Example Usage
++
++```lua
++local myString = FString("Hello")
++myString:Append(" World")
++print(myString:ToString()) -- Output: "Hello World"
++
++if myString:StartsWith("Hello") then
++    print("String starts with Hello!")
++end
++
++local upperString = myString:ToUpper()
++print(upperString:ToString()) -- Output: "HELLO WORLD"
++
++local index = myString:Find("World")
++print(index) -- Output: 7 (1-based index)
++```
+\ No newline at end of file
+diff --git a/docs/lua-api/classes/futf8string.md b/docs/lua-api/classes/futf8string.md
+new file mode 100644
+index 000000000..f16618a89
+--- /dev/null
++++ b/docs/lua-api/classes/futf8string.md
+@@ -0,0 +1,120 @@
++# FUtf8String
++
++`FUtf8String` is Unreal Engine's UTF-8 encoded string type, optimized for UTF-8 character data.
++
++## Inheritance
++[LocalObject](./localobject.md)
++
++## Related Types
++- [FString](./fstring.md) - Wide-character (TCHAR) string type
++- [FAnsiString](./fansistring.md) - ANSI encoded string type
++
++## Methods
++
++### ToString()
++
++- **Return type:** `string`
++- **Returns:** a UTF-8 encoded Lua string.
++
++### Empty()
++
++- Empties the string by removing all characters.
++
++### Clear()
++
++- Empties the string by removing all characters (identical to Empty).
++
++### Len()
++
++- **Return type:** `integer`
++- **Returns:** the number of UTF-8 code units (bytes), not Unicode code points. For example, "Hello 你好" returns 14 (bytes), not 8 (characters).
++
++### IsEmpty()
++
++- **Return type:** `boolean`
++- **Returns:** `true` if the string is empty, `false` otherwise.
++
++### Append(string)
++
++- **Parameter:** `string` - A Lua string or another FUtf8String to append
++- Appends the given string to the end of this string.
++
++### Find(search)
++
++- **Parameter:** `search` - A Lua string to search for
++- **Return type:** `integer` or `nil`
++- **Returns:** 1-based index of the first occurrence of the search string, or `nil` if not found.
++
++### StartsWith(prefix)
++
++- **Parameter:** `prefix` - A Lua string to check
++- **Return type:** `boolean`
++- **Returns:** `true` if the string starts with the given prefix, `false` otherwise.
++
++### EndsWith(suffix)
++
++- **Parameter:** `suffix` - A Lua string to check
++- **Return type:** `boolean`
++- **Returns:** `true` if the string ends with the given suffix, `false` otherwise.
++
++### ToUpper()
++
++- **Return type:** `FUtf8String`
++- **Returns:** a new FUtf8String with ASCII characters (a-z) converted to uppercase.
++- **⚠️ Note:** Only ASCII characters are converted, matching Unreal Engine behavior. Multibyte UTF-8 characters (accented characters, Cyrillic, Chinese, etc.) are left unchanged. For example, `"café"` becomes `"cafÉ"`, not `"CAFÉ"`.
++
++### ToLower()
++
++- **Return type:** `FUtf8String`
++- **Returns:** a new FUtf8String with ASCII characters (A-Z) converted to lowercase.
++- **⚠️ Note:** Only ASCII characters are converted, matching Unreal Engine behavior. Multibyte UTF-8 characters (accented characters, Cyrillic, Chinese, etc.) are left unchanged. For example, `"CAFÉ"` becomes `"cafÉ"`, not `"café"`.
++
++
++## Example Usage
++
++```lua
++-- FUtf8String works seamlessly with UTF-8 data
++local utf8String = FUtf8String("Hello UTF-8! 你好")
++print(utf8String:ToString()) -- Output: "Hello UTF-8! 你好"
++
++utf8String:Append(" 世界")
++print(utf8String:ToString()) -- Output: "Hello UTF-8! 你好 世界"
++
++if utf8String:StartsWith("Hello") then
++    print("String starts with Hello!")
++end
++
++local upperString = utf8String:ToUpper()
++print(upperString:ToString())
++
++local index = utf8String:Find("UTF-8")
++if index then
++    print("Found at index: " .. index)
++end
++```
++
++## Notes
++
++- `FUtf8String` is particularly useful when working with international text or when you need to ensure UTF-8 encoding.
++- The `Len()` method returns the **byte length**, not character count, as UTF-8 uses variable-length encoding (1-4 bytes per character).
++- `Find()`, `StartsWith()`, and `EndsWith()` work correctly with multibyte UTF-8 characters.
++- `ToUpper()` and `ToLower()` only convert ASCII characters (a-z, A-Z), matching Unreal Engine's documented behavior. This is a performance optimization and matches how Epic Games implements these functions across all string types.
++
++## Workarounds for Full UTF-8 Case Conversion
++
++If you need case conversion for non-ASCII characters, consider these alternatives:
++
++```lua
++-- Option 1: Use Lua's string library (if available and UTF-8 aware)
++local text = "Café"
++local upper = text:upper()  -- May work depending on Lua locale settings
++
++-- Option 2: Convert through FString (Windows TCHAR has better Unicode support)
++local utf8str = FUtf8String("Café")
++local fstr = FString(utf8str:ToString())
++local upper = fstr:ToUpper()  -- Works for most common accented characters
++local result = FUtf8String(upper:ToString())
++
++-- Option 3: Implement custom case conversion in Lua
++-- Use UTF-8 aware libraries or Unicode case mapping tables
++```

@@ -1,0 +1,4003 @@
+#if defined(__PROSPERO__)
+#include "L23GameThreadProbe.hpp"
+#include "NativePropertyPointerGuard.hpp"
+#endif
+#define NOMINMAX
+
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+
+// Shared composition diagnostic sink (diagnostic.c, in-link C symbol).
+// Declared unconditionally: used on PROSPERO (IniParser + input-gate diagnostics).
+extern "C" void diagnostic_event(const char* tag, unsigned int value);
+namespace RC
+{
+    auto early4_mods_started() noexcept -> void; // [EARLY-4] LuaMod.cpp (PS5 world-event route)
+}
+
+
+#ifdef TEXT
+#undef TEXT
+#endif
+
+#include <algorithm>
+#include <cwctype>
+#include <cstdio>
+#ifdef __PROSPERO__
+#include <Input/PlatformInputSource.hpp>
+#include <Helpers/Utf16Utf8.hpp>
+#include <NativeLayoutBinding.hpp>
+#include <NativeLayoutDeclarations.hpp>
+#include <AutoProfileGenerator.hpp>
+#endif
+#include <format>
+#include <fstream>
+#include <limits>
+#include <unordered_set>
+#include <fmt/chrono.h>
+#include <Profiler/Profiler.hpp>
+#include <DynamicOutput/Output.hpp>
+#include <DynamicOutput/FileDevice.hpp>
+#include <DynamicOutput/NewFileDevice.hpp>
+#ifndef __PROSPERO__
+#include <DynamicOutput/DebugConsoleDevice.hpp>
+#endif
+#include <ExceptionHandling.hpp>
+#ifndef __PROSPERO__
+#include <GUI/ConsoleOutputDevice.hpp>
+#endif
+#include <GUI/GUI.hpp>
+#include <GUI/LiveView.hpp>
+#include <Helpers/ASM.hpp>
+#include <Helpers/Format.hpp>
+#include <Helpers/Integer.hpp>
+#include <Helpers/String.hpp>
+#include <Helpers/Time.hpp>
+#include <IniParser/Ini.hpp>
+#include <LuaLibrary.hpp>
+#include <LuaType/LuaCustomProperty.hpp>
+#include <LuaType/LuaUObject.hpp>
+#include <Mod/CppMod.hpp>
+#ifdef __PROSPERO__
+// [CAP09 B1] native C++ mods under the activation snapshot (engine-free planner).
+#include <Platform/NativeCppModInventory.hpp>
+#endif
+#include <Mod/LuaMod.hpp>
+#include <Mod/Mod.hpp>
+#include <ObjectDumper/ObjectToString.hpp>
+#include <SDKGenerator/Generator.hpp>
+#include <SDKGenerator/UEHeaderGenerator.hpp>
+#include <SigScanner/SinglePassSigScanner.hpp>
+#include <Signatures.hpp>
+#include <Timer/ScopedTimer.hpp>
+#include <UE4SSProgram.hpp>
+#ifdef __PROSPERO__
+#include "Cap10InvocationObservation.hpp"
+#if defined(MODBRIDGE_CAP10_ADMITTED_MONO_PORT) && MODBRIDGE_CAP10_ADMITTED_MONO_PORT == 1
+#include "MonoOwner.hpp"
+#endif
+#include <atomic>
+#include <cstdint>
+#include <limits>
+#endif
+#include <Unreal/AGameMode.hpp>
+#include <Unreal/AGameModeBase.hpp>
+#include <Unreal/GameplayStatics.hpp>
+#include <Unreal/Searcher/ObjectSearcher.hpp>
+#include <Unreal/Core/Templates/Tuple.hpp>
+#include <Unreal/UEngine.hpp>
+#include <Unreal/TypeChecker.hpp>
+#include <Unreal/UActorComponent.hpp>
+#include <Unreal/UInterface.hpp>
+#include <Unreal/UKismetSystemLibrary.hpp>
+#include <Unreal/ULocalPlayer.hpp>
+#include <Unreal/UObjectArray.hpp>
+#include <Unreal/UPackage.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+#include <Unreal/Property/FFieldPathProperty.hpp>
+#include <Unreal/UnrealInitializer.hpp>
+#include <Unreal/World.hpp>
+#include <Unreal/FWorldContext.hpp>
+#include <Unreal/Engine/UDataTable.hpp>
+#include <Unreal/BitfieldProxy.hpp>
+#include <Unreal/FOutputDevice.hpp>
+#include <Unreal/UObjectHashTables.hpp>
+#include <UE4SSRuntime.hpp>
+#include <UnrealDef.hpp>
+
+#ifdef _WIN32
+#include <polyhook2/PE/IatHook.hpp>
+#endif
+
+#ifndef __PROSPERO__
+#include <FilesystemWatcher.hpp>
+#endif
+
+namespace RC
+{
+    // Commented out because this system (turn off hotkeys when in-game console is open) it doesn't work properly.
+    /*
+    auto get_player_controller() -> UObject*
+    {
+        std::vector<Unreal::UObject*> player_controllers{};
+        UObjectGlobals::FindAllOf(STR("PlayerController"), player_controllers);
+        if (!player_controllers.empty())
+        {
+            return player_controllers.back();
+        }
+        else
+        {
+            return nullptr;
+        }
+    }
+    //*/
+
+    SettingsManager UE4SSProgram::settings_manager{};
+
+#ifdef __PROSPERO__
+    // =================================================================================
+    // [R9-MEM] Lua backing store = the engine's own allocator (GMalloc).
+    //
+    // Generic for every UE game the profile covers: it consumes ONLY values the
+    // runtime already binds and checks for any game - the GMalloc variable
+    // (seed slot 3, V1 instance + V2 vptr) and the FMalloc Realloc/Free vtable
+    // slots from the per-game layout map (the same FMalloc::Realloc/Free path
+    // the runtime's TArray/FString code already uses through FMemory). No new
+    // offset, no new import, no detour: a plain virtual call into the engine
+    // allocator, exactly what the game's own libc does (its malloc-replace
+    // thunks call [GMalloc]->Malloc/Realloc/Free). Missing anything -> fail
+    // closed: nothing is installed and Lua keeps the libc path (B5 behavior).
+    // Lua's contract maps 1:1: realloc(p,n)/free(p); Alignment 0 is the
+    // engine DEFAULT_ALIGNMENT (>= 16 B for >= 16 B blocks; Lua needs 8).
+    // =================================================================================
+    namespace
+    {
+        auto r9_gmalloc_lua_realloc(void* ptr, size_t nsize) noexcept -> void*
+        {
+            try
+            {
+                return (*Unreal::GMalloc)->Realloc(ptr, nsize, 0);
+            }
+            catch (...)
+            {
+                // Only the wrapper's own "slot unavailable" throw can land here
+                // (engine code does not throw); report it as an allocation failure.
+                return nullptr;
+            }
+        }
+
+        auto r9_gmalloc_lua_free(void* ptr) noexcept -> void
+        {
+            try
+            {
+                (*Unreal::GMalloc)->Free(ptr);
+            }
+            catch (...)
+            {
+                // Unreachable after the install probe below (same slot lookup);
+                // a block would leak rather than reach a foreign allocator.
+            }
+        }
+
+        auto r9_install_lua_backing_allocator() noexcept -> void
+        {
+            const File::CharType* reason = nullptr;
+            void* instance = nullptr;
+            try
+            {
+                if (Unreal::GMalloc == nullptr || *Unreal::GMalloc == nullptr)
+                {
+                    reason = STR("gmalloc-unbound");
+                }
+                else if (!Unreal::UnrealInitializer::StaticStorage::bVersionedContainerIsInitialized)
+                {
+                    reason = STR("versioned-container-uninitialized");
+                }
+                else if (!Unreal::FMalloc::VTableLayoutMap.contains(STR("Realloc")) || !Unreal::FMalloc::VTableLayoutMap.contains(STR("Free")))
+                {
+                    reason = STR("fmalloc-slots-missing");
+                }
+                else
+                {
+                    instance = static_cast<void*>(*Unreal::GMalloc);
+                    // Probe the exact calls Lua will make: allocate, grow (copy), free.
+                    void* probe = r9_gmalloc_lua_realloc(nullptr, 64);
+                    if (probe == nullptr)
+                    {
+                        reason = STR("probe-alloc-failed");
+                    }
+                    else
+                    {
+                        static_cast<unsigned char*>(probe)[0] = 0x5a;
+                        static_cast<unsigned char*>(probe)[63] = 0xa5;
+                        void* grown = r9_gmalloc_lua_realloc(probe, 4096);
+                        if (grown == nullptr)
+                        {
+                            r9_gmalloc_lua_free(probe);
+                            reason = STR("probe-grow-failed");
+                        }
+                        else
+                        {
+                            const bool kept = static_cast<unsigned char*>(grown)[0] == 0x5a && static_cast<unsigned char*>(grown)[63] == 0xa5;
+                            r9_gmalloc_lua_free(grown);
+                            if (!kept)
+                            {
+                                reason = STR("probe-copy-mismatch");
+                            }
+                        }
+                    }
+                }
+                if (reason == nullptr)
+                {
+                    const LuaMadeSimple::LuaBackingAllocator backing{&r9_gmalloc_lua_realloc, &r9_gmalloc_lua_free};
+                    if (!LuaMadeSimple::set_lua_backing_allocator(backing))
+                    {
+                        reason = STR("already-installed");
+                    }
+                }
+            }
+            catch (...)
+            {
+                reason = STR("exception");
+            }
+            try
+            {
+                if (reason == nullptr)
+                {
+                    Output::send(STR("[MEM] lua-backend=gmalloc gmalloc={} instance={} probe=ok (new Lua states use the engine allocator)\n"),
+                                 static_cast<void*>(Unreal::GMalloc), instance);
+                }
+                else
+                {
+                    Output::send<LogLevel::Warning>(STR("[MEM] lua-backend=libc reason={} (fail-closed: Lua keeps the libc heap)\n"), reason);
+                }
+            }
+            catch (...)
+            {
+                // Observational only: a log failure never changes the decision.
+            }
+        }
+    }
+#endif
+
+#define OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(StructName)                                                                                                           \
+    for (const auto& [name, offset] : Unreal::StructName::MemberOffsets)                                                                                       \
+    {                                                                                                                                                          \
+        Output::send(STR(#StructName "::{} = 0x{:X}\n"), name, offset);                                                                                        \
+    }
+
+    enum class IsCoalesced
+    {
+        Yes,
+        No,
+    };
+    auto output_all_member_offsets(IsCoalesced is_coalesced) -> void
+    {
+        Output::send(STR("\n##### MEMBER OFFSETS START ({}) #####\n\n"), is_coalesced == IsCoalesced::No ? STR("MemberVariableLayout") : STR("Coalesced"));
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UObjectBase);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UScriptStruct::ICppStructOps);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UStruct);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UScriptStruct);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UClass);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UEnum);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UFunction);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(USparseDelegateFunction);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UField);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FField);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FNumericProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FObjectPropertyBase);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FStructProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FArrayProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FMapProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FSetProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FBoolProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FByteProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FEnumProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FClassProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FSoftClassProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FDelegateProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FMulticastDelegateProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FInterfaceProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FFieldPathProperty);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FWorldContext);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FOutputDevice);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FArchiveState);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FArchive);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(AActor);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(AGameModeBase);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(AGameMode);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UEngine);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UGameViewportClient);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UPlayer);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(ULocalPlayer);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UWorld);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(UDataTable);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FUObjectItem);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(FUObjectArray);
+        OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(TUObjectArray);
+        Output::send(STR("\n##### MEMBER OFFSETS END ({}) #####\n\n"), is_coalesced == IsCoalesced::No ? STR("MemberVariableLayout") : STR("Coalesced"));
+    }
+
+#ifndef __PROSPERO__
+    void* HookedLoadLibraryA(const char* dll_name)
+    {
+        UE4SSProgram& program = UE4SSProgram::get_program();
+        HMODULE lib = PLH::FnCast(program.m_hook_trampoline_load_library_a, &LoadLibraryA)(dll_name);
+        program.fire_dll_load_for_cpp_mods(ensure_str(dll_name));
+        return lib;
+    }
+
+    void* HookedLoadLibraryExA(const char* dll_name, void* file, int32_t flags)
+    {
+        UE4SSProgram& program = UE4SSProgram::get_program();
+        HMODULE lib = PLH::FnCast(program.m_hook_trampoline_load_library_ex_a, &LoadLibraryExA)(dll_name, file, flags);
+        program.fire_dll_load_for_cpp_mods(ensure_str(dll_name));
+        return lib;
+    }
+
+    void* HookedLoadLibraryW(const wchar_t* dll_name)
+    {
+        UE4SSProgram& program = UE4SSProgram::get_program();
+        HMODULE lib = PLH::FnCast(program.m_hook_trampoline_load_library_w, &LoadLibraryW)(dll_name);
+        program.fire_dll_load_for_cpp_mods(ToCharTypePtr(dll_name));
+        return lib;
+    }
+
+    void* HookedLoadLibraryExW(const wchar_t* dll_name, void* file, int32_t flags)
+    {
+        UE4SSProgram& program = UE4SSProgram::get_program();
+        HMODULE lib = PLH::FnCast(program.m_hook_trampoline_load_library_ex_w, &LoadLibraryExW)(dll_name, file, flags);
+        program.fire_dll_load_for_cpp_mods(ToCharTypePtr(dll_name));
+        return lib;
+    }
+
+#endif
+#ifdef __PROSPERO__
+    UE4SSProgram::UE4SSProgram(Platform::NativeProgramContext context, std::initializer_list<BinaryOptions> options)
+        : MProgram(options), m_native_context(std::move(context))
+#else
+    UE4SSProgram::UE4SSProgram(const std::filesystem::path& moduleFilePath, std::initializer_list<BinaryOptions> options) : MProgram(options)
+#endif
+    {
+        ProfilerScope();
+        try
+        {
+#ifdef __PROSPERO__
+            Platform::ValidateNativeProgramContext(m_native_context);
+            if (s_program)
+                throw std::runtime_error("A UE4SS program is already published");
+            setup_paths(m_native_context.module_file_path);
+#else
+            s_program = this;
+            setup_paths(moduleFilePath);
+#endif
+
+            try
+            {
+#ifdef __PROSPERO__
+                {
+                    // Targeted diagnostic: record the settings path length and
+                    // whether the mod source is available at parse time
+                    diagnostic_event("settings_path_len", static_cast<unsigned>(m_settings_path_and_file.string().length()));
+                    diagnostic_event("settings_mod_source", m_native_context.mod_source ? 1u : 0u);
+                }
+                settings_manager.deserialize(m_settings_path_and_file, *this);
+#else
+                settings_manager.deserialize(m_settings_path_and_file);
+#endif
+            }
+            catch (std::exception& e)
+            {
+                // Targeted diagnostic: capture the RAW exception bytes before the
+                // lossy char16-to-char conversion hides the suffix. Each 4-byte
+                // chunk of e.what() is packed into one uint32 diagnostic event.
+                {
+                    const char* raw = e.what();
+                    const unsigned len = raw ? static_cast<unsigned>(strlen(raw)) : 0;
+                    diagnostic_event("iniparser_exc_len", len);
+                    for (unsigned i = 0; i + 4 <= len && i < 256; i += 4)
+                    {
+                        const uint32_t chunk = static_cast<uint32_t>(static_cast<unsigned char>(raw[i]))
+                            | (static_cast<uint32_t>(static_cast<unsigned char>(raw[i+1])) << 8)
+                            | (static_cast<uint32_t>(static_cast<unsigned char>(raw[i+2])) << 16)
+                            | (static_cast<uint32_t>(static_cast<unsigned char>(raw[i+3])) << 24);
+                        diagnostic_event("iniparser_exc", chunk);
+                    }
+                }
+                create_emergency_console_for_early_error(fmt::format(STR("The IniParser failed to parse: {}"), ensure_str(e.what())));
+                return;
+            }
+
+#ifndef __PROSPERO__
+            if (settings_manager.CrashDump.EnableDumping)
+            {
+                m_crash_dumper.enable();
+            }
+
+            m_crash_dumper.set_full_memory_dump(settings_manager.CrashDump.FullMemoryDump);
+
+            m_debugging_gui.set_gfx_backend(settings_manager.Debug.GraphicsAPI);
+
+#endif
+#ifdef __PROSPERO__
+            validate_native_services();
+#endif
+            // Setup the log file
+#ifdef __PROSPERO__
+            m_native_owns_output_devices = true;
+#endif
+            auto& file_device = Output::set_default_devices<Output::NewFileDevice>();
+            file_device.set_file_name_and_path(ensure_str((m_log_directory / "UE4SS.log")));
+
+            if (const auto ue4ss_mods_paths_var_raw = std::getenv("UE4SS_MODS_PATHS"); ue4ss_mods_paths_var_raw)
+            {
+#ifdef __PROSPERO__
+                if (m_native_context.mod_source && ue4ss_mods_paths_var_raw[0])
+                    throw std::runtime_error("Native activation does not support UE4SS_MODS_PATHS");
+#endif
+                const auto ue4ss_mods_paths_var = ensure_str(ue4ss_mods_paths_var_raw);
+                Output::send(STR("Environment variable 'UE4SS_MODS_PATHS' present, adding 'Mods' path overrides: {}\n"), ue4ss_mods_paths_var);
+                const auto paths = parse_semicolon_separated_string(ue4ss_mods_paths_var);
+                for (const auto& path : std::ranges::reverse_view(paths))
+                {
+#ifdef __PROSPERO__
+                    // [FS-THROW BAN] lexical only on PS5: weakly_canonical
+                    // touches the OS fs and throws on the game process.
+                    add_mods_directory(std::filesystem::path(Unicode::EncodeUtf8(path)).lexically_normal());
+#else
+                    add_mods_directory(std::filesystem::weakly_canonical(path));
+#endif
+                }
+            }
+
+            create_simple_console();
+
+#ifndef __PROSPERO__
+            if (settings_manager.Debug.DebugConsoleEnabled)
+            {
+                m_console_device = &Output::set_default_devices<Output::ConsoleDevice>();
+                m_console_device->set_formatter([](File::StringViewType string) -> File::StringType {
+                    return fmt::format(STR("[{}] {}"), get_now_as_string(STR("{:%X}")), string);
+                });
+                if (settings_manager.Debug.DebugConsoleVisible)
+                {
+                    switch (settings_manager.Debug.RenderMode)
+                    {
+                    case GUI::RenderMode::ExternalThread:
+                        m_render_thread = std::jthread{&GUI::gui_thread, &m_debugging_gui};
+                        break;
+                    case GUI::RenderMode::EngineTick:
+                    case GUI::RenderMode::GameViewportClientTick:
+                        // The hooked game function will pick up on the window being "open", and start rendering.
+                        get_debugging_ui().set_open(true);
+                        break;
+                    }
+                }
+            }
+
+#endif
+            // This is experimental code that's here only for future reference
+            /*
+            Unreal::UnrealInitializer::SetupUnrealModules();
+
+            constexpr const wchar_t* str_to_find = STR("Allocator: %s");
+            void* string_address = SinglePassScanner::string_scan(str_to_find, ScanTarget::Core);
+            Output::send(STR("\n\nFound string '{}' at {}\n\n"), std::wstring_view{str_to_find}, string_address);
+            //*/
+
+#ifndef __PROSPERO__
+            Output::send(STR("Console created\n"));
+#else
+            Output::send(STR("Native console, GUI, crash dumping and filesystem watching are unavailable\n"));
+#endif
+            Output::send(STR("UE4SS - v{}.{}.{}{}{} - Git SHA #{}\n"),
+                         UE4SS_LIB_VERSION_MAJOR,
+                         UE4SS_LIB_VERSION_MINOR,
+                         UE4SS_LIB_VERSION_HOTFIX,
+                         fmt::format(STR("{}"), UE4SS_LIB_VERSION_PRERELEASE == 0 ? STR("") : fmt::format(STR(" PreRelease #{}"), UE4SS_LIB_VERSION_PRERELEASE)),
+                         fmt::format(STR("{}"),
+                                     UE4SS_LIB_BETA_STARTED == 0
+                                             ? STR("")
+                                             : (UE4SS_LIB_IS_BETA == 0 ? STR(" Beta #?") : fmt::format(STR(" Beta #{}"), UE4SS_LIB_VERSION_BETA))),
+                         ensure_str(UE4SS_LIB_BUILD_GITSHA));
+            bool use_local_time = true;
+#ifdef _WIN32
+            if (auto module = GetModuleHandleW(L"ntdll.dll"); module && GetProcAddress(module, "wine_get_version"))
+            {
+                use_local_time = false;
+            }
+#endif
+            if (use_local_time)
+            {
+                try
+                {
+#if defined(__cpp_lib_chrono) && __cpp_lib_chrono >= 201907L
+                    Output::send(STR("Timezone: {}\n"), ensure_str(std::chrono::current_zone()->name()));
+#else
+                    Output::send(STR("Timezone database unavailable in this standard library\n"));
+#endif
+                }
+                catch (std::runtime_error&)
+                {
+                    Output::send(STR("Timezone: UTC (local disabled due to lack of support (chrono::current_zone() failed))\n"));
+                }
+            }
+            else
+            {
+                Output::send(STR("Timezone: UTC (local disabled due to wine)\n"));
+            }
+
+#ifdef __clang__
+#define UE4SS_COMPILER STR("Clang")
+#else
+#define UE4SS_COMPILER STR("MSVC")
+#endif
+
+            Output::send(STR("UE4SS Build Configuration: {} ({})\n"), ensure_str(UE4SS_CONFIGURATION), UE4SS_COMPILER);
+
+#ifndef __PROSPERO__
+            m_load_library_a_hook = std::make_unique<PLH::IatHook>("kernel32.dll",
+                                                                   "LoadLibraryA",
+                                                                   std::bit_cast<uint64_t>(&HookedLoadLibraryA),
+                                                                   &m_hook_trampoline_load_library_a,
+                                                                   L"");
+            m_load_library_a_hook->hook();
+
+            m_load_library_ex_a_hook = std::make_unique<PLH::IatHook>("kernel32.dll",
+                                                                      "LoadLibraryExA",
+                                                                      std::bit_cast<uint64_t>(&HookedLoadLibraryExA),
+                                                                      &m_hook_trampoline_load_library_ex_a,
+                                                                      L"");
+            m_load_library_ex_a_hook->hook();
+
+            m_load_library_w_hook = std::make_unique<PLH::IatHook>("kernel32.dll",
+                                                                   "LoadLibraryW",
+                                                                   std::bit_cast<uint64_t>(&HookedLoadLibraryW),
+                                                                   &m_hook_trampoline_load_library_w,
+                                                                   L"");
+            m_load_library_w_hook->hook();
+
+            m_load_library_ex_w_hook = std::make_unique<PLH::IatHook>("kernel32.dll",
+                                                                      "LoadLibraryExW",
+                                                                      std::bit_cast<uint64_t>(&HookedLoadLibraryExW),
+                                                                      &m_hook_trampoline_load_library_ex_w,
+                                                                      L"");
+            m_load_library_ex_w_hook->hook();
+
+            Unreal::UnrealInitializer::SetupUnrealModules();
+
+#endif
+#ifdef __PROSPERO__
+            // Publish only after loader inputs, paths and service requests pass validation.
+            s_program = this;
+#endif
+            setup_mod_directory_path();
+
+#ifdef __PROSPERO__
+            if (Platform::ShouldAutostartNativeMods(m_native_context.mod_startup_policy))
+                start_native_mods();
+#else
+            setup_mods();
+            install_cpp_mods();
+            start_cpp_mods(IsInitialStartup::Yes);
+#endif
+#ifdef __PROSPERO__
+            if (m_error_object->has_error())
+                throw std::runtime_error("Native C++ mod startup reported a program error");
+#endif
+
+            if (m_has_game_specific_config)
+            {
+                Output::send(STR("Found configuration for game: {}\n"), ensure_str(m_working_directory.filename()));
+            }
+            else
+            {
+                Output::send(STR("No specific game configuration found, using default configuration file\n"));
+            }
+
+            Output::send(STR("Config: {}\n\n"), ensure_str(m_settings_path_and_file));
+            Output::send(STR("root directory: {}\n"), ensure_str(m_root_directory));
+            Output::send(STR("working directory: {}\n"), ensure_str(m_working_directory));
+            Output::send(STR("game executable directory: {}\n"), ensure_str(m_game_executable_directory));
+#ifdef __PROSPERO__
+            // Resolution B: the game executable is legitimately unobserved on
+            // this platform; never stat a fabricated path.
+            if (!m_game_path_and_exe_name.empty())
+                Output::send(STR("game executable: {} ({} bytes)\n\n\n"), ensure_str(m_game_path_and_exe_name), std::filesystem::file_size(m_game_path_and_exe_name));
+            else
+                Output::send(STR("game executable: (unobserved on this platform; configured game directory: {})\n\n\n"), ensure_str(m_native_context.configured_game_directory));
+#else
+            Output::send(STR("game executable: {} ({} bytes)\n\n\n"), ensure_str(m_game_path_and_exe_name), std::filesystem::file_size(m_game_path_and_exe_name));
+#endif
+            Output::send(STR("mods directories: \n"));
+            for (size_t index = 0; index < m_mods_directories.size(); ++index)
+            {
+                Output::send(STR("[{}] {}\n"), index, ensure_str(m_mods_directories[index]));
+            }
+            Output::send(STR("\n"));
+            Output::send(STR("log directory: {}\n"), ensure_str(m_log_directory));
+            Output::send(STR("object dumper directory: {}\n\n\n"), ensure_str(m_object_dumper_output_directory));
+        }
+#ifdef __PROSPERO__
+        catch (const Unreal::UnrealInitializer::StartupCancelled&)
+        {
+            // An owner-requested native shutdown is a normal startup exit.
+            // Preserve any earlier error and do not turn cancellation into one.
+            shutdown_native_program();
+            return;
+        }
+        catch (std::exception& e)
+#else
+        catch (std::runtime_error& e)
+#endif
+        {
+            // Returns to main from here which checks, displays & handles whether to close the program or not
+            // If has_error() returns false that means that set_error was not called
+            // In that case we need to copy the exception message to the error buffer before we return to main
+            if (!m_error_object->has_error())
+            {
+                copy_error_into_message(e.what());
+            }
+#ifdef __PROSPERO__
+            shutdown_native_program();
+#endif
+            return;
+        }
+#ifdef __PROSPERO__
+        catch (...)
+        {
+            copy_error_into_message("Native UE4SS construction failed with an unknown exception");
+            shutdown_native_program();
+            return;
+        }
+#endif
+    }
+
+    UE4SSProgram::~UE4SSProgram()
+    {
+#ifdef __PROSPERO__
+        shutdown_native_program();
+#else
+        // Shut down the event loop.
+        m_processing_events = false;
+        Output::close_all_default_devices();
+#endif
+    }
+
+#ifdef __PROSPERO__
+    // [EU FIX4 2026-10-09, agent-EU] TU-local declaration (the established
+    // no-shared-header bridge law): defined in UnrealInitializer.cpp under
+    // the armed R3 fold (a no-op definition exists in the disarmed Prospero
+    // fold, so the link holds in both). Restores the GameEngine vptr before
+    // teardown; ownership-checked inside — a foreign writer is never
+    // clobbered; noexcept throughout.
+    namespace Unreal::UnrealInitializer
+    {
+        auto VmtTickPumpRetire() noexcept -> void;
+    }
+    auto UE4SSProgram::shutdown_native_program() noexcept -> void
+    {
+        // [EU FIX4] Restore the original vptr BEFORE any teardown step
+        // (event-loop join, mod uninstall, device close): the copied-vtable
+        // Tick pump's swap is undone first so no later stage can observe
+        // our replacement table.
+        Unreal::UnrealInitializer::VmtTickPumpRetire();
+        request_shutdown();
+        m_is_program_started.store(false, std::memory_order_release);
+        std::lock_guard<std::mutex> startup_guard(m_native_startup_mutex);
+        if (m_event_loop.joinable())
+        {
+            try
+            {
+                m_event_loop.request_stop();
+                m_event_loop.join();
+            }
+            catch (const std::exception& error)
+            {
+                // The loader's ownership contract forbids destruction on the
+                // update thread or while another caller is joining init().
+                std::fprintf(stderr, "Native UE4SS event-loop shutdown failed: %s\n", error.what());
+                std::terminate();
+            }
+        }
+        {
+            std::lock_guard<std::mutex> guard(m_event_queue_mutex);
+            m_queued_events.clear();
+        }
+        if (s_program == this)
+        {
+            try { uninstall_mods(); }
+            catch (const std::exception& error)
+            {
+                std::fprintf(stderr, "Native UE4SS mod shutdown failed; unloading is unsafe: %s\n", error.what());
+                std::terminate();
+            }
+            catch (...)
+            {
+                std::fprintf(stderr, "Native UE4SS mod shutdown failed; unloading is unsafe\n");
+                std::terminate();
+            }
+            s_program = nullptr;
+        }
+        m_mods.clear();
+#ifdef HAS_INPUT
+        if (!m_input_handler.shutdown())
+        {
+            std::fprintf(stderr, "Native UE4SS input provider failed to deactivate; releasing its owner is unsafe\n");
+            std::terminate();
+        }
+#endif
+        Unreal::NativePropertyGuard::Revoke();
+        if (m_native_owns_output_devices)
+        {
+            try { Output::close_all_default_devices(); }
+            catch (const std::exception& error)
+            {
+                std::fprintf(stderr, "Native UE4SS output shutdown failed: %s\n", error.what());
+            }
+            m_native_owns_output_devices = false;
+        }
+    }
+#endif
+
+#ifdef __PROSPERO__
+    auto UE4SSProgram::native_mods_enabled() const noexcept -> bool
+    {
+        return m_native_mods_started.load(std::memory_order_acquire);
+    }
+
+    auto UE4SSProgram::start_native_mods() -> void
+    {
+        std::lock_guard<std::mutex> startup_guard(m_native_startup_mutex);
+        const auto rejection = Platform::CheckNativeModStartup(
+            s_program == this,
+            m_error_object->has_error(),
+            m_shutdown_requested->load(std::memory_order_acquire),
+            m_native_init_started,
+            m_native_mod_start_attempted);
+        if (rejection != Platform::NativeModStartupBlock::None)
+        {
+            switch (rejection)
+            {
+            case Platform::NativeModStartupBlock::ProgramNotPublished:
+                throw std::runtime_error("Native mods require a published UE4SS program");
+            case Platform::NativeModStartupBlock::ExistingError:
+                throw std::runtime_error("Native mods cannot start after a UE4SS startup error");
+            case Platform::NativeModStartupBlock::ShuttingDown:
+                throw std::runtime_error("Native mods cannot start during shutdown");
+            case Platform::NativeModStartupBlock::InitializationStarted:
+                throw std::runtime_error("Native mods must be enabled before UE4SS initialization");
+            case Platform::NativeModStartupBlock::AlreadyAttempted:
+                throw std::runtime_error("Native mod startup is one-shot");
+            case Platform::NativeModStartupBlock::None:
+                break;
+            }
+        }
+
+        m_native_mod_start_attempted = true;
+        try
+        {
+            setup_mods();
+            install_cpp_mods();
+            m_native_mods_started.store(true, std::memory_order_release);
+            start_cpp_mods(IsInitialStartup::Yes);
+            if (m_error_object->has_error())
+                throw std::runtime_error("Native C++ mod startup reported a program error");
+        }
+        catch (...)
+        {
+            m_native_mods_started.store(false, std::memory_order_release);
+            throw;
+        }
+    }
+
+    auto UE4SSProgram::native_startup_error_message() noexcept -> const char*
+    {
+        return m_error_object->has_error() ? m_error_object->get_message() : nullptr;
+    }
+#endif
+
+#ifdef __PROSPERO__
+    // Source-only embedding observation; no Mono host or provider module lease.
+    namespace
+    {
+        struct Cap10BridgeState
+        {
+            UE4SSProgram* program{};
+            std::atomic_bool* shutdown{};
+            const void* admission{};
+        };
+        thread_local Cap10BridgeState cap10_bridge_state{};
+        enum class Call : std::uint8_t { None, Abi, Probe };
+        struct Cap10Window
+        {
+            Cap10Observation::Observation observed{};
+            const void* admission{};
+            std::uint64_t serial{};
+            Call in_flight{Call::None};
+            std::uint8_t phase{};
+            bool active{}, poisoned{};
+        };
+        thread_local Cap10Window window{};
+        // Loaded-provider-lifetime issuance: TLS addresses may be reused by new threads.
+        std::atomic<std::uint64_t> issued{0};
+        bool issue(std::uint64_t& serial) noexcept
+        {
+            auto value = issued.load(std::memory_order_relaxed);
+            for (;;)
+            {
+                if (value == std::numeric_limits<std::uint64_t>::max()) return false;
+                if (issued.compare_exchange_weak(value, value + 1, std::memory_order_relaxed))
+                { serial = value + 1; return true; }
+            }
+        }
+        void cancel_window() noexcept { window = {}; }
+        bool admitted() noexcept
+        {
+            try
+            {
+                const Cap10BridgeState state = cap10_bridge_state;
+                return state.program && state.shutdown && state.admission &&
+                       !state.shutdown->load(std::memory_order_acquire) &&
+                       state.program->is_program_started();
+            }
+            catch (...) { return false; }
+        }
+        bool same_admission() noexcept
+        {
+            return window.admission == cap10_bridge_state.admission && admitted();
+        }
+        void count(std::uint8_t& value) noexcept
+        {
+            if (value < 2) ++value; // Saturate; duplicate calls poison separately.
+        }
+        void record_entry(Call call, std::int32_t cookie = 0) noexcept
+        {
+            if (!window.active) return;
+            if (!same_admission() || window.in_flight != Call::None ||
+                window.observed.kind == Cap10Observation::WindowKind::NoNativeCalls)
+                window.poisoned = true;
+            if (call == Call::Abi)
+            {
+                count(window.observed.abi_entries);
+                if (window.phase != 0 || window.observed.abi_entries != 1) window.poisoned = true;
+            }
+            else
+            {
+                count(window.observed.probe_entries);
+                window.observed.probe_cookie = cookie;
+                if (window.phase != 1 || window.observed.probe_entries != 1 ||
+                    cookie != window.observed.expected_cookie) window.poisoned = true;
+            }
+            window.in_flight = call;
+        }
+        void record_exit(Call call, std::int32_t result, bool reply_written = false,
+                         std::int32_t reply = 0) noexcept
+        {
+            if (!window.active) return;
+            if (!same_admission() || window.in_flight != call) window.poisoned = true;
+            if (call == Call::Abi)
+            {
+                count(window.observed.abi_exits);
+                window.observed.abi_result = result;
+                if (window.observed.abi_exits != 1 || result != 1) window.poisoned = true;
+                window.phase = 1;
+            }
+            else
+            {
+                count(window.observed.probe_exits);
+                window.observed.probe_status = result;
+                window.observed.probe_reply_valid = reply_written;
+                window.observed.probe_reply = reply;
+                if (window.observed.probe_exits != 1 || result != 0 || !reply_written ||
+                    reply != window.observed.expected_cookie) window.poisoned = true;
+                window.phase = 2;
+            }
+            window.in_flight = Call::None;
+        }
+        struct Cap10BridgeAdmissionScope
+        {
+            Cap10BridgeState previous;
+            Cap10BridgeAdmissionScope(UE4SSProgram* program, std::atomic_bool* shutdown) noexcept
+                : previous(cap10_bridge_state)
+            {
+                cancel_window(); // Nested callback admission cannot inherit/resurrect proof.
+                cap10_bridge_state = {program, shutdown, this};
+            }
+            Cap10BridgeAdmissionScope(const Cap10BridgeAdmissionScope&) = delete;
+            Cap10BridgeAdmissionScope& operator=(const Cap10BridgeAdmissionScope&) = delete;
+            ~Cap10BridgeAdmissionScope() noexcept
+            {
+                cancel_window();
+                cap10_bridge_state = previous;
+            }
+        };
+    }
+    namespace Cap10Observation
+    {
+        bool begin(WindowKind kind, std::int32_t expected_cookie, WindowToken* token) noexcept
+        {
+            if (window.active) { window.poisoned = true; return false; }
+            if (!token || !admitted() ||
+                (kind != WindowKind::RunImports && kind != WindowKind::NoNativeCalls) ||
+                (kind == WindowKind::RunImports && expected_cookie == 0)) return false;
+            std::uint64_t serial{};
+            if (!issue(serial)) return false;
+            window = {};
+            window.active = true;
+            window.admission = cap10_bridge_state.admission;
+            window.serial = serial;
+            window.observed.kind = kind;
+            window.observed.expected_cookie = expected_cookie;
+            *token = {&window, serial};
+            return true;
+        }
+        bool finish(WindowToken token, Observation* observed) noexcept
+        {
+            if (token.provider_tls != &window || !window.active || token.serial != window.serial)
+            {
+                if (window.active) window.poisoned = true;
+                return false;
+            }
+            bool accepted = observed && !window.poisoned && same_admission() &&
+                            window.in_flight == Call::None;
+            const auto& o = window.observed;
+            if (o.kind == WindowKind::RunImports)
+                accepted = accepted && window.phase == 2 && o.abi_entries == 1 && o.abi_exits == 1 &&
+                           o.probe_entries == 1 && o.probe_exits == 1 && o.abi_result == 1 &&
+                           o.probe_status == 0 && o.probe_reply_valid &&
+                           o.probe_cookie == o.expected_cookie && o.probe_reply == o.expected_cookie;
+            else if (o.kind == WindowKind::NoNativeCalls)
+                accepted = accepted && window.phase == 0 && o.abi_entries == 0 && o.abi_exits == 0 &&
+                           o.probe_entries == 0 && o.probe_exits == 0;
+            else accepted = false;
+            window.observed.poisoned = window.poisoned;
+            window.observed.accepted = accepted;
+            if (observed) *observed = window.observed;
+            cancel_window();
+            return accepted;
+        }
+        void abort(WindowToken token) noexcept
+        {
+            if (token.provider_tls == &window && window.active && token.serial == window.serial)
+                cancel_window();
+            else if (window.active) window.poisoned = true;
+        }
+    }
+
+    extern "C" __attribute__((visibility("default")))
+    std::int32_t modbridge_cap10_abi_version() noexcept
+    {
+        record_entry(Call::Abi);
+        record_exit(Call::Abi, 1);
+        return 1;
+    }
+    // reply must be valid caller-owned writable int32 storage; only null is checked.
+    extern "C" __attribute__((visibility("default")))
+    std::int32_t modbridge_cap10_runtime_probe(std::int32_t cookie, std::int32_t* reply) noexcept
+    {
+        record_entry(Call::Probe, cookie);
+        const auto finish_probe = [cookie](std::int32_t status, bool written) noexcept
+        {
+            record_exit(Call::Probe, status, written, written ? cookie : 0);
+            return status;
+        };
+        if (!reply) return finish_probe(-4, false);
+        try
+        {
+            const Cap10BridgeState state = cap10_bridge_state;
+            if (!state.program || !state.shutdown ||
+                state.shutdown->load(std::memory_order_acquire) ||
+                !state.program->is_program_started()) return finish_probe(-3, false);
+            *reply = cookie;
+            return finish_probe(0, true);
+        }
+        catch (...) { return finish_probe(-5, false); }
+    }
+#endif
+
+    auto UE4SSProgram::init() -> void
+    {
+        ProfilerSetThreadName("UE4SS-InitThread");
+        ProfilerScope();
+
+        try
+        {
+#ifdef __PROSPERO__
+            {
+                std::lock_guard<std::mutex> startup_guard(m_native_startup_mutex);
+                if (m_native_init_started)
+                    throw std::runtime_error("Native UE4SS initialization is one-shot");
+                m_native_init_started = true;
+            }
+            if (s_program != this || m_error_object->has_error())
+                throw std::runtime_error("Native UE4SS program cannot initialize after rejected startup or shutdown");
+            if (m_shutdown_requested->load(std::memory_order_acquire))
+                throw Unreal::UnrealInitializer::StartupCancelled{};
+#endif
+            setup_unreal();
+
+            Output::send(STR("Unreal Engine modules ({}):\n"), SigScannerStaticData::m_is_modular ? STR("modular") : STR("non-modular"));
+            const auto module_base = [](const auto& module) -> const void* {
+#ifdef _WIN32
+                return module.lpBaseOfDll;
+#else
+                return module.image_base;
+#endif
+            };
+            const auto module_size = [](const auto& module) -> size_t {
+#ifdef _WIN32
+                return module.SizeOfImage;
+#else
+                return module.image_size;
+#endif
+            };
+            auto main_exe_ptr = module_base(SigScannerStaticData::m_modules_info.array[static_cast<size_t>(ScanTarget::MainExe)]);
+            for (size_t i = 0; i < static_cast<size_t>(ScanTarget::Max); ++i)
+            {
+                auto& module = SigScannerStaticData::m_modules_info.array[i];
+                // only log modules with unique addresses (non-modular builds have everything in MainExe)
+                if (i == static_cast<size_t>(ScanTarget::MainExe) || main_exe_ptr != module_base(module))
+                {
+                    auto module_name = ensure_str(ScanTargetToString(i));
+                    Output::send(STR("{} @ {} size={:#x}\n"), module_name.c_str(), module_base(module), module_size(module));
+                }
+            }
+
+            fire_unreal_init_for_cpp_mods();
+            setup_unreal_properties();
+            UAssetRegistry::SetMaxMemoryUsageDuringAssetLoading(settings_manager.Memory.MaxMemoryUsageDuringAssetLoading);
+
+            share_lua_functions();
+
+#ifdef __PROSPERO__
+            m_is_program_started.store(true, std::memory_order_release);
+            {
+                std::lock_guard<std::recursive_mutex> callback_guard(m_engine_ready_callback_mutex);
+                if (!m_shutdown_requested->load(std::memory_order_acquire) &&
+                    m_native_context.on_engine_initialized)
+                {
+                    Cap10BridgeAdmissionScope admission{this, m_shutdown_requested.get()};
+                    m_native_context.on_engine_initialized();
+#if defined(MODBRIDGE_CAP10_ADMITTED_MONO_PORT) && MODBRIDGE_CAP10_ADMITTED_MONO_PORT == 1
+                    (void)Cap10Host::run_embedded_probe_once();
+#endif
+                }
+            }
+            if (m_shutdown_requested->load(std::memory_order_acquire))
+            {
+                shutdown_native_program();
+                return;
+            }
+#endif
+
+            // Only deal with the event loop thread here if the 'Test' constructor doesn't need to be called
+#ifndef RUN_TESTS
+            // Program is now fully setup
+            // Start event loop
+            m_event_loop = std::jthread{&UE4SSProgram::update, this};
+
+            // Wait for thread
+            // There's a loop inside the thread that only exits when you hit the 'End' key on the keyboard
+            // As long as you don't do that the thread will stay open and accept further inputs
+            m_event_loop.join();
+#ifdef __PROSPERO__
+            if (m_error_object->has_error())
+                shutdown_native_program();
+#endif
+#endif
+        }
+#ifdef __PROSPERO__
+        catch (const Unreal::UnrealInitializer::StartupCancelled&)
+        {
+            shutdown_native_program();
+            return;
+        }
+        catch (std::exception& e)
+#else
+        catch (std::runtime_error& e)
+#endif
+        {
+            // Returns to main from here which checks, displays & handles whether to close the program or not
+            // If has_error() returns false that means that set_error was not called
+            // In that case we need to copy the exception message to the error buffer before we return to main
+            if (!m_error_object->has_error())
+            {
+                copy_error_into_message(e.what());
+            }
+#ifdef __PROSPERO__
+            shutdown_native_program();
+#endif
+            return;
+        }
+#ifdef __PROSPERO__
+        catch (...)
+        {
+            copy_error_into_message("Native UE4SS initialization failed with an unknown exception");
+            shutdown_native_program();
+            return;
+        }
+#endif
+    }
+
+#ifdef __PROSPERO__
+    // worker-pad-defer-1: shared composition diagnostic sink (diagnostic.c,
+    // in-link C symbol). Namespace-scope extern "C" declaration only; no new
+    // import, no new header dependency.
+
+    auto UE4SSProgram::validate_native_services() -> void
+    {
+        if (settings_manager.CrashDump.EnableDumping)
+            throw std::runtime_error("Native crash dumping service is unavailable");
+        if (settings_manager.Debug.SimpleConsoleEnabled)
+            throw std::runtime_error("Native simple console service is unavailable");
+        if (settings_manager.Debug.DebugConsoleEnabled || settings_manager.Debug.DebugConsoleVisible ||
+            settings_manager.Debug.RenderMode != GUI::RenderMode::ExternalThread)
+            throw std::runtime_error("Native debugging GUI service is unavailable");
+        if (settings_manager.General.EnableHotReloadSystem || settings_manager.General.EnableAutoReloadingLuaMods)
+            throw std::runtime_error("Native hot reload and filesystem watcher services are unavailable");
+#ifdef HAS_INPUT
+        if (m_native_context.input_source)
+        {
+            if (!m_input_handler.init(m_native_context.input_source))
+                throw std::runtime_error("Native supplied input source is unavailable or failed activation");
+#ifndef __PROSPERO__
+            // On PROSPERO the native input provider is supplied by the composition
+            // (pad-config unit); there is no configurable InputSource to match —
+            // General.InputSource is not parsed from any ini and its default may
+            // carry the Windows "Default" constant, which never matches the
+            // pad provider name. Skip the match check on this platform.
+            if (!settings_manager.General.InputSource.empty() &&
+                !m_input_handler.set_input_source(to_string(settings_manager.General.InputSource)))
+                throw std::runtime_error("Native configured InputSource does not match the supplied provider");
+#endif
+        }
+        // worker-pad-defer-1 (launch-10 pad-defer floor). On this target the
+        // composition defers (never aborts) when the pad is unavailable
+        // (NativePadInput.cpp pad_input_deferred), and General.InputSource is
+        // not parsed from any ini on __PROSPERO__ (SettingsManager never reads
+        // it), so its non-empty "Default" is a CONSTANT here, not a request:
+        // the gate below fired on every input-less boot and re-aborted startup
+        // after the pad-config deferral. Unavailable controller input must
+        // never abort native startup, so the InputSource clause is downgraded
+        // to a diagnostic on the shared supplier-diag channel (symbol defined
+        // in-link by diagnostic.c; declaration only, no new import). The
+        // explicit binding request (EnableDebugKeyBindings, default false,
+        // unset in the shipped ini) keeps its fatal refusal, and every other
+        // service gate above is unchanged.
+        if (!m_input_handler.is_input_available() && settings_manager.General.EnableDebugKeyBindings)
+            throw std::runtime_error("Native input service is unavailable; disable bindings and clear InputSource");
+        if (!m_input_handler.is_input_available())
+        {
+            diagnostic_event("pad_input_deferred_input_gate", 1u);
+        }
+#else
+        if (m_native_context.input_source || settings_manager.General.EnableDebugKeyBindings || !settings_manager.General.InputSource.empty())
+            throw std::runtime_error("Native input support was not compiled");
+#endif
+    }
+#endif
+
+    auto UE4SSProgram::setup_paths(const std::filesystem::path& moduleFilePath) -> void
+    {
+        ProfilerScope();
+        m_root_directory = moduleFilePath.parent_path();
+        m_module_file_path = moduleFilePath;
+
+        // The default working directory is the root directory
+        // Can be changed by creating a <GameName> directory in the root directory
+        // At that point, the working directory will be "root/<GameName>"
+        m_working_directory = m_root_directory;
+
+#ifdef __PROSPERO__
+        // Resolution B (configured roots): the game executable path is
+        // legitimately unobservable on this target. Directory derivations come
+        // from the explicit configured game directory when supplied; image
+        // identity lives in the retained mappings, never in this string.
+        std::filesystem::path game_directory_path;
+        if (!m_native_context.configured_game_directory.empty())
+            game_directory_path = m_native_context.configured_game_directory;
+        else
+            game_directory_path = m_native_context.game_executable_path.parent_path();
+        std::filesystem::path game_exe_path = m_native_context.game_executable_path;  // may be empty: unobserved
+#else
+        wchar_t exe_path_buffer[1024];
+        GetModuleFileNameW(GetModuleHandle(nullptr), exe_path_buffer, 1023);
+        std::filesystem::path game_exe_path = exe_path_buffer;
+        std::filesystem::path game_directory_path = game_exe_path.parent_path();
+#endif
+        m_legacy_root_directory = game_directory_path;
+
+        m_working_directory = m_root_directory;
+        m_game_executable_directory = game_directory_path;
+        m_settings_path_and_file = m_root_directory;
+        m_game_path_and_exe_name = game_exe_path;
+        m_object_dumper_output_directory = m_working_directory;
+
+#ifdef __PROSPERO__
+        if (m_native_context.mod_source)
+        {
+            // Filesystem paths remain diagnostic/log destinations. Configuration
+            // is selected exclusively from retained logical ue4ss/ keys.
+            m_log_directory = m_working_directory;
+            m_settings_path_and_file.append("UE4SS-settings.ini");
+            return;
+        }
+#endif
+        // Allow loading of DLLs from the game directory
+#ifdef _WIN32
+        AddDllDirectory(game_exe_path.c_str());
+#endif
+
+        for (const auto& item : std::filesystem::directory_iterator(m_root_directory))
+        {
+            if (!item.is_directory())
+            {
+                continue;
+            }
+
+            if (item.path().filename() == game_directory_path.parent_path().parent_path().parent_path().filename())
+            {
+                m_has_game_specific_config = true;
+                m_working_directory = item.path();
+                m_settings_path_and_file = std::move(item.path());
+                m_log_directory = m_working_directory;
+                m_object_dumper_output_directory = m_working_directory;
+                m_legacy_root_directory = m_legacy_root_directory / item.path();
+                break;
+            }
+        }
+
+        m_log_directory = m_working_directory;
+        m_settings_path_and_file.append("UE4SS-settings.ini");
+
+        // Check for legacy locations and update paths accordingly
+        if (std::filesystem::exists(m_legacy_root_directory / "UE4SS-settings.ini") && !std::filesystem::exists(m_settings_path_and_file))
+        {
+            m_settings_path_and_file = m_legacy_root_directory / "UE4SS-settings.ini";
+        }
+    }
+
+    auto UE4SSProgram::create_emergency_console_for_early_error(File::StringViewType error_message) -> void
+    {
+#ifdef __PROSPERO__
+        // Store the actual parser error; no console allocation is available.
+        copy_error_into_message(to_string(error_message).c_str());
+#else
+        settings_manager.Debug.SimpleConsoleEnabled = true;
+        create_simple_console();
+        printf_s("%S\n", FromCharTypePtr<wchar_t>(error_message.data()));
+#endif
+    }
+
+    auto UE4SSProgram::setup_mod_directory_path() -> void
+    {
+#ifdef __PROSPERO__
+        if (m_native_context.mod_source)
+        {
+            // [IP] Claude round-10 item 3 (shim root wiring): the native mods
+            // directory must be ABSOLUTE so the LuaPathShim root derivation in
+            // LuaMod::prepare_mod (which lexically strips the trailing
+            // /ue4ss[/Mods] from get_mods_directory()) yields the REAL
+            // modbridge root and the writable-area feature (agent IB) becomes
+            // testable at runtime. The root is RUNTIME-CARRIED, never derived
+            // here: the module_start composition activates with its mod root
+            // and the runtime bridge copies that string verbatim into
+            // NativeProgramContext::configured_working_directory
+            // (runtime_start_bridge.cpp, Resolution B). Rule 10: no title-id
+            // anywhere in this derivation — whatever root the composition
+            // activated with is used as-is. Pure lexical join (no OS call:
+            // weakly_canonical/current_path THROW on this target, launch-2
+            // evidence). An empty configured root (older composition) keeps
+            // the legacy relative "ue4ss/Mods" so the shim still disables
+            // itself loudly (reason=no-root) instead of guessing.
+            const std::filesystem::path shim_native_root = m_native_context.configured_working_directory;
+            m_mods_directories = {shim_native_root.empty() ? std::filesystem::path("ue4ss/Mods")
+                                                           : (shim_native_root / "ue4ss" / "Mods")};
+            return;
+        }
+#endif
+        std::filesystem::path default_mods_path{};
+        if (!settings_manager.Overrides.ModsFolderPath.empty())
+        {
+#ifdef __PROSPERO__
+            default_mods_path = Unicode::EncodeUtf8(settings_manager.Overrides.ModsFolderPath);
+#else
+            default_mods_path = settings_manager.Overrides.ModsFolderPath;
+#endif
+        }
+        else
+        {
+            default_mods_path = m_working_directory / "Mods";
+        }
+
+        // If no paths were added, check legacy location for fallback
+        if (std::filesystem::exists(m_legacy_root_directory / "Mods") && !std::filesystem::exists(default_mods_path))
+        {
+            default_mods_path = m_legacy_root_directory / "Mods";
+        }
+
+        insert_mods_directory(default_mods_path, 0);
+
+        for (const auto& path : m_mods_directories_to_remove)
+        {
+            std::erase(m_mods_directories, path);
+        }
+    }
+
+    auto UE4SSProgram::create_simple_console() -> void
+    {
+#ifdef __PROSPERO__
+        if (settings_manager.Debug.SimpleConsoleEnabled)
+            throw std::runtime_error("Native simple console service is unavailable");
+#else
+        if (settings_manager.Debug.SimpleConsoleEnabled)
+        {
+            m_debug_console_device = &Output::set_default_devices<Output::DebugConsoleDevice>();
+            Output::set_default_log_level<LogLevel::Normal>();
+            m_debug_console_device->set_formatter([](File::StringViewType string) -> File::StringType {
+                return fmt::format(STR("[{}] {}"), get_now_as_string(STR("{:%X}")), string);
+            });
+
+            if (AllocConsole())
+            {
+                FILE* stdin_filename;
+                FILE* stdout_filename;
+                FILE* stderr_filename;
+                freopen_s(&stdin_filename, "CONIN$", "r", stdin);
+                freopen_s(&stdout_filename, "CONOUT$", "w", stdout);
+                freopen_s(&stderr_filename, "CONOUT$", "w", stderr);
+            }
+        }
+#endif
+    }
+
+    auto UE4SSProgram::load_unreal_offsets_from_file() -> void
+    {
+#ifdef __PROSPERO__
+        if (const auto compiled = Platform::NativeLayouts::GetCompiledNativeLayoutDeclarations(); compiled)
+        {
+            Output::send(STR("[NativeLayout] declaration_provider=compiled source={} profile_digest={}\n"),
+                         ensure_str(std::string{compiled->selection_source}), ensure_str(std::string{compiled->profile_digest}));
+            // cap02 SHADOW (log-only, non-arming): re-render the engine-level
+            // layout pack from this pair's own header and byte-compare it with
+            // the compiled texts. A drift check only: the compiled texts below
+            // stay the armed layout whatever the verdict, and any exception in
+            // the shadow is caught and logged so activation is never aborted.
+            try
+            {
+                const auto sh = rc::autoprofile::shadow_check(compiled->members, compiled->vtables);
+                Output::send(STR("[AutoProfile] shadow parsed={} verdict={} pack={} pack_digest={} member_rows={} vtable_rows={} detail={}\n"),
+                             sh.parsed ? 1 : 0, ensure_str(sh.matched ? "MATCH" : "DIVERGE"),
+                             ensure_str(std::string{sh.pack_id}), ensure_str(std::string{sh.digest}),
+                             sh.member_rows, sh.vtable_rows, ensure_str(std::string{sh.reason}));
+            }
+            catch (...)
+            {
+                Output::send(STR("[AutoProfile] shadow parsed=0 verdict=DIVERGE detail=exception in shadow (ignored; compiled layout still armed)\n"));
+            }
+            Platform::NativeLayouts::StageNativeLayoutTexts(compiled->members, compiled->vtables);
+        }
+        else if (m_native_context.mod_source)
+        {
+            const auto members = m_native_context.mod_source->read("ue4ss/MemberVariableLayout.ini");
+            const auto virtuals = m_native_context.mod_source->read("ue4ss/VTableLayout.ini");
+            if (!members || !virtuals)
+                throw std::runtime_error("Native activation requires both member and vtable layout files");
+            Platform::NativeLayouts::StageNativeLayoutTexts(members->bytes, virtuals->bytes);
+        }
+        else
+            Platform::NativeLayouts::StageNativeLayoutFiles(m_working_directory);
+        // Native maps publish together only after real engine axes are resolved.
+#else
+        std::filesystem::path file_path = m_working_directory / "MemberVariableLayout.ini";
+        if (std::filesystem::exists(file_path))
+        {
+            auto file = File::open(file_path);
+            if (auto file_contents = file.read_all(); !file_contents.empty())
+            {
+                Ini::Parser parser;
+                parser.parse(file_contents);
+                file.close();
+
+                // The following code is auto-generated.
+#include <MacroSetter.hpp>
+
+                m_custom_member_variable_layout_loaded = true;
+            }
+        }
+#endif
+    }
+
+    auto UE4SSProgram::setup_unreal() -> void
+    {
+        ProfilerScope();
+        // Retrieve offsets from the config file
+        const StringType offset_overrides_section{STR("OffsetOverrides")};
+
+        load_unreal_offsets_from_file();
+
+        if (m_custom_member_variable_layout_loaded)
+        {
+            Output::send(STR("MemberVariableLayout.ini loaded\n"));
+            output_all_member_offsets(IsCoalesced::No);
+        }
+
+        Unreal::UnrealInitializer::Config config;
+#ifdef __PROSPERO__
+        config.ModuleSource = m_native_context.module_source;
+        config.NativeScanSource = m_native_context.scanner_source;
+        auto startup_wait = std::make_shared<Unreal::UnrealInitializer::StartupWaitControl>();
+        std::weak_ptr<std::atomic_bool> shutdown_requested = m_shutdown_requested;
+        startup_wait->IsCancelled = [shutdown_requested] {
+            auto request = shutdown_requested.lock();
+            return !request || request->load(std::memory_order_acquire);
+        };
+        startup_wait->Deadline = Unreal::UnrealInitializer::StartupWaitControl::Clock::now() +
+                                 Unreal::UnrealInitializer::DefaultStartupWaitTimeout;
+        config.StartupWait = std::move(startup_wait);
+#endif
+        config.CachePath = m_root_directory / "cache";
+        config.bInvalidateCacheIfSelfChanged = settings_manager.General.InvalidateCacheIfDLLDiffers;
+        config.bEnableCache = settings_manager.General.UseCache;
+        config.SecondsToScanBeforeGivingUp = settings_manager.General.SecondsToScanBeforeGivingUp;
+        config.bUseUObjectArrayCache = settings_manager.General.UseUObjectArrayCache;
+        config.bForceGUObjectArrayForIteration = settings_manager.General.ForceGUObjectArrayForIteration;
+
+        // Retrieve from the config file the number of threads to be used for aob scanning
+        {
+            // The config system only directly supports signed 64-bit integers
+            // I'm using '-1' for the default and then only proceeding with using the value from the config file if it's within the
+            // range of an unsigned 32-bit integer (which is what the SinglePassScanner uses)
+            // The variables for these settings are default initialized with valid values so no need to set them if the config value
+            // was either missing or invalid
+            int64_t num_threads_for_scanner_from_config = settings_manager.Threads.SigScannerNumThreads;
+
+            // The scanner is expecting a uint32_t so lets make sure we can safely convert to a uint32_t
+            if (num_threads_for_scanner_from_config <= std::numeric_limits<uint32_t>::max() && num_threads_for_scanner_from_config >= 1)
+            {
+                config.NumScanThreads = static_cast<uint32_t>(num_threads_for_scanner_from_config);
+            }
+        }
+
+        {
+            int64_t multithreading_module_size_threshold_from_config = settings_manager.Threads.SigScannerMultithreadingModuleSizeThreshold;
+
+            if (multithreading_module_size_threshold_from_config <= std::numeric_limits<uint32_t>::max() &&
+                multithreading_module_size_threshold_from_config >= std::numeric_limits<uint32_t>::min())
+            {
+                config.MultithreadingModuleSizeThreshold = static_cast<uint32_t>(multithreading_module_size_threshold_from_config);
+            }
+        }
+
+        // Version override from ini file
+        {
+            int64_t major_version = settings_manager.EngineVersionOverride.MajorVersion;
+            int64_t minor_version = settings_manager.EngineVersionOverride.MinorVersion;
+
+            if (major_version != -1 && minor_version != -1)
+            {
+                // clang-format off
+                if (major_version < std::numeric_limits<uint32_t>::min() ||
+                    major_version > std::numeric_limits<uint32_t>::max() ||
+                    minor_version < std::numeric_limits<uint32_t>::min() ||
+                    minor_version > std::numeric_limits<uint32_t>::max())
+                {
+                    throw std::runtime_error{
+                            "Was unable to override engine version from ini file; The number in the ini file must be in range of a uint32"};
+                }
+                // clang-format on
+
+                Unreal::Version::Major = static_cast<uint32_t>(major_version);
+                Unreal::Version::Minor = static_cast<uint32_t>(minor_version);
+
+                config.ScanOverrides.version_finder = [&]([[maybe_unused]] auto&, Unreal::Signatures::ScanResult&) {};
+            }
+        }
+
+        // If any Lua scripts are found, add overrides so that the Lua script can perform the aob scan instead of the Unreal API itself
+        setup_lua_scan_overrides(m_working_directory, config);
+
+        // Virtual function offset overrides
+#ifndef __PROSPERO__
+        // Native targets use the identity-checked staged layout pair above.
+        TRY([&]() {
+            ProfilerScopeNamed("loading virtual function offset overrides");
+            static File::StringType virtual_function_offset_override_file{ensure_str((m_working_directory / STR("VTableLayout.ini")))};
+            if (std::filesystem::exists(virtual_function_offset_override_file))
+            {
+                auto file =
+                        File::open(virtual_function_offset_override_file, File::OpenFor::Reading, File::OverwriteExistingFile::No, File::CreateIfNonExistent::No);
+                Ini::Parser parser;
+                parser.parse(file);
+
+                Output::send<Color::Blue>(STR("Getting ordered lists from ini file\n"));
+
+                auto calculate_virtual_function_offset = []<typename... BaseSizes>(uint32_t current_index, BaseSizes... base_sizes) -> uint32_t {
+                    return current_index == 0 ? 0 : (current_index + (base_sizes + ...)) * 8;
+                };
+
+                auto retrieve_vtable_layout_from_ini = [&](const File::StringType& section_name, auto callable) -> uint32_t {
+                    auto list = parser.get_ordered_list(section_name);
+                    uint32_t vtable_size = list.size() - 1;
+                    list.for_each([&](uint32_t index, File::StringType& item) {
+                        callable(index, item);
+                    });
+                    return vtable_size;
+                };
+
+                Output::send<Color::Blue>(STR("UObjectBase\n"));
+                uint32_t uobjectbase_size = retrieve_vtable_layout_from_ini(STR("UObjectBase"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, 0);
+                    Output::send(STR("UObjectBase::{} = 0x{:X}\n"), item, offset);
+                    Unreal::UObjectBase::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("UObjectBaseUtility\n"));
+                uint32_t uobjectbaseutility_size = retrieve_vtable_layout_from_ini(STR("UObjectBaseUtility"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, uobjectbase_size);
+                    Output::send(STR("UObjectBaseUtility::{} = 0x{:X}\n"), item, offset);
+                    Unreal::UObjectBaseUtility::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("UObject\n"));
+                uint32_t uobject_size = retrieve_vtable_layout_from_ini(STR("UObject"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, uobjectbase_size, uobjectbaseutility_size);
+                    Output::send(STR("UObject::{} = 0x{:X}\n"), item, offset);
+                    Unreal::UObject::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("UField\n"));
+                uint32_t ufield_size = retrieve_vtable_layout_from_ini(STR("UField"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, uobjectbase_size, uobjectbaseutility_size, uobject_size);
+                    Output::send(STR("UField::{} = 0x{:X}\n"), item, offset);
+                    Unreal::UField::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("UEngine\n"));
+                uint32_t uengine_size = retrieve_vtable_layout_from_ini(STR("UEngine"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, uobjectbase_size, uobjectbaseutility_size, uobject_size);
+                    Output::send(STR("UEngine::{} = 0x{:X}\n"), item, offset);
+                    Unreal::UEngine::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("UScriptStruct::ICppStructOps\n"));
+                retrieve_vtable_layout_from_ini(STR("UScriptStruct::ICppStructOps"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, 0);
+                    Output::send(STR("UScriptStruct::ICppStructOps::{} = 0x{:X}\n"), item, offset);
+                    Unreal::UScriptStruct::ICppStructOps::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("FField\n"));
+                uint32_t ffield_size = retrieve_vtable_layout_from_ini(STR("FField"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, 0);
+                    Output::send(STR("FField::{} = 0x{:X}\n"), item, offset);
+                    Unreal::FField::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("FProperty\n"));
+                uint32_t fproperty_size = retrieve_vtable_layout_from_ini(STR("FProperty"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset{};
+                    if (Unreal::Version::IsBelow(4, 25))
+                    {
+                        offset = calculate_virtual_function_offset(index, uobjectbase_size, uobjectbaseutility_size, uobject_size, ufield_size);
+                    }
+                    else
+                    {
+                        offset = calculate_virtual_function_offset(index, ffield_size);
+                    }
+                    Output::send(STR("FProperty::{} = 0x{:X}\n"), item, offset);
+                    Unreal::FProperty::VTableLayoutMap.emplace(item, offset);
+                });
+
+                // If the engine version is <4.25 then the inheritance is different and we must take that into consideration.
+                if (Unreal::Version::IsBelow(4, 25))
+                {
+                    fproperty_size = uobjectbase_size + uobjectbaseutility_size + uobject_size + ufield_size + fproperty_size;
+                }
+                else
+                {
+                    fproperty_size = ffield_size + fproperty_size;
+                }
+
+                Output::send<Color::Blue>(STR("FNumericProperty\n"));
+                retrieve_vtable_layout_from_ini(STR("FNumericProperty"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, fproperty_size);
+                    Output::send(STR("FNumericProperty::{} = 0x{:X}\n"), item, offset);
+                    Unreal::FNumericProperty::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("FMulticastDelegateProperty\n"));
+                retrieve_vtable_layout_from_ini(STR("FMulticastDelegateProperty"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, fproperty_size);
+                    Output::send(STR("FMulticastDelegateProperty::{} = 0x{:X}\n"), item, offset);
+                    Unreal::FMulticastDelegateProperty::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("FObjectPropertyBase\n"));
+                retrieve_vtable_layout_from_ini(STR("FObjectPropertyBase"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, fproperty_size);
+                    Output::send(STR("FObjectPropertyBase::{} = 0x{:X}\n"), item, offset);
+                    Unreal::FObjectPropertyBase::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("UStruct\n"));
+                retrieve_vtable_layout_from_ini(STR("UStruct"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, uobjectbase_size, uobjectbaseutility_size, uobject_size, ufield_size);
+                    Output::send(STR("UStruct::{} = 0x{:X}\n"), item, offset);
+                    Unreal::UStruct::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("FOutputDevice\n"));
+                retrieve_vtable_layout_from_ini(STR("FOutputDevice"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, 0);
+                    Output::send(STR("FOutputDevice::{} = 0x{:X}\n"), item, offset);
+                    Unreal::FOutputDevice::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("FMalloc\n"));
+                retrieve_vtable_layout_from_ini(STR("FMalloc"), [&](uint32_t index, File::StringType& item) {
+                    // We don't support FExec, so we're manually telling it the size.
+                    static constexpr uint32_t fexec_size = 1;
+                    uint32_t offset = calculate_virtual_function_offset(index, fexec_size);
+                    Output::send(STR("FMalloc::{} = 0x{:X}\n"), item, offset);
+                    Unreal::FMalloc::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("AActor\n"));
+                uint32_t aactor_size = retrieve_vtable_layout_from_ini(STR("AActor"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, uobjectbase_size, uobjectbaseutility_size, uobject_size);
+                    Output::send(STR("AActor::{} = 0x{:X}\n"), item, offset);
+                    Unreal::AActor::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("AGameModeBase\n"));
+                uint32_t agamemodebase_size = retrieve_vtable_layout_from_ini(STR("AGameModeBase"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, uobjectbase_size, uobjectbaseutility_size, uobject_size, aactor_size);
+                    Output::send(STR("AGameModeBase::{} = 0x{:X}\n"), item, offset);
+                    Unreal::AGameModeBase::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("AGameMode\n"));
+                retrieve_vtable_layout_from_ini(STR("AGameMode"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index,
+                                                                        Unreal::Version::IsAtLeast(4, 14)
+                                                                        ? uobjectbase_size,
+                                                                        uobjectbaseutility_size,
+                                                                        uobject_size,
+                                                                        aactor_size,
+                                                                        agamemodebase_size
+                                                                        : uobjectbase_size,
+                                                                        uobjectbaseutility_size,
+                                                                        uobject_size,
+                                                                        aactor_size);
+                    Output::send(STR("AGameMode::{} = 0x{:X}\n"), item, offset);
+                    Unreal::AGameMode::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("UPlayer\n"));
+                uint32_t uplayer_size = retrieve_vtable_layout_from_ini(STR("UPlayer"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, uobjectbase_size, uobjectbaseutility_size, uobject_size);
+                    Output::send(STR("UPlayer::{} = 0x{:X}\n"), item, offset);
+                    Unreal::UPlayer::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("ULocalPlayer\n"));
+                retrieve_vtable_layout_from_ini(STR("ULocalPlayer"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, uobjectbase_size, uobjectbaseutility_size, uobject_size, uplayer_size);
+                    Output::send(STR("ULocalPlayer::{} = 0x{:X}\n"), item, offset);
+                    Unreal::ULocalPlayer::VTableLayoutMap.emplace(item, offset);
+                });
+
+                Output::send<Color::Blue>(STR("UDataTable\n"));
+                retrieve_vtable_layout_from_ini(STR("UDataTable"), [&](uint32_t index, File::StringType& item) {
+                    uint32_t offset = calculate_virtual_function_offset(index, uobjectbase_size, uobjectbaseutility_size, uobject_size, uplayer_size);
+                    Output::send(STR("UDataTable::{} = 0x{:X}\n"), item, offset);
+                    Unreal::UDataTable::VTableLayoutMap.emplace(item, offset);
+                });
+
+                file.close();
+            }
+        });
+#endif
+
+        config.bHookProcessInternal = settings_manager.Hooks.HookProcessInternal;
+        config.bHookProcessLocalScriptFunction = settings_manager.Hooks.HookProcessLocalScriptFunction;
+        config.bHookLoadMap = settings_manager.Hooks.HookLoadMap;
+        config.bHookInitGameState = settings_manager.Hooks.HookInitGameState;
+        config.bHookCallFunctionByNameWithArguments = settings_manager.Hooks.HookCallFunctionByNameWithArguments;
+        config.bHookBeginPlay = settings_manager.Hooks.HookBeginPlay;
+        config.bHookEndPlay = settings_manager.Hooks.HookEndPlay;
+        config.bHookLocalPlayerExec = settings_manager.Hooks.HookLocalPlayerExec;
+        config.bHookAActorTick = settings_manager.Hooks.HookAActorTick;
+        config.bHookEngineTick = settings_manager.Hooks.HookEngineTick;
+        config.EngineTickResolveMethod = settings_manager.Hooks.EngineTickResolveMethod;
+        config.bHookGameViewportClientTick = settings_manager.Hooks.HookGameViewportClientTick;
+        config.bHookUObjectProcessEvent = settings_manager.Hooks.HookUObjectProcessEvent;
+        config.bHookProcessConsoleExec = settings_manager.Hooks.HookProcessConsoleExec;
+        config.bHookUStructLink = settings_manager.Hooks.HookUStructLink;
+        config.FExecVTableOffsetInLocalPlayer = settings_manager.Hooks.FExecVTableOffsetInLocalPlayer;
+        config.FNameToStringMethod = settings_manager.General.DefaultFNameToStringMethod;
+        config.DebugBuild = settings_manager.EngineVersionOverride.DebugBuild;
+        config.Stats = settings_manager.EngineVersionOverride.Stats;
+        if (settings_manager.General.DoEarlyScan)
+        {
+            // Scan a single time while the game thread is locked after UE4SS is attached.
+            Unreal::UnrealInitializer::PreInitialize(config);
+            try
+            {
+                Unreal::UnrealInitializer::ScanGame();
+            }
+            catch (const Unreal::UnrealInitializer::StartupCancelled&)
+            {
+                throw;
+            }
+            catch (const Unreal::UnrealInitializer::StartupDeadlineExceeded&)
+            {
+                throw;
+            }
+            catch (std::runtime_error&)
+            {
+                // No work to be done here. Error is non-fatal, just let the 'Initialize' function take it from here.
+            }
+        }
+        cpp_mods_done_loading.store(true);
+        cpp_mods_done_loading.notify_one();
+        // Continuous scanning, and finish initializing after the game thread is unlocked.
+        Unreal::UnrealInitializer::Initialize(config);
+
+        output_all_member_offsets(IsCoalesced::Yes);
+
+        if (settings_manager.General.ForceGUObjectArrayForIteration)
+        {
+            Output::send<LogLevel::Warning>(STR("[HashTables] Iteration forced to GUObjectArray by settings\n"));
+        }
+        else if (Unreal::FUObjectHashTables::IsConfigured())
+        {
+            // The game thread edits the tables without locking, so the walk has to happen on it
+            if (UE4SSRuntime::IsEngineTickAvailable())
+            {
+                Unreal::Hook::RegisterEngineTickPostCallback(
+                        [](auto&, ...) {
+                            static bool Done = false;
+                            if (!Done)
+                            {
+                                Done = true;
+                                if (Unreal::FUObjectHashTables::RunSelfTest())
+                                {
+                                    Unreal::UnrealInitializer::RetireUObjectArrayCache();
+                                }
+                            }
+                        },
+                        {false, false, STR("UE4SS"), STR("HashTableSelfTest")});
+            }
+            else if (Unreal::FUObjectHashTables::RunSelfTest())
+            {
+                Unreal::UnrealInitializer::RetireUObjectArrayCache();
+            }
+        }
+        else
+        {
+            Output::send<LogLevel::Warning>(STR("[HashTables] FUObjectHashTables unavailable, object lookups use GUObjectArray\n"));
+        }
+
+        bool can_create_custom_events{true};
+        if (!UObject::ProcessLocalScriptFunctionInternal.is_ready() && Unreal::Version::IsAtLeast(4, 22))
+        {
+            can_create_custom_events = false;
+            Output::send<LogLevel::Warning>(STR("ProcessLocalScriptFunction is not available, the following features will be unavailable:\n"));
+        }
+        else if (!UObject::ProcessInternalInternal.is_ready() && Unreal::Version::IsBelow(4, 22))
+        {
+            can_create_custom_events = false;
+            Output::send<LogLevel::Warning>(STR("ProcessInternal is not available, the following features will be unavailable:\n"));
+        }
+        if (!can_create_custom_events)
+        {
+            Output::send<LogLevel::Warning>(STR("<Put function here responsible for creating custom UFunctions or events for BPs>\n"));
+        }
+        if (!Unreal::GNatives_Internal)
+        {
+            Output::send<LogLevel::Warning>(STR("GNatives not found, you will experience limited hooking functionality in certain scenarios.\n"));
+        }
+    }
+
+    auto UE4SSProgram::share_lua_functions() -> void
+    {
+        m_shared_functions.set_script_variable_int32_function = &LuaLibrary::set_script_variable_int32;
+        m_shared_functions.set_script_variable_default_data_function = &LuaLibrary::set_script_variable_default_data;
+        m_shared_functions.call_script_function_function = &LuaLibrary::call_script_function;
+        m_shared_functions.is_ue4ss_initialized_function = &LuaLibrary::is_ue4ss_initialized;
+        Output::send(STR("m_shared_functions: {}\n"), static_cast<void*>(&m_shared_functions));
+    }
+
+#ifndef __PROSPERO__
+    static bool s_gui_initialized_for_game_thread{};
+    static bool s_gui_initializing_for_game_thread{};
+    auto gui_render_thread_tick() -> void
+    {
+        if (UE4SSProgram::settings_manager.Debug.RenderMode == GUI::RenderMode::ExternalThread)
+        {
+            return;
+        }
+        std::lock_guard guard(UE4SSProgram::get_program().m_render_thread_mutex);
+        if (UE4SSProgram::get_program().get_debugging_ui().exit_requested())
+        {
+            UE4SSProgram::get_program().get_debugging_ui().uninitialize();
+            s_gui_initialized_for_game_thread = false;
+            return;
+        }
+        if (!UE4SSProgram::get_program().get_debugging_ui().is_open())
+        {
+            return;
+        }
+        if (!s_gui_initialized_for_game_thread)
+        {
+            GUI::gui_thread(std::nullopt, &UE4SSProgram::get_program().get_debugging_ui());
+            s_gui_initialized_for_game_thread = true;
+        }
+        if (s_gui_initializing_for_game_thread)
+        {
+            s_gui_initializing_for_game_thread = false;
+        }
+        UE4SSProgram::get_program().get_debugging_ui().main_loop_internal();
+    }
+
+#endif
+    auto UE4SSProgram::on_program_start() -> void
+    {
+        ProfilerScope();
+        using namespace Unreal;
+
+        // [l25] runtime-phase tag (Claude l25 item 6): first observable proof the
+        // program-start phase was entered on the event-loop thread; the lua-mod
+        // install/start chain (install_lua_mods / LuaMod::on_program_start /
+        // start_lua_mods) runs further down in this same function.
+        Output::send(STR("[l25] on_program_start entered\n"));
+        diagnostic_event("on_program_start_entered", 1u);
+
+#ifndef __PROSPERO__
+        if (settings_manager.Debug.RenderMode == GUI::RenderMode::EngineTick)
+        {
+            Hook::RegisterEngineTickPostCallback([](auto&,...){gui_render_thread_tick(); }, {false, false, STR("UE4SS"), STR("ImGuiRenderHook")});
+        }
+        else if (settings_manager.Debug.RenderMode == GUI::RenderMode::GameViewportClientTick)
+        {
+            Hook::RegisterGameViewportClientTickPostCallback([](auto&,...){gui_render_thread_tick(); }, {false, false, STR("UE4SS"), STR("ImGuiRenderHook")});
+        }
+
+        if (settings_manager.Debug.DebugConsoleEnabled)
+        {
+            if (settings_manager.General.UseUObjectArrayCache)
+            {
+                m_debugging_gui.get_live_view().set_listeners_allowed(true);
+            }
+            else
+            {
+                m_debugging_gui.get_live_view().set_listeners_allowed(false);
+            }
+            register_keydown_event(settings_manager.Debug.ToggleGUIKey, {Input::ModifierKey::CONTROL}, [&]() {
+                TRY([&] {
+                    std::lock_guard guard(m_render_thread_mutex);
+                    if (s_gui_initializing_for_game_thread)
+                    {
+                        Output::send<LogLevel::Verbose>(STR("Cancelled GUI toggle during GUI initialization.\n"));
+                        return;
+                    }
+                    auto was_gui_open = get_debugging_ui().is_open();
+                    stop_render_thread();
+                    if (!was_gui_open)
+                    {
+                        switch (settings_manager.Debug.RenderMode)
+                        {
+                        case GUI::RenderMode::ExternalThread:
+                            m_render_thread = std::jthread{&GUI::gui_thread, &m_debugging_gui};
+                            break;
+                        case GUI::RenderMode::EngineTick:
+                        case GUI::RenderMode::GameViewportClientTick:
+                            // The hooked game function will pick up on the window being "open", and start rendering.
+                            s_gui_initialized_for_game_thread = false;
+                            s_gui_initializing_for_game_thread = true;
+                            get_debugging_ui().set_open(true);
+                            break;
+                        }
+                        fire_ui_init_for_cpp_mods();
+                    }
+                });
+            });
+        }
+
+#endif
+#ifdef TIME_FUNCTION_MACRO_ENABLED
+        register_keydown_event(Input::Key::Y, {Input::ModifierKey::CONTROL}, [&]() {
+            if (FunctionTimerFrame::s_timer_enabled)
+            {
+                FunctionTimerFrame::stop_profiling();
+                FunctionTimerFrame::dump_profile();
+                Output::send(STR("Profiler stopped & dumped\n"));
+            }
+            else
+            {
+                FunctionTimerFrame::start_profiling();
+                Output::send(STR("Profiler started\n"));
+            }
+        });
+#endif
+
+        TRY([&] {
+            ObjectDumper::init();
+            if (settings_manager.General.EnableHotReloadSystem)
+            {
+                register_keydown_event(settings_manager.General.HotReloadKey, {Input::ModifierKey::CONTROL}, [&]() {
+                    TRY([&] {
+                        queue_reinstall_mods();
+                    });
+                });
+            }
+            if ((settings_manager.ObjectDumper.LoadAllAssetsBeforeDumpingObjects || settings_manager.CXXHeaderGenerator.LoadAllAssetsBeforeGeneratingCXXHeaders) &&
+                Unreal::Version::IsBelow(4, 17))
+            {
+                Output::send<LogLevel::Warning>(
+                        STR("FAssetData not available in <4.17, ignoring 'LoadAllAssetsBeforeDumpingObjects' & 'LoadAllAssetsBeforeGeneratingCXXHeaders'."));
+            }
+            else if (!bFAssetDataAvailable)
+            {
+                Output::send<LogLevel::Warning>(
+                        STR("FAssetData not available, ignoring 'LoadAllAssetsBeforeDumpingObjects' & 'LoadAllAssetsBeforeGeneratingCXXHeaders'."));
+            }
+
+#if defined(HAS_INPUT) && !defined(__PROSPERO__)
+            m_input_handler.init();
+            if (!settings_manager.General.InputSource.empty())
+            {
+                if (m_input_handler.set_input_source(to_string(settings_manager.General.InputSource)))
+                {
+                    Output::send(STR("Input source set to: {}\n"), to_generic_string(m_input_handler.get_current_input_source()));
+                }
+                else
+                {
+                    Output::send<LogLevel::Error>(STR("Failed to set input source to: {}\n"), to_string(settings_manager.General.InputSource));
+                }
+            }
+#endif
+
+            // Set default ExecuteInGameThread method from settings
+            LuaMod::m_default_game_thread_method = settings_manager.General.DefaultExecuteInGameThreadMethod;
+        });
+
+        bool allow_mod_callbacks = true;
+#ifdef __PROSPERO__
+        allow_mod_callbacks = RC::Platform::ShouldRunNativeModCallbacks(
+            true, m_native_mods_started.load(std::memory_order_acquire));
+#endif
+        if (allow_mod_callbacks)
+        {
+            // [L27][ET nul-throw-armor] FIX 3 (per-step catch-and-log armor,
+            // the Phase 5/6 pattern): the old single TRY block meant ONE
+            // throw anywhere between install and start (e.g. the carrier-
+            // arming StaticFindObject refusal that escaped LuaMod::on_program_start
+            // before its own armor) silently skipped EVERY later step —
+            // start_lua_mods never ran and mods-started stayed 0 while the
+            // event loop lived. Each mod-start step is now individually
+            // caught, logged, and marked; mods start even when a step fails.
+            bool install_ok = true;
+#ifdef __PROSPERO__
+            // [R9-MEM] must run before install_lua_mods(): a Lua state keeps the
+            // backing store it is created with (launch-2 order, console-proven:
+            // GMalloc bound at decoded:518/659, install_lua_mods at decoded:772).
+            r9_install_lua_backing_allocator();
+#endif
+            try
+            {
+                install_lua_mods();
+            }
+            catch (const std::exception& e)
+            {
+                install_ok = false;
+                Output::send<LogLevel::Error>(STR("[L25] install_lua_mods exception: {}\n"), ensure_str(std::string{e.what()}));
+            }
+            catch (...)
+            {
+                install_ok = false;
+                Output::send<LogLevel::Error>(STR("[L25] install_lua_mods exception: unknown\n"));
+            }
+            Output::send(STR("[L25] install_lua_mods result: {}\n"), install_ok ? STR("ok") : STR("exception"));
+
+            // Carrier arming + listener registration live at the top of
+            // LuaMod::on_program_start and carry their own armor + the
+            // '[L25] carrier arming result: {}' marker there.
+            try
+            {
+                LuaMod::on_program_start();
+            }
+            catch (const std::exception& e)
+            {
+                Output::send<LogLevel::Error>(STR("[L25] LuaMod on_program_start exception: {}\n"), ensure_str(std::string{e.what()}));
+            }
+            catch (...)
+            {
+                Output::send<LogLevel::Error>(STR("[L25] LuaMod on_program_start exception: unknown\n"));
+            }
+
+            bool start_ok = true;
+            try
+            {
+                fire_program_start_for_cpp_mods();
+                start_lua_mods();
+            }
+            catch (const std::exception& e)
+            {
+                start_ok = false;
+                Output::send<LogLevel::Error>(STR("[L25] mod start exception: {}\n"), ensure_str(std::string{e.what()}));
+            }
+            catch (...)
+            {
+                start_ok = false;
+                Output::send<LogLevel::Error>(STR("[L25] mod start exception: unknown\n"));
+            }
+            int32_t started_mod_count{};
+            for (const auto& mod : m_mods)
+            {
+                if (mod->is_started()) { ++started_mod_count; }
+            }
+            Output::send(STR("[L25] start gate: {} started mod(s){}\n"),
+                         started_mod_count, start_ok ? STR("") : STR(" (start exception)"));
+#ifdef __PROSPERO__
+            {
+                // [EARLY-4] (cap #4) one-shot timeline marker: steady-clock ms in the log, its low 32 bits
+                // into the diagnostic sink (whose own t_ms is CLOCK_MONOTONIC) -> same-run clock proof.
+                const int64_t early_t = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+                diagnostic_event("early_mods_started", static_cast<unsigned int>(static_cast<uint64_t>(early_t) & 0xFFFF'FFFFu));
+                Output::send(STR("[EARLY] stage=mods-started t_ms={} mods={}\n"), early_t, started_mod_count);
+                early4_mods_started(); // LuaMod.cpp [WORLD-EV]: the startup-registration window closes at the next feed
+            }
+#endif
+        }
+
+        if (settings_manager.General.EnableDebugKeyBindings)
+        {
+            register_keydown_event(Input::Key::NUM_NINE, {Input::ModifierKey::CONTROL}, [&]() {
+                generate_uht_compatible_headers();
+            });
+        }
+    }
+
+    auto UE4SSProgram::update() -> void
+    {
+#ifdef __PROSPERO__
+        try
+        {
+#endif
+
+        ProfilerSetThreadName("UE4SS-UpdateThread");
+        m_event_loop_thread_id = std::this_thread::get_id();
+
+        // [l25] runtime-phase tag (Claude l25 item 6): the m_event_loop jthread
+        // (constructed in init() at the UE4SSProgram.cpp:715 region) has begun
+        // executing update() - reaching this line proves the whole
+        // UnrealInitializer startup path completed and the loop thread is live.
+        Output::send(STR("[l25] event loop started\n"));
+        diagnostic_event("event_loop_started", 1u);
+
+#ifdef __PROSPERO__
+        if (m_shutdown_requested->load(std::memory_order_acquire))
+            return;
+#endif
+        on_program_start();
+
+#ifndef __PROSPERO__
+        FilesystemWatcher filesystem_watcher{};
+        if (settings_manager.General.EnableAutoReloadingLuaMods)
+        {
+            for (const auto& mod : m_mods)
+            {
+                if (dynamic_cast<CppMod*>(mod.get()))
+                {
+                    filesystem_watcher.add_dir(std::filesystem::path{get_mods_directory()} / mod->get_name() / "dlls");
+                }
+                else if (dynamic_cast<LuaMod*>(mod.get()))
+                {
+                    filesystem_watcher.add_dir(std::filesystem::path{get_mods_directory()} / mod->get_name() / "Scripts");
+                }
+            }
+            filesystem_watcher.start_async_polling([&](const std::filesystem::path& file, bool match_all) {
+                ScopedThreadSynchronizer thread_synchronizer{filesystem_watcher.get_thread_state()};
+                const auto mod_name = file.parent_path().filename();
+                auto dir_name = file.filename().string();
+                const auto is_cpp_mod = String::iequal(dir_name, "dlls");
+                if (is_cpp_mod)
+                {
+                    auto staged_file = file / mod_name;
+                    staged_file.replace_extension(".dll");
+                    if (!std::filesystem::exists(staged_file))
+                    {
+                        return;
+                    }
+                    // TODO: Unload the dll (uninstall).
+                    //       Delete 'main.dll'.
+                    //       Rename 'staged_file' to 'main.dll'.
+                    //       Load 'main.dll' (install & start).
+
+                    // TODO: To reload C++ mods, we need to add a way to unregister hooks, and then C++ mods need to unregister on they get notified that they're getting unloaded.
+                    //       For Lua mods, there's no notification, but we track all the hooks internally, so we can unregister automatically, we just need to
+                    //       call Lua::Uninstall, and We must also remove the keybinds like we do in UE4SSProgram::reinstall_mods.
+                    //       Unsure about loading and starting mods again.
+                }
+                else
+                {
+                    auto mod = find_lua_mod_by_name(ensure_str(mod_name), IsInstalled::Yes, IsStarted::Yes);
+                    if (!mod)
+                    {
+                        return;
+                    }
+                    m_pause_events_processing = true;
+                    m_mods_are_being_touched = true;
+                    mod->uninstall();
+                    auto& mod_ref = *std::ranges::find_if(m_mods, [&](const std::unique_ptr<Mod>& mod_ptr) {
+                        return mod_ptr.get() == mod;
+                    });
+                    if (!mod_ref)
+                    {
+                        return;
+                    }
+                    mod_ref = std::make_unique<LuaMod>(*this, StringType{mod_ref->get_name()}, mod_ref->get_path());
+                    m_pause_events_processing = false;
+                    Output::send(STR("Auto-reloading Lua mod '{}'\n"), mod_ref->get_name());
+                    mod_ref->start_mod();
+                    m_mods_are_being_touched = false;
+                }
+            });
+        }
+
+#endif
+        Output::send(STR("Event loop start\n"));
+        // [L27][ET nul-throw-armor] FIX 3: the first three update() ticks
+        // only — bounded proof the loop body actually cycles (on_program_start
+        // completed or armored-out before the loop) without per-tick log spam.
+        int32_t update_ticks_logged{};
+#ifdef __PROSPERO__
+        for (m_processing_events = !m_shutdown_requested->load();
+             m_processing_events && !m_shutdown_requested->load();)
+#else
+        for (m_processing_events = true; m_processing_events;)
+#endif
+        {
+            if (update_ticks_logged < 3)
+            {
+                ++update_ticks_logged;
+                Output::send(STR("[L25] update tick {}\n"), update_ticks_logged);
+            }
+            if (!Unreal::UnrealInitializer::IsInitialized())
+            {
+                m_processing_events = false;
+                break;
+            }
+
+#if defined(__PROSPERO__)
+            L23GameThreadProbe::Poll();
+#endif
+            if (m_pause_events_processing)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                continue;
+            }
+
+            if (!is_queue_empty())
+            {
+                ProfilerScopeNamed("event processing");
+
+#ifdef __PROSPERO__
+                static constexpr size_t max_events_executed_per_frame = 5;
+                std::vector<EventCallable> batch;
+                {
+                    std::lock_guard<std::mutex> guard(m_event_queue_mutex);
+                    const auto count = std::min(max_events_executed_per_frame, m_queued_events.size());
+                    batch.reserve(count);
+                    std::move(m_queued_events.begin(), m_queued_events.begin() + count, std::back_inserter(batch));
+                    m_queued_events.erase(m_queued_events.begin(), m_queued_events.begin() + count);
+                }
+                // Callbacks may enqueue more work. Never invoke them under the
+                // queue lock; newly enqueued work remains for a subsequent batch.
+                for (auto& event : batch)
+                    event();
+#else
+                static constexpr size_t max_events_executed_per_frame = 5;
+                size_t num_events_executed{};
+                std::lock_guard<std::mutex> guard(m_event_queue_mutex);
+                m_queued_events.erase(std::remove_if(m_queued_events.begin(),
+                                                     m_queued_events.end(),
+                                                     [&](EventCallable& event) -> bool {
+                                                         if (num_events_executed >= max_events_executed_per_frame)
+                                                         {
+                                                             return false;
+                                                         }
+                                                         ++num_events_executed;
+                                                         event();
+                                                         return true;
+                                                     }),
+                                      m_queued_events.end());
+#endif
+            }
+
+            // Commented out because this system (turn off hotkeys when in-game console is open) it doesn't work properly.
+            /*
+            auto* player_controller = get_player_controller();
+            if (player_controller)
+            {
+                auto** player = player_controller->GetValuePtrByPropertyName<UObject*>(STR("Player"));
+                if (player && *player)
+                {
+                    auto** viewportclient = (*player)->GetValuePtrByPropertyName<UObject*>(STR("ViewportClient"));
+                    if (viewportclient && *viewportclient)
+                    {
+                        auto** console = (*viewportclient)->GetValuePtrByPropertyName<UObject*>(STR("ViewportConsole"));
+                        if (console && *console)
+                        {
+                            auto* console_state = std::bit_cast<FName*>(static_cast<uint8_t*>((*console)->GetValuePtrByPropertyNameInChain(STR("HistoryBuffer"))) + 0x70);
+                            m_input_handler.set_allow_input(console_state && *console_state == Unreal::NAME_None);
+                        }
+                    }
+                }
+            }
+            //*/
+#ifdef HAS_INPUT
+            m_input_handler.process_event();
+#endif
+            {
+                ProfilerScopeNamed("mod update processing");
+
+                for (auto& mod : m_mods)
+                {
+                    if (mod->is_started())
+                    {
+                        mod->fire_update();
+                    }
+                }
+            }
+
+#ifndef __PROSPERO__
+            if (settings_manager.General.EnableAutoReloadingLuaMods)
+            {
+                // Process any mod file changes, and wait until done.
+                process_sync_request(filesystem_watcher.get_thread_state());
+            }
+
+#endif
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            ProfilerFrameMark();
+        }
+        m_processing_events = false;
+        Output::send(STR("Event loop end\n"));
+#ifdef __PROSPERO__
+        }
+        catch (const std::exception& error)
+        {
+            copy_error_into_message(error.what());
+            request_shutdown();
+        }
+        catch (...)
+        {
+            copy_error_into_message("Native UE4SS event loop failed with an unknown exception");
+            request_shutdown();
+        }
+#endif
+    }
+
+    auto UE4SSProgram::setup_unreal_properties() -> void
+    {
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("ObjectProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_objectproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("ClassProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_classproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("Int8Property"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_int8property);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("Int16Property"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_int16property);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("IntProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_intproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("Int64Property"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_int64property);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("ByteProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_byteproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("UInt16Property"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_uint16property);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("UInt32Property"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_uint32property);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("UInt64Property"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_uint64property);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("StructProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_structproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("ArrayProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_arrayproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("SetProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_setproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("MapProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_mapproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("FloatProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_floatproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("DoubleProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_doubleproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("BoolProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_boolproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("EnumProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_enumproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("WeakObjectProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_weakobjectproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("NameProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_nameproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("TextProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_textproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("StrProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_strproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("SoftObjectProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_softobjectproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("SoftClassProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_softobjectproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("InterfaceProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_interfaceproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("DelegateProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_delegateproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("MulticastDelegateProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_multicastdelegateproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("MulticastInlineDelegateProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_multicastdelegateproperty);
+        LuaType::StaticState::m_property_value_pushers.emplace(FName(STR("MulticastSparseDelegateProperty"), Unreal::FNAME_Find).GetComparisonIndex(), &LuaType::push_multicastsparsedelegateproperty);
+    }
+
+    // PS5 codecvt discipline (proven live, pids 466/492/700): every
+    // wstring_convert-based wide<->narrow route garbles (NUL-interleave or
+    // [::2]). Native mod keys/names are pure ASCII UTF-8; widen byte-by-byte
+    // at every native-source boundary. Hoisted from setup_mods so the whole
+    // lifecycle (setup, start, reinstall, uninstall-by-name) shares one
+    // conversion (worker-lifecycle-conversion P0/P1).
+    [[nodiscard]] static auto widen_ascii_native_key(const std::string& narrow) -> StringType
+    {
+        StringType wide;
+        wide.reserve(narrow.size());
+        for (const char c : narrow)
+        {
+            wide.push_back(static_cast<File::CharType>(static_cast<unsigned char>(c)));
+        }
+        return wide;
+    }
+
+#ifdef __PROSPERO__
+    // [CAP09 B1] Startup order of the native C++ mods created by setup_mods
+    // under the activation snapshot (one program per process). Narrow ASCII
+    // names, widened with widen_ascii_native_key at every lookup.
+    static auto native_cpp_start_order() -> std::vector<std::string>&
+    {
+        static std::vector<std::string> order;
+        return order;
+    }
+
+    // [CAP09 B1] Start the snapshot-enabled C++ mods in startup order. One mod
+    // that refuses or throws is logged and skipped; it never stops the others
+    // or the Lua mods (an escaping exception would abort the whole runtime).
+    static auto start_native_cpp_mods_in_order() -> void
+    {
+        for (const auto& name : native_cpp_start_order())
+        {
+            const auto wide_name = widen_ascii_native_key(name);
+            auto* mod = UE4SSProgram::find_mod_by_name<CppMod>(wide_name, UE4SSProgram::IsInstalled::Yes);
+            if (!mod)
+            {
+                Output::send<LogLevel::Warning>(STR("[NMOD] {}: not started (module was not loaded, see the line above)\n"), wide_name);
+                continue;
+            }
+            if (mod->is_started()) continue;
+            try
+            {
+                mod->start_mod();
+                Output::send(STR("[NMOD] {}: start returned started={}\n"), wide_name, mod->is_started() ? STR("yes") : STR("no"));
+            }
+            catch (const std::exception& error)
+            {
+                Output::send<LogLevel::Error>(STR("[NMOD] {}: start refused: {}\n"), wide_name, widen_ascii_native_key(std::string{error.what()}));
+            }
+            catch (...)
+            {
+                Output::send<LogLevel::Error>(STR("[NMOD] {}: start refused: unknown exception\n"), wide_name);
+            }
+        }
+    }
+#endif
+
+    auto UE4SSProgram::setup_mods() -> void
+    {
+        ProfilerScope();
+
+        Output::send(STR("Setting up mods...\n"));
+
+#ifdef __PROSPERO__
+        if (m_native_context.mod_source)
+        {
+            // widen_ascii hoisted: the inline lambda below now delegates to
+            // the shared helper (same conversion, one definition site).
+            auto widen_ascii = [](const std::string& narrow) -> StringType {
+                return widen_ascii_native_key(narrow);
+            };
+            for (const auto& mod : m_native_context.mod_source->lua_mods())
+            {
+                auto name = widen_ascii(mod.name);
+                if (!find_mod_by_name<LuaMod>(name))
+                    m_mods.emplace_back(std::make_unique<LuaMod>(*this, std::move(name), widen_ascii(mod.path)));
+            }
+            // [CAP09 B1] Native C++ mods. Enabled = the snapshot (mods.txt
+            // "Name : 1" or the mod's enabled.txt, as upstream UE4SS); the PRX
+            // comes from <mods directory>/<Name>/dlls/ on disk. This runs inside
+            // start_native_mods(), i.e. during the runtime's module_start, the
+            // only phase in which /data is known to be reachable (backend
+            // comment; launch 14 shows /data creation failing later). The
+            // CppMod constructor loads the PRX (sceKernelLoadStartModule).
+            // Fail closed and contained: a planner error skips C++ mods only;
+            // an error in one mod skips that mod only [CAP09 F2].
+            native_cpp_start_order().clear();
+            try
+            {
+                const auto& source = *m_native_context.mod_source;
+                const std::filesystem::path mods_dir = m_mods_directories.empty() ? std::filesystem::path{} : m_mods_directories.front();
+                std::optional<std::string_view> mods_txt;
+                const auto mods_txt_file = source.read("ue4ss/Mods/mods.txt");
+                if (mods_txt_file) mods_txt = mods_txt_file->bytes;
+                const auto inventory = Platform::NativeMods::discover_cpp_mods(mods_dir, mods_txt, [&source](std::string_view mod_name) {
+                    return source.read("ue4ss/Mods/" + std::string(mod_name) + "/enabled.txt").has_value();
+                });
+                for (const auto& note : inventory.notes)
+                    Output::send(STR("[NMOD] {}\n"), widen_ascii(note));
+                // [CAP09 F2] One try/catch PER candidate: a refusal or exception
+                // (bad_alloc in a log line, a throwing constructor) skips that
+                // mod only, never the ones after it. The start-order row is
+                // written BEFORE the module is created and kept, so a mod that is
+                // in m_mods is always in the start order (no loaded-but-never-
+                // started mod); a row whose module was not kept is reported by
+                // the start step ("not started ... see the line above").
+                for (const auto& candidate : inventory.start_order)
+                {
+                    try
+                    {
+                        auto name = widen_ascii(candidate.name);
+                        if (find_mod_by_name<CppMod>(name)) continue;
+                        auto mod_dir = widen_ascii(candidate.mod_dir.string());
+                        native_cpp_start_order().push_back(candidate.name);
+                        Output::send(STR("[NMOD] loading C++ mod {} from {}/dlls (if the log stops here, the module load hung)\n"), name, mod_dir);
+                        auto mod = std::make_unique<CppMod>(*this, std::move(name), std::move(mod_dir));
+                        const bool installable = mod->is_installable();
+                        m_mods.emplace_back(std::move(mod));
+                        Output::send(STR("[NMOD] load step returned for {} installable={}\n"), widen_ascii(candidate.name),
+                                     installable ? STR("yes") : STR("no"));
+                    }
+                    catch (const std::exception& error)
+                    {
+                        Output::send<LogLevel::Error>(STR("[NMOD] {}: refused: C++ mod setup failed: {}\n"), widen_ascii(candidate.name),
+                                                      widen_ascii(std::string{error.what()}));
+                    }
+                    catch (...)
+                    {
+                        Output::send<LogLevel::Error>(STR("[NMOD] {}: refused: C++ mod setup failed: unknown exception\n"), widen_ascii(candidate.name));
+                    }
+                }
+            }
+            catch (const std::exception& error)
+            {
+                Output::send<LogLevel::Error>(STR("[NMOD] refused: C++ mod setup failed: {}\n"), widen_ascii(std::string{error.what()}));
+            }
+            catch (...)
+            {
+                Output::send<LogLevel::Error>(STR("[NMOD] refused: C++ mod setup failed: unknown exception\n"));
+            }
+            return;
+        }
+#endif
+        for (const auto& mods_directory : std::ranges::reverse_view(m_mods_directories))
+        {
+            if (!std::filesystem::exists(mods_directory))
+            {
+                Output::send<LogLevel::Warning>(STR("Mods directory doesn't exist, skipping: {}\n"), ensure_str(mods_directory));
+                continue;
+            }
+
+            Output::send(STR("Loading mods from: {}\n"), ensure_str(mods_directory));
+
+            for (const auto& sub_directory : std::filesystem::directory_iterator(mods_directory))
+            {
+                std::error_code ec;
+
+                // Ignore all non-directories
+                if (!sub_directory.is_directory())
+                {
+                    continue;
+                }
+                if (ec.value() != 0)
+                {
+                    set_error("is_directory ran into error %d", ec.value());
+                }
+
+                StringType directory_lowercase = ensure_str(sub_directory.path().stem());
+                std::transform(directory_lowercase.begin(), directory_lowercase.end(), directory_lowercase.begin(), std::towlower);
+
+                if (directory_lowercase == STR("shared"))
+                {
+                    // Do stuff when shared libraries have been implemented
+                }
+                else
+                {
+                    auto mod_name = ensure_str(sub_directory.path().stem());
+                    // Create the mod but don't install it yet
+                    if (!find_mod_by_name<LuaMod>(mod_name) && std::filesystem::exists(sub_directory.path() / "scripts"))
+                        m_mods.emplace_back(std::make_unique<LuaMod>(*this, std::move(mod_name), ensure_str(sub_directory.path())));
+                    if (!find_mod_by_name<CppMod>(mod_name) && std::filesystem::exists(sub_directory.path() / "dlls"))
+                        m_mods.emplace_back(std::make_unique<CppMod>(*this, std::move(mod_name), ensure_str(sub_directory.path())));
+                }
+            }
+        }
+    }
+
+    template <typename ModType>
+    auto install_mods(std::vector<std::unique_ptr<Mod>>& mods) -> void
+    {
+        ProfilerScope();
+
+        for (auto& mod : mods)
+        {
+            if (!dynamic_cast<ModType*>(mod.get()))
+            {
+                continue;
+            }
+
+            bool mod_name_is_taken = std::find_if(mods.begin(), mods.end(), [&](auto& elem) {
+                                         return elem->get_name() == mod->get_name();
+                                     }) == mods.end();
+
+            if (mod_name_is_taken)
+            {
+                mod->set_installable(false);
+                Output::send<LogLevel::Warning>(STR("Mod name '{}' is already in use.\n"), mod->get_name());
+                continue;
+            }
+
+            if (mod->is_installed())
+            {
+                Output::send<LogLevel::Warning>(STR("Tried to install a mod that was already installed, Mod: '{}'\n"), mod->get_name());
+                continue;
+            }
+
+            if (!mod->is_installable())
+            {
+                Output::send<LogLevel::Warning>(STR("Was unable to install mod '{}' for unknown reasons. Mod is not installable.\n"), mod->get_name());
+                continue;
+            }
+
+            mod->set_installed(true);
+        }
+    }
+
+    auto UE4SSProgram::install_cpp_mods() -> void
+    {
+        install_mods<CppMod>(get_program().m_mods);
+    }
+
+    auto UE4SSProgram::install_lua_mods() -> void
+    {
+        install_mods<LuaMod>(get_program().m_mods);
+    }
+
+    auto UE4SSProgram::fire_unreal_init_for_cpp_mods() -> void
+    {
+        ProfilerScope();
+        for (const auto& mod : m_mods)
+        {
+            if (!dynamic_cast<CppMod*>(mod.get()))
+            {
+                continue;
+            }
+            mod->fire_unreal_init();
+        }
+    }
+
+    auto UE4SSProgram::fire_ui_init_for_cpp_mods() -> void
+    {
+        ProfilerScope();
+        for (const auto& mod : m_mods)
+        {
+            if (!dynamic_cast<CppMod*>(mod.get()))
+            {
+                continue;
+            }
+            mod->fire_ui_init();
+        }
+    }
+
+    auto UE4SSProgram::fire_program_start_for_cpp_mods() -> void
+    {
+        ProfilerScope();
+        for (const auto& mod : m_mods)
+        {
+            if (!dynamic_cast<CppMod*>(mod.get()))
+            {
+                continue;
+            }
+            mod->fire_program_start();
+        }
+    }
+
+    auto UE4SSProgram::fire_dll_load_for_cpp_mods(StringViewType dll_name) -> void
+    {
+        for (const auto& mod : m_mods)
+        {
+            if (auto cpp_mod = dynamic_cast<CppMod*>(mod.get()); cpp_mod)
+            {
+#ifdef __PROSPERO__
+                try { cpp_mod->fire_dll_load(dll_name); }
+                catch (const std::exception& error)
+                {
+                    try
+                    {
+                        Output::send<LogLevel::Error>(STR("Native module listener '{}' failed for '{}': {}\n"),
+                            cpp_mod->get_name(), dll_name, ensure_str(error.what()));
+                    }
+                    catch (...) { std::fprintf(stderr, "Native module listener failed: %s\n", error.what()); }
+                }
+                catch (...)
+                {
+                    std::fprintf(stderr, "Native module listener failed with an unknown exception\n");
+                }
+#else
+                cpp_mod->fire_dll_load(dll_name);
+#endif
+            }
+        }
+    }
+
+    auto UE4SSProgram::fire_on_cpp_mods_loaded_for_cpp_mods() -> void
+    {
+        for (const auto& mod : m_mods)
+        {
+            if (auto cpp_mod = dynamic_cast<CppMod*>(mod.get()); cpp_mod)
+            {
+                cpp_mod->fire_on_cpp_mods_loaded();
+            }
+        }
+    }
+
+    auto UE4SSProgram::unregister_keydown_events_for_lua_mod(LuaMod* mod, AllMods all_mods) -> void
+    {
+#ifdef HAS_INPUT
+        m_input_handler.get_events_safe([&](auto& key_set) {
+            std::erase_if(key_set.key_data, [&](auto& item) -> bool {
+                auto& [_, key_data] = item;
+                std::erase_if(key_data, [&](Input::KeyData& key_data) -> bool {
+                    // custom_data == 1: Bind came from Lua, and custom_data2 is a pointer to LuaMod.
+                    // custom_data == 2: Bind came from C++, and custom_data2 is a pointer to KeyDownEventData. Must free it.
+                    return key_data.custom_data == 1 && (all_mods == AllMods::Yes || static_cast<LuaMod*>(key_data.custom_data2) == mod);
+                });
+                return key_data.empty();
+            });
+        });
+#endif
+    }
+
+    template <typename ModType>
+    auto start_mods() -> std::string
+    {
+        ProfilerScope();
+
+#ifdef __PROSPERO__
+        if (const auto& source = UE4SSProgram::get_program().native_mod_source())
+        {
+            if constexpr (std::is_same_v<ModType, LuaMod>)
+                for (const auto& name : source->startup_mod_names())
+                {
+                    // P0 (worker-lifecycle-conversion): startup_mod_names() keys
+                    // are narrow ASCII; ensure_str(name) garbles and the lookup
+                    // silently misses — enabled native mods would never start.
+                    auto mod = UE4SSProgram::find_mod_by_name<LuaMod>(widen_ascii_native_key(name), UE4SSProgram::IsInstalled::Yes);
+                    if (mod && !mod->is_started()) mod->start_mod();
+                }
+            // [CAP09 B1] C++ mods created by setup_mods under the snapshot.
+            if constexpr (std::is_same_v<ModType, CppMod>)
+                start_native_cpp_mods_in_order();
+            return {};
+        }
+#endif
+        // Determine which mods.txt file(s) to parse
+        std::vector<std::filesystem::path> mods_txt_files_to_parse;
+
+        if (!UE4SSProgram::settings_manager.Overrides.ControllingModsTxt.empty())
+        {
+            // If a controlling mods.txt is specified, only use that one
+            auto controlling_path = UE4SSProgram::get_program().make_compatible_path(UE4SSProgram::settings_manager.Overrides.ControllingModsTxt);
+            if (std::filesystem::exists(controlling_path))
+            {
+                mods_txt_files_to_parse.push_back(controlling_path);
+                Output::send(STR("Using controlling mods.txt from: {}\n"), ensure_str(controlling_path));
+            }
+            else
+            {
+                Output::send(STR("Warning: Controlling mods.txt not found at: {}\n"), ensure_str(controlling_path));
+            }
+        }
+        else
+        {
+            // Parse mods.txt from all directories
+            for (const auto& mods_directory : std::ranges::reverse_view(UE4SSProgram::get_program().get_mods_directories()))
+            {
+                if (!std::filesystem::exists(mods_directory))
+                {
+                    continue;
+                }
+
+                auto mods_txt_path = mods_directory / "mods.txt";
+                if (std::filesystem::exists(mods_txt_path))
+                {
+                    mods_txt_files_to_parse.push_back(mods_txt_path);
+                }
+            }
+        }
+
+        // Process each mods.txt file
+        for (const auto& enabled_mods_file : mods_txt_files_to_parse)
+        {
+            // Part #1: Start all mods that are enabled in mods.txt.
+            if (!std::filesystem::exists(enabled_mods_file))
+            {
+                Output::send(STR("No mods.txt file found...\n"));
+            }
+            else
+            {
+                // 'mods.txt' exists, lets parse it
+                Output::send(STR("Starting mods (from mods.txt ({}) load order)...\n"), ensure_str(enabled_mods_file));
+
+                // First, check for BOM using a byte stream
+                std::ifstream bom_check(enabled_mods_file, std::ios::binary);
+                char bom[3] = {0};
+                bom_check.read(bom, 3);
+                bool has_bom = (bom[0] == '\xEF' && bom[1] == '\xBB' && bom[2] == '\xBF');
+                bom_check.close();
+
+                // Now open the actual stream
+                StreamIType mods_stream{enabled_mods_file};
+
+                // If BOM was detected, skip the first "character" (which will be the BOM interpreted as a wide char)
+                if (has_bom)
+                {
+                    wchar_t discard;
+                    mods_stream.get(discard);
+                }
+
+                StringType current_line;
+                while (std::getline(mods_stream, current_line))
+                {
+                    // Don't parse any lines with ';'
+                    if (current_line.find(STR(";")) != current_line.npos)
+                    {
+                        continue;
+                    }
+
+                    // Don't parse if the line is impossibly short (empty lines for example)
+                    if (current_line.size() <= 4)
+                    {
+                        continue;
+                    }
+
+                    // Remove all spaces
+                    auto end = std::remove(current_line.begin(), current_line.end(), STR(' '));
+                    current_line.erase(end, current_line.end());
+
+                    // Parse the line into something that can be converted into proper data
+                    StringType mod_name = explode_by_occurrence(current_line, STR(':'), 1);
+                    StringType mod_enabled = explode_by_occurrence(current_line, STR(':'), ExplodeType::FromEnd);
+
+                    auto mod = UE4SSProgram::find_mod_by_name<ModType>(mod_name, UE4SSProgram::IsInstalled::Yes);
+                    if (!mod || !dynamic_cast<ModType*>(mod) || mod->is_started())
+                    {
+                        continue;
+                    }
+
+                    if (!mod_enabled.empty() && mod_enabled[0] == STR('1'))
+                    {
+                        Output::send(STR("Starting {} mod '{}'\n"), std::is_same_v<ModType, LuaMod> ? STR("Lua") : STR("C++"), mod->get_name().data());
+                        mod->start_mod();
+                    }
+                    else
+                    {
+                        Output::send(STR("Mod '{}' disabled in mods.txt.\n"), mod_name);
+                    }
+                }
+            }
+        }
+
+        // Part #2: Start all mods that have enabled.txt present in the mod directory.
+        for (const auto& mods_directory : UE4SSProgram::get_program().get_mods_directories())
+        {
+            if (!std::filesystem::exists(mods_directory))
+            {
+                continue;
+            }
+
+            Output::send(STR("Starting mods (from enabled.txt ({}), no defined load order)...\n"), ensure_str(mods_directory));
+
+            for (const auto& mod_directory : std::filesystem::directory_iterator(mods_directory))
+            {
+                std::error_code ec{};
+
+                if (!mod_directory.is_directory(ec))
+                {
+                    continue;
+                }
+                if (ec.value() != 0)
+                {
+                    return fmt::format("is_directory ran into error {}", ec.value());
+                }
+
+                if (!std::filesystem::exists(mod_directory.path() / "enabled.txt", ec))
+                {
+                    continue;
+                }
+                if (ec.value() != 0)
+                {
+                    return fmt::format("exists ran into error {}", ec.value());
+                }
+
+                auto mod = UE4SSProgram::find_mod_by_name<ModType>(ensure_str(mod_directory.path().stem()), UE4SSProgram::IsInstalled::Yes);
+                if (!dynamic_cast<ModType*>(mod))
+                {
+                    continue;
+                }
+                if (!mod)
+                {
+                    Output::send<LogLevel::Warning>(STR("Found a mod with enabled.txt but mod has not been installed properly.\n"));
+                    continue;
+                }
+
+                if (mod->is_started())
+                {
+                    continue;
+                }
+
+                Output::send(STR("Mod '{}' has enabled.txt, starting mod.\n"), mod->get_name().data());
+                mod->start_mod();
+            }
+        }
+
+        return {};
+    }
+
+    auto UE4SSProgram::start_lua_mods() -> void
+    {
+        ProfilerScope();
+        auto error_message = start_mods<LuaMod>();
+        if (!error_message.empty())
+        {
+            set_error(error_message.c_str());
+        }
+    }
+
+    auto UE4SSProgram::start_cpp_mods(IsInitialStartup is_initial_startup) -> void
+    {
+        ProfilerScope();
+        auto error_message = start_mods<CppMod>();
+        if (!error_message.empty())
+        {
+            set_error(error_message.c_str());
+        }
+        // If this is the initial startup, notify mods that the UI has initialized.
+        // This isn't completely accurate since the UI will usually have started a while ago.
+        // However, we can't immediately notify mods of this because no mods have been started at that point.
+        // We only need to do this for the initial start of UE4SS because after that, more accurate notifications will happen when the UI is closed an reopened.
+#ifndef __PROSPERO__
+        if (is_initial_startup == IsInitialStartup::Yes && m_render_thread.get_id() != std::this_thread::get_id())
+        {
+            fire_ui_init_for_cpp_mods();
+        }
+#endif
+        fire_on_cpp_mods_loaded_for_cpp_mods();
+    }
+
+    auto UE4SSProgram::uninstall_mods() -> void
+    {
+        ProfilerScope();
+        std::vector<CppMod*> cpp_mods{};
+        std::vector<LuaMod*> lua_mods{};
+        for (auto& mod : m_mods)
+        {
+            if (auto cpp_mod = dynamic_cast<CppMod*>(mod.get()); cpp_mod)
+            {
+                cpp_mods.emplace_back(cpp_mod);
+            }
+            else if (auto lua_mod = dynamic_cast<LuaMod*>(mod.get()); lua_mod)
+            {
+                lua_mods.emplace_back(lua_mod);
+            }
+        }
+
+        for (auto& mod : lua_mods)
+        {
+            // Remove any actions, or we'll get an internal error as the lua ref won't be valid
+#ifdef __PROSPERO__
+            try { mod->uninstall(); }
+            catch (const std::exception& error)
+            {
+                std::fprintf(stderr, "Native mod uninstall failed; unloading is unsafe: %s\n", error.what());
+                std::terminate();
+            }
+            catch (...)
+            {
+                std::fprintf(stderr, "Native mod uninstall failed; unloading is unsafe (unknown exception)\n");
+                std::terminate();
+            }
+#else
+            mod->uninstall();
+#endif
+        }
+
+        for (auto& mod : cpp_mods)
+        {
+            if (!mod->is_installable())
+            {
+                continue;
+            }
+#ifdef __PROSPERO__
+            try { mod->uninstall(); }
+            catch (const std::exception& error)
+            {
+                std::fprintf(stderr, "Native mod uninstall failed; unloading is unsafe: %s\n", error.what());
+                std::terminate();
+            }
+            catch (...)
+            {
+                std::fprintf(stderr, "Native mod uninstall failed; unloading is unsafe (unknown exception)\n");
+                std::terminate();
+            }
+#else
+            mod->uninstall();
+#endif
+        }
+
+        m_mods.clear();
+        LuaMod::global_uninstall();
+    }
+
+    auto UE4SSProgram::delete_mod(Mod* mod) -> void
+    {
+        for (auto it = m_mods.begin(); it != m_mods.end();)
+        {
+            if (it->get() == mod)
+            {
+                it = m_mods.erase(it);
+                break;
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+
+    auto UE4SSProgram::is_program_started() -> bool
+    {
+#ifdef __PROSPERO__
+        return m_is_program_started.load(std::memory_order_acquire);
+#else
+        return m_is_program_started;
+#endif
+    }
+
+    auto UE4SSProgram::find_mod_by_id(ModId mod_id) -> Mod*
+    {
+        if (mod_id == InvalidModId)
+        {
+            return nullptr;
+        }
+        for (auto& mod : m_mods)
+        {
+            if (mod->get_id() == mod_id)
+            {
+                return mod.get();
+            }
+        }
+        return nullptr;
+    }
+
+    auto UE4SSProgram::find_lua_mod_by_id(ModId mod_id) -> LuaMod*
+    {
+        return dynamic_cast<LuaMod*>(find_mod_by_id(mod_id));
+    }
+
+    auto UE4SSProgram::queue_reinstall_mods() -> void
+    {
+#ifdef __PROSPERO__
+        if (!native_mods_enabled()) return;
+#endif
+        if (!is_event_loop_thread())
+        {
+            queue_event([this]() { queue_reinstall_mods(); });
+            return;
+        }
+#ifdef __PROSPERO__
+        // [CAP09 F3] Hot reload is refused, loudly, while any native C++ mod is
+        // present. An ABI-v1 module stays resident (it may own threads), so a
+        // reinstall would dlopen the resident image again outside module_start,
+        // re-enter its entry, and start nothing (install_cpp_mods is not part
+        // of a reinstall). Nothing is uninstalled: every mod keeps running.
+        // Without C++ mods this is the unchanged R11 path. Restart the game to
+        // reload mods.
+        {
+            size_t native_cpp_mods = 0;
+            for (const auto& mod : m_mods)
+                if (dynamic_cast<CppMod*>(mod.get())) ++native_cpp_mods;
+            if (native_cpp_mods != 0)
+            {
+                Output::send<LogLevel::Warning>(STR("[NMOD] refused: hot reload of all mods while {} native C++ mod(s) are loaded; nothing was reloaded, every mod keeps running (restart the game to reload)\n"),
+                                                native_cpp_mods);
+                return;
+            }
+        }
+#endif
+
+        ProfilerScope();
+        Output::send(STR("Re-installing all mods\n"));
+
+        // Stop processing events while stuff isn't properly setup
+        m_pause_events_processing = true;
+        m_mods_are_being_touched = true;
+
+        uninstall_mods();
+
+        // Remove all custom properties
+        // Uncomment when custom properties are working
+        LuaType::LuaCustomProperty::StaticStorage::property_list.clear();
+
+        // Reset the Lua callbacks for the global Lua function 'NotifyOnNewObject'
+        LuaMod::m_static_construct_object_lua_callbacks.clear();
+
+        // Start processing events again as everything is now properly setup
+        // Do this before mods are started or else you won't be able to use the hot-reload key bind if there's an error from Lua
+        m_pause_events_processing = false;
+
+        setup_mods();
+        start_cpp_mods();
+        start_lua_mods();
+
+        if (Unreal::UnrealInitializer::IsInitialized())
+        {
+            fire_unreal_init_for_cpp_mods();
+        }
+
+        if (is_program_started())
+        {
+            fire_program_start_for_cpp_mods();
+        }
+
+        m_mods_are_being_touched = false;
+
+        Output::send(STR("All mods re-installed\n"));
+    }
+
+    auto UE4SSProgram::queue_reinstall_mod(LuaMod* mod) -> void
+    {
+#ifdef __PROSPERO__
+        if (!native_mods_enabled()) return;
+#endif
+        if (!mod)
+        {
+            return;
+        }
+
+        if (!is_event_loop_thread())
+        {
+            queue_event([this, mod]() { queue_reinstall_mod(mod); });
+            return;
+        }
+
+        // Save mod info before uninstalling
+        StringType mod_name = StringType(mod->get_name());
+        std::filesystem::path mod_path = mod->get_path();
+
+        Output::send(STR("Reinstalling mod: {}\n"), mod_name);
+
+        // Pause event processing for safety
+        m_pause_events_processing = true;
+        m_mods_are_being_touched = true;
+
+        mod->uninstall();
+
+        // Remove key binds registered by this specific mod
+        unregister_keydown_events_for_lua_mod(mod, AllMods::No);
+
+        // Remove the old mod from the list
+        delete_mod(mod);
+        mod = nullptr;
+
+        // Resume event processing before starting the new mod
+        m_pause_events_processing = false;
+
+        // P1 (worker-lifecycle-conversion): mod_path is a clean wide
+        // filesystem path; ensure_str narrows it through the broken
+        // codecvt and the LuaMod ctor's native lookup then misses.
+        // Widen the clean narrow form instead.
+        auto new_mod = std::make_unique<LuaMod>(*this, std::move(mod_name), widen_ascii_native_key(mod_path.string()));
+        LuaMod* new_mod_ptr = new_mod.get();
+        m_mods.emplace_back(std::move(new_mod));
+
+        new_mod_ptr->start_mod();
+
+        m_mods_are_being_touched = false;
+
+        Output::send(STR("Mod '{}' reinstalled\n"), new_mod_ptr->get_name());
+    }
+
+    auto UE4SSProgram::queue_uninstall_mod(LuaMod* mod) -> void
+    {
+#ifdef __PROSPERO__
+        if (!native_mods_enabled()) return;
+#endif
+        if (!mod)
+        {
+            return;
+        }
+
+        if (!is_event_loop_thread())
+        {
+            queue_event([this, mod]() { queue_uninstall_mod(mod); });
+            return;
+        }
+
+        StringType mod_name = StringType(mod->get_name());
+        Output::send(STR("Uninstalling mod: {}\n"), mod_name);
+
+        // Pause event processing for safety
+        m_pause_events_processing = true;
+        m_mods_are_being_touched = true;
+
+        mod->uninstall();
+
+        // Remove key binds registered by this specific mod
+        unregister_keydown_events_for_lua_mod(mod, AllMods::No);
+
+        delete_mod(mod);
+
+        // Resume event processing
+        m_pause_events_processing = false;
+        m_mods_are_being_touched = false;
+
+        Output::send(STR("Mod '{}' uninstalled\n"), mod_name);
+    }
+
+    auto UE4SSProgram::queue_reinstall_mod(ModId mod_id) -> void
+    {
+#ifdef __PROSPERO__
+        if (!native_mods_enabled()) return;
+#endif
+        if (mod_id == InvalidModId)
+        {
+            return;
+        }
+
+        if (!is_event_loop_thread())
+        {
+            queue_event([this, mod_id]() { queue_reinstall_mod(mod_id); });
+            return;
+        }
+
+        // Look up the mod by ID at execution time (safe for queued events)
+        if (auto* lua_mod = find_lua_mod_by_id(mod_id))
+        {
+            queue_reinstall_mod(lua_mod);
+        }
+        else
+        {
+            Output::send<LogLevel::Warning>(STR("Could not find mod to reinstall with ID: {}\n"), mod_id);
+        }
+    }
+
+    auto UE4SSProgram::queue_uninstall_mod(ModId mod_id) -> void
+    {
+#ifdef __PROSPERO__
+        if (!native_mods_enabled()) return;
+#endif
+        if (mod_id == InvalidModId)
+        {
+            return;
+        }
+
+        if (!is_event_loop_thread())
+        {
+            queue_event([this, mod_id]() { queue_uninstall_mod(mod_id); });
+            return;
+        }
+
+        // Look up the mod by ID at execution time (safe for queued events)
+        if (auto* lua_mod = find_lua_mod_by_id(mod_id))
+        {
+            queue_uninstall_mod(lua_mod);
+        }
+        else
+        {
+            Output::send<LogLevel::Warning>(STR("Could not find mod to uninstall with ID: {}\n"), mod_id);
+        }
+    }
+
+    auto UE4SSProgram::queue_reinstall_mod_by_name(const std::string& mod_name) -> void
+    {
+#ifdef __PROSPERO__
+        if (!native_mods_enabled()) return;
+#endif
+        if (!is_event_loop_thread())
+        {
+            queue_event([this, mod_name]() { queue_reinstall_mod_by_name(mod_name); });
+            return;
+        }
+
+        // Find the mod by name at execution time (safe for queued events)
+        for (auto& mod : m_mods)
+        {
+            auto* lua_mod = dynamic_cast<LuaMod*>(mod.get());
+            if (lua_mod && lua_mod->get_name() == widen_ascii_native_key(mod_name))
+            {
+                queue_reinstall_mod(lua_mod);
+                return;
+            }
+        }
+        Output::send<LogLevel::Warning>(STR("Could not find mod to reinstall: {}\n"), ensure_str(mod_name));
+    }
+
+    auto UE4SSProgram::queue_reinstall_mod_by_name(std::string_view mod_name) -> void
+    {
+        queue_reinstall_mod_by_name(std::string{mod_name});
+    }
+
+    auto UE4SSProgram::queue_uninstall_mod_by_name(const std::string& mod_name) -> void
+    {
+#ifdef __PROSPERO__
+        if (!native_mods_enabled()) return;
+#endif
+        if (!is_event_loop_thread())
+        {
+            queue_event([this, mod_name]() { queue_uninstall_mod_by_name(mod_name); });
+            return;
+        }
+
+        // Find the mod by name at execution time (safe for queued events)
+        for (auto& mod : m_mods)
+        {
+            auto* lua_mod = dynamic_cast<LuaMod*>(mod.get());
+            if (lua_mod && lua_mod->get_name() == widen_ascii_native_key(mod_name))
+            {
+                queue_uninstall_mod(lua_mod);
+                return;
+            }
+        }
+        Output::send<LogLevel::Warning>(STR("Could not find mod to uninstall: {}\n"), ensure_str(mod_name));
+    }
+
+    auto UE4SSProgram::queue_uninstall_mod_by_name(std::string_view mod_name) -> void
+    {
+        queue_uninstall_mod_by_name(std::string{mod_name});
+    }
+
+    auto UE4SSProgram::queue_start_lua_mod_by_path(const std::filesystem::path& mod_path) -> void
+    {
+#ifdef __PROSPERO__
+        if (!native_mods_enabled()) return;
+#endif
+        if (!is_event_loop_thread())
+        {
+            queue_event([this, mod_path]() { queue_start_lua_mod_by_path(mod_path); });
+            return;
+        }
+
+        std::string mod_name_str = mod_path.stem().string();
+
+        // Check if mod already exists in m_mods
+        for (auto& mod : m_mods)
+        {
+            auto* lua_mod = dynamic_cast<LuaMod*>(mod.get());
+            if (lua_mod && lua_mod->get_name() == widen_ascii_native_key(mod_name_str))
+            {
+                if (lua_mod->is_started())
+                {
+                    Output::send<LogLevel::Warning>(STR("Mod '{}' is already running\n"), ensure_str(mod_name_str));
+                    return;
+                }
+                else
+                {
+                    // Mod exists but is not started - remove it first (its Lua state is invalid)
+                    // Then we'll create a fresh one below
+                    delete_mod(lua_mod);
+                    break;
+                }
+            }
+        }
+
+        // Verify the mod path exists and has a main.lua
+        std::filesystem::path scripts_path = mod_path / "Scripts";
+        std::filesystem::path main_lua = scripts_path / "main.lua";
+        if (!std::filesystem::exists(main_lua))
+        {
+            Output::send<LogLevel::Error>(STR("Cannot start mod '{}': main.lua not found\n"), ensure_str(mod_name_str));
+            return;
+        }
+
+        Output::send(STR("Starting mod: {}\n"), ensure_str(mod_name_str));
+
+        StringType mod_name = ensure_str(mod_name_str);
+
+        auto new_mod = std::make_unique<LuaMod>(*this, std::move(mod_name), ensure_str(std::filesystem::path(mod_path)));
+        LuaMod* new_mod_ptr = new_mod.get();
+        m_mods.emplace_back(std::move(new_mod));
+
+        new_mod_ptr->start_mod();
+
+        Output::send(STR("Mod '{}' started\n"), new_mod_ptr->get_name());
+    }
+
+    auto UE4SSProgram::get_module_directory() -> File::StringType
+    {
+        return ensure_str(m_module_file_path);
+    }
+
+#ifdef __PROSPERO__
+    auto UE4SSProgram::get_game_executable_path() const -> const std::filesystem::path&
+    {
+        return m_game_path_and_exe_name;
+    }
+#endif
+
+    auto UE4SSProgram::get_game_executable_directory() -> File::StringType
+    {
+        return ensure_str(m_game_executable_directory);
+    }
+
+    auto UE4SSProgram::get_working_directory() -> File::StringType
+    {
+        return ensure_str(m_working_directory);
+    }
+
+    auto UE4SSProgram::get_mods_directory() -> File::StringType
+    {
+        // Return the first (primary) mods directory for backwards compatibility
+        return m_mods_directories.empty() ? STR("") : ensure_str(m_mods_directories[0]);
+    }
+
+    auto UE4SSProgram::get_mods_directories() -> std::vector<std::filesystem::path>&
+    {
+        return m_mods_directories;
+    }
+
+    auto UE4SSProgram::get_mods_txt_entries() -> std::unordered_map<std::string, bool>
+    {
+        std::unordered_map<std::string, bool> result;
+#ifdef __PROSPERO__
+        if (m_native_context.mod_source)
+        {
+            const auto& enabled = m_native_context.mod_source->startup_mod_names();
+            for (const auto& mod : m_native_context.mod_source->lua_mods())
+                result.emplace(mod.name, std::find(enabled.begin(), enabled.end(), mod.name) != enabled.end());
+            return result;
+        }
+#endif
+
+        std::vector<std::filesystem::path> mods_txt_files;
+
+        if (!settings_manager.Overrides.ControllingModsTxt.empty())
+        {
+            auto controlling_path = make_compatible_path(settings_manager.Overrides.ControllingModsTxt);
+            if (std::filesystem::exists(controlling_path))
+            {
+                mods_txt_files.push_back(controlling_path);
+            }
+        }
+        else
+        {
+            for (const auto& mods_directory : std::ranges::reverse_view(m_mods_directories))
+            {
+                if (!std::filesystem::exists(mods_directory))
+                {
+                    continue;
+                }
+
+                auto mods_txt_path = mods_directory / "mods.txt";
+                if (std::filesystem::exists(mods_txt_path))
+                {
+                    mods_txt_files.push_back(mods_txt_path);
+                }
+            }
+        }
+
+        for (const auto& mods_txt_path : mods_txt_files)
+        {
+            std::ifstream bom_check(mods_txt_path, std::ios::binary);
+            char bom[3] = {0};
+            bom_check.read(bom, 3);
+            bool has_bom = (bom[0] == '\xEF' && bom[1] == '\xBB' && bom[2] == '\xBF');
+            bom_check.close();
+
+            StreamIType mods_stream{mods_txt_path};
+
+            if (has_bom)
+            {
+                wchar_t discard;
+                mods_stream.get(discard);
+            }
+
+            StringType current_line;
+            while (std::getline(mods_stream, current_line))
+            {
+                if (current_line.find(STR(";")) != current_line.npos)
+                {
+                    continue;
+                }
+
+                if (current_line.size() <= 4)
+                {
+                    continue;
+                }
+
+                auto end = std::remove(current_line.begin(), current_line.end(), STR(' '));
+                current_line.erase(end, current_line.end());
+
+                StringType mod_name = explode_by_occurrence(current_line, STR(':'), 1);
+                StringType mod_enabled = explode_by_occurrence(current_line, STR(':'), ExplodeType::FromEnd);
+
+                std::string mod_name_str = to_string(mod_name);
+                bool enabled = !mod_enabled.empty() && mod_enabled[0] == STR('1');
+
+                if (result.find(mod_name_str) == result.end())
+                {
+                    result[mod_name_str] = enabled;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    auto UE4SSProgram::make_compatible_path(const std::filesystem::path& in_path) const -> std::filesystem::path
+    {
+        auto path = in_path;
+        if (path.is_relative())
+        {
+            path = m_working_directory / path;
+        }
+        path = path.lexically_normal().make_preferred();
+        path = std::filesystem::weakly_canonical(path);
+        return path;
+    }
+
+    auto UE4SSProgram::insert_mods_directory(const std::filesystem::path& path, int64_t index) -> void
+    {
+        m_mods_directories.insert(m_mods_directories.begin() + index, path);
+    }
+
+    auto UE4SSProgram::add_mods_directory(const std::filesystem::path& in_path) -> void
+    {
+#ifdef __PROSPERO__
+        if (m_native_context.mod_source)
+            throw std::runtime_error("Native activation does not support additional filesystem mod directories");
+#endif
+        auto path = make_compatible_path(in_path);
+        if (const auto it = std::ranges::find(m_mods_directories, path); it != m_mods_directories.end())
+        {
+            m_mods_directories.erase(it);
+        }
+        m_mods_directories.emplace_back(std::forward<decltype(path)>(path));
+    }
+
+    auto UE4SSProgram::remove_mods_directory(const std::filesystem::path& in_path) -> void
+    {
+#ifdef __PROSPERO__
+        if (m_native_context.mod_source)
+            throw std::runtime_error("Native activation does not support filesystem mod directory overrides");
+#endif
+        auto path = make_compatible_path(in_path);
+        m_mods_directories_to_remove.emplace_back(std::forward<decltype(path)>(path));
+    }
+
+    auto UE4SSProgram::get_legacy_root_directory() -> File::StringType
+    {
+        return ensure_str(m_legacy_root_directory);
+    }
+
+    auto UE4SSProgram::generate_uht_compatible_headers() -> void
+    {
+        ProfilerScope();
+        Output::send(STR("Generating UHT compatible headers...\n"));
+
+        double generator_duration{};
+        {
+            ScopedTimer generator_timer{&generator_duration};
+
+            const std::filesystem::path DumpRootDirectory = m_working_directory / "UHTHeaderDump";
+            UEGenerator::UEHeaderGenerator HeaderGenerator = UEGenerator::UEHeaderGenerator(DumpRootDirectory);
+            HeaderGenerator.dump_native_packages();
+        }
+
+        Output::send(STR("Generating UHT compatible headers took {} seconds\n"), generator_duration);
+    }
+
+    auto UE4SSProgram::generate_cxx_headers(const std::filesystem::path& output_dir) -> void
+    {
+        ProfilerScope();
+        if (settings_manager.CXXHeaderGenerator.LoadAllAssetsBeforeGeneratingCXXHeaders)
+        {
+            Output::send(STR("Loading all assets...\n"));
+            double asset_loading_duration{};
+            {
+                ProfilerScopeNamed("loading all assets");
+                ScopedTimer loading_timer{&asset_loading_duration};
+
+                UAssetRegistry::LoadAllAssets();
+            }
+            Output::send(STR("Loading all assets took {} seconds\n"), asset_loading_duration);
+        }
+
+        double generator_duration;
+        {
+            ProfilerScopeNamed("unloading all force-loaded assets");
+            ScopedTimer generator_timer{&generator_duration};
+
+            UEGenerator::generate_cxx_headers(output_dir);
+
+            Output::send(STR("Unloading all forcefully loaded assets\n"));
+        }
+
+        UAssetRegistry::FreeAllForcefullyLoadedAssets();
+        Output::send(STR("SDK generated in {} seconds.\n"), generator_duration);
+    }
+
+    auto UE4SSProgram::generate_lua_types(const std::filesystem::path& output_dir) -> void
+    {
+        ProfilerScope();
+        if (settings_manager.CXXHeaderGenerator.LoadAllAssetsBeforeGeneratingCXXHeaders)
+        {
+            Output::send(STR("Loading all assets...\n"));
+            double asset_loading_duration{};
+            {
+                ProfilerScopeNamed("loading all assets");
+                ScopedTimer loading_timer{&asset_loading_duration};
+
+                UAssetRegistry::LoadAllAssets();
+            }
+            Output::send(STR("Loading all assets took {} seconds\n"), asset_loading_duration);
+        }
+
+        double generator_duration;
+        {
+            ProfilerScopeNamed("unloading all force-loaded assets");
+            ScopedTimer generator_timer{&generator_duration};
+
+            UEGenerator::generate_lua_types(output_dir);
+
+            Output::send(STR("Unloading all forcefully loaded assets\n"));
+        }
+
+        UAssetRegistry::FreeAllForcefullyLoadedAssets();
+        Output::send(STR("SDK generated in {} seconds.\n"), generator_duration);
+    }
+
+    auto UE4SSProgram::stop_render_thread() -> void
+    {
+#ifdef __PROSPERO__
+        throw std::runtime_error("Native debugging GUI service is unavailable");
+#else
+
+        if (!get_debugging_ui().is_open())
+        {
+            return;
+        }
+        if (settings_manager.Debug.RenderMode == GUI::RenderMode::ExternalThread && m_render_thread.joinable())
+        {
+            m_render_thread.request_stop();
+            m_render_thread.join();
+        }
+        else
+        {
+            get_debugging_ui().request_exit();
+        }
+    #endif
+    }
+
+    auto UE4SSProgram::add_gui_tab(std::shared_ptr<GUI::GUITab> tab) -> void
+    {
+#ifdef __PROSPERO__
+        throw std::runtime_error("Native debugging GUI service is unavailable");
+#else
+
+        m_debugging_gui.add_tab(tab);
+    #endif
+    }
+
+    auto UE4SSProgram::remove_gui_tab(std::shared_ptr<GUI::GUITab> tab) -> void
+    {
+#ifdef __PROSPERO__
+        throw std::runtime_error("Native debugging GUI service is unavailable");
+#else
+
+        m_debugging_gui.remove_tab(tab);
+    #endif
+    }
+
+    auto UE4SSProgram::queue_event(EventCallable callable) -> void
+    {
+        if (!can_process_events())
+        {
+            return;
+        }
+        std::lock_guard<std::mutex> guard(m_event_queue_mutex);
+#ifdef __PROSPERO__
+        if (!can_process_events())
+            return;
+#endif
+        m_queued_events.emplace_back(std::move(callable));
+    }
+
+    auto UE4SSProgram::queue_event(LegacyEventCallable callable, void* data) -> void
+    {
+        queue_event([callable, data]() { callable(data); });
+    }
+
+    auto UE4SSProgram::is_queue_empty() -> bool
+    {
+#ifdef __PROSPERO__
+        std::lock_guard<std::mutex> guard(m_event_queue_mutex);
+#else
+        // Not locking here because if the worst that could happen as far as I know is that the event loop processes the event slightly late.
+#endif
+        return m_queued_events.empty();
+    }
+
+    auto UE4SSProgram::register_keydown_event(Input::Key key, const Input::EventCallbackCallable& callback, uint8_t custom_data, void* custom_data2) -> void
+    {
+#ifdef HAS_INPUT
+        m_input_handler.register_keydown_event(key, callback, custom_data, custom_data2);
+#elif defined(__PROSPERO__)
+        throw std::runtime_error("Native input service is unavailable");
+#endif
+    }
+
+    auto UE4SSProgram::register_keydown_event(Input::Key key,
+                                              const Input::Handler::ModifierKeyArray& modifier_keys,
+                                              const Input::EventCallbackCallable& callback,
+                                              uint8_t custom_data,
+                                              void* custom_data2) -> void
+    {
+#ifdef HAS_INPUT
+        m_input_handler.register_keydown_event(key, modifier_keys, callback, custom_data, custom_data2);
+#elif defined(__PROSPERO__)
+        throw std::runtime_error("Native input service is unavailable");
+#endif
+    }
+
+    auto UE4SSProgram::is_keydown_event_registered(Input::Key key) -> bool
+    {
+#ifdef HAS_INPUT
+#ifdef __PROSPERO__
+        if (!m_input_handler.is_input_available())
+            throw std::runtime_error("Native input service is unavailable");
+#endif
+        return m_input_handler.is_keydown_event_registered(key);
+#elif defined(__PROSPERO__)
+        throw std::runtime_error("Native input service is unavailable");
+#else
+        return false;
+#endif
+    }
+
+    auto UE4SSProgram::is_keydown_event_registered(Input::Key key, const Input::Handler::ModifierKeyArray& modifier_keys) -> bool
+    {
+#ifdef HAS_INPUT
+#ifdef __PROSPERO__
+        if (!m_input_handler.is_input_available())
+            throw std::runtime_error("Native input service is unavailable");
+#endif
+        return m_input_handler.is_keydown_event_registered(key, modifier_keys);
+#elif defined(__PROSPERO__)
+        throw std::runtime_error("Native input service is unavailable");
+#else
+        return false;
+#endif
+    }
+
+    auto UE4SSProgram::get_all_input_events(std::function<void(Input::KeySet&)> callback) -> void
+    {
+#ifdef HAS_INPUT
+        // Registry enumeration is also used by LuaMod's uninstall path. It
+        // describes real stored bindings, even when no source can deliver input.
+
+        m_input_handler.get_events_safe(callback);
+#elif defined(__PROSPERO__)
+        throw std::runtime_error("Native input service is unavailable");
+#endif
+    }
+
+    auto UE4SSProgram::find_mod_by_name_internal(StringViewType mod_name, IsInstalled is_installed, IsStarted is_started, FMBNI_ExtraPredicate extra_predicate)
+            -> Mod*
+    {
+        auto mod_exists_with_name = std::find_if(get_program().m_mods.begin(), get_program().m_mods.end(), [&](auto& elem) -> bool {
+            bool found = true;
+
+            if (!extra_predicate(elem.get()))
+            {
+                found = false;
+            }
+            if (mod_name != elem->get_name())
+            {
+                found = false;
+            }
+            if (is_installed == IsInstalled::Yes && !elem->is_installable())
+            {
+                found = false;
+            }
+            if (is_started == IsStarted::Yes && !elem->is_started())
+            {
+                found = false;
+            }
+
+            return found;
+        });
+
+        // clang-format off
+        if (mod_exists_with_name == get_program().m_mods.end())
+        {
+            return nullptr;
+        }
+        // clang-format on
+        else
+        {
+            return mod_exists_with_name->get();
+        }
+    }
+
+    auto UE4SSProgram::find_lua_mod_by_name(std::string_view mod_name, UE4SSProgram::IsInstalled installed_only, IsStarted is_started) -> LuaMod*
+    {
+        return static_cast<LuaMod*>(find_mod_by_name<LuaMod>(mod_name, installed_only, is_started));
+    }
+
+    auto UE4SSProgram::find_lua_mod_by_name(StringViewType mod_name, UE4SSProgram::IsInstalled installed_only, IsStarted is_started) -> LuaMod*
+    {
+        return static_cast<LuaMod*>(find_mod_by_name<LuaMod>(mod_name, installed_only, is_started));
+    }
+
+    auto UE4SSProgram::find_lua_mod_by_lua_state(lua_State* lua_state, IsInstalled is_installed, IsStarted is_started) -> LuaMod*
+    {
+        if (!lua_state)
+        {
+            return nullptr;
+        }
+
+        const auto mod = std::ranges::find_if(get_program().m_mods, [&](auto& elem) -> bool {
+            bool found = false;
+
+            const auto lua_mod = dynamic_cast<LuaMod*>(elem.get());
+            if (!lua_mod)
+            {
+                return false;
+            }
+            if (lua_state == lua_mod->get_lua_state() || (lua_mod->m_main_lua && lua_mod->m_main_lua->get_lua_state() == lua_state) ||
+                (lua_mod->m_hook_lua && lua_mod->m_hook_lua->get_lua_state() == lua_state) ||
+                (lua_mod->m_async_lua && lua_mod->m_async_lua->get_lua_state() == lua_state))
+            {
+                found = true;
+            }
+            if (is_installed == IsInstalled::Yes && !elem->is_installable())
+            {
+                found = false;
+            }
+            if (is_started == IsStarted::Yes && !elem->is_started())
+            {
+                found = false;
+            }
+
+            return found;
+        });
+
+        if (mod != get_program().m_mods.end())
+        {
+            return static_cast<LuaMod*>(mod->get());
+        }
+        else
+        {
+            return nullptr;
+        }
+    }
+
+    auto UE4SSProgram::get_object_dumper_output_directory() -> const File::StringType
+    {
+        return ensure_str(m_object_dumper_output_directory);
+    }
+
+    auto UE4SSProgram::dump_uobject(UObject* object,
+                                    std::unordered_set<FField*>* in_dumped_fields,
+                                    StringType& out_line,
+                                    bool is_below_425,
+                                    std::unordered_set<UFunction*>* in_dumped_functions) -> void
+    {
+        bool owns_dumped_fields{};
+        auto dumped_fields_ptr = [&] {
+            if (in_dumped_fields)
+            {
+                return in_dumped_fields;
+            }
+            else
+            {
+                owns_dumped_fields = true;
+                return new std::unordered_set<FField*>{};
+            }
+        }();
+        auto& dumped_fields = *dumped_fields_ptr;
+
+        UObject* typed_obj = static_cast<UObject*>(object);
+
+        static auto delegate_function_class = UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, STR("/Script/CoreUObject.DelegateFunction"));
+        static auto linker_placeholder_function_class =
+                UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, STR("/Script/CoreUObject.LinkerPlaceholderFunction"));
+
+        bool is_property = is_below_425 && Unreal::TypeChecker::is_property(typed_obj) &&
+                           !typed_obj->HasAnyFlags(static_cast<EObjectFlags>(EObjectFlags::RF_DefaultSubObject | EObjectFlags::RF_ArchetypeObject));
+        if (!is_property && (!typed_obj->IsA<UFunction>() || typed_obj->IsA(delegate_function_class) || typed_obj->IsA(linker_placeholder_function_class)))
+        {
+            if (in_dumped_functions && typed_obj->IsA<UFunction>())
+            {
+                if (in_dumped_functions->contains(static_cast<UFunction*>(typed_obj)))
+                {
+                    return;
+                }
+                else
+                {
+                    in_dumped_functions->emplace(static_cast<UFunction*>(typed_obj));
+                }
+            }
+            auto typed_class = typed_obj->GetClassPrivate()->HashObject();
+            if (ObjectDumper::to_string_exists(typed_class))
+            {
+                // Call type-specific implementation to dump UObject
+                // The type is determined at runtime
+
+                // Dump UObject
+                ObjectDumper::get_to_string(typed_class)(object, out_line);
+                out_line.append(STR("\n"));
+
+                if (ObjectDumper::to_string_complex_exists(typed_class))
+                {
+                    // Dump all properties that are directly owned by this UObject (not its UClass)
+                    ObjectDumper::get_to_string_complex(typed_class)(object, out_line, [&](void* prop) {
+                        if (dumped_fields.contains(static_cast<FField*>(prop)))
+                        {
+                            return;
+                        }
+
+                        ObjectDumper::dump_xproperty(static_cast<FProperty*>(prop), out_line);
+                        dumped_fields.emplace(static_cast<FField*>(prop));
+                    });
+                }
+            }
+            else
+            {
+                // A type-specific implementation does not exist so lets call the default implementation for UObjects instead
+                ObjectDumper::object_to_string(object, out_line);
+                out_line.append(STR("\n"));
+            }
+
+            // If the UClass of the UObject has any properties then dump them
+            if (typed_obj->IsA<UStruct>())
+            {
+                for (FProperty* prop : TFieldRange<FProperty>(static_cast<UClass*>(typed_obj), Unreal::EFieldIterationFlags::IncludeDeprecated))
+                {
+                    if (dumped_fields.contains(prop))
+                    {
+                        continue;
+                    }
+
+                    ObjectDumper::dump_xproperty(prop, out_line);
+                    dumped_fields.emplace(prop);
+                }
+            }
+
+            if (typed_obj->IsA<UStruct>())
+            {
+                for (UFunction* func : TFieldRange<UFunction>(static_cast<UStruct*>(typed_obj), Unreal::EFieldIterationFlags::None))
+                {
+                    ObjectDumper::function_to_string(func, out_line, in_dumped_functions);
+                }
+            }
+        }
+
+        if (owns_dumped_fields)
+        {
+            delete dumped_fields_ptr;
+        }
+    }
+
+    auto UE4SSProgram::dump_all_objects_and_properties(const File::StringType& output_path_and_file_name) -> void
+    {
+        /*
+        Output::send(STR("Test msg with no fmt args, and no optional arg\n"));
+        Output::send(STR("Test msg with no fmt args, and one optional arg [Normal]\n"), LogLevel::Normal);
+        Output::send(STR("Test msg with no fmt args, and one optional arg [Verbose]\n"), LogLevel::Verbose);
+        Output::send(STR("Test msg with one fmt arg [{}], and one optional arg [Warning]\n"), LogLevel::Warning, 33);
+        Output::send(STR("Test msg with two fmt args [{}, {}], and one optional arg [Error]\n"), LogLevel::Error, 33, 44);
+        //*/
+
+        // Object & Property Dumper -> START
+        if (settings_manager.ObjectDumper.LoadAllAssetsBeforeDumpingObjects)
+        {
+            Output::send(STR("Loading all assets...\n"));
+            double asset_loading_duration{};
+            {
+                ScopedTimer loading_timer{&asset_loading_duration};
+
+                UAssetRegistry::LoadAllAssets();
+            }
+            Output::send(STR("Loading all assets took {} seconds\n"), asset_loading_duration);
+        }
+
+        double dumper_duration{};
+        {
+            ScopedTimer dumper_timer{&dumper_duration};
+
+            std::unordered_set<FField*> dumped_fields;
+            // There will be tons of dumped fields so lets just reserve tons in order to speed things up a bit
+            dumped_fields.reserve(100000);
+
+            // Some delegate functions belong to a class, and are dumped as part of the class.
+            // Others are not, and must be dumped as part of GUObjectArray.
+            // Both are part of GUObjectArray.
+            // We must maintain a list of already dumped functions to avoid dumping the same function multiple times.
+            // We can't just use GUObjectArray even though they all exist in there because that would destroy the order in which objects get dumped.
+            std::unordered_set<UFunction*> dumped_functions;
+            dumped_fields.reserve(10000);
+
+            bool is_below_425 = Unreal::Version::IsBelow(4, 25);
+
+            // The final outputted string shouldn't need be reformatted just to put a new line at the end
+            // Instead the object/property implementations should add a new line in the last format that they do
+            //
+            // Optimizations done:
+            // 1. The entire code-base has been changed to use 'wchar_t' instead of 'char'.
+            // The effect of this is that there is no need to ever convert between types.
+            // There's also no thinking about which type should be used since 'wchar_t' is now the standard for UE4SS.
+            // The downside with wchar_t is that all files that get output to will be doubled in size.
+
+            using ObjectDumperOutputDevice = Output::NewFileDevice;
+            Output::Targets<ObjectDumperOutputDevice> scoped_dumper_out;
+            auto& file_device = scoped_dumper_out.get_device<ObjectDumperOutputDevice>();
+            file_device.set_file_name_and_path(output_path_and_file_name);
+            file_device.set_formatter([](File::StringViewType string) -> File::StringType {
+                return File::StringType{string};
+            });
+
+            // Make string & reserve massive amounts of space to hopefully not reach the end of the string and require more
+            // dynamic allocations
+            StringType out_line;
+            out_line.reserve(200000000);
+
+            Output::send(STR("Dumping all objects & properties in GUObjectArray\n"));
+            UObjectGlobals::ForEachUObject([&](void* object, [[maybe_unused]] int32_t chunk_index, [[maybe_unused]] int32_t object_index) {
+                dump_uobject(static_cast<UObject*>(object), &dumped_fields, out_line, is_below_425, &dumped_functions);
+                return LoopAction::Continue;
+            });
+
+            // Save to file
+            scoped_dumper_out.send(out_line);
+
+            // Reset the dumped_fields set, otherwise no fields will be dumped in subsequent dumps
+            dumped_fields.clear();
+            Output::send(STR("Done iterating GUObjectArray\n"));
+        }
+
+        UAssetRegistry::FreeAllForcefullyLoadedAssets();
+        Output::send(STR("Dumping GUObjectArray took {} seconds\n"), dumper_duration);
+        // Object & Property Dumper -> END
+    }
+
+    auto UE4SSProgram::static_cleanup() -> void
+    {
+        delete &get_program();
+
+        // Do cleanup of static objects here
+        // This function is called right before the DLL detaches from the game
+        // Including when the player hits the 'X' button to exit the game
+    }
+
+    auto UE4SSProgram::parse_semicolon_separated_string(const StringType& string) -> std::vector<StringType>
+    {
+        std::vector<StringType> strings{};
+        if (auto end = string.find(STR(';')); end == string.npos)
+        {
+            // No colon, but we still have content in the variable, so we'll assume this a single path.
+            strings.emplace_back(string);
+        }
+        else
+        {
+            size_t start = 0;
+            while (end != string.npos)
+            {
+                strings.emplace_back(string.substr(start, end - start));
+                start = end + 1; // Adding 1 to skip the colon.
+                end = string.find(STR(';'), start);
+                if (end == string.npos)
+                {
+                    // No more colons, but we still content so let's assume that's another path.
+                    strings.emplace_back(string.substr(start));
+                }
+            }
+        }
+        return strings;
+    }
+} // namespace RC

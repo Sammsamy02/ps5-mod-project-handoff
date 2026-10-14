@@ -1,0 +1,251 @@
+--- a/src/UObjectGlobals.cpp	2026-10-11 21:26:18
++++ b/src/UObjectGlobals.cpp	2026-10-11 21:20:27
+@@ -1,5 +1,8 @@
+ #include <L22Diagnostics/Logging.hpp>
+ #include <Unreal/UObjectGlobals.hpp>
++// [IT lookup-speed 04] explicit std includes for the FindXOf bucket cache below
++#include <mutex>
++#include <unordered_map>
+ #include <Unreal/UObject.hpp>
+ #include <Unreal/AActor.hpp>
+ #include <Unreal/UPackage.hpp>
+@@ -1180,7 +1183,194 @@
+             return Slot->ChainMatchesQuery != 0;
+         }
+     };
++
++    // =====================================================================================
++    // [IT lookup-speed 04, Claude round-13 item 2] Name-keyed FindXOf cache.
++    //
++    // Upstream's bUseUObjectArrayCache pre-builds lookup structures once and
++    // keeps them current through the GUObjectArray listeners; this port's
++    // searcher POOLS are category-keyed (all classes / all actors / all
++    // instances), so even with the cache enabled a FindFirstOf(name) still
++    // scanned a whole pool. This cache is NAME-keyed the way the FindXOf
++    // queries are: one bucket per DISTINCT class-name FName comparison index
++    // in an object's class chain, so a query becomes one hash lookup plus a
++    // walk over exactly the matching objects.
++    //
++    // Maintenance (mirrors the pools' discipline):
++    //   - populated once at init (UnrealInitializer cache block);
++    //   - new objects: StaticConstructObject post-hook AND (if ever
++    //     registered through an admitted engine op) FClassCreateListener —
++    //     both idempotent, the bucket add dedups by FUObjectItem;
++    //   - destroyed objects: FClassDeleteListener::NotifyUObjectDeleted —
++    //     the console-proven engine-side delete listener (variant C);
++    //   - deactivated + cleared by UnrealInitializer::RetireUObjectArrayCache
++    //     (same lifecycle as the pools and the global object cache).
++    //
++    // Semantics vs the walk: buckets only ever hold objects that passed
++    // IsValidObjectForFindXOf at insert (those flags are construct-time and
++    // never clear; the IsA verdicts are per-class and stable), so a query
++    // re-checks only IsUnreachable. FindFirstOf preserves the walk's exact
++    // result rule (first direct match wins outright; otherwise the LAST
++    // chain match). FindAllOf returns the same SET as the walk; bucket ORDER
++    // can differ from array order after swap-removes (upstream's pools have
++    // the same property).
++    // =====================================================================================
++    struct FFindXOfBucket
++    {
++        std::vector<const FUObjectItem*> Items{};
++        std::unordered_map<const FUObjectItem*, size_t> IndexMap{};
++    };
++    std::unordered_map<uint32_t, FFindXOfBucket> FindXOfBuckets{};
++    std::mutex FindXOfBucketsMutex{};
++    bool FindXOfBucketsActive{false};
++
++    void FindXOfCache_SetActive(bool bActive)
++    {
++        std::lock_guard Lock(FindXOfBucketsMutex);
++        if (!bActive)
++        {
++            decltype(FindXOfBuckets){}.swap(FindXOfBuckets);
++        }
++        FindXOfBucketsActive = bActive;
++    }
++
++    [[nodiscard]] bool FindXOfCache_IsActive()
++    {
++        return FindXOfBucketsActive;
++    }
+ 
++    void FindXOfCache_AddObjectToBuckets(UObject* Object)
++    {
++        if (!Object || !FindXOfBucketsActive) { return; }
++        UClass* Class = Object->GetClassPrivate();
++        if (!Class || !IsValidObjectForFindXOf(Object)) { return; }
++        const FUObjectItem* Item = Object->GetObjectItem();
++        if (!Item) { return; }
++
++        std::lock_guard Lock(FindXOfBucketsMutex);
++        // One bucket per DISTINCT name index in the class chain (starting AT
++        // the class itself — the walk's direct compare covers it). 64-deep
++        // bound + same-key revisit break = loop-proof against a corrupt chain.
++        uint32_t SeenKeys[64]{};
++        int32_t SeenCount = 0;
++        for (UStruct* Struct = Class; Struct != nullptr && SeenCount < 64; Struct = Struct->GetSuperStruct())
++        {
++            const uint32_t Key = Struct->GetNamePrivate().GetComparisonIndex().ToUnstableInt();
++            bool bKeySeen = false;
++            for (int32_t i = 0; i < SeenCount; ++i)
++            {
++                if (SeenKeys[i] == Key)
++                {
++                    bKeySeen = true;
++                    break;
++                }
++            }
++            if (bKeySeen) { break; }
++            SeenKeys[SeenCount++] = Key;
++
++            auto& Bucket = FindXOfBuckets[Key];
++            if (Bucket.IndexMap.find(Item) == Bucket.IndexMap.end())
++            {
++                Bucket.IndexMap.emplace(Item, Bucket.Items.size());
++                Bucket.Items.emplace_back(Item);
++            }
++        }
++    }
++
++    void FindXOfCache_RemoveObjectFromBuckets(const FUObjectItem* Item, UObject* Object)
++    {
++        if (!Item || !Object || !FindXOfBucketsActive) { return; }
++        UClass* Class = Object->GetClassPrivate();
++        if (!Class) { return; }
++
++        std::lock_guard Lock(FindXOfBucketsMutex);
++        // Must walk the SAME (class, chain, dedup) shape as the add, so every
++        // bucket the item was inserted into is visited on removal.
++        uint32_t SeenKeys[64]{};
++        int32_t SeenCount = 0;
++        for (UStruct* Struct = Class; Struct != nullptr && SeenCount < 64; Struct = Struct->GetSuperStruct())
++        {
++            const uint32_t Key = Struct->GetNamePrivate().GetComparisonIndex().ToUnstableInt();
++            bool bKeySeen = false;
++            for (int32_t i = 0; i < SeenCount; ++i)
++            {
++                if (SeenKeys[i] == Key)
++                {
++                    bKeySeen = true;
++                    break;
++                }
++            }
++            if (bKeySeen) { break; }
++            SeenKeys[SeenCount++] = Key;
++
++            auto BucketIt = FindXOfBuckets.find(Key);
++            if (BucketIt == FindXOfBuckets.end()) { continue; }
++            auto& Bucket = BucketIt->second;
++            auto MapIt = Bucket.IndexMap.find(Item);
++            if (MapIt == Bucket.IndexMap.end()) { continue; }
++            const size_t Index = MapIt->second;
++            const size_t LastIndex = Bucket.Items.size() - 1;
++            if (Index != LastIndex)
++            {
++                const auto LastItem = Bucket.Items[LastIndex];
++                Bucket.Items[Index] = LastItem;
++                Bucket.IndexMap[LastItem] = Index;
++            }
++            Bucket.Items.pop_back();
++            Bucket.IndexMap.erase(MapIt);
++        }
++    }
++
++    [[nodiscard]] bool FindXOfCache_TryFirstOf(FName ClassName, UObject*& OutObject)
++    {
++        OutObject = nullptr;
++        if (!FindXOfBucketsActive) { return false; }
++        const uint32_t Key = ClassName.GetComparisonIndex().ToUnstableInt();
++
++        std::lock_guard Lock(FindXOfBucketsMutex);
++        const auto BucketIt = FindXOfBuckets.find(Key);
++        if (BucketIt == FindXOfBuckets.end()) { return false; }
++
++        UObject* LastChainMatch = nullptr;
++        for (const FUObjectItem* Item : BucketIt->second.Items)
++        {
++            UObject* Object = Item->GetUObject();
++            if (!Object || Item->IsUnreachable()) { continue; }
++            if (Object->GetClassPrivate()->GetNamePrivate().Equals(ClassName))
++            {
++                // Walk rule: the first DIRECT match breaks the scan and wins,
++                // regardless of earlier chain matches.
++                OutObject = Object;
++                return true;
++            }
++            LastChainMatch = Object;
++        }
++        if (LastChainMatch)
++        {
++            OutObject = LastChainMatch;
++            return true;
++        }
++        return false;
++    }
++
++    [[nodiscard]] bool FindXOfCache_TryAllOf(FName ClassName, std::vector<UObject*>& OutStorage)
++    {
++        if (!FindXOfBucketsActive) { return false; }
++        const uint32_t Key = ClassName.GetComparisonIndex().ToUnstableInt();
++
++        std::lock_guard Lock(FindXOfBucketsMutex);
++        const auto BucketIt = FindXOfBuckets.find(Key);
++        if (BucketIt == FindXOfBuckets.end()) { return false; }
++
++        for (const FUObjectItem* Item : BucketIt->second.Items)
++        {
++            UObject* Object = Item->GetUObject();
++            if (!Object || Item->IsUnreachable()) { continue; }
++            OutStorage.emplace_back(Object);
++        }
++        return true;
++    }
++
+     auto FindFirstOf(FName ClassName) -> UObject*
+     {
+         UObject* ObjectFound{nullptr};
+@@ -1210,6 +1400,20 @@
+             // Equals hits over UClass objects); no per-object super walk.
+             FFO2.exact = static_cast<uint32_t>(Roots.size());
+             FFO2.arm = "hash";
++            LogFindXOfFfo2(ClassName, FFO2, ObjectFound, -1);
++#endif
++            return ObjectFound;
++        }
++
++        // [IT lookup-speed 04] Name-keyed cache second (hash tables stay the
++        // preferred arm when available): one bucket lookup instead of the
++        // GUObjectArray walk.
++        if (FindXOfCache_TryFirstOf(ClassName, ObjectFound))
++        {
++#ifdef __PROSPERO__
++            FFO2.scanned = 0;
++            FFO2.exact = (ObjectFound && ObjectFound->GetClassPrivate()->GetNamePrivate().Equals(ClassName)) ? 1u : 0u;
++            FFO2.arm = "namecache";
+             LogFindXOfFfo2(ClassName, FFO2, ObjectFound, -1);
+ #endif
+             return ObjectFound;
+@@ -1421,6 +1625,23 @@
+             LogFindXOfFfo2(ClassName, FFO2, FFO2First, static_cast<int64_t>(OutStorage.size() - FFO2FoundBefore));
+ #endif
+             return;
++        }
++
++        // [IT lookup-speed 04] Name-keyed cache second (hash tables stay the
++        // preferred arm when available).
++        {
++            const size_t FFO2FoundBeforeCache = OutStorage.size();
++            if (FindXOfCache_TryAllOf(ClassName, OutStorage))
++            {
++#ifdef __PROSPERO__
++                FFO2.scanned = static_cast<uint32_t>(OutStorage.size() - FFO2FoundBeforeCache);
++                FFO2.exact = FFO2.scanned;
++                FFO2.arm = "namecache";
++                LogFindXOfFfo2(ClassName, FFO2, FFO2FoundBeforeCache < OutStorage.size() ? OutStorage[FFO2FoundBeforeCache] : nullptr,
++                               static_cast<int64_t>(OutStorage.size() - FFO2FoundBeforeCache));
++#endif
++                return;
++            }
+         }
+ 
+         UObjectGlobals::ForEachUObject([&](UObject* Object, [[maybe_unused]]int32_t ChunkIndex, [[maybe_unused]]int32_t ObjectIndex) {

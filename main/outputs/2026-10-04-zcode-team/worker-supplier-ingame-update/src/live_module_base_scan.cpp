@@ -1,0 +1,287 @@
+// live_module_base_scan.cpp
+//
+// Vendored 2026-10-04 by worker-supplier-ingame-update from
+// worker-ingame-probe-v2's V2 scan (experiments.c: ig_range_readable /
+// ig_copy_checked / dyn_walk / phdr_table_read / scan_image_candidates),
+// restructured into a pure function over (spans, read callback) with no
+// global state. Behavior (candidate classification, ranking, two dynamic
+// address hypotheses, bounds) is field-for-field the logic that ran inside
+// the live game process (checkpoint zcode_ingame_v1_results).
+//
+// This TU performs NO OS calls. The only dereferences are the raw reads
+// through the injected callback, and those happen ONLY after the target
+// range has been validated to lie inside one readable span.
+#include "live_module_base_scan.hpp"
+
+namespace lmf {
+namespace {
+
+// ---- local minimal ELF64 definitions (pinned SDK layouts) ---------------
+static constexpr uint8_t kElfMagic0 = 0x7f;
+static constexpr char kElfMagic123[3] = {'E', 'L', 'F'};
+static constexpr uint8_t kElfClass64 = 2;  // ELFCLASS64
+static constexpr uint32_t kPtLoad = 1;
+static constexpr uint32_t kPtDynamic = 2;
+static constexpr uint32_t kPfX = 0x1;
+static constexpr uint64_t kDtNull = 0;
+static constexpr uint64_t kDtDebug = 21;
+
+struct LocalEhdr {
+    uint8_t e_ident[16];
+    uint16_t e_type;
+    uint16_t e_machine;
+    uint32_t e_version;
+    uint64_t e_entry;
+    uint64_t e_phoff;
+    uint64_t e_shoff;
+    uint32_t e_flags;
+    uint16_t e_ehsize;
+    uint16_t e_phentsize;
+    uint16_t e_phnum;
+    uint16_t e_shentsize;
+    uint16_t e_shnum;
+    uint16_t e_shstrndx;
+};
+static_assert(sizeof(LocalEhdr) == 64, "Elf64_Ehdr pinned layout");
+
+struct LocalPhdr {
+    uint32_t p_type;
+    uint32_t p_flags;
+    uint64_t p_offset;
+    uint64_t p_vaddr;
+    uint64_t p_paddr;
+    uint64_t p_filesz;
+    uint64_t p_memsz;
+    uint64_t p_align;
+};
+static_assert(sizeof(LocalPhdr) == 56, "Elf64_Phdr pinned layout");
+
+struct LocalDyn {
+    int64_t d_tag;
+    union {
+        uint64_t d_val;
+        uint64_t d_ptr;
+    } d_un;
+};
+static_assert(sizeof(LocalDyn) == 16, "Elf64_Dyn pinned layout");
+
+void copy_bounded_str(const char *src, char *dst, size_t cap) noexcept {
+    size_t i = 0;
+    for (; i + 1 < cap && src[i] != '\0'; ++i) dst[i] = src[i];
+    dst[i] = '\0';
+}
+
+// Span validation: the WHOLE [addr, addr+len) range must fit inside one
+// readable (bit0) span. This is what makes every later read "no dereference
+// beyond span-validated reads".
+bool range_readable(const VmScanSpan *spans, size_t span_count, uint64_t addr,
+                    uint64_t len) noexcept {
+    if (len == 0) return true;
+    for (size_t i = 0; i < span_count; ++i) {
+        const VmScanSpan &s = spans[i];
+        if ((s.protection & kVmScanReadableBit) && addr >= s.start &&
+            addr - s.start < s.end - s.start && s.end - addr >= len)
+            return true;
+    }
+    return false;
+}
+
+size_t copy_checked(const VmScanSpan *spans, size_t span_count,
+                    VmScanReadFn read_fn, void *read_ctx, uint64_t addr,
+                    void *dst, size_t len) noexcept {
+    if (!range_readable(spans, span_count, addr, len)) return 0;
+    return read_fn(read_ctx, addr, dst, len);
+}
+
+// Bounded dynamic walk at dyn_addr (each entry independently span-validated).
+// Bounded to min(filesz/16, 256) entries, exactly the V2 bound.
+bool dyn_walk(const VmScanSpan *spans, size_t span_count, VmScanReadFn read_fn,
+              void *read_ctx, uint64_t dyn_addr, uint64_t filesz,
+              int *entries_out, int *dt_null_seen, int *dt_debug_present,
+              uint64_t *dt_debug_value) noexcept {
+    unsigned steps = 256;
+    if (filesz != 0) {
+        const uint64_t s = filesz / sizeof(LocalDyn);
+        if (s < steps) steps = static_cast<unsigned>(s);
+        if (steps == 0) steps = 1;
+    }
+    int scanned = 0, sane = 0, nul = 0, dbg = 0;
+    uint64_t dbgval = 0;
+    for (unsigned i = 0; i < steps; ++i) {
+        LocalDyn d;
+        if (copy_checked(spans, span_count, read_fn, read_ctx,
+                         dyn_addr + static_cast<uint64_t>(i) * sizeof d, &d,
+                         sizeof d) != sizeof d)
+            break;  // unreadable: stop the walk (containment)
+        const uint64_t tag = static_cast<uint64_t>(d.d_tag);
+        ++scanned;
+        const bool tag_sane = (tag <= 0x40) ||
+                              (tag >= 0x60000000ULL && tag < 0x70000000ULL) ||
+                              (tag >= 0x70000000ULL && tag < 0x80000000ULL);
+        if (tag_sane) ++sane;
+        if (tag == kDtNull) { nul = 1; break; }
+        if (tag == kDtDebug) { dbg = 1; dbgval = d.d_un.d_ptr; }
+    }
+    if (entries_out) *entries_out = scanned;
+    if (dt_null_seen) *dt_null_seen = nul;
+    if (dt_debug_present) *dt_debug_present = dbg;
+    if (dt_debug_value) *dt_debug_value = dbgval;
+    return scanned > 0 && (nul || sane == scanned);
+}
+
+// Phdr table at base (each entry independently span-validated). Returns true
+// when the table was fully read; fills dynamic info and the PT_LOAD extent.
+bool phdr_table_read(const VmScanSpan *spans, size_t span_count,
+                     VmScanReadFn read_fn, void *read_ctx, uint64_t base,
+                     const LocalEhdr *eh, uint64_t *dyn_vaddr,
+                     uint64_t *dyn_filesz, int *dyn_found, uint64_t *extent,
+                     int *has_exec) noexcept {
+    *dyn_found = 0; *extent = 0; *has_exec = 0;
+    *dyn_vaddr = 0; *dyn_filesz = 0;
+    for (unsigned p = 0; p < eh->e_phnum; ++p) {
+        LocalPhdr ph;
+        if (copy_checked(spans, span_count, read_fn, read_ctx,
+                         base + eh->e_phoff +
+                             static_cast<uint64_t>(p) * eh->e_phentsize,
+                         &ph, sizeof ph) != sizeof ph)
+            return false;  // any unreadable phdr => table not fully read
+        if (ph.p_type == kPtDynamic) {
+            *dyn_vaddr = ph.p_vaddr;
+            *dyn_filesz = ph.p_filesz;
+            *dyn_found = 1;
+        } else if (ph.p_type == kPtLoad) {
+            if (ph.p_flags & kPfX) *has_exec = 1;
+            const uint64_t e2 = ph.p_vaddr + ph.p_memsz;
+            if (e2 > *extent) *extent = e2;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+VmScanResult lmf_scan_image_bases(const VmScanSpan *spans, size_t span_count,
+                                  VmScanReadFn read_fn, void *read_ctx,
+                                  VmScanCandidate *candidates,
+                                  size_t candidate_capacity) noexcept {
+    VmScanResult result{};
+    result.chosen_index = -1;
+    copy_bounded_str("needs-base", result.provenance, sizeof result.provenance);
+    if (spans == nullptr || read_fn == nullptr) return result;
+    VmScanCandidate *cands = candidates;
+    const size_t cap = candidate_capacity == 0 || candidates == nullptr
+                           ? 0
+                           : candidate_capacity;
+    uint32_t count = 0;
+    int truncated = 0;
+
+    for (size_t i = 0; i < span_count; ++i) {
+        if (count >= cap) { truncated = span_count > 0 ? 1 : 0; break; }
+        const VmScanSpan &s = spans[i];
+        const bool rd = (s.protection & kVmScanReadableBit) != 0;
+        const bool ex = (s.protection & kVmScanExecBit) != 0;
+        const char *where = nullptr;
+        if (rd && ex) {
+            where = "rx_span";
+        } else if (rd && !ex && i + 1 < span_count) {
+            // Typical image layout: header PT_LOAD readable, next PT_LOAD
+            // executable and adjacent — also a candidate base.
+            const VmScanSpan &n = spans[i + 1];
+            if ((n.protection & kVmScanReadableBit) &&
+                (n.protection & kVmScanExecBit) && n.start == s.end)
+                where = "r_adjacent_exec";
+        }
+        if (where == nullptr) continue;
+        if (s.end - s.start < sizeof(LocalEhdr)) continue;
+
+        VmScanCandidate c{};
+        c.base = s.start;
+        c.span_start = s.start;
+        c.span_end = s.end;
+        c.prot = s.protection;
+        copy_bounded_str(where, c.where, sizeof c.where);
+        LocalEhdr eh;
+        for (size_t k = 0; k < sizeof eh; ++k)
+            reinterpret_cast<uint8_t *>(&eh)[k] = 0;
+        if (copy_checked(spans, span_count, read_fn, read_ctx, c.base, &eh,
+                         sizeof eh) == sizeof eh &&
+            eh.e_ident[0] == kElfMagic0 && eh.e_ident[1] == kElfMagic123[0] &&
+            eh.e_ident[2] == kElfMagic123[1] && eh.e_ident[3] == kElfMagic123[2]) {
+            c.magic_ok = 1;
+            c.class_ok = eh.e_ident[4] == kElfClass64;
+            c.e_type = eh.e_type;
+            c.phnum = eh.e_phnum;
+            if (c.class_ok && eh.e_phentsize >= sizeof(LocalPhdr) &&
+                eh.e_phnum >= 1 && eh.e_phnum <= 128) {
+                c.phdr_ok = phdr_table_read(spans, span_count, read_fn, read_ctx,
+                                            c.base, &eh, &c.dyn_vaddr,
+                                            &c.dyn_filesz, &c.dyn_found,
+                                            &c.extent, &c.has_exec_segment);
+                if (c.phdr_ok && c.dyn_found) {
+                    // Two address hypotheses (recorded, never guessed):
+                    // mode 1: bias=base, dyn at base+p_vaddr (ET_DYN style);
+                    // mode 2: p_vaddr absolute (ET_EXEC style). Both are
+                    // validated by span reads inside dyn_walk; better score
+                    // wins, tie -> mode 1.
+                    int e1 = 0, n1 = 0, d1p = 0;
+                    uint64_t d1v = 0;
+                    const bool ok1 = dyn_walk(spans, span_count, read_fn, read_ctx,
+                                              c.base + c.dyn_vaddr, c.dyn_filesz,
+                                              &e1, &n1, &d1p, &d1v);
+                    int e2 = 0, n2 = 0, d2p = 0;
+                    uint64_t d2v = 0;
+                    const uint64_t abs_addr = c.dyn_vaddr;
+                    bool ok2 = false;
+                    if (abs_addr != c.base + c.dyn_vaddr)
+                        ok2 = dyn_walk(spans, span_count, read_fn, read_ctx,
+                                       abs_addr, c.dyn_filesz, &e2, &n2, &d2p,
+                                       &d2v);
+                    const int score1 = (ok1 ? 2 : 0) + n1;
+                    const int score2 = (ok2 ? 2 : 0) + n2;
+                    if (ok1 && score1 >= score2) {
+                        c.dyn_mode = 1; c.dyn_entries = e1;
+                        c.dt_null_seen = n1; c.dyn_parses = 1;
+                        c.dt_debug_present = d1p; c.dt_debug_value = d1v;
+                    } else if (ok2) {
+                        c.dyn_mode = 2; c.dyn_entries = e2;
+                        c.dt_null_seen = n2; c.dyn_parses = 1;
+                        c.dt_debug_present = d2p; c.dt_debug_value = d2v;
+                    }
+                }
+            }
+        }
+        cands[count++] = c;
+    }
+    if (span_count > 0 && count == cap && count < span_count) truncated = 1;
+
+    // Main eboot candidate: LARGEST executable image whose dynamic parses.
+    // Ties resolve to the lowest base (deterministic, spans ascending).
+    int best = -1;
+    for (uint32_t i = 0; i < count; ++i) {
+        const VmScanCandidate &c = cands[i];
+        if (!(c.magic_ok && c.class_ok && c.phdr_ok && c.dyn_parses &&
+              c.has_exec_segment && c.extent != 0))
+            continue;
+        if (best < 0 || c.extent > cands[static_cast<size_t>(best)].extent)
+            best = static_cast<int>(i);
+    }
+    result.candidate_count = count;
+    result.truncated = truncated;
+    if (best >= 0) {
+        VmScanCandidate &c = cands[static_cast<size_t>(best)];
+        c.chosen = 1;
+        result.chosen_index = best;
+        result.chosen_base = c.base;
+        result.chosen_extent = c.extent;
+        result.chosen_dyn_mode = c.dyn_mode;
+        result.chosen_e_type = c.e_type;
+        result.chosen_dyn_addr = (c.dyn_mode == 2)
+                                     ? c.dyn_vaddr
+                                     : c.base + c.dyn_vaddr;
+        copy_bounded_str("v2_elf_base_scan", result.provenance,
+                         sizeof result.provenance);
+    }
+    return result;
+}
+
+}  // namespace lmf

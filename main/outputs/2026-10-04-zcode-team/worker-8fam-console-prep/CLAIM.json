@@ -1,0 +1,30 @@
+{
+  "worker": "worker-8fam-console-prep",
+  "date": "2026-10-04",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "write_scope": [
+    "outputs/2026-10-04-zcode-team/worker-8fam-console-prep/"
+  ],
+  "read_only_inputs": [
+    "outputs/2026-10-04-zcode-team/worker-dll-8fam-combined/ (host-validated 8-family SDK ELF candidate c3aba79f... + EXPECTED-DELTA-8FAM.md + REPORT.md)",
+    "outputs/2026-10-04-zcode-team/worker-static-tls-7fam/out-sdk-composition/e72f5318.../ (7-family ELF + receipt; CONSOLE-STAGE-PLAN-7FAM.md + EXPECTED-LEDGER-7FAM.md)",
+    "outputs/2026-10-04-zcode-team/worker-combined-dll-allfam/out-sdk-composition/133c5e9e.../ (6-family console-PASSED ELF + receipt)",
+    "outputs/2026-10-04-zcode-team/worker-console-batch-runner/ (session-order note: payload-only first)"
+  ],
+  "task": "Console stage-prep for the 8-family combined owned-DLL candidate: (1) verify the artifact (local re-hash == 79281191... EXACTLY, 336552 bytes; undefined-import set diffed against BOTH the console-passed 6-family ELF 133c5e9e and the 7-family ELF e72f5318 — expect identical 55-symbol sets); (2) write CONSOLE-STAGE-PLAN-8FAM.md (fresh alias ALLFAM8_DLL_TEST.elf, upload/check/readback with payload law readback==upload sha EXACTLY, single dispatch, JSONL append positions, expected deltas vs BOTH prior runs incl. seh64 key from seq1, consumer imports 82->90 with the 8 named symbols, win64cc IR +7, memory.last host-measured values, failure triage incl. -130..-137); (3) sequencing recommendation: prefer the 8fam superset run at the user's return window with the 7fam as fallback attribution, coordinated with the batch-runner payload-only-first order.",
+  "budget_calls_max": 40,
+  "claims": {
+    "artifact_identity.verified_this_session": "sha256 792811911e773c9b07a47ba3b22bc5d290f9f3ab86056ddfc985cf25e6d804fb, 336552 bytes, ELF 64-bit LSB pie executable x86-64 FreeBSD, build-id 0224ee94363709e5114bb133231aa4a7 — re-hash EXACT match vs receipt",
+    "import_set.verified_this_session": "nm -u sets of 6fam(133c5e9e), 7fam(e72f5318), 8fam(c3aba79f) are each exactly 55 symbols and pairwise byte-identical (diff clean both ways)",
+    "jsonl_position.verified": "console /data/modbridge-owned-dll-candidate.jsonl holds 36 records (through 133c5e9e seq3 phase5) per the 7fam stage-prep re-count (which corrected the stale 6-family-plan '20 records' figure). ALLFAM8_DLL_TEST as the FIRST of the two pending DLL stages appends at positions 37-40; if 7fam runs first instead, 8fam appends at 41-44. Hard invariant either way: appended after ALL existing records, none modified.",
+    "memory_last_correction": "EXPECTED-DELTA-8FAM.md does not mention memory.last; the task assumption 'unchanged from 7fam' is FALSE per host oracle. 8fam host-normal measured memory.last.length 114688 (seq2 phase3) and 163840 (seq3 phase5) vs 7fam 98304/147456 vs 6fam 98304 final. Plan carries host-measured values (6-family run proved this field matches host on target).",
+    "expected_deltas": "vs 7fam: +seh64 key {enabled:1} from seq1 (9 family keys total incl. seh64), consumer_imports 82->90 (7x KERNEL32: RtlCaptureContext/RtlLookupFunctionEntry/RtlVirtualUnwind/RtlAddFunctionTable/RtlRemoveFunctionTable/SetUnhandledExceptionFilter/RaiseException + 1x VCRUNTIME140 __C_specific_handler — verified in worker-seh64-*.def), win64cc IR +7 (mb_win_seh64_abi), memory.last.length 98304->114688 / 147456->163840, new fixture codes -130..-137. vs 6fam: additionally static_tls and its 4 TLS symbols (82 vs 78) per the 7fam ledger.",
+    "unchanged": "results [86,93], worker 4/4 (begin [...,258,259], result 0x81234567), entry attach [7,7]/detach [0,0], contract_errors 0, cleanup {pending:0,retired:1}, helper_imports 10, 55-symbol SDK import set"
+  },
+  "non_goals": [
+    "No console contact, no target/PS5 execution, no nested subagents, no network to the console",
+    "No writes outside worker-8fam-console-prep/; no modification of any source/vendor tree",
+    "No dispatch now: console runs PENDING user authorization; this is controller prep only",
+    "No claim that the 8-family candidate has passed on console"
+  ]
+}

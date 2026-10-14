@@ -1,0 +1,171 @@
+--- a/UE4SSProgram.cpp
++++ b/UE4SSProgram.cpp
+@@ -58,6 +58,10 @@
+ #include <LuaType/LuaCustomProperty.hpp>
+ #include <LuaType/LuaUObject.hpp>
+ #include <Mod/CppMod.hpp>
++#ifdef __PROSPERO__
++// [CAP09 B1] native C++ mods under the activation snapshot (engine-free planner).
++#include <Platform/NativeCppModInventory.hpp>
++#endif
+ #include <Mod/LuaMod.hpp>
+ #include <Mod/Mod.hpp>
+ #include <ObjectDumper/ObjectToString.hpp>
+@@ -2098,7 +2102,49 @@
+             wide.push_back(static_cast<File::CharType>(static_cast<unsigned char>(c)));
+         }
+         return wide;
++    }
++
++#ifdef __PROSPERO__
++    // [CAP09 B1] Startup order of the native C++ mods created by setup_mods
++    // under the activation snapshot (one program per process). Narrow ASCII
++    // names, widened with widen_ascii_native_key at every lookup.
++    static auto native_cpp_start_order() -> std::vector<std::string>&
++    {
++        static std::vector<std::string> order;
++        return order;
++    }
++
++    // [CAP09 B1] Start the snapshot-enabled C++ mods in startup order. One mod
++    // that refuses or throws is logged and skipped; it never stops the others
++    // or the Lua mods (an escaping exception would abort the whole runtime).
++    static auto start_native_cpp_mods_in_order() -> void
++    {
++        for (const auto& name : native_cpp_start_order())
++        {
++            const auto wide_name = widen_ascii_native_key(name);
++            auto* mod = UE4SSProgram::find_mod_by_name<CppMod>(wide_name, UE4SSProgram::IsInstalled::Yes);
++            if (!mod)
++            {
++                Output::send<LogLevel::Warning>(STR("[NMOD] {}: not started (module was not loaded, see the line above)\n"), wide_name);
++                continue;
++            }
++            if (mod->is_started()) continue;
++            try
++            {
++                mod->start_mod();
++                Output::send(STR("[NMOD] {}: start returned started={}\n"), wide_name, mod->is_started() ? STR("yes") : STR("no"));
++            }
++            catch (const std::exception& error)
++            {
++                Output::send<LogLevel::Error>(STR("[NMOD] {}: start refused: {}\n"), wide_name, widen_ascii_native_key(std::string{error.what()}));
++            }
++            catch (...)
++            {
++                Output::send<LogLevel::Error>(STR("[NMOD] {}: start refused: unknown exception\n"), wide_name);
++            }
++        }
+     }
++#endif
+ 
+     auto UE4SSProgram::setup_mods() -> void
+     {
+@@ -2119,6 +2165,69 @@
+                 auto name = widen_ascii(mod.name);
+                 if (!find_mod_by_name<LuaMod>(name))
+                     m_mods.emplace_back(std::make_unique<LuaMod>(*this, std::move(name), widen_ascii(mod.path)));
++            }
++            // [CAP09 B1] Native C++ mods. Enabled = the snapshot (mods.txt
++            // "Name : 1" or the mod's enabled.txt, as upstream UE4SS); the PRX
++            // comes from <mods directory>/<Name>/dlls/ on disk. This runs inside
++            // start_native_mods(), i.e. during the runtime's module_start, the
++            // only phase in which /data is known to be reachable (backend
++            // comment; launch 14 shows /data creation failing later). The
++            // CppMod constructor loads the PRX (sceKernelLoadStartModule).
++            // Fail closed and contained: a planner error skips C++ mods only;
++            // an error in one mod skips that mod only [CAP09 F2].
++            native_cpp_start_order().clear();
++            try
++            {
++                const auto& source = *m_native_context.mod_source;
++                const std::filesystem::path mods_dir = m_mods_directories.empty() ? std::filesystem::path{} : m_mods_directories.front();
++                std::optional<std::string_view> mods_txt;
++                const auto mods_txt_file = source.read("ue4ss/Mods/mods.txt");
++                if (mods_txt_file) mods_txt = mods_txt_file->bytes;
++                const auto inventory = Platform::NativeMods::discover_cpp_mods(mods_dir, mods_txt, [&source](std::string_view mod_name) {
++                    return source.read("ue4ss/Mods/" + std::string(mod_name) + "/enabled.txt").has_value();
++                });
++                for (const auto& note : inventory.notes)
++                    Output::send(STR("[NMOD] {}\n"), widen_ascii(note));
++                // [CAP09 F2] One try/catch PER candidate: a refusal or exception
++                // (bad_alloc in a log line, a throwing constructor) skips that
++                // mod only, never the ones after it. The start-order row is
++                // written BEFORE the module is created and kept, so a mod that is
++                // in m_mods is always in the start order (no loaded-but-never-
++                // started mod); a row whose module was not kept is reported by
++                // the start step ("not started ... see the line above").
++                for (const auto& candidate : inventory.start_order)
++                {
++                    try
++                    {
++                        auto name = widen_ascii(candidate.name);
++                        if (find_mod_by_name<CppMod>(name)) continue;
++                        auto mod_dir = widen_ascii(candidate.mod_dir.string());
++                        native_cpp_start_order().push_back(candidate.name);
++                        Output::send(STR("[NMOD] loading C++ mod {} from {}/dlls (if the log stops here, the module load hung)\n"), name, mod_dir);
++                        auto mod = std::make_unique<CppMod>(*this, std::move(name), std::move(mod_dir));
++                        const bool installable = mod->is_installable();
++                        m_mods.emplace_back(std::move(mod));
++                        Output::send(STR("[NMOD] load step returned for {} installable={}\n"), widen_ascii(candidate.name),
++                                     installable ? STR("yes") : STR("no"));
++                    }
++                    catch (const std::exception& error)
++                    {
++                        Output::send<LogLevel::Error>(STR("[NMOD] {}: refused: C++ mod setup failed: {}\n"), widen_ascii(candidate.name),
++                                                      widen_ascii(std::string{error.what()}));
++                    }
++                    catch (...)
++                    {
++                        Output::send<LogLevel::Error>(STR("[NMOD] {}: refused: C++ mod setup failed: unknown exception\n"), widen_ascii(candidate.name));
++                    }
++                }
++            }
++            catch (const std::exception& error)
++            {
++                Output::send<LogLevel::Error>(STR("[NMOD] refused: C++ mod setup failed: {}\n"), widen_ascii(std::string{error.what()}));
++            }
++            catch (...)
++            {
++                Output::send<LogLevel::Error>(STR("[NMOD] refused: C++ mod setup failed: unknown exception\n"));
+             }
+             return;
+         }
+@@ -2328,6 +2437,9 @@
+                     auto mod = UE4SSProgram::find_mod_by_name<LuaMod>(widen_ascii_native_key(name), UE4SSProgram::IsInstalled::Yes);
+                     if (mod && !mod->is_started()) mod->start_mod();
+                 }
++            // [CAP09 B1] C++ mods created by setup_mods under the snapshot.
++            if constexpr (std::is_same_v<ModType, CppMod>)
++                start_native_cpp_mods_in_order();
+             return {};
+         }
+ #endif
+@@ -2644,7 +2756,27 @@
+         {
+             queue_event([this]() { queue_reinstall_mods(); });
+             return;
++        }
++#ifdef __PROSPERO__
++        // [CAP09 F3] Hot reload is refused, loudly, while any native C++ mod is
++        // present. An ABI-v1 module stays resident (it may own threads), so a
++        // reinstall would dlopen the resident image again outside module_start,
++        // re-enter its entry, and start nothing (install_cpp_mods is not part
++        // of a reinstall). Nothing is uninstalled: every mod keeps running.
++        // Without C++ mods this is the unchanged R11 path. Restart the game to
++        // reload mods.
++        {
++            size_t native_cpp_mods = 0;
++            for (const auto& mod : m_mods)
++                if (dynamic_cast<CppMod*>(mod.get())) ++native_cpp_mods;
++            if (native_cpp_mods != 0)
++            {
++                Output::send<LogLevel::Warning>(STR("[NMOD] refused: hot reload of all mods while {} native C++ mod(s) are loaded; nothing was reloaded, every mod keeps running (restart the game to reload)\n"),
++                                                native_cpp_mods);
++                return;
++            }
+         }
++#endif
+ 
+         ProfilerScope();
+         Output::send(STR("Re-installing all mods\n"));

@@ -1,0 +1,146 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-owned-detour-1/original/sources/x64Detour.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-owned-detour-1/port/sources/x64Detour.cpp
+@@ -1,3 +1,10 @@
++#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++#include <polyhook2/OwnedTrampoline.hpp>
++#include <polyhook2/OwnedMemory.hpp>
++#include <memory>
++#include <stdexcept>
++#include <exception>
++#endif
+ //
+ // Created by steve on 7/5/17.
+ //
+@@ -24,6 +31,13 @@
+     Detour(fnAddress, fnCallback, userTrampVar, getArchType()), m_allocator(8, 100) {}
+ 
+ x64Detour::~x64Detour() {
++#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++    if (m_trampoline && !m_hooked) {
++        if (!OwnedMemory::release_trampoline(m_trampoline)) std::terminate();
++        m_trampoline = 0;
++        if (m_userTrampVar) *m_userTrampVar = 0;
++    }
++#endif
+     if (m_valloc2_region) {
+         m_allocator.deallocate(*m_valloc2_region);
+         m_valloc2_region = {};
+@@ -390,12 +404,70 @@
+         Log::log("Trampoline Jmp Tbl:\n" + instsToStr(jmpTblOpt) + "\n", ErrorLevel::INFO);
+     }
+ 
++#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++    m_hookSize = (uint32_t) roundProlSz;
++    m_nopProlOffset = (uint16_t) minProlSz;
++    assert(m_hookSize >= m_nopProlOffset);
++    m_nopSize = (uint16_t) (m_hookSize - m_nopProlOffset);
++    // Complete all throwing construction/registration before changing source.
++    auto patch = m_hookInsts;
++    const auto nops = make_nops(m_fnAddress + m_nopProlOffset, m_nopSize);
++    patch.insert(patch.end(), nops.begin(), nops.end());
++    const auto flatten = [&](const insts_t& instructions) {
++        std::vector<uint8_t> bytes;
++        bytes.reserve(m_hookSize);
++        uint64_t expected = m_fnAddress;
++        for (const auto& instruction : instructions) {
++            if (instruction.getAddress() != expected || !instruction.size() ||
++                instruction.size() > instruction.getBytes().size())
++                throw std::runtime_error("Noncontiguous owned hook bytes");
++            bytes.insert(bytes.end(), instruction.getBytes().begin(),
++                         instruction.getBytes().begin() + instruction.size());
++            expected += instruction.size();
++        }
++        if (bytes.size() != m_hookSize) throw std::runtime_error("Owned hook byte extent mismatch");
++        return bytes;
++    };
++    auto patchBytes = flatten(patch);
++    auto originalBytes = flatten(m_originalInsts);
++    OwnedMemory::ScopedRegion patchSource(patchBytes.data(), patchBytes.size(), R);
++    OwnedMemory::ScopedRegion rollbackSource(originalBytes.data(), originalBytes.size(), R);
++    MemoryProtector prot(m_fnAddress, m_hookSize, ProtFlag::RWX, *this);
++    if (!prot.isGood()) return false;
++    try {
++        if (!mem_copy(m_fnAddress, (uint64_t)patchBytes.data(), patchBytes.size()))
++            throw std::runtime_error("Owned source patch refused");
++        // No allocating/logging operation follows the first successful patch.
++        m_hooked = true;
++        *m_userTrampVar = m_trampoline;
++        return true;
++    } catch (...) {
++        // A custom accessor may have copied a prefix before refusing/throwing.
++        // Retain trampoline resources until the entire original extent restores.
++        bool restored = false;
++        try { restored = mem_copy(m_fnAddress, (uint64_t)originalBytes.data(), originalBytes.size()); }
++        catch (...) {}
++        if (!restored) {
++            m_hooked = true;
++            *m_userTrampVar = m_trampoline;
++            throw std::runtime_error("Owned source rollback refused; hook resources retained");
++        }
++        if (!OwnedMemory::release_trampoline(m_trampoline)) std::terminate();
++        m_trampoline = 0;
++        *m_userTrampVar = 0;
++        m_hooked = false;
++        return false;
++    }
++#else
+     *m_userTrampVar = m_trampoline;
+     m_hookSize = (uint32_t) roundProlSz;
+     m_nopProlOffset = (uint16_t) minProlSz;
+ 
+     Log::log("Hook instructions: \n" + instsToStr(m_hookInsts) + "\n", ErrorLevel::INFO);
+     MemoryProtector prot(m_fnAddress, m_hookSize, ProtFlag::RWX, *this);
++#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++    if (!prot.isGood()) { *m_userTrampVar = 0; return false; }
++#endif
+     ZydisDisassembler::writeEncoding(m_hookInsts, *this);
+ 
+     Log::log("Hook size: " + std::to_string(m_hookSize) + "\n", ErrorLevel::INFO);
+@@ -409,6 +481,7 @@
+ 
+     m_hooked = true;
+     return true;
++#endif
+ }
+ 
+ bool x64Detour::unHook() {
+@@ -691,7 +764,7 @@
+ 
+ bool x64Detour::makeTrampoline(insts_t& prologue, insts_t& outJmpTable) {
+     assert(!prologue.empty());
+-    assert(m_trampoline == NULL);
++    assert(m_trampoline == 0);
+ 
+     const uint64_t prolStart = prologue.front().getAddress();
+     const uint16_t prolSz = calcInstsSz(prologue);
+@@ -718,10 +791,19 @@
+     m_trampolineSz = (uint16_t) (prolSz + jmp_size * (1 + neededEntryCount) + alignment_pad_size);
+ 
+     // allocate new trampoline before deleting old to increase odds of new mem address
++    #if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++    const auto tmpTrampoline = OwnedMemory::allocate_trampoline(m_trampolineSz);
++    if (!tmpTrampoline) return false;
++    if (m_trampoline && !OwnedMemory::release_trampoline(m_trampoline)) {
++        OwnedMemory::release_trampoline(tmpTrampoline);
++        throw std::runtime_error("Owned trampoline release failed");
++    }
++#else
+     auto tmpTrampoline = (uint64_t) new uint8_t[m_trampolineSz];
+-    if (m_trampoline != NULL) {
++    if (m_trampoline != 0) {
+         delete[] (uint8_t*) m_trampoline;
+     }
++#endif
+ 
+     m_trampoline = tmpTrampoline;
+     delta = m_trampoline - prolStart;
+@@ -774,6 +856,9 @@
+     }
+ 
+     MemoryProtector prot(m_trampoline, m_trampolineSz, ProtFlag::R | ProtFlag::W | ProtFlag::X, *this, false);
++#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++    if (!prot.isGood()) return false;
++#endif
+ 
+     // Insert jmp from trampoline -> prologue after overwritten section
+     const uint64_t jmpToProlAddr = m_trampoline + prolSz;

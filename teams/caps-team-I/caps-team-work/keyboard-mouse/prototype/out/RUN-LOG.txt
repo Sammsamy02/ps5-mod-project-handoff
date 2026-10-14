@@ -1,0 +1,44 @@
+== inputs (read-only)
+  16fcfe4943627076  outputs/2026-10-04-zcode-team/worker-pad-coexist/staging/input-handler-coexist/Handler.cpp
+  6a0633caa27f6f57  outputs/2026-10-08-l22-runtime/candidate/PS5PadSource.cpp
+  2d63c094bf8d3718  outputs/2026-10-04-zcode-team/worker-pad-coexist/staging/ue4ss-native-pad-provider-coexist/port/PS5PadSource.hpp
+  61890df00f097482  .superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/first/include/Input/KeyDef.hpp
+  5d27a2c7a9b16277  .superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/first/src/Input/KeyDef.cpp
+== 1. table gate
+check_table: enum_values=163 rows=163 spellings=166 hid_rows=124 engine_rows=100 modifiers=3 aliases=2 checked=730 errors=0
+check_table: PASS
+== 2. our sources compile warning-free (-Werror)
+  ok src/KeyboardMouseMap.cpp
+  ok src/EngineKeySource.cpp
+  ok src/CompositeInputSource.cpp
+== 3. unit + integration tests (ASan+UBSan)
+  rows=163 engine-named=100 hid=124 aliases=2 modifiers=3
+PASS table_rows_unique_and_named
+PASS table_lookups
+PASS key_down_fires_once_no_repeat
+PASS held_at_start_is_not_a_press
+PASS controller_change_or_loading_resets_baseline
+PASS only_bound_keys_are_asked
+PASS modifiers_exact_match_like_pc_ue4ss
+PASS no_keyboard_plugged_in
+PASS unsupported_engine_fails_closed_pad_continues
+PASS unknown_key_name_in_this_game_is_skipped
+PASS controller_events_identical_with_and_without_keyboard_route
+PASS pad_chord_and_real_key_same_poll_fire_once
+PASS mouse_buttons_bindable
+PASS queue_overflow_drops_counted_no_crash
+PASS over_budget_slows_down_and_caps
+PASS round_robin_above_key_cap
+PASS allow_input_false_delivers_nothing
+PASS deactivate_stops_sampling
+PASS deferred_attach_pad_held_by_game
+PASS broken_child_never_silences_the_others
+PASS no_reader_is_unsupported
+tests=21 checks=1166 failures=0
+  table rows dumped: 168 -> out/keymap.tsv
+== 4. two-thread stress (ThreadSanitizer)
+threads: shown=10000 events=10000 drops=0 delivered=10000 accounted=1 silent_after_shutdown=1
+== 5. Lua probe + bind-check host tests
+test_probe: size=2193 checks=193 failures=0
+test_bind: size=570 checks=9 failures=0
+== ALL PASS

@@ -1,0 +1,111 @@
+{
+  "commit": "0cbf0e290c31adb476f9de0fa44b1d8829affa40",
+  "runtime_ready": false,
+  "label": "source-bound transition prerequisites; conditional paths not target proof",
+  "probe_signatures": [
+    "Run(int32)->int32",
+    "ThrowForHostBoundaryTest()->void",
+    "AbiVersion()->int32 cdecl",
+    "RuntimeProbe(int32,int32&)->int32 cdecl"
+  ],
+  "requirements": [
+    {
+      "id": "mode",
+      "source": "mono/mini/driver.c:2941",
+      "symbols": "MONO_AOT_MODE_INTERP",
+      "condition": "sets aot_only, use_interpreter, use_aot_trampolines; does not set force_use_interpreter",
+      "required_evidence": "Confirm selected full-AOT/interpreter runtime configuration; do not substitute JIT or LLVM modes."
+    },
+    {
+      "id": "host_invoke",
+      "source": "mono/metadata/object.c:3095",
+      "symbols": "mono_runtime_invoke",
+      "condition": "static obj=NULL; params[0]=address of int32 cookie; nonnull exc catches/converts errors; return int is boxed",
+      "required_evidence": "Attach calling thread; retain/handle managed objects across GC; check exc before unboxing."
+    },
+    {
+      "id": "dispatch",
+      "source": "mono/mini/mini-runtime.c:3078",
+      "symbols": "mono_jit_runtime_invoke",
+      "condition": "tries jit_only/AOT method; unavailable compiled method with interpreter enabled selects use_interp; :3208 invokes callback",
+      "required_evidence": "For intended interpreted Probe verify use_interp rather than assume INTERP forces all invocations."
+    },
+    {
+      "id": "runtime_wrapper",
+      "source": "mono/mini/interp/interp.c:1906",
+      "symbols": "interp_runtime_invoke",
+      "condition": "builds runtime-invoke IL wrapper; obtains InterpMethod and executes frame",
+      "required_evidence": "Enable method builder, IL transform, TLS stacks and core library; do not mistake IL generation for permission to emit native JIT code."
+    },
+    {
+      "id": "exception_capture",
+      "source": "mono/metadata/marshal-ilgen.c:1639",
+      "symbols": "emit_runtime_invoke_body_ilgen",
+      "condition": "nonnull exc branch emits managed Exception catch; stores exception via pointer",
+      "required_evidence": "Exercise ThrowForHostBoundaryTest and missing-import exceptions; never unbox exception result."
+    },
+    {
+      "id": "pinvoke_wrapper",
+      "source": "mono/mini/interp/transform.c:1728",
+      "symbols": "interp_transform_internal_calls",
+      "condition": "PInvoke methods routed through mono_marshal_get_native_wrapper(FALSE,FALSE)",
+      "required_evidence": "Support metadata signature/marshaler wrapper creation for int32 and int32 byref; no strings/structs/delegates required by Probe imports."
+    },
+    {
+      "id": "resolver",
+      "source": "mono/metadata/native-library.c:1179",
+      "symbols": "lookup_pinvoke_call_impl",
+      "condition": "reads ImplMap/ModuleRef, optional dllmap, loads module, probes symbol and caches address",
+      "required_evidence": "Admit exact Probe metadata and narrow resolver scope; retain code addresses until managed calls end."
+    },
+    {
+      "id": "internal_scope",
+      "source": "mono/metadata/native-library.c:1068",
+      "symbols": "legacy_probe_for_module",
+      "condition": "__Internal uses mono_dl_open(NULL); symbol lookup may mangle if NO_MANGLE absent",
+      "required_evidence": "Actual process namespace lookup or explicit mapped bridge scope must be supplied; fallback callback alone proves no strict allowlist."
+    },
+    {
+      "id": "fast_call",
+      "source": "mono/mini/interp/transform.c:2362",
+      "symbols": "interp_icall_op_for_sig / MINT_CALLI_NAT_FAST",
+      "condition": "non-dynamic simple signature when proper MonoContext available; I4 and pointers accepted; direct pointer-sized C calls through do_icall_wrapper",
+      "required_evidence": "Verify generated native signature and actual platform calling ABI: AbiVersion V_P eligible; RuntimeProbe PP_P candidate. No emitted-code/trampoline claim from lexical trace."
+    },
+    {
+      "id": "general_call",
+      "source": "mono/mini/interp/interp.c:1558",
+      "symbols": "ves_pinvoke_method",
+      "condition": "fallback uses AOT interp_to_native_trampoline; CallContext arch helpers or build_args_from_sig; special no-proper-context LMF wrapper branch",
+      "required_evidence": "Only mandatory if fallback selected; supply named mscorlib AOT trampoline, ABI argument/return handling and correct unwind metadata."
+    },
+    {
+      "id": "gc_lmf",
+      "source": "mono/metadata/marshal-ilgen.c:1805",
+      "symbols": "gc_safe_transition_builder / INTERP_PUSH_LMF_WITH_CTX",
+      "condition": "native wrapper enters/exits GC safe state except TARGET_WASM/skip branches; direct and fallback calls push LMF; context-less branch errors",
+      "required_evidence": "Supply cooperative GC transitions, TLS/LMF stack, stack/register context capture and resume; do not infer target macros."
+    },
+    {
+      "id": "eh_startup",
+      "source": "mono/mini/mini-exceptions.c:212",
+      "symbols": "mono_exceptions_init",
+      "condition": "AOT mode loads restore_context, call_filter, throw_exception, rethrow_exception, rethrow_preserve_exception; invokes mono_arch_exceptions_init",
+      "required_evidence": "Provide real mscorlib AOT module and registered unwind/exception architecture implementation even if imports use fast calls."
+    },
+    {
+      "id": "managed_throw",
+      "source": "mono/mini/interp/interp.c:1104",
+      "symbols": "interp_throw / interp_set_resume_state",
+      "condition": "uses LMF and mono_handle_exception; restores native context if needed; resume state roots exception with GC handle",
+      "required_evidence": "Supply actual interpreter-aware EH walking and context restore; corlib InvalidOperationException/string allocation remains necessary."
+    },
+    {
+      "id": "reverse_entry_conditional",
+      "source": "mono/mini/interp/interp.c:2955",
+      "symbols": "mono_native_to_interp_trampoline / mono_create_ftnptr_arg_trampoline",
+      "condition": "compiled-call entry wrappers and function-pointer paths use these; public runtime-invoke interpreter callback itself is direct C",
+      "required_evidence": "Probe declares no callbacks/delegates; do not require reverse function-pointer entry for selected Probe path without observed reachable dependency."
+    }
+  ]
+}

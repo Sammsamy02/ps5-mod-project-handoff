@@ -1,0 +1,54 @@
+{
+  "worker": "worker-comp6-post-build-reviewer",
+  "date": "2026-10-04",
+  "role": "Independent post-build review of composition-6 one-pass build (one layer above automated gates)",
+  "scope": [
+    "Wait for composition-6 run-1 receipt.json (poll ~60s, max ~30min)",
+    "(a) composed-object shape delta vs composition-4 run-3 baseline: expected units = program replaced, initializer replaced, adapter extra, loadercontext affected, bootstrap pair; nm/readelf diffs itemized",
+    "(b) initializer Shape-A claim spot-proof at objdump level: ScanGame compiled form contains seeds-missing-gmalloc refusal string, no ps_scan call sites",
+    "(c) configured-roots path: new context fields in program object symbols/layout; Validate fork new error string present",
+    "(d) read candidate PRX 17/17 receipt, gate v2 manifest verdict, worker-odr-emitter-check receipt-one-pass.json; confirm claimed GOs",
+    "Deliver POST-BUILD-VERDICT.md with GO/NO-GO for staging; any delta beyond expected set flagged loudly"
+  ],
+  "constraints": [
+    "No console contact, no nested subagents",
+    "Read-only verification of build artifacts; no edits to build outputs",
+    "Independent verification: re-derive evidence from artifacts, do not trust gate prose"
+  ],
+  "build_state_at_review_close": {
+    "run_dir": "ue4ss-native-supplier-composition-6/run-1-f1791174131 (Phase A completed 23:16 local, preserved for forensics after Phase B packaging refusal at 23:20; attempt 9 still failing at verify-only on a bridge source pin at ~23:33)",
+    "composed_object_sha256": "4dd4f309075cdc3e6391947e4111842bb991935144cd8ee97c61ded32a0358b5",
+    "composed_object_bytes": 117702184,
+    "candidate_prx": "NOT PRODUCED (packaging refused: runtime_start_bridge.h drift 4bb02413 vs pin ecada77e; header edited 22:49 after pin recorded)",
+    "emitter_receipt_one_pass": "ABSENT",
+    "gate_v2_manifest_verdict": "ABSENT (manifest not finalized: PENDING shas, no resolution_b section, entry r3/r4 self-contradiction)"
+  },
+  "verified_claims": {
+    "composition_delta_exact": "freshly_compiled_units = run-3's 15 + program; retained_units_replaced == ['program']; bootstrap triple bit-identical (source+object shas) to run-3; undefined_delta identical to run-3 (added [sceKernelGetModuleInfo], removed [], count 198)",
+    "composed_und_set_identical_to_run3": "198/198 names, zero delta",
+    "composed_def_delta_itemized": "+1 Validate-fork filesystem::path lambda; -56 initializer unreachable-tail template instantiations (Output::send arms, ScanResult/ScanError helpers, optional<bool>, libc++ B8ne180100 internals); nothing else",
+    "shape_a_artifact_proof": "initializer object sha fe639a859b2f33d1ecc4d000e9e1980c7b53413269acbb4ffe823e973dcc496f BIT-IDENTICAL to REPLACE-ARGV compile-gate object (1,676,944 bytes); composed ScanGame exactly 0x4a4 bytes; whole-object ps_scan relocations = 1 (.eh_frame FDE only; run-3 had 2 incl. the now-gone ScanGame call site); zero DoScan lambda sections; compiled kAllSlots table parses gmalloc slot present=0 addr=0x0; refusal string '[Seeds] Required-slot seed table incomplete: present [{}] missing [{}]…SHAPE A' verbatim in .rodata; ScanGame tail = __cxa_allocate_exception + runtime_error + __cxa_throw via fmt::vformat",
+    "configured_roots_artifact_proof": "both Validate-fork error strings verbatim in composed object; ValidateNativeProgramContext weak symbol + new lambda defined; both MakeNativeProgramContext overloads defined; program banner 'unobserved on this platform; configured game directory: {}' present (UTF-16 @0x4680e); ODR gate byte_identical true at EDITED port sha 0a068bb9 (not pre-landing 66499615); chain-symbols 14/14 post-compose",
+    "source_provenance": "program staged copy == controller comp6-integration copy (75abf2ab); adapter W/src == controller copy (b63f482a); loadercontext W/src == controller copy (bc982594); initializer merged staging source c85c42f7 + SeedTable.h 2cab0c52 + SeedValidation.hpp b8d851e9 all rr-covered"
+  },
+  "deltas_beyond_expected_set": [
+    "NO candidate PRX: Phase B packaging refused on runtime_start_bridge.h pin drift (measured 4bb02413 vs pinned ecada77e; header edited 22:49)",
+    "bridge cpp pin mismatch in attempt 9 (10385e22 != None) — controller iterating at review close",
+    "change-manifest self-contradiction: packaging_units declares entry r4 (c97055f4) while fold_ins parks r4 and checklist P7 pins r3 (51771ab5); build preflighted with r4",
+    "manifest NOT finalized: program/adapter/loadercontext shas PENDING-FROM-ONE-PASS, bridge sha feed5254-pending-final, no resolution_b section (gate v2 B1 would not run)",
+    "two D2 headers (OwnedMappedImageCaller.hpp, PsMappedImageCaller.hpp) initially edited in place without rr coverage; admitted only after fail-closed refusals (rr 96->98 files); attempts preserved in /tmp/comp6_onepass_run6/7.log",
+    "one benign new adapter compile warning: nodiscard on void convert_impl (adapter :111)"
+  ],
+  "verdict": "NO-GO for staging: Phase A composition verified genuine and exactly the declared change set (incl. Shape A and configured roots) at byte/symbol/instruction level, but the authorizing pass is incomplete — no candidate PRX, no emitter receipt, no finalized manifest, no gate v2 verdict. Re-run required after bridge pin reconciliation; §1 checks must be re-run on the fresh run dir.",
+  "evidence": {
+    "verdict_doc": "POST-BUILD-VERDICT.md",
+    "verifier": "verify_comp6_build.py (re-runnable), verify_out.json (full dump)",
+    "evidence_files": [
+      "evidence/run1-composed-scangame.asm",
+      "evidence/run1-composed-relocs-distilled.txt",
+      "evidence/run3-legacy-initializer-relocations.txt",
+      "evidence/run3-composed-und-baseline.txt",
+      "evidence/run3-composed-def-global-baseline.txt"
+    ]
+  }
+}

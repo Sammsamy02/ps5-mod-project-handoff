@@ -1,0 +1,90 @@
+{
+  "worker": "worker-luamod-l11-dryrun",
+  "date": "2026-10-05",
+  "mission": "Prove the luamod DIFF-1 admission path EXECUTES (launch-11 preparation) by dry-running the worker-luamod-rebase INTEGRATION.md runbook in a scratch area; host-side only; stop before the shared packaging pipeline.",
+  "mode": "LOCAL ONLY. No console contact, no target execution, no nested subagents, no PRX packaging, no writes outside outputs/2026-10-04-zcode-team/worker-luamod-l11-dryrun/. The canonical launch-10 launch10-build / prx-candidate dirs, worker-fname-heap-runtime-bounds, worker-facts-geometry-fix and worker-lease-coverage-fix were not touched.",
+  "claims": [
+    {
+      "id": "L11D-1",
+      "claim": "The INTEGRATION.md section-1 sha gates pass exactly as written: all 8 pinned shas match (fixed_l10lm 9de2c4c8ccfbbdf8..., l10lm driver 9b332fc56ededa74..., staged LuaMod.cpp 4540593ac9e66cdc..., initializer 8b0c7e9905ce4a85..., SeedTable 59effe6e4cd34eb0..., replace-receipt 27c1b3b0dc8d646a..., package_prx.py e6fbe6c5011b498e..., frozen fixed script 8dd92a6fe4b71cf1...).",
+      "evidence": "logs/sha-gates.txt; DRYRUN.md section 1"
+    },
+    {
+      "id": "L11D-2",
+      "claim": "The admission edit path is exactly as delivered: the fixed-script edition differs from the frozen 8dd92a6f... baseline by EXACTLY line 52 (RETAINED_REPLACEABLE={'program'} -> {'program','luamod'}), and the l10lm driver differs from the r3-armed driver 51646132... by docstring + tagged L10LM E0/E1/E2/E3/E4/E5 sites only (57 diff lines, every code change tagged).",
+      "evidence": "logs/lineage-diff-fixed.txt, /tmp snapshot in DRYRUN.md; grep of tagged sites"
+    },
+    {
+      "id": "L11D-3",
+      "claim": "The frozen-script admission ACCEPTS the luamod replace-unit in a real compose: the SEC32-3 retained path admitted unit 'luamod' with retained_replaced=true, argv drift indices EXACTLY {165,168,171} (source/-o/-MF redirection only, 172-token argv preserved), source covered by the 100-file replace-receipt, and the fresh .d dependency walk fully pre-covered (1306/1306, no 'Unpinned retained-replacement dependency' raised). retained_units_replaced in the run receipt = ['luamod','program'].",
+      "evidence": "scratch/ue4ss-native-supplier-composition-6-l10lm/run-a/receipt.json (73faa059...), run-a/retained-luamod.stdout, commands.json (52/52 exit 0)"
+    },
+    {
+      "id": "L11D-4",
+      "claim": "The compose argv builds with variant B and the full driver gate chain executes: fixed-script sha check, ODR equality (0a068bb9...), receipt preflight (100 rr + 6 extra files), edited-landed gate, entry preflight (c97055f4...), bridge pin (10385e22...), compose, chain-symbols gate (14/14 startup-chain symbols defined). Compose wall time 75.3 s (run-a) / 30.4 s (run-b).",
+      "evidence": "logs/dryrun-harness.console.log, logs/dryrun-harness-run-b.console.log, scratch/staging/chain-symbols.json"
+    },
+    {
+      "id": "L11D-5",
+      "claim": "Object results: composed runtime object sha256 633a8c82d71b6233989bc5ada83bc06ac6b65e1cf11ef769e00601b6ea2ccda4, 117,742,096 bytes (+1,936 vs r3-armed run-a 4be218ef.../117,740,160), 368 units, 17 freshly compiled, 353 retained. The composed run's luamod.o is sha256 5595feb785206c0057eb29af0ccdcd53a8898d86629db0b10debc4a17aa08dea (6,903,984 B) - BYTE-IDENTICAL to the rebase gate's variantB AND variantA objects, proving the executor-tag formulation equivalence holds in the real composition.",
+      "evidence": "run-a and run-b receipts; shasum of run-a/luamod.o, run-b/luamod.o; LM/receipts/compile-gate.json"
+    },
+    {
+      "id": "L11D-6",
+      "claim": "Unit delta vs the r3-armed run-a receipt: 368/368 unit names equal and EXACTLY ONE unit object differs (luamod: 2371839b3d6fe0b4 -> 5595feb785206c00). program (135392038b21a9d8) and unreal-unrealinitializer (f5aa9efae0fdbbf2) objects are byte-identical to r3-armed. Import contract unchanged: luamod.o UND set 565 == pinned 565 (zero new); composed-object undefined_delta IDENTICAL to r3-armed (added ['sceKernelGetModuleInfo'], removed 0, changed_bindings 0, current 198, SDK-baseline extended).",
+      "evidence": "comparison of scratch run-a receipt vs worker-launch10-r3-armed/ue4ss-native-supplier-composition-6-l10r3/run-a/receipt.json; logs/run-a-luamod-undefined.txt vs logs/gateB-undefined.txt"
+    },
+    {
+      "id": "L11D-7",
+      "claim": "Link-inertness finding HOLDS, in a STRONGER form than the mission phrasing: llvm-nm -a (25,373 symbols incl. file-static locals) on the composed run's luamod.o shows arm_funcptr_marshal_drain, funcptr_marshal_hook and r3_marshal_carrier_precheck ABSENT (dead-code-eliminated: file-static, no TU-internal caller), not merely unreferenced; zero undefined references to them anywhere. The same three names are absent from the 117.7 MB composed object (287,573 syms). The live DIFF-1 surface IS present: RC::m_funcptr_marshal_armed (local b), RC::is_funcptr_marshal_armed (local t), the FuncPtrMarshal Lua key string. The R3MarshalPublishGameThreadIdentity / R3MarshalQueryHarnessDispatch / R3MarshalPumpPending symbols in the big object are DEFINED (T) by the initializer unit with byte-same sizes in the r3-armed object - lineage-inherited DIFF-2/R3 surface, NOT introduced by DIFF-1, and with zero UND refs in both lineages. Consequence unchanged: the initializer's deferred pump still has no consumer and nothing arms the marshal - a controller/authoring-worker design decision (INTEGRATION.md section 6), unchanged by this dry run.",
+      "evidence": "logs/run-a-luamod-all-symbols.txt, logs/run-a-bigobj-all-symbols.txt, logs/run-a-bigobj-R3Marshal-und.txt vs logs/r3-bigobj-R3Marshal-und.txt (IDENTICAL)"
+    },
+    {
+      "id": "L11D-8",
+      "claim": "Determinism: two full passes into scratch run-a and run-b produce BYTE-IDENTICAL composed objects (same sha, same size), 368/368 identical unit objects, identical luamod.o, identical undefined_delta; the run input-hashes maps differ ONLY in the 17 freshly-compiled .o path keys (run dir name), with identical shas on all 368 common paths.",
+      "evidence": "run-a vs run-b receipt comparison; input-hashes.json diff analysis in DRYRUN.md section 5"
+    }
+  ],
+  "non_claims": [
+    "No PRX was packaged: the runbook's build_overlay + package_phase (frozen shared package_prx.py e6fbe6c5...) were deliberately NOT executed; no prx-candidate dir exists anywhere in this worker dir. Packaging is launch-10/controller-owned and serialized.",
+    "No in-game behavior, runtime execution, console contact, or launch-grade quality claim of any kind. The dry run is host-side object/link-level evidence only.",
+    "The dry-run receipts (scratch) are NOT canonical receipts; launch-11 must regenerate its own under the controller's dirs. Scratch receipt.json files embed run-dir paths and differ between passes by design; the durable comparators are the composed-object and unit-object shas, which are path-independent (proven by run-a==run-b).",
+    "No resolution of the drain-consumer design question (INTEGRATION.md section 6) and no claim that the F-1 calibration service or an armed drain now exists.",
+    "No claim that the delivered L10LM driver default --program-source works as documented; see finding L11D-F1."
+  ],
+  "findings_for_controller": [
+    {
+      "id": "L11D-F1",
+      "severity": "runbook-bug (worked around; must be passed explicitly)",
+      "finding": "The delivered l10lm driver's DEFAULT --program-source (MY/staging/comp6-program/UE4SSProgram.cpp under worker-luamod-rebase) does NOT exist - the rebase staging never re-staged the program copy, and the regenerated replace-receipt covers the canonical worker-comp6-driver/staging/comp6-program/UE4SSProgram.cpp (75abf2ab77791f4e...). The r3-armed run-a passed the canonical path explicitly. INTEGRATION.md section 3's 'all other arguments have pinned defaults' is therefore wrong for --program-source: a default invocation fails in receipt_preflight ('replace-receipt does not cover the program staged copy').",
+      "action": "Controller MUST pass --program-source outputs/2026-10-04-zcode-team/worker-comp6-driver/staging/comp6-program/UE4SSProgram.cpp (or re-stage the copy under the controller dir AND regenerate the receipt; do not edit pins)."
+    },
+    {
+      "id": "L11D-F2",
+      "severity": "phrasing correction",
+      "finding": "The drain cluster is NOT 'present but unreferenced' in the candidate; it is compile-time dead-code-eliminated (absent from the unit object and from the composed object). Any launch-11 plan that assumes a linkable arm_funcptr_marshal_drain symbol must be revised: a caller requires first restoring an emitted definition (non-static linkage or an in-TU caller), then wiring it.",
+      "action": "Carry into the INTEGRATION.md section-6 controller decision."
+    }
+  ],
+  "pins": {
+    "fixed_l10lm_edition": "9de2c4c8ccfbbdf89d03510e080c5b321a42b6944f0e9642a37cf3829d0c9eaf",
+    "l10lm_driver": "9b332fc56ededa745603b36a8d93354cdbd43274ed37ab6be1efb7edfcefceb1",
+    "staged_luamod_source": "4540593ac9e66cdc0a62e56736f05c05a23ca897881a902cae55e1d51bb79b25",
+    "replace_receipt": "27c1b3b0dc8d646ac3e05f1ffdf0332c67a3aa1ab65df3a0536b4874bd2d96b3",
+    "package_prx_frozen": "e6fbe6c5011b498e0c26ee88bdc6c84aacab204b6ccad5696a78353afef5c313",
+    "frozen_fixed_baseline": "8dd92a6fe4b71cf194aa180adb155e00b98cdae682425b5c825032518fef8a10",
+    "program_staged_copy_rr_covered": "75abf2ab77791f4e0aa2c068164d95d7737aefdcf0536a791f40599cd4ffb574",
+    "entry": "c97055f40f5a6dd94dd6360c4459538b8130e8b63a806a84d975d7c7604db470",
+    "bridge": "10385e2265af0a12236bc7f713ed343a7f13796644aac0de511f6663f579209a",
+    "pinned_luamod_object": "2371839b3d6fe0b42ee999e5ac456df72d77921b04b6838aeb2105631d39c848",
+    "dryrun_composed_object_run_a_and_b": "633a8c82d71b6233989bc5ada83bc06ac6b65e1cf11ef769e00601b6ea2ccda4",
+    "dryrun_luamod_object_run_a_and_b": "5595feb785206c0057eb29af0ccdcd53a8898d86629db0b10debc4a17aa08dea",
+    "r3armed_composed_object": "4be218efc61a251c (117,740,160 B)"
+  },
+  "scratch_modifications": {
+    "driver_copy": "scratch/build_runtime_composition6_l10lm.py (5878cd4874ca44d2...) differs from the pinned 9b332fc5 edition by EXACTLY TWO scope-isolation path redirects, both proven by diff: line 100 MY -> worker-luamod-l11-dryrun/scratch, line 103 COMPOSE6_FIXED -> the scratch copy of the fixed edition. No logic edits. py_compile clean.",
+    "fixed_edition_copy": "scratch/build_runtime_composition6_fixed_l10lm.py is BYTE-IDENTICAL to the pinned 9de2c4c8 edition (sha-checked by the driver at run time).",
+    "receipt_copy": "scratch/receipts/composition6-replace-receipt.json is BYTE-IDENTICAL to the pinned 27c1b3b0 receipt.",
+    "harness": "scratch/run_dry_l11.py executes the driver module's OWN main() sequence (check_sha, odr_gate, receipt_preflight, edited_landed_gate, entry_preflight, bridge pin, compose_phase, chain_symbols_gate) with scratch --composition-run, then raises the mission stop bound before build_overlay/package_phase."
+  }
+}

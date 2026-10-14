@@ -1,0 +1,121 @@
+--- a/loader/src/pe_loader.cpp
++++ b/loader/src/pe_loader.cpp
+@@ -286,6 +286,27 @@
+             return fail(out, "PE has a static TLS directory with data or callbacks; "
+                              "TEB/gs thread-local access unsupported -- refused");
+     }
++    // A missing or empty TLS directory cannot establish absence of Windows
++    // TEB access. 0x65 is the x86 GS segment-override prefix. Reject any
++    // executable file byte with that value until the runtime supports GS/TEB.
++    // This is intentionally conservative: an immediate or embedded data byte
++    // may also be 0x65, so this can refuse a DLL that does not use GS.
++    for (uint16_t i = 0; i < s.coff->NumberOfSections; ++i)
++    {
++        const PeSectionHeader& sec = s.sections[i];
++        if (!(sec.Characteristics & PE_SCN_MEM_EXECUTE) || !sec.SizeOfRawData) continue;
++        const uint8_t* begin = s.file + sec.PointerToRawData;
++        const auto* hit = static_cast<const uint8_t*>(std::memchr(begin, 0x65, sec.SizeOfRawData));
++        if (hit)
++        {
++            const uint64_t rva = uint64_t(sec.VirtualAddress) + (hit - begin);
++            char reason[160];
++            std::snprintf(reason, sizeof(reason),
++                          "PE executable byte at RVA 0x%llx is 0x65 (possible GS segment override); TEB/gs unsupported -- refused",
++                          (unsigned long long)rva);
++            return fail(out, reason);
++        }
++    }
+ 
+     std::string reason;
+     if (!partition_ok(s, reason)) return fail(out, std::move(reason));
+--- a/loader/include/pe_loader.h
++++ b/loader/include/pe_loader.h
+@@ -8,7 +8,8 @@
+ //   * images are mapped once and never unmapped (retained-module law of the
+ //     #9 host: a mod may have started threads; unloading is never safe);
+ //   * a PE with real static TLS data/callbacks is refused (TEB/gs wall);
+-//     an empty linker-artifact TLS directory is admitted after validation.
++//     empty or absent TLS metadata does not prove GS absence. Executable
++//     bytes containing 0x65 are conservatively refused before mapping.
+ //
+ // Host-portable by design: the memory primitives are isolated in Os namespace
+ // so macOS (SysV x86_64) can unit-test the whole mapper without a console.
+@@ -76,6 +77,7 @@
+ 
+ // Map the PE at 'file_bytes/file_size' through 'resolver'. Refuses with a
+ // named reason on: not PE32+/x64, CLR/COM descriptor, real static TLS,
++// possible GS segment prefix in executable bytes,
+ // RWX-requiring 16 KiB partition (unless allowed), unknown relocation type,
+ // unresolvable import (all missing symbols listed in one pass).
+ LoadResult pe_load(const void* file_bytes, size_t file_size, ImportResolver& resolver,
+--- a/loader/src/pe_types.h
++++ b/loader/src/pe_types.h
+@@ -167,8 +167,8 @@
+     uint32_t AddressOfNameOrdinals;    // uint16 index array into functions
+ };
+ 
+-// TLS directory (presence = refusal per design section 3e; we only read
+-// the header to name the reason).
++// TLS directory. Real template data or callbacks are refused; an empty
++// directory can be admitted only if every other preflight check passes.
+ struct PeTlsDirectory64
+ {
+     uint64_t StartAddressOfRawData;
+--- a/loader/tests/test_preflight.cpp
++++ b/loader/tests/test_preflight.cpp
+@@ -2,6 +2,7 @@
+ #include "pe_types.h"
+ 
+ #include <cstdint>
++#include <cstring>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <fstream>
+@@ -43,7 +44,8 @@
+ int main(int argc, char** argv) {
+     if (argc != 5) return 2;
+     const std::string which = argv[1];
+-    const char* input = (which == "empty_tls" || which == "bad_tls" ||
++    const char* input = (which == "empty_tls" || which == "gs_prefix_empty_tls" ||
++                         which == "gs_prefix_no_tls_dir" || which == "bad_tls" ||
+                          which == "bad_tls_oversize" || which == "tls_overlay" ||
+                          which == "bad_reloc_target" || which == "bad_reloc_odd" ||
+                          which == "empty_reloc" || which == "absolute_reloc")
+@@ -65,6 +67,18 @@
+ 
+     if (which == "bad_optional") coff(bytes)->SizeOfOptionalHeader = 0xffff;
+     if (which == "bad_tls") opt(bytes)->DataDirectory[PE_DIR_TLS].VirtualAddress = 0xffffff00u;
++    if (which == "gs_prefix_empty_tls" || which == "gs_prefix_no_tls_dir") {
++        auto* sections = reinterpret_cast<PeSectionHeader*>(
++            reinterpret_cast<uint8_t*>(opt(bytes)) + coff(bytes)->SizeOfOptionalHeader);
++        const uint32_t entry_off = file_offset(bytes, sections[0].VirtualAddress);
++        if (!entry_off || entry_off + 9 > bytes.size()) return 4;
++        const uint8_t gs_read[] = {0x65, 0x48, 0x8b, 0x04, 0x25, 0x58, 0, 0, 0};
++        std::memcpy(bytes.data() + entry_off, gs_read, sizeof(gs_read));
++        if (which == "gs_prefix_no_tls_dir") {
++            opt(bytes)->DataDirectory[PE_DIR_TLS].VirtualAddress = 0;
++            opt(bytes)->DataDirectory[PE_DIR_TLS].Size = 0;
++        }
++    }
+     if (which == "tls_zero_size") opt(bytes)->DataDirectory[PE_DIR_TLS].Size = 0;
+     if (which == "bad_tls_oversize") opt(bytes)->DataDirectory[PE_DIR_TLS].Size = opt(bytes)->SizeOfImage;
+     if (which == "bad_entry") opt(bytes)->AddressOfEntryPoint = opt(bytes)->SizeOfImage + 0x1000;
+@@ -172,6 +186,8 @@
+     else if (which == "bad_reloc_odd") ok = !r.ok && r.reason.find("relocation block") != std::string::npos;
+     else if (which == "empty_reloc" || which == "absolute_reloc") ok = !r.ok && r.reason.find("usable base relocation") != std::string::npos;
+     else if (which == "real_tls") ok = !r.ok && r.reason.find("static TLS") != std::string::npos;
++    else if (which == "gs_prefix_empty_tls" || which == "gs_prefix_no_tls_dir")
++        ok = !r.ok && r.reason.find("possible GS segment override") != std::string::npos;
+     else if (which == "missing_reloc") ok = !r.ok && r.reason.find("base relocation") != std::string::npos;
+     std::printf("%s %s: ok=%d reason=%s\n", which.c_str(), ok ? "PASS" : "FAIL", r.ok, r.reason.c_str());
+     return ok ? 0 : 1;
+--- a/loader/tests/run_preflight.py
++++ b/loader/tests/run_preflight.py
+@@ -16,6 +16,7 @@
+ subprocess.run(cmd, check=True, timeout=30)
+ failed = 0
+ cases = ['baseline', 'bad_optional', 'missing_reloc', 'empty_tls', 'bad_tls',
++         'gs_prefix_empty_tls', 'gs_prefix_no_tls_dir',
+          'real_tls', 'bad_import_dir', 'bad_export', 'bad_reloc_target',
+          'bad_reloc_odd', 'helper_bad_pe', 'bad_entry', 'empty_reloc',
+          'absolute_reloc', 'bad_tls_oversize', 'tls_overlay', 'bad_delay',

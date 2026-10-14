@@ -1,0 +1,41 @@
+{
+ "worker": "worker-kernel-pak",
+ "team": "2026-10-04-zcode-team",
+ "claimed_utc": "2026-10-06",
+ "task": "PS5 UE4SS runtime port: research + prototype the PAK overlay (engine pak loading in decrypted eboot, pakchunk naming/priority, kernel-redirect vs engine-registration approaches, PC-mod->PS5 pak compatibility, host-side inspection tool, PAK-OVERLAY.md).",
+ "scope": "offline research + host prototype only; no console contact; no game claims; read-only outside outputs/2026-10-04-zcode-team/worker-kernel-pak/",
+ "inputs": {
+  "eboot": ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin (sha256 3b6cfad4...)",
+  "ps5_pak": ".superpowers/native-observations/townfall-main-pak-full-2026-10-01/pakchunk0-ps5.pak (sha256 ee145cbc...)",
+  "ps5_utocs": ".superpowers/native-observations/townfall-main-utoc-2026-10-01/",
+  "pc_mod_trio": ".superpowers/native-observations/leon-real-mod-intake-2026-10-01/extracted/zzz_Leon_Townfall_2K_P.{pak,utoc,ucas}",
+  "staged_diagnostic_pak": ".superpowers/native-observations/townfall-extra-pak-test-2026-10-01/diagnostic-render-control/",
+  "repak_spike": ".superpowers/native-dependency-spike/unreal-library-container-survey-1/mount-research/artifact/original-asset-format-spike.pak",
+  "repak_binary": ".superpowers/native-dependency-spike/unreal-library-container-survey-1/mount-research/tools/build/aarch64-apple-darwin/release/repak"
+ },
+ "deliverables": [
+  "PAK-OVERLAY.md",
+  "tools/pak_inspect.py",
+  "tools/eboot_xref.py",
+  "tools/eboot_disasm.py",
+  "evidence/eboot-re-findings.json",
+  "evidence/pakchunk0-ps5.json",
+  "evidence/pakchunk0-ps5-census.json",
+  "evidence/modbridge-diagnostic-pak.json",
+  "evidence/leon-pak.json",
+  "evidence/repak-spike-pak.json",
+  "evidence/utoc-headers.json",
+  "evidence/*.disasm.txt"
+ ],
+ "key_claims": [
+  "FPakPlatformFile::Initialize located at eboot vaddr 0x1769ee0; boot pak scan chain mapped (folders '%sPaks/', wildcard '*.pak', IterateDirectory visitor) — byte-proved via string xrefs + disassembly.",
+  "Mount priority is folder-index ranked (4/3/2/1 via 0x1770140) and '_P.pak' substring is explicitly recognized by the mount helper at 0x176ec30 (utf16 string proved at 0x775a23a).",
+  "Subfolder (~mods) recursion NOT settled statically (visitor vtable is BSS-initialized); only direct Paks-folder placement is proved-safe.",
+  "Unified v11 compact index layout proven across PS5 game paks, PC mod stub, repak output, ModBridge output; all index+region SHA1s verified by tools/pak_inspect.py.",
+  "The field worker-pak-index called 'lead u32 (semantics unknown)' is the path-hash seed (proved via repak spike: 0xF376E23D = documented seed 4084654653).",
+  "ModBridge diagnostic pak entry flags are 0x0 where game records carry 0xE0000000 — a concrete byte difference to reconcile before the next mount-acceptance experiment.",
+  "Game classic paks contain zero cooked packages (4699 loose files: .res/.png/.ini/fonts); all cooked content is IoStore v8 utoc/ucas — asset mods need IoStore delivery, config mods work via classic pak.",
+  "Container-level PC->PS5 compatibility: proved same formats (pak v11 compact, utoc v8, unencrypted, same b'-==-' prefix); cooked payload platform mismatch (PC shaders/textures vs PS5 GNF) remains the open blocker, recooking expected but untested."
+ ],
+ "recommended_approach": "Phased: (0) rebuild diagnostic pak with game-identical entry records 0xE0000000 + engine-level mount observation; (1) kernel virtual-file injection into the game's Paks-folder enumeration for boot-time additive paks; (2) engine-level registration via mount helper 0x176ec30 (UE4SS-style, signature-scanned, allocator-correct FString args) for runtime/late mounting. No approach is runtime-validated yet."
+}

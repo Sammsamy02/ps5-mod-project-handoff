@@ -1,0 +1,17 @@
+# Capability #3: existing resident route by operation
+
+This is a Mac-only source analysis of the pinned `kstuff-lite` v1.11 archive, SHA-256 `b4fcf169a12aa184c812f4243c5f0cca40f1ad932d9a14530bbc667aef47ddf6`, and the isolated stage-57 #3 implementation. It does not report console execution. The relevant source is `ps5-kstuff/uelf/main.c:56,87–93`, `ps5-kstuff/uelf/syscall_fixes.c:8–14,66–80`, and `ps5-kstuff/uelf/kekcall.c:102–106` inside `/WORKSPACE/.codex/worktrees/translation-core/what/outputs/kstuff-lite-pinned/kstuff-lite-v1.11-source.zip`.
+
+| #3 operation | Existing route in the staged code | New resident kernel code needed for this operation? | Unproved target condition |
+| --- | --- | --- | --- |
+| Preflight permission query | `sceKernelQueryMemoryProtection`, with `sceKernelVirtualQuery` corroboration; both are pinned libkernel exports and locally declared in `CodePatch.cpp` | No | Correct PS5 signature, structure layout, and fidelity on the actual mapping |
+| Liveness gate | Existing `getppid` kekcall CHECK (`0xffffffff00000027`) | No | This process must reach the hooked PPR sysent and not be in a paused state; final RAX/CF contract is not source-proved |
+| Open target page for a write | Existing resident interception of PPR/PS4 `mprotect`; debug-register trap skips a permission-validation block | No new sub-op is identified | The underlying `vm_map` change can still fail; SELF/PRX text and COW behavior require console evidence |
+| Confirm writable mapping | Re-query page protection through libkernel; refuse if it is not readable and writable | No | Query APIs must report the real post-change state |
+| Copy and verify replacement bytes | In-process `memcpy`, fence, and readback in `CodePatch.cpp` | No | Concurrent execution, cross-core visibility, and executable cache behavior are not proven |
+| Unpatch and restore permissions | Checked byte restore, `mprotect` to recorded permissions, and re-query proof | No new sub-op is identified | Target restore rc, readback, permission fidelity, and long-term stickiness need console tests |
+| Plan and allocate a near trampoline | Stage-50 user-space decoder/planner and non-fixed `mmap`/`mprotect` backend | No | Nearby executable mapping and the chosen relocated instructions must work in the target process |
+| Install/remove a live hook | Stage-57 transaction composes the above and requires a caller-provided quiescence lease over target and trampoline, including draining in-flight handler uses | Not established. Cooperative quiescence could be userspace; a generic process-wide stop provider may need a separately admitted resident capability | No console provider or live-game proof exists; the existing mprotect fix supplies no thread suspension |
+| Resolve the corresponding PS5 target | Runtime symbol/profile analysis, separate from the patch primitive | No #3 kernel sub-op is identified | PC-to-PS5 function identity and instruction compatibility are unverified |
+
+**Verdict:** The existing resident permissions route is a source-backed candidate for checked in-process patch and restore. It does not by itself prove an executable game hook or imply a new #1 kernel modification for every #3 step. Any new resident Phase-B work should be justified by a specific failed console gate, such as unavailable process-wide quiescence or a demonstrated permissions limitation, rather than assumed in advance. A game or DLL whose target cannot be identified and safely relocated must be refused.

@@ -1,0 +1,55 @@
+# PROPOSAL PATCH — DO NOT APPLY while agent EM is live-editing
+# UnrealInitializer.cpp. Apply AFTER EM lands, then refresh the
+# typescan-r4 CHANGES.json files[]/changes[] rows for
+# candidate/src/UnrealInitializer.cpp (same discipline as EI/EJ note).
+#
+# Base state this diff was authored against:
+#   typescan-r4/candidate/src/UnrealInitializer.cpp
+#   sha256 ee6af9be6b68c6cc... (EI state, 2026-10-09 09:58; line numbers
+#   1229-1352). The hunks are CONTEXT-anchored, not line-anchored: if EM's
+#   fix moves lines INSIDE the Phase 4c block (1232-1350), this still
+#   applies; if EM edits the boundary context lines themselves (the slot-2
+#   "bound at" message or the Phase 5 header comment), rebase by hand.
+#
+# Semantics: with -DMODBRIDGE_L27_NO_TOSTRING_BIND the ENTIRE Phase 4c
+# admission/bind block (EI's code, including any EM fix inside it) is
+# compiled out. FName::ToStringNative stays null; NameTypes.cpp's
+# ToStringInternalWrapper routes FName::ToString through the legacy Kismet
+# path exactly as in every pre-L27 build. No [Seeds][L27] / [FN]
+# tostring-bind logging exists in this arm (the control must be
+# indistinguishable from a pre-L27 build at this layer). Slots 0/2/3/4,
+# Phase 5/6 admission and delete-listener registration are untouched.
+# Diagnostic control only; never promote; never leave resident.
+
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp
+@@ -1229,6 +1229,19 @@
+             Output::send(STR("[Seeds] slot 2 FName ctor bound at {} and behaviorally verified (ByteProperty probe id == pool id 0x{:X}); detour verification skipped\n"),
+                          reinterpret_cast<void*>(ctor_runtime), words.byte_property_id);
+ 
++#if defined(MODBRIDGE_L27_NO_TOSTRING_BIND)
++            // ---- Phase 4c no-bind control (agent-EO parallel candidate,
++            // 2026-10-09): MODBRIDGE_L27_NO_TOSTRING_BIND compiles EI's
++            // ToString admission/bind out entirely. FName::ToStringNative
++            // stays null, so NameTypes.cpp routes FName::ToString through
++            // the legacy Kismet path exactly as in every pre-L27 build --
++            // the same runtime state as a refused bind, but with the
++            // admission chain, its try/catch and every [Seeds][L27]/[FN]
++            // tostring-bind log line absent. A-shaped otherwise: slots
++            // 0/2/3/4, Phase 5/6 admission and the delete-listener
++            // registration are untouched. Diagnostic control only; never
++            // promote as production and never leave resident.
++#else
+             // ---- Phase 4c ([Seeds][L27], agent-EI): bind the ENGINE'S OWN
+             // FName::ToStringInternal (image 0x23FA00 / runtime 0x63FA00;
+             // CJ §2b re-verified from bytes, see EngineToStringProfile.hpp)
+@@ -1346,8 +1359,9 @@
+                 catch (...)
+                 {
+                     Output::send<LogLevel::Error>(STR("[Seeds][L27] ToString bind refused: exception during admission/probe; legacy Kismet route retains FName::ToString\n"));
+                 }
+             }
++#endif // MODBRIDGE_L27_NO_TOSTRING_BIND
+ 
+             // ---- Phase 5: SCO static identity plus empty-callback ABI admission.
+             // l21 official/source + pinned image evidence; target ABI assertions

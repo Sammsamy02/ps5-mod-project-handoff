@@ -1,0 +1,36 @@
+--- r2/tests/initializer_profile_integration.py
++++ r3/tests/initializer_profile_integration.py
+@@ -76,6 +76,13 @@
+  else if(scenario=="new_cdo_missing"){std::erase_if(Staged->member_facts,[](const auto&f){return f.name=="UClass::ClassDefaultObject";});required="layout.member.UClass::ClassDefaultObject.present";}
+  else if(scenario=="new_property_slot_conflict"){for(auto&f:Staged->virtual_facts)if(f.name=="FProperty::GetMinAlignment")f.offset+=8;required="layout.vtable.FProperty::GetMinAlignment.value";}
+  else if(scenario=="new_property_vtable_missing"){std::erase_if(Staged->virtual_facts,[](const auto&f){return f.name=="FProperty::GetMinAlignment";});required="layout.vtable.FProperty::GetMinAlignment.present";}
++ else if(scenario=="new_interface_offset_conflict"){for(auto&f:Staged->member_facts)if(f.name=="UClass::Interfaces")f.offset++;required="layout.member.UClass::Interfaces.value";}
++ else if(scenario=="new_interface_missing"){std::erase_if(Staged->member_facts,[](const auto&f){return f.name=="UClass::Interfaces";});required="layout.member.UClass::Interfaces.present";}
++ else if(scenario=="new_tick_slot_conflict"){for(auto&f:Staged->virtual_facts)if(f.name=="UEngine::Tick")f.offset+=8;required="layout.vtable.UEngine::Tick.value";}
++ else if(scenario=="new_tick_missing"){std::erase_if(Staged->virtual_facts,[](const auto&f){return f.name=="UEngine::Tick";});required="layout.vtable.UEngine::Tick.present";}
++ else if(scenario=="owner_compiled_width16"){for(auto&f:Staged->member_facts)if(f.name=="FField::Owner")f.width=16;}
++ else if(scenario=="owner_width_narrow"){for(auto&f:Staged->member_facts)if(f.name=="FField::Owner")f.width=7;required="layout.member.FField::Owner.width";}
++ else if(scenario=="actual_saved_declaration"){std::erase_if(Staged->member_facts,[](const auto&f){return !f.name.starts_with("FUObjectArray::")&&!f.name.starts_with("TUObjectArray::");});std::erase_if(Staged->virtual_facts,[](const auto&f){return f.name!="UObject::ProcessEvent";});assert(Staged->member_facts.size()==17&&Staged->virtual_facts.size()==1);required="layout.member.FUObjectItem::Object.present";}
+  else if(scenario=="owner_denied"){SeedArming::g_copyin_initializer_owner.leave();resolved=false;required="image.authenticated";}
+  else if(scenario=="deadline"){fake_ms=60000;resolved=false;required="image.deadline";}
+  else if(scenario=="collect_all"){cache.metadata.sha256[0]='0';Staged->identity.stats=true;Version::Major=4;resolved=false;required="settings.version";}
+@@ -84,7 +91,10 @@
+  assert(threw&&engine_calls==0&&SeedArming::cleanup_callback_invocations==1);
+  assert((results.build_configuration==1&&results.stats==1)==resolved);
+  auto check_refused=[&](const std::string&name){std::istringstream lines(log_text);std::string line;bool refused=false;while(std::getline(lines,line))if(line.find(" "+name+" ")!=std::string::npos&&line.find(" REFUSE ")!=std::string::npos)refused=true;assert(refused);};
++ auto check_passed=[&](const std::string&name){std::istringstream lines(log_text);std::string line;bool passed=false;while(std::getline(lines,line))if(line.find(" "+name+" ")!=std::string::npos&&line.find(" PASS ")!=std::string::npos)passed=true;assert(passed);};
+  if(!required.empty())check_refused(required);
++ if(scenario=="owner_compiled_width16")check_passed("layout.member.FField::Owner.width");
++ if(scenario=="actual_saved_declaration")check_refused("layout.vtable.UEngine::Tick.present");
+  if(scenario=="collect_all"){check_refused("image.sha");check_refused("layout.stats");check_refused("settings.version");}
+  for(const auto&p:rc::runtimeprofile::kRequiredMembers)assert(log_text.find(p.name)!=std::string::npos);
+  for(const auto&p:rc::runtimeprofile::kRequiredVtables)assert(log_text.find(p.name)!=std::string::npos);
+@@ -97,7 +107,7 @@
+ cmd=['clang++','-std=c++20','-Wall','-Wextra','-Werror','-O1','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer','-I',str(root/'units'),'-I',str(parser),str(p),'-o',str(exe)]
+ r=subprocess.run(cmd,capture_output=True,text=True);rows=[{'argv':cmd,'exit':r.returncode,'stdout':r.stdout,'stderr':r.stderr}]
+ if r.returncode:print(r.stderr);sys.exit(r.returncode)
+-scenarios=['exact_saved_profile','wrong_sha','wrong_base','null_context','wrong_size','missing_staged','conflict_stats','conflict_config','staged_stats','staged_revision','wrong_version','known_offset_conflict','missing_known_member','owner_denied','deadline','collect_all','wrong_version_zero_minor','version_detect','new_cast_offset_conflict','new_cdo_missing','new_property_slot_conflict','new_property_vtable_missing']
++scenarios=['exact_saved_profile','wrong_sha','wrong_base','null_context','wrong_size','missing_staged','conflict_stats','conflict_config','staged_stats','staged_revision','wrong_version','known_offset_conflict','missing_known_member','owner_denied','deadline','collect_all','wrong_version_zero_minor','version_detect','new_cast_offset_conflict','new_cdo_missing','new_property_slot_conflict','new_property_vtable_missing','new_interface_offset_conflict','new_interface_missing','new_tick_slot_conflict','new_tick_missing','owner_compiled_width16','owner_width_narrow','actual_saved_declaration']
+ for name in ([sys.argv[1]] if len(sys.argv)>1 else scenarios):
+  c=[str(exe),name,str(workspace/'outputs/2026-10-04-zcode-team/worker-game-version/console-decrypted-eboot.bin')];r=subprocess.run(c,capture_output=True,text=True);rows.append({'argv':c,'exit':r.returncode,'stdout':r.stdout,'stderr':r.stderr});print(r.stdout or r.stderr)
+  if r.returncode:break

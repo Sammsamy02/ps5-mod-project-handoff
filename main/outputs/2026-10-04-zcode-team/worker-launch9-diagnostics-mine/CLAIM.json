@@ -1,0 +1,59 @@
+{
+  "worker": "worker-launch9-diagnostics-mine",
+  "date": "2026-10-05",
+  "scope": "local-only extraction from already-fetched launch-9 evidence; no network, no engine writes",
+  "primary_evidence": {
+    "file": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch9-evidence/aligned-entry-log-snapshot.log",
+    "total_bytes": 2343756,
+    "stated_baseline_bytes": 2213030,
+    "extracted_delta_start_offset": 2210306,
+    "extracted_delta_bytes": 133450,
+    "note": "2343756-133450=2210306, which is exactly the module_start_entered line of the entry's r13 wiring attempt (clean attempt boundary). The stated baseline 2213030 is 2724 B larger and falls mid-constructor-chain INSIDE that same attempt (between constructor_begin @2212935 and its constructor_return @2213056). The two published figures are mutually inconsistent by 2724 B; extraction used the clean boundary."
+  },
+  "findings": [
+    {
+      "id": "F1-timeline",
+      "claim": "Launch-9 delta = 1097 diagnostic lines, all stamped with the entry channel prefix 'modbridge-runtime-aligned-entry/v1 build=f6530c79...', forming two complete module_start invocations (attempt B offsets 2210306-2277722, attempt C offsets 2277845-2343755) plus interleaved worker-thread Lua-harness events. Full ordered extraction with byte offsets in timeline.tsv.",
+      "evidence": "aligned-entry-log-snapshot.log bytes [2210306, 2343756); timeline.tsv rows 1-1097"
+    },
+    {
+      "id": "F2-lease-cap-not-hit",
+      "claim": "DECISIVE: bridge_lease_reg_spans=0x6 (6) and bridge_lease_reg=0x6 (6). spans == registered, so the 128-region cap was NOT hit (cause A excluded). Registration evidence instead points to cause B (exec-only text pages inside the lease range; r12/r13 source comments confirm the eboot header page is exec-only on this target) with unmapped gaps (cause C) as secondary; protection-bit semantics (cause D) disfavored.",
+      "evidence": [
+        "aligned-entry-log-snapshot.log @2270807 bridge_lease_reg_spans value=0x00000006",
+        "aligned-entry-log-snapshot.log @2270933 bridge_lease_reg value=0x00000006",
+        "runtime_start_bridge_r13.cpp lines 496-522 (spans counter semantics, cap, r11 quantization)",
+        "runtime_start_bridge_r12.cpp line 113 comment: 'The eboot header page is EXEC-ONLY on this target (VMMAP [0x400000,'",
+        "xwp-jsonl-final.jsonl seq 3-14 + UE4SS-log-final.txt lines 32-43: live VMMAP prot decode R=1 W=2 X=4 (0x4 X, 0x5 RX, 0x7 RWX, 0x3 RW, 0x1 R)"
+      ]
+    },
+    {
+      "id": "F2b-composition-attempt-adjacent",
+      "claim": "The immediately preceding attempt in the same log (offsets ~2176xxx-2210183, ending runtime_start_failed=0x2 @2208542) is the only in-log code=2 'unregistered bytes' wiring sequence and is attributed to the launch-9 composition (session 234) by adjacency and text match with LAUNCH9-RESULT. Its build is pre-r13: bridge_lease_reg=6 @2204570 with NO bridge_lease_reg_spans tag (added in r13); also NO bridge_cfg_* tags (added in r12), so its binary is r10/r11-lineage (r10 vs r11 not distinguishable in-log; tag sets identical). It registered 6 regions too - independent corroboration that only 6 readable spans exist and the cap is nowhere near saturation. Caveat: launch-8 produced the same failure text, so the mirror line's launch attribution is ambiguous; the entry-log adjacency is the stronger local signal.",
+      "evidence": [
+        "aligned-entry-log-snapshot.log @2204570 bridge_lease_reg value=0x00000006 (no preceding spans tag)",
+        "aligned-entry-log-snapshot.log @2208542 runtime_start_failed value=0x00000002",
+        "UE4SS-log-final.txt line 27: runtime_start_failed code=2 detail=Owned read range includes unregistered bytes",
+        "runtime_start_bridge_r12.cpp lines 638-639 (cfg tags exist in r12; absent in-log for this attempt)"
+      ]
+    },
+    {
+      "id": "F3-geometry-code1",
+      "claim": "The entry's code=1 refusal (MRS_ERR_CONVERSION) fired at lmf_to_native_loader_facts.cpp:228-231 (derive_readable_ranges returned zero intervals intersecting the extent). Terminal event chain @2274097-2276081: 5 data windows verified+matched at the candidate base (anchor_match 0x0000_0001..0x0004_0001), window 5 not covered, anchor_c_either=1, then lmf caps vmentry=2(Ok) vm_scan=2(Ok) linkmap=1(Failed), provider_code=0xfffff05f (-4001 = kRefusalExecHandleRawZeroIngame, the known in-game g1 exec_handle raw-0 refusal - NOT a scan failure), identity_source=2 (VmScan), runtime_start_failed=0x1. Contradiction at the heart of the bug: the bridge's own registration query found 6 readable spans intersecting the extent minutes earlier in the same attempt (@2270807), while the conversion's snapshot derived ZERO intersecting intervals. bridge_cfg_gamedir/bridge_cfg_workdir are ABSENT from the whole delta - expected for the entry (conversion failed before the attach point at r13 lines 668-671), so the in-log record contains no direct Resolution-B attach evidence for launch-9.",
+      "evidence": [
+        "aligned-entry-log-snapshot.log @2275480-2276081 (lmf_* + runtime_start_failed block)",
+        "comp6-integration/lmf_to_native_loader_facts.cpp lines 77-109 (derive_readable_ranges R-bit + intersection filter), 174-231 (extent resolution + refusal text)",
+        "live_module_os_ops_sce.cpp line 263: return LiveLoaderObservedFacts::kRefusalExecHandleRawZeroIngame; // -4001",
+        "live_module_facts.hpp line 98: enum class ProbeResult : uint8_t { NotBound=0, Failed, Ok }; line 74-78 IdentitySource VmScan=2",
+        "runtime_start_bridge.h lines 37-38: MRS_ERR_CONVERSION=1, MRS_ERR_CONTEXT=2",
+        "UE4SS-log-final.txt line 45: [t=44372082ms pid=273] ... code=1 detail=no observed mapping interval intersects the module image extent with valid geometry"
+      ]
+    },
+    {
+      "id": "F3b-attempt-mapping",
+      "claim": "All 9 runtime_start_failed lines in the full log map 1:1 (in order) to the 9 'modbridge module_start failed' lines in the UE4SS mirror. The launch-9 terminal entry state is the 9th: code=1 geometry, mirror-correlated by [t=44372082ms pid=273].",
+      "evidence": "entry-log offsets [1303207,1431014,1558821,1686985,1815648,1945333,2076253,2208542,2276081] vs UE4SS-log-final.txt lines [6,9,12,15,18,21,24,27,45]"
+    }
+  ],
+  "attribution_note": "Every delta line carries the entry channel prefix because the diagnostic_event stream flows into the shared aligned-entry log; the bridge_*/lmf_*/stat_* events inside the entry's wiring stage were emitted by the bridge r13 code linked into the entry's start path (entry r4.c imports diagnostic_event; bridge r13 defines and emits it)."
+}

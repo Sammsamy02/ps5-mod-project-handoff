@@ -1,0 +1,9 @@
+# PRIVATE Claude Cloud runtime handoff
+
+Private source/input snapshot for Sammsamy02/ps5. Do not publish publicly.
+
+Extract preserving repository-relative paths. Original receipts contain absolute macOS paths rooted at /WORKSPACE/.codex/worktrees/translation-core/what; remap that prefix to the cloud checkout. Recipes use macOS ARM64 LLVM 21.1.8 paths. Supply a compatible Linux LLVM toolchain and set SDK wrapper environment appropriately; macOS LLVM executables are intentionally excluded. No Linux build was performed or claimed. Rust Cargo registry downloads/caches are excluded; use the included Cargo.lock files to fetch pinned crates in Cloud (network required). Vendor and scanner-core source overlays are included.
+
+Full Unreal/UEPseudo port, source-dependencies, stage27 source/overlay inputs, startup/bootstrap, SDK headers/libraries, lifecycle recipes, reports and frozen successful PRX are included. Historical receipts are retained unchanged, including references to excluded objects. Recompile production C/C++ units and retained Rust resolver support before composition; scripts that assert historical object hashes need a deliberate rebuild orchestration adjustment. Intermediate objects/archives are excluded except SDK libraries and the frozen PRX. The aligned-entry recipe directly needs native-stage27-local-deps.o, which must be recreated from stage27 production units and Rust support. Sources do not supply target engine layouts, engine objects, game-thread binding or proof of in-game mod execution. No game binaries/assets/mod archives or secrets are included.
+
+MANIFEST.json gives per-file hashes of archived repository files. Its unresolved_paths field lists absent paths encountered in historical source receipts; toolchain and intermediate object references are intentionally not treated as missing source files.

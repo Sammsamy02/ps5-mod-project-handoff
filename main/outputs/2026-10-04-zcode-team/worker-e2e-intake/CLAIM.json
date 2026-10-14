@@ -1,0 +1,34 @@
+{
+  "worker": "worker-e2e-intake",
+  "team": "2026-10-04-zcode-team",
+  "date": "2026-10-05",
+  "role": "Resolve the parked E2E installer intake blocker: create /data/modbridge/intake/ on the live console (console came back ONLINE), test alternative creation routes, and reconcile the result with the config-file-driven installer design",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "writes_confined_to": "outputs/2026-10-04-zcode-team/worker-e2e-intake/ (local) + the two bounded console writes: /data/modbridge/intake/ (MKD) and /data/modbridge/intake/test.txt (STOR)",
+  "inputs_read_only": [
+    "outputs/2026-10-04-zcode-team/worker-e2e-console-dry/ (E2E-CMD-SCHEMA.md fixed E2E_CMD_PATH design, CONSOLE-E2E-EXECUTION.md STOR probe gate P1/G3, STAGING-MANIFEST-D1REL.md)",
+    "outputs/2026-10-04-zcode-team/worker-e2e-staging-final/ (STAGED-E2E-COMMANDS.md)",
+    "outputs/2026-10-04-zcode-team/worker-knowledge-synthesis/KNOWLEDGE-BASE.md (ftp facts from Lreturn_e2e_blocked)",
+    "outputs/2026-09-30-native-sdk-host-route.md (pldmgr manage:upload handler semantics)",
+    "outputs/2026-10-04-zcode-team/worker-d1-chain-relink/composition/vendored/modinst_core.c (installer mkdirs() of state/roots only)",
+    "live console ftp://ps5-host-not-configured.invalid:2121 (LIST/RETR read-only except the two bounded writes) and http://ps5-host-not-configured.invalid:8084 (one bounded POST per task 2a)"
+  ],
+  "console_writes_exact": [
+    "curl -Q \"MKD /data/modbridge/intake\" ftp://ps5-host-not-configured.invalid:2121/data/  -> 226 Directory created, curl rc 0 (dir created)",
+    "curl -T /tmp/modbridge-intake-test.txt ftp://ps5-host-not-configured.invalid:2121/data/modbridge/intake/test.txt -> 226 Data transfer complete, curl rc 0 (88-byte file staged)",
+    "curl -X POST \"http://ps5-host-not-configured.invalid:8084/manage:upload?filename=%2Fdata%2Fmodbridge%2Fintake%2Fprobe.txt\" (task-2a probe; server REJECTED, HTTP 500, nothing written console-side)"
+  ],
+  "deliverables": [
+    "CLAIM.json        (this file, first)",
+    "INTAKE-RESULT.md  (task 1+2: exact probe transcript, rc codes, server replies, readback verification)",
+    "REPORT.md         (task 3+4: reconciliation with installer design; blocker status RESOLVED; last)"
+  ],
+  "verification_done_this_session": {
+    "intake_dir_exists_after": "drwxrwxrwx /data/modbridge/intake listed via ftp LIST (console mtime 2026-10-05 19:49)",
+    "stor_readback": "RETR test.txt rc 0; byte-identical to local (diff clean); sha256 818dafb31d5836f9cebd80381e71f9fab2ad7dee143baac16b5a63a15a455783, 88 bytes",
+    "pldmgr_route": "HTTP 500 'Error during upload' for path-carrying filename; /data/modbridge/intake, /data/modbridge and /data/pldmgr/payloads listings verified unchanged afterwards",
+    "e2e_cmd_json_absence": "/data/modbridge/intake contains ONLY test.txt; e2e-cmd.json absent (controller pre-STOR absence check will pass)"
+  },
+  "bounds": "no nested subagents; console writes limited to the two actions the task required (intake dir + one test file) plus the explicitly-requested task-2a POST which was rejected server-side; no ploader.ini, no plugins/, no mod tree, no DELE, no dispatch, no payload upload; everything else read-only",
+  "honesty": "The historical KB fact 'MKD is refused' did NOT reproduce: MKD succeeded because the parent /data/modbridge now exists (roots/ created 2026-10-04 22:22 by an earlier installer-side mkdirs run). I did NOT re-test a parent-missing MKD because that would require out-of-bounds writes. STOR-into-existing-dir rc 0 and readback are verified facts; the rc-9-silent STOR finding was not re-triggered (dir existed). The intake dir is created but NO E2E stage has been dispatched: this unblocks the controller run, it does not itself run the E2E suite."
+}

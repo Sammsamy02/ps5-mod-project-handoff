@@ -1,0 +1,25 @@
+{
+  "worker": "worker-odr-emitter-check",
+  "task": "Mechanical post-build ODR emitter check for the composition-6 one-pass build: from a fresh run dir (runtime.map + composed object) prove (a) ValidateNativeProgramContext has no stale retained emitter and its sole surviving copy comes from program.o, (b) the 13 audited retained units emit no code touching the new configured-roots field offsets (symbol/section-level heuristic), (c) NativeLoaderFacts-taking and native_mod_source inline emitters are absent from retained units except the offset-safe allow-list, per worker-odr-header-safety/ODR-SAFETY.md sections 3 and 6 (item 6).",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "write_scope": "outputs/2026-10-04-zcode-team/worker-odr-emitter-check/",
+  "inputs": {
+    "audit": "outputs/2026-10-04-zcode-team/worker-odr-header-safety/ODR-SAFETY.md",
+    "host_test_run_dir": ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/ue4ss-native-supplier-composition-4/run-3/",
+    "integration_target": "outputs/2026-10-04-zcode-controller/comp6_one_pass.py",
+    "unit_list_source": "runtime.map input lines (authoritative 380-object set, 15 fresh + 365 external/pinned)"
+  },
+  "method": [
+    "parse runtime.map: section-group -> contributing input object (COMDAT survivor identity)",
+    "stdlib ELF64 symbol-table scan of every map input object: TRUE per-unit emitter sets (the map alone hides COMDAT-deduped duplicate emitters; dry-run proved native_mod_source has 4 emitters while the map shows 1 survivor, and Validate has 3 emitters while the map shows 1)",
+    "sha256 body hashes of .text.<mangled> sections across all emitters of each target symbol (byte-identity = all linked vintages agree; divergence = strict ODR violation)",
+    "composed-object symbol + section-hash readback (survivor bytes in the linked output equal the emitter body)",
+    "token sweep over all retained units: 20NativeProgramContext / 17NativeLoaderFacts / 24MakeNativeProgramContext / 28ValidateNativeProgramContext / native_mod_source / D2 ctor symbols / UE4SSProgram offset-sensitive inlines"
+  ],
+  "claims": [
+    "on run-3 the tool PASSES the design-claim checks and reports program.o as the sole surviving ValidateNativeProgramContext emitter (advisory: program.o is retained in run-3 and must be replaced in comp6, FINDING-4)",
+    "--require-program-fresh flips run-3 to FAIL, proving the gate is not vacuous for the post-one-pass run",
+    "on the fresh one-pass run the same command must PASS with program.o fresh: that is the real mechanical proof of the ODR-SAFETY invariant"
+  ],
+  "bounds": "25-45 tool calls, no console contact, no nested subagents; read-only outside own output dir; tool is stdlib-only, target-ELF parsing only, executes nothing"
+}

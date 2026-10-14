@@ -1,0 +1,60 @@
+{
+  "worker": "worker-l3-profile",
+  "date": "2026-10-05",
+  "task": "Build the L3 GAME-PROFILE layer artifact of the adapter system (L1 compat runtime / L2 engine adapter / L3 game-build profile): schema + generator + generated profile + validation, assembled ONLY from verified inputs",
+  "scope": "LOCAL ONLY. No console contact, no engine/source edits, no files outside this worker directory. All facts pre-exist in verified sources; the generator assembles, recomputes hashes, derives address arithmetic, and refuses to emit on any failed cross-check.",
+  "deliverables": {
+    "schema": "schema/game-profile.v1.schema.json",
+    "generator": "tools/gen_profile.py",
+    "schema_validator": "tools/validate_profile.py",
+    "profile": "game-profile.townfall-ps5-ue56-v1.json",
+    "inputs_manifest": "inputs-manifest.json",
+    "validation": "VALIDATION.md",
+    "report": "REPORT.md"
+  },
+  "artifact_hashes": {
+    "game-profile.townfall-ps5-ue56-v1.json_sha256_16": "06f78bc4014ae749",
+    "inputs-manifest.json_sha256_16": "c07610b8d8e271f6",
+    "determinism": "two consecutive generations byte-identical; generator --check re-validates without writing"
+  },
+  "claim": {
+    "profile_id": "townfall-ps5-ue56-game-profile-v1",
+    "sections": ["identity", "engine (+key_structures)", "addresses (translation_rule, 6 seed_slots, support_constants, runtime_examples)", "memory_geometry (phdrs, vmmap_observed, seed_address_classes, owned_read_policy, known_false_claims)", "api_surface (17 provided, 2 registered-unused)", "mod_requirements (loadlist, input_map, 17 mod API usages, oracle line, settings gates)", "runtime_facts (13 capture/lease/spanpub constants, observed runs 3+4)", "provenance_classes", "sources (16)", "unresolved (11)", "readiness"],
+    "seed_slots": {
+      "0_g_uobject_array": "0x93ba110 -> 0x97ba110 (in-game-observed)",
+      "1_fname_pool": "0x9365ec0 -> 0x9765ec0 (re-verified; corrected CurrentBlock 0-based open-block-index semantics + entry-0 'None' anchor included)",
+      "2_fname_ctor_wchar": "0x23d590 -> 0x63d590 (re-verified; Ghidra decompile corroborated)",
+      "3_gmalloc": "0x930add8 -> 0x970add8 (re-verified; DeleteFile candidate refutation recorded)",
+      "4_static_construct_object_internal": "0x490aa0 -> 0x890aa0 (re-verified)",
+      "5_gmalloc_instance": "0x93089b8 -> 0x97089b8 (re-verified; V1 validator target, never bound)"
+    },
+    "validation_result": "44/44 generator cross-checks PASS; schema conformance VALID; profile sha256 matches inputs-manifest.json pin"
+  },
+  "inputs_used": {
+    "S1": "outputs/2026-10-04-zcode-controller/launch10-build/final-units/SeedTable.h",
+    "S2": "outputs/2026-10-04-zcode-team/worker-geometry-reference/GEOMETRY.json",
+    "S3": "outputs/2026-10-04-zcode-team/worker-2-layout-facts/profiles/townfall-ps5-ue56.profile.json",
+    "S4": "outputs/2026-10-04-zcode-controller/launch10-build/final-units/SeedValidation.hpp",
+    "S5": "outputs/2026-10-04-zcode-controller/launch10-build/final-units/runtime_start_bridge_r14_diag_spanpub.cpp",
+    "S6": "outputs/2026-10-04-zcode-team/worker-re-fname-pool/FNAME-POOL-RE.md",
+    "S7": "outputs/2026-10-04-zcode-team/worker-rea-trial/FINDINGS.md",
+    "S8": "outputs/2026-10-04-zcode-controller/launch10-evidence/loadlist-sizefixed.txt",
+    "S9": "outputs/2026-10-04-zcode-controller/launch10-evidence/PS5Pad-sanitized.ini",
+    "S10": "outputs/2026-10-04-zcode-team/worker-mod-load-readiness/READINESS.md",
+    "S11": "outputs/2026-10-04-zcode-controller/launch10-evidence/run3-sdiag.jsonl",
+    "S12": "outputs/2026-10-04-zcode-controller/launch10-evidence/run4-sdiag.jsonl",
+    "S-lmf": "outputs/2026-10-04-zcode-controller/launch10-build/staging/live_module_facts.hpp",
+    "S-edition": "outputs/2026-10-04-zcode-controller/launch10-build/EDITION.json",
+    "S-capture": ".superpowers/native-observations/townfall-static-executable-2026-10-02/capture.json",
+    "S-image": ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin (sha256 recomputed at generation)"
+  },
+  "mission_note_worker_actual": "The mission's 'worker-actual' directory does not exist under outputs/2026-10-04-zcode-team; the runtime's own capture/lease/spanpub constants were sourced from the actual final-units runtime sources (S5 runtime_start_bridge_r14_diag_spanpub.cpp + S4 SeedValidation.hpp + S-lmf staged header), and the observed values from the launch-10 evidence jsonl (S11/S12). No facts were invented to fill the gap.",
+  "honest_bounds": [
+    "The profile claims ASSEMBLY FIDELITY (every emitted value source-cross-checked), never runtime capability: static_survey_ready=false and runtime_binding_ready=false are preserved from the layout profile and launch-10 evidence",
+    "In-game seed arming (Phase F) has never run: slots 1-5 are re-verified (offline two-channel), NOT in-game validated; only slot 0 carries in-game-observed provenance (placement + readability + same-value writeback, not structural identity)",
+    "Engine patch/revision left null (survey resolves 5.6; the 'UE 5.6.1' RE-worker label is recorded as a note, not promoted)",
+    "lmf_anchor_count=7 vs bridge kDataWindowAnchors=6 are distinct counters; an initial wrong equation was caught by check V18 during development and the shipped checks encode the corrected semantics",
+    "run1 vmwalk 22761 > kBridgeVmmapEntries=16384 with clean stop remains the unreconciled oracle gap G7; run3/run4 (the profile's observed runs) are unaffected and recorded verbatim"
+  ],
+  "regenerate": "python3 tools/gen_profile.py && python3 tools/validate_profile.py"
+}

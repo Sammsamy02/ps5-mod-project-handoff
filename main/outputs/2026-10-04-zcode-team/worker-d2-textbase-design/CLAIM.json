@@ -1,0 +1,41 @@
+{
+  "worker": "worker-d2-textbase-design",
+  "date": "2026-10-04",
+  "task": "D2 design: how text_base can ever satisfy PsMappedImageCaller::contains + OwnedMappedImageCaller::permits_code for the exec-only-text target, and the composition-5 r8 integration path (proposals only)",
+  "status": "complete",
+  "scope": [
+    "Read adapter facts.mapped assembly + S1 REPORT D2 + probes A/C",
+    "Read PsMappedImageCaller/OwnedMappedImageCaller(both variants)/OwnedMemory lease + registration",
+    "Read r8 bridge (multi-window anchor, path ladder, PLH pre-registration) + composed supplier",
+    "Check composition4_fixed/composition5 driver replace-unit constraints + downstream consumers",
+    "Enumerate + rank honest resolutions for 2.9/2.11; deliver D2-DESIGN.md with exact proposal diffs + launch-7 diagnostics"
+  ],
+  "constraints_respected": {
+    "proposals_only": true,
+    "writes": "outputs/2026-10-04-zcode-team/worker-d2-textbase-design/ only",
+    "no_console_contact": true,
+    "no_nested_subagents": true,
+    "frozen_wiring_files_touched": false
+  },
+  "deliverables": ["CLAIM.json", "D2-DESIGN.md", "REPORT.md"],
+  "findings": {
+    "gate_chain": "ReadLease (2.6) runs before PsMappedImageCaller checks (2.7-2.10) before permits_code (2.11): OwnedMappedImageCaller.hpp:55-57 (provider variant, the composed one; :48-50 read-lease variant). contains({0,0})=true / contains({0,1})=false is PsMappedImageCaller.hpp:24-25; ctor wraps scalar text_base as {text_base,1} at :68 so adapter text_base=0 can never pass; permits_code demands R|X segments (hpp:57,69,39); lease demands R per registered page (OwnedMemory.cpp:121-126).",
+    "r8_premise_correction": "With staged units r8 still dies at 2.6, not 2.9: adapter derive_readable_ranges (lmf_to_native_loader_facts.cpp:74-103) never filters by protection, composed supplier records the exec-only anchor mapping (live_module_facts.cpp:443-459), so readable_ranges=[{0x400000,0x787c000}) while the bridge registers R-only spans starting 0x787c000 (runtime_start_bridge_r8.cpp:398-421). Supplier-side filtering is NOT an option (anchor_mapping_count would hit 0 -> conversion refusal, lmf cpp:155-158); the filter belongs in the adapter (satellite diff A).",
+    "probe_precedent": "Probe A (test_lmf_adapter_host.cpp:458-478) host-proves contains({0,1}) fails on adapter facts with everything earlier passing (S1 REPORT.md:149). Probe C (:501-519) host-proves permits_code requires R|X registration of the covering segment (REPORT.md:151). A registered-pages configuration where text_base=0x400000 passes BOTH exists service-side only (register text R|X; ScopedRegion accepts it, OwnedMemory.cpp:41-44) but is a hardware lie on this target (VMMAP prot=4; igf6 blocked read, mechanism user-amended to not-localized, no re-probe directive).",
+    "consumer_audit": "No reader of view().text_base exists anywhere: not in the candidate collectors, not in OwnedSerializedElfSource, not in the vendored patternsleuth Rust crate (zero grep hits). text_base=0 views are therefore inert metadata downstream.",
+    "hazard_row_2_7_hint_stale": "HAZARD-TABLE.md:100 'exec pages read fine in-game - anchor proved it' is contradicted by r8:113-114 and the igf6 record; anchor windows all sit above 0x787c000 (readable data spans). Flagged for owner correction."
+  },
+  "recommendation": {
+    "option": "(c) honor the ABI's own absence convention (PsScanAbi.h:92 metadata-is-{0,0} rule) + required adapter satellite",
+    "diffs": [
+      "A (required satellite): lmf_to_native_loader_facts.cpp derive_readable_ranges - skip mappings with (protection & 1)==0, after the :84 degeneracy check",
+      "B: PsMappedImageCaller.hpp:68 - (text_base!=0 && !contains({text_base,1})) so 0 means absent",
+      "C: OwnedMappedImageCaller.hpp:57 (provider) and :50 (read-lease variant) - (text_base!=0 && !permits_code(text_base)), message text unchanged"
+    ],
+    "ranked_rejects": "(a) text_base=0x400000 with R-registered exec-only text: dishonest + crashes on first scan read; (b) exec-span registration category: honest end-state but 5+ units, pinned ABI V1 (PsScanAbi.h:91 readable-borrow promise), native-owned-memory is not in the affected inventory (composition4_fixed.py:57-61,79) so it cannot even be replaced without widening the pinned set - and nothing consumes view.text_base today.",
+    "integration": "Adapter = --extra-unit (build_runtime_composition5.py:155, fresh every run; update extra-receipt hash). Headers are header-only under the trigger-header include chain (NativeLoaderContext.hpp -> OwnedMappedScanSource.hpp -> OwnedSerializedElfSource.hpp -> OwnedMappedImageCaller.hpp -> PsMappedImageCaller.hpp) so all instantiating TUs are in the freshly-compiled affected 6-set (composition4_fixed.py:57-64); refresh --replace-receipt + lineage-overlay copies.",
+    "honest_limit": "Option (c) makes Stage 2 passable only; text-pattern scan slots remain unmatchable (exec-only text), ScanGame will loop to 'PS scan timed out' (UnrealInitializer.cpp:610-631) unless slot policy/witness work lands next - not solvable by any text_base representation."
+  },
+  "launch7_diagnostics": "D/L/S channel shapes per HAZARD-TABLE.md:26-33,106-107; unique what() string per sub-gate mapped in D2-DESIGN.md section 5 (2.6 unregistered/unreadable vs 2.7 invalid-span vs 2.8 coverage vs 2.9 containment vs 2.10 format vs 2.11 permits_code); bridge_lease_reg (r8:420) cross-checks registered-vs-derived region counts.",
+  "claims_are": "Static-source findings with file:line citations; no target execution, no text-read probes, no runtime success claims of any kind."
+}

@@ -1,0 +1,125 @@
+--- a/src/UnrealInitializer.cpp
++++ b/src/UnrealInitializer.cpp
+@@ -852,6 +852,94 @@
+         extern "C" int bridge_image_range(uint64_t,size_t,rc::imagecoverage::Hit*);
+         #include "NativePropertyReadBackend.inl"
+ 
++
++        // =====================================================================================
++        // [Seeds][L25] item 7 — copyin probe liveness notes (agent-Q).
++        //
++        // Why this exists (l25-prep/agent-F-crash-forensics.md): the l24 diagnostic
++        // vocabulary is init-only; nothing observed the copyin machinery after
++        // startup admission, so the save-load crash window (CE-108255-1, kernel
++        // "copyin: has nonsleeping lock") was a blind spot. These notes make the
++        // post-admission probe state observable WITHOUT changing any probe
++        // behavior: one state note at admission retirement, plus a throttled
++        // warning if a kernel-write probe dispatch is ever attempted afterwards.
++        //
++        // Facts this rests on (all cited in l25-prep/agent-Q-copyin-probe.md):
++        //  - copyin_cleanup.complete() (= bridge_copyin_initializer_complete)
++        //    closes the parent directory descriptor and every one of the 64
++        //    single-use sink descriptors (bridge_copyin_directory_release), so a
++        //    later probe dispatch returns Unavailable at the parent-fd check
++        //    BEFORE any kernel write (runtime_start_bridge.cpp probe_until).
++        //  - the initializer owner gate itself stays armed on this (runtime init)
++        //    thread until RuntimeOwner::initialize returns at shutdown
++        //    (CopyinOwnerScope in runtime_owner.cpp); "armed gate, retired bank".
++        //  - init-phase probe fires keep their existing pool_copyin_probe_*
++        //    telemetry; these notes only cover the post-admission window.
++        //
++        // Import discipline: only diagnostic_event (already an undefined import
++        // of the composed runtime object, declared the same way UE4SSProgram.cpp
++        // declares it) and internal Output::send are used. No new link symbols;
++        // the frozen import contract and build_runtime.py's import-delta
++        // assertion are untouched.
++        // =====================================================================================
++        extern "C" void diagnostic_event(const char* tag, unsigned int value);
++        struct CopyinProbeLiveness
++        {
++            static constexpr uint64_t kNoteIntervalMs = 10000; // throttle window for fire notes
++            static bool admission_state_noted;
++            static bool post_admission_fire_noted;
++            static uint64_t last_fire_note_ms;
++            static uint64_t steady_now_ms()
++            {
++                return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
++                    std::chrono::steady_clock::now().time_since_epoch()).count());
++            }
++            // ONE-TIME, immediately after copyin_cleanup.complete(): state the
++            // probe state on UE4SS.log + the diagnostic channel. Idempotent and
++            // nonthrowing; safe on every completion path (the CompletionCleanup
++            // destructor may run this on a refusal unwind).
++            static void note_admission_complete(unsigned oracle_calls, bool used_vq,
++                                                bool used_copyin, uint64_t elapsed_ms) noexcept
++            {
++                if (admission_state_noted) return;
++                admission_state_noted = true;
++                // State bits: 1 = sink bank retired (kernel-write dispatch inert:
++                // parent fd + all 64 sinks closed by the complete() call above),
++                //             2 = initializer owner gate still armed on this init
++                //                 thread until shutdown (gate alone cannot fire).
++                diagnostic_event("copyin_probe_liveness_state", 3u);
++                diagnostic_event("copyin_probe_liveness_oracle_calls", oracle_calls);
++                Output::send(STR("[Seeds][L25] copyin probe state after admission: kernel-write dispatch STOPPED "
++                                 "(sink bank retired at admission completion; oracle-probes={} used-vq={} used-copyin={} elapsed={}ms); "
++                                 "initializer owner gate remains armed on the runtime init thread until shutdown - a gate match without "
++                                 "sink fds cannot reach a kernel write; any post-admission dispatch attempt will log "
++                                 "copyin_probe_fire_post_admission (throttled 10s)\n"),
++                    oracle_calls, used_vq ? 1 : 0, used_copyin ? 1 : 0, elapsed_ms);
++            }
++            // THROTTLED: first post-admission probe dispatch attempt, then at
++            // most one note per kNoteIntervalMs. Purely observational.
++            static void note_probe_call(uint64_t address, size_t length) noexcept
++            {
++                if (!admission_state_noted) return; // init phase: pool_copyin_probe_* covers it
++                const uint64_t now = steady_now_ms();
++                if (!post_admission_fire_noted || now - last_fire_note_ms >= kNoteIntervalMs)
++                {
++                    post_admission_fire_noted = true;
++                    last_fire_note_ms = now;
++                    diagnostic_event("copyin_probe_fire_post_admission", 1u);
++                    diagnostic_event("copyin_probe_fire_addr_lo", static_cast<unsigned>(address & 0xffffffffu));
++                    diagnostic_event("copyin_probe_fire_addr_hi", static_cast<unsigned>(address >> 32));
++                    diagnostic_event("copyin_probe_fire_len", static_cast<unsigned>(length));
++                    Output::send(STR("[Seeds][L25] WARNING: copyin kernel-write probe dispatched AFTER admission retirement "
++                                     "(addr=0x{:X} len={}); bridge must refuse the dispatch at the retired-bank check - "
++                                     "this line is liveness evidence, not a kernel write\n"), address, length);
++                }
++            }
++        };
++        bool CopyinProbeLiveness::admission_state_noted = false;
++        bool CopyinProbeLiveness::post_admission_fire_noted = false;
++        uint64_t CopyinProbeLiveness::last_fire_note_ms = 0;
++
+         static const char* l14_verdict(admission::Verdict v) {
+             switch(v) {
+             case admission::Verdict::Readable:return "readable";
+@@ -979,6 +1067,7 @@
+             {
+                 CheckStartupWait();
+                 ++oracle_calls;
++                CopyinProbeLiveness::note_probe_call(address, length);
+                 return bridge_kernel_write_copyin_probe_until(address, length, budget.deadline_ms);
+             }
+             auto shadow(admission::Budget&) -> bool
+@@ -1549,7 +1549,19 @@
+             // completes on every early unwind path.
+             // [Seeds][EQ phase armor 2026-10-09] the last silent-throw surface
+             // between the L15 summary and this line: wrap completion too.
+             try
+             {
+                 copyin_cleanup.complete();
++                // [Seeds][L25] item 7 (re-anchored by agent-EQ 2026-10-09
++                // onto the phase-armor completion wrap — same
++                // immediately-after-complete() position as the EM placement):
++                // the retirement above closed every copyin sink and the
++                // parent descriptor — kernel-write probe dispatch is
++                // structurally stopped. One-time liveness note; the bridge
++                // emits its own copyin_probe_state events from inside
++                // complete(). note_admission_complete is noexcept, so the
++                // armor catch below can only see complete()/send failures.
++                CopyinProbeLiveness::note_admission_complete(admission_ops.oracle_calls,
++                    evaluation.used_vq, evaluation.used_copyin,
++                    admission_ops.now_ms() - admission_budget.start_ms);
+                 Output::send(STR("[Seeds][L25] copyin cleanup completed after Phase 6 (all admission gates passed; EP sequencing fix)\n"));

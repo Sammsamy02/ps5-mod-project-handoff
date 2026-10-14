@@ -1,0 +1,197 @@
+--- outputs/2026-10-08-l25-prep/round9-staging/b6-direct/src/LuaMod.cpp	2026-10-12 10:57:39
++++ outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp	2026-10-12 11:09:09
+@@ -414,16 +414,30 @@
+         }
+ 
+         // Mod name of the calling Lua state, never throws, leaves the Lua stack as it found it.
++        inline auto lua_rawgetfield_compat(lua_State* L, const char* k) -> int
++        {
++            lua_pushstring(L, k);
++            return lua_rawget(L, -2);
++        }
++
+         inline auto mod_name_of(const LuaMadeSimple::Lua& lua) -> StringType
+         {
+             StringType out{STR("?")};
+             lua_State* L = lua.get_lua_state();
+             const int top = lua_gettop(L);
+-            if (lua_getglobal(L, "ModRef") != LUA_TNIL)
++            try
+             {
+-                auto& ref = lua.get_userdata<LuaType::LuaModRef>(-1);
+-                if (auto* m = ref.get_remote_cpp_object()) { out = StringType{m->get_name()}; }
++                lua_pushglobaltable(L);
++                if (lua_rawgetfield_compat(L, "ModRef") == LUA_TUSERDATA)
++                {
++                    auto& ref = lua.get_userdata<LuaType::LuaModRef>(-1);
++                    if (auto* m = ref.get_remote_cpp_object()) { out = StringType{m->get_name()}; }
++                }
+             }
++            catch (...)
++            {
++                out = StringType{STR("?")};
++            }
+             lua_settop(L, top);
+             return out;
+         }
+@@ -4931,10 +4945,11 @@
+                 continue;
+             }
+ 
++            try
+             {
+                 const GameActionExecutingGuard executing_guard{};
+                 TRY([&]() {
+-                    lua_data.lua->registry().get_function_ref(lua_data.lua_action_function_ref);
++                    get_function_ref_cxx(*lua_data.lua, lua_data.lua_action_function_ref);
+                     L22Diagnostics::observe([&]() {
+                         Output::send(STR("[l22] ExecuteInGameThread drained state={} ref={} (callback entry)\n"),
+                                      static_cast<void*>(lua_data.lua->get_lua_state()), lua_data.lua_action_function_ref);
+@@ -4947,6 +4962,13 @@
+                 });
+                 luaL_unref(lua_data.lua->get_lua_state(), LUA_REGISTRYINDEX, lua_data.lua_action_function_ref);
+             }
++            catch (...)
++            {
++                // [R9-EIGT] an exception that escaped TRY must not drop the rest of to_run
++                // or the deferred callbacks; release this action's ref and continue.
++                luaL_unref(lua_data.lua->get_lua_state(), LUA_REGISTRYINDEX, lua_data.lua_action_function_ref);
++                try { Output::send<LogLevel::Error>(STR("[R9-EIGT] game-thread action threw; continuing\n")); } catch (...) {}
++            }
+         }
+ 
+         if (!deferred.empty())
+@@ -5163,13 +5185,20 @@
+                 continue;
+             }
+ 
++            try
+             {
+                 const GameActionExecutingGuard executing_guard{};
+                 TRY([&]() {
+-                    exec.lua->registry().get_function_ref(exec.lua_action_function_ref);
++                    get_function_ref_cxx(*exec.lua, exec.lua_action_function_ref);
+                     exec.lua->call_function(0, 0);
+                 });
+             }
++            catch (...)
++            {
++                // [R9-EIGT] an exception that escaped TRY (e.g. bad_alloc in its error log)
++                // must not stop the remaining actions or skip the status reset below.
++                try { Output::send<LogLevel::Error>(STR("[R9-EIGT] delayed game-thread action threw; continuing\n")); } catch (...) {}
++            }
+         }
+ 
+         {
+@@ -8536,6 +8565,22 @@
+         {
+             m_main_thread_id = std::this_thread::get_id();
+ 
++#if defined(__PROSPERO__)
++            // [R9-MEM-REBASE] this mod's Lua state was created in the constructor (setup_mods),
++            // before the engine allocator was bound; while it is still empty, move it onto
++            // the installed backing store (GMalloc). Fail-closed: anything else keeps libc.
++            {
++                const int rebase = LuaMadeSimple::rebase_pristine_state_on_backing(const_cast<LuaMadeSimple::Lua&>(lua()));
++                try
++                {
++                    Output::send(STR("[MEM] mod={} lua-state-backend={} rebase={}\n"), m_mod_name,
++                                 rebase == 1 || rebase == 0 ? STR("gmalloc") : STR("libc"), rebase);
++                }
++                catch (...)
++                {
++                }
++            }
++#endif
+             prepare_mod(lua());
+             make_main_state(this, lua());
+             setup_lua_global_functions_main_state_only();
+--- outputs/2026-10-08-l25-prep/round9-staging/b6-direct/src/LuaMadeSimple/LuaMadeSimple.cpp	2026-10-12 10:57:39
++++ outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMadeSimple/LuaMadeSimple.cpp	2026-10-12 11:08:20
+@@ -1728,6 +1728,61 @@
+         return *lua_instances.emplace(new_lua_state, std::make_unique<Lua>(new_lua_state)).first->second;
+     }
+ 
++    auto rebase_pristine_state_on_backing(Lua& lua) noexcept -> int
++    {
++        try
++        {
++            void* const backing_ud = backing_for_new_state();
++            if (backing_ud == nullptr)
++            {
++                return -1;
++            }
++            lua_State* const old_state = lua.m_lua_state;
++            void* old_ud = nullptr;
++            (void)lua_getallocf(old_state, &old_ud);
++            if (old_ud == backing_ud)
++            {
++                return 0;
++            }
++            // Pristine: empty stack and an empty global table (nothing registered yet).
++            if (lua_gettop(old_state) != 0)
++            {
++                return -2;
++            }
++            lua_pushglobaltable(old_state);
++            lua_pushnil(old_state);
++            const bool has_globals = lua_next(old_state, -2) != 0;
++            lua_settop(old_state, 0);
++            if (has_globals)
++            {
++                return -2;
++            }
++            auto node = lua_instances.extract(old_state);
++            if (node.empty())
++            {
++                return -2;
++            }
++            lua_State* const new_state_ptr = lua_newstate(lms_counting_alloc, backing_ud);
++            if (new_state_ptr == nullptr)
++            {
++                lua_instances.insert(std::move(node));
++                return -3;
++            }
++            g_backing_states.fetch_add(1);
++            lua_atpanic(new_state_ptr, &lms_lua_panic);
++            lua_setwarnf(new_state_ptr, lms_warnfoff, new_state_ptr);
++            lua.m_lua_state = new_state_ptr;
++            node.key() = new_state_ptr;
++            lua_instances.insert(std::move(node));
++            lua_close(old_state);
++            return 1;
++        }
++        catch (...)
++        {
++            return -3;
++        }
++    }
++
+     auto RC_LMS_API push_pcall_error_handler(lua_State* L) -> int
+     {
+         return push_error_handler(L);
+--- outputs/2026-10-08-l25-prep/round9-staging/b6-direct/include/LuaMadeSimple/LuaMadeSimple.hpp	2026-10-12 10:57:39
++++ outputs/2026-10-08-l26-runtime/typescan-r4/candidate/include/LuaMadeSimple/LuaMadeSimple.hpp	2026-10-12 11:08:20
+@@ -95,6 +95,7 @@
+     class Lua
+     {
+         friend RC_LMS_API auto process_lua_function(lua_State* lua_state) -> int;
++        friend RC_LMS_API auto rebase_pristine_state_on_backing(Lua& lua) noexcept -> int;
+ 
+       private:
+         lua_State* m_lua_state;
+@@ -858,6 +859,14 @@
+         void (*free_fn)(void* ptr) noexcept{nullptr};
+     };
+     RC_LMS_API auto set_lua_backing_allocator(const LuaBackingAllocator& backing) noexcept -> bool;
++    // [R9-MEM-REBASE] Mod Lua states are created when mods are set up, long before the
++    // engine allocator is bound. A state that is still PRISTINE (empty stack, empty
++    // globals, nothing loaded) is replaced in place by a fresh state on the installed
++    // backing store, and the old empty state is closed. Returns 1 rebased, 0 already on
++    // the backing store, -1 no backing store installed, -2 not pristine (left unchanged),
++    // -3 allocation failed (left unchanged). Never throws.
++    class Lua;
++    RC_LMS_API auto rebase_pristine_state_on_backing(Lua& lua) noexcept -> int;
+     // [B2] Copies the most recently raised Lua error text (no allocation; the
+     // buffer is shared by all states, so a concurrent raise may mix two texts).
+     RC_LMS_API auto copy_last_raised_error(char* out, size_t out_size) noexcept -> void;

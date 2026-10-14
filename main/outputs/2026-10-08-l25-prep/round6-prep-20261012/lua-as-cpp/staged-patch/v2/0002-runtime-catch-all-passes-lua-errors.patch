@@ -1,0 +1,86 @@
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaUObject.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaUObject.cpp
+@@ -138,6 +138,12 @@
+         try
+         {
+             return call_ufunction_from_lua_impl(Invocation->Lua, *Invocation);
++        }
++        catch (void*)
++        {
++            // Lua-as-C++: a Lua error raised while marshalling goes to the inner lua_pcall, as with the C build's longjmp (was: stored and re-thrown outside it -> status -1, message lost).
++            // A Lua error is a thrown struct lua_longjmp* (ldo.c:57). Dead code with Lua built as C.
++            throw;
+         }
+         catch (...)
+         {
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMadeSimple/LuaMadeSimple.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMadeSimple/LuaMadeSimple.cpp
+@@ -1456,6 +1456,12 @@
+                                            snap.cxx_exceptions,
+                                            last_error);
+                 }
++                catch (void*)
++                {
++                    // Lua-as-C++: a Lua error passes this handler unchanged, as the C build's longjmp does.
++                    // A Lua error is a thrown struct lua_longjmp* (ldo.c:57). Dead code with Lua built as C.
++                    throw;
++                }
+                 catch (...)
+                 {
+                     mem_note = " [lua-mem: note-format-failed]";
+@@ -1583,6 +1589,12 @@
+                 static constexpr char kTruncated[] = " ...[truncated]";
+                 std::memcpy(final_text + sizeof(final_text) - sizeof(kTruncated), kTruncated, sizeof(kTruncated));
+             }
++        }
++        catch (void*)
++        {
++            // Lua-as-C++: LUA_ERRMEM from luaL_traceback inside handle_error must propagate (was: swallowed -> Lua's global lock left held).
++            // A Lua error is a thrown struct lua_longjmp* (ldo.c:57). Dead code with Lua built as C.
++            throw;
+         }
+         catch (...)
+         {
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
+@@ -1015,6 +1015,12 @@
+                 {
+                     std::snprintf(error, sizeof(error), "cannot open native Lua file: %s", exception.what());
+                 }
++                catch (void*)
++                {
++                    // Lua-as-C++: a Lua error passes this handler unchanged, as the C build's longjmp does.
++                    // A Lua error is a thrown struct lua_longjmp* (ldo.c:57). Dead code with Lua built as C.
++                    throw;
++                }
+                 catch (...)
+                 {
+                     std::snprintf(error, sizeof(error), "cannot open native Lua file: source lookup failed");
+@@ -1442,6 +1448,12 @@
+             catch (const std::exception& error)
+             {
+                 native_lua_push_text(L, error.what());
++            }
++            catch (void*)
++            {
++                // Lua-as-C++: a Lua error passes this handler unchanged, as the C build's longjmp does.
++                // A Lua error is a thrown struct lua_longjmp* (ldo.c:57). Dead code with Lua built as C.
++                throw;
+             }
+             catch (...)
+             {
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaPathShim.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaPathShim.cpp
+@@ -1787,6 +1787,12 @@
+ 
+             Output::send(STR("[SHIM] path-resolver installed mod={} root={}\n"), ensure_str(mod), ensure_str(context->modbridge_root));
+         }
++        catch (void*)
++        {
++            // Lua-as-C++: a Lua error passes this handler unchanged, as the C build's longjmp does.
++            // A Lua error is a thrown struct lua_longjmp* (ldo.c:57). Dead code with Lua built as C.
++            throw;
++        }
+         catch (...)
+         {
+             // Registration is best-effort: any failure leaves the stock io/os

@@ -1,0 +1,35 @@
+{
+  "worker": "worker-capture-22k-fixture",
+  "utc": "2026-10-05",
+  "what": "PASS receipt — >capture-capacity host fixture suite (22,761-record synthetic walk vs the 16,384 snapshot; the truncated-honest run1 class, worker-verdict-first-real G7), driven against the FOLDED v4 SeedValidation.hpp",
+  "suite": {
+    "source": "host-test/test_capture22k_host.cpp",
+    "sha256": "6b16f025ee578eda1769172056dc6c3ebcbf2d1cd68ece760e36afcce7045197",
+    "header_under_test": "staging/SeedValidation.hpp — byte-identical copy of outputs/2026-10-04-zcode-controller/launch10-build/final-units/SeedValidation.hpp (sha256 f09ec9b319985cf86a5899894a30fc8d20a905072008ac8d4a35efbcaec3a5de; originals untouched)",
+    "drives": "rc_seed::publish_readable_spans (the ONLY publication filter in the folded header — the retired alias is deleted there) + rc_seed::check_pool_shape (v4 signature: current_block, none_id, blocks0, spans, count, envelope) + rc_seed::check_none_anchor + rc_seed::check_entry_bounds (END-TO-END case)",
+    "compile": "clang++ -std=c++20 -Wall -Wextra -I staging (rc=0, zero warnings; receipts/fixture-compile.stderr, 0 bytes)",
+    "run": "test_capture22k <receipt-path> — writes its own receipt file; stdout unused (harness pipe writes wedge uninterruptibly in this environment; self-written files complete instantly)",
+    "result": "34 passed, 0 failed (exit 0); deterministic — second run byte-identical (receipts/fixture-capture22k-rerun.txt)",
+    "output": "receipts/fixture-capture22k.txt sha256 bf3040be149a5029d6df4ef8e4a083f3661c34e783d50aa91ae79b571b5aeb58"
+  },
+  "real_run_basis": {
+    "run1": "bridge_vmentry_entries=22761 vs 16,384 snapshot capacity, walk_stop=0 (truncated-honest) — worker-verdict-first-real classifier-outputs/run1-summary.txt, G7",
+    "run3": "bridge_vmentry_entries=10028 <= 16,384 (complete; production norm) — classifier-outputs/run3-summary.txt",
+    "saturation": "spanpub_cap=1 saturated at 16 on BOTH real boots (G9) — mirrored by the fixture prefix (22 qualifying, top-16 kept)"
+  },
+  "fixture_walk_shape": {
+    "records": 22761,
+    "capacity_kept": 16384,
+    "omitted": 6377,
+    "layout": "records 0-7 pinned image low map + vintage giant + JIT (v3/v4 suite numbers); below-cut heap reservation [0x432300000,0x452300000) 512 MiB at record 8000; 16 medium 4 MiB readable spans at records 9000..15000 (below the cut); above-cut heap spans [0x6cf000000,0x6df000000) 256 MiB at record 17000, [0x76ba00000,0x773a00000) 128 MiB at record 19000, [0x870c00000,0x890c00000) 512 MiB at record 22600 (true heap top near the walk end); sub-floor 32 KiB filler between, address-ascending",
+    "bridge_parity": "the filter receives ONLY the first 16,384 records (the stored snapshot prefix), exactly like bridge_spanpub_publish's bounded=min(count,kBridgeVmmapEntries) copy (runtime_start_bridge_r14_diag_spanpub.cpp:714-744)"
+  },
+  "directives_under_test": {
+    "a_admit_below_cut": "A1/A2/A3 — blocks0=0x432320000 inside the below-cut published span ADMITS (bounds_source=published-readable-spans); boundaries lo inclusive/hi-8 ok; END-TO-END shape+'None' anchor+entry bounds pass",
+    "b_truncated_above_cut": "T1/T2/T3 — blocks0 inside EACH above-cut span (0x6cf020000, 0x76ba20000, 0x870c20000) refuses 'snapshot truncated' with bounds_source=capture-truncated and NEVER the 'not covered/unmapped' class; T4 boundary: blocks0 == envelope_end -> truncation; T5 boundary: envelope_end-8 (below the cut, unpublished sub-floor record) -> honest unmapped class ('capture complete below the envelope')",
+    "c_envelope_math": "E1-E5 — envelope_end == max end over the CAPTURED prefix == last captured record end (0x6a39e8000, the cut); strictly below every above-cut span and below the true walk end (0x89c008000); first omitted record (16,384) starts at/above the envelope (omitted <=> at/above the cut); P7/P8 — the published table holds NO above-cut span and every published span ends at/below the envelope",
+    "d_capacity_lever_contrast": "C1/C2/C3 — publishing the FULL 22,761 records moves the envelope to the true walk end and the SAME three above-cut blocks0 values ADMIT: the refusal is a capture-coverage property, not an address property (this is the capacity-bump lever class)"
+  },
+  "fixture_defects_found_during_development": "2 initial FAILs were FIXTURE-side arithmetic (P1/C3): the 128 KiB tail record {0x100118000,0x100138000,3} is EXACTLY one FName block capacity (0x20000) and QUALIFIES — predicted qualifying totals were 21/24, real 22/25 (at-floor is inclusive). The validator classified correctly in both runs; fixed the predictions, rerun 34/34.",
+  "honest_limits": "Pure-function host proof only: no target run, no console contact, no dereference of Blocks[0]. The walk is SYNTHETIC: 22,761/16,384/10,028 and walk_stop=0 are pinned real-run facts (G7/G9), but the address layout past the image spans is plausible-not-captured — no realBlocks0 value exists (labeling law, worker-blocks0-provenance). Cap top-16 can still false-refuse a below-cut blocks0 whose span loses the size contest (v4 C5 documented limit; the fixture's 512 MiB heap survives by construction)."
+}

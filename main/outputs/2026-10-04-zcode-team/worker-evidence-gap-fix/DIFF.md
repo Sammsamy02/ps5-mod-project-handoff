@@ -1,0 +1,173 @@
+# DIFF — worker-evidence-gap-fix (2026-10-04)
+
+Target: `../worker-launch10-evidence-upgrade/evidence.sh`
+- sha256 before: `5a034d460e642a51a7689e7cd498f9367609c9cddf64fcb31cdaed101601ba52`
+- sha256 after:  `76559126074c28dad936905a8d9c2c3c3d7fffedc47907cc7f0f356616ae858a`
+- 55 changed lines; baseline constants/drift-guard untouched (no re-baselining); crash-tail note untouched.
+
+## Change summary
+
+| Gap | Change |
+|---|---|
+| GAP-1 (HIGH) | 6 lmf conversion success tags (`lmf_extent_base_low/high`, `lmf_extent_end_low/high`, `lmf_anchor_count`, `lmf_intervals_found`) added to `stage_of_tag` → `S6_CONVERSION` in BOTH classifiers + bare-lmf text regex; SDIAGSUM gains `anchor_count` + `intervals_found` right after `lease_spans`/`lease_reg` (substring `lease_spans=6 lease_reg=6` preserved for existing assertions) |
+| GAP-2 (MEDIUM) | `MODLOADLINE` records + bounded `mod-load prints` summary section (cap 6) for `[TownfallItemSpawner]` lines; `MODS_STARTED` NEXT text now points at the section; JSON tail gains `"mod_load_lines":N` |
+| GAP-3 (LOW) | `s7_quirk` detection + one-line display-quirk note when `S7_CFG_ATTACH` precedes `S4_LEASE_REG`/`S5_IDENTITY_ANCHORS`; first-seen order NOT reordered |
+
+## Suite change (host-test/run_fixture_tests.sh)
+
+Additive only: new case 17 `l10_success_conversion` with 10 assertions locking GAP-1/2/3 (success chain contains `S4_LEASE_REG -> S6_CONVERSION -> S5_IDENTITY_ANCHORS`; SDIAGSUM pair `lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1`; verbatim `Loaded v1.0` + `Menu created.` lines; `"mod_load_lines":4`; quirk note present; zero WARN; rc=0). No existing case, fixture, or assertion modified. Suite: 84/0 pre-patch → 94/0 post-patch.
+
+## Full unified diff (evidence.sh)
+
+```diff
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-evidence-gap-fix/evidence.sh.pre-patch	2026-10-05 09:39:37
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/evidence.sh	2026-10-05 09:43:16
+@@ -21,6 +21,21 @@
+ #      jsonl t_ms events, file-level sequence order).
+ # New: r13/r14 marker->stage classification (STAGE TABLE), launch-10 staging
+ # runbook via --plan.
++#
++# Rev 2026-10-04 (worker-evidence-gap-fix), per verdict-rehearsal RUN-RECEIPT:
++#   GAP-1 lmf_extent_base_low/high + lmf_extent_end_low/high + lmf_anchor_count
++#      + lmf_intervals_found now stage S6_CONVERSION in BOTH classifiers (the
++#      success chains include conversion, not just the D-style refusal fan-out)
++#      and anchor_count/intervals_found are carried in SDIAGSUM next to the
++#      lease spans (controller predicted-pair check: anchor_count=7,
++#      intervals_found=1 next to lease_spans=6).
++#   GAP-2 the BEST-decisive [TownfallItemSpawner] lines are printed verbatim
++#      (MODLOADLINE, capped 6) in a dedicated mod-load prints section, so
++#      G2 (load prints) vs G3 (mod-error lines, also BEST) is decidable from
++#      the one-pager without opening the raw log.
++#   GAP-3 first-seen chains may read S7 before S4/S5 because bridge_exepath_source
++#      is emitted mid-walk by the bridge; annotated as a display quirk, order
++#      itself is NOT reordered (first-seen order remains the honest record).
+ #
+ # Evidence sources (console):
+ #   ftp://ps5-host-not-configured.invalid:2121/data/plugins/UE4SS.log                (append-only mirror; PRIMARY)
+@@ -348,7 +363,7 @@
+       else if (t == "bridge_vmentry_entries" || t == "bridge_vm_walk_stop" || t == "bridge_kve_distinct0" || t == "bridge_kve_distinct1" || t == "bridge_kve_distinct2" || t == "bridge_kve_distinct3" || t == "bridge_kve_eboot" || t == "bridge_exepath_valid" || t == "bridge_exepath_sig") s = "S3_VMMAP_WALK"
+       else if (t == "bridge_lease_reg_spans" || t == "bridge_lease_reg" || t == "bridge_lease_cap" || t == "bridge_lease_gap" || t == "bridge_lease_gap_req" || t == "bridge_lease_ref_lo" || t == "bridge_lease_ref_hi" || t == "bridge_lease_ref_len" || t == "bridge_lease_near_lo" || t == "bridge_lease_near_hi" || t == "bridge_lease_near_len") s = "S4_LEASE_REG"
+       else if (t == "anchor_cov" || t == "anchor_match" || t == "anchor_mm" || t == "anchor_c_either" || t == "anchor_owned_ref" || t == "anchor_refuse") s = "S5_IDENTITY_ANCHORS"
+-      else if (t == "lmf_vmentry_cap" || t == "lmf_vm_scan_cap" || t == "lmf_linkmap_cap" || t == "lmf_provider_code" || t == "lmf_identity_source") s = "S6_CONVERSION"
++      else if (t == "lmf_vmentry_cap" || t == "lmf_vm_scan_cap" || t == "lmf_linkmap_cap" || t == "lmf_provider_code" || t == "lmf_identity_source" || t == "lmf_extent_base_low" || t == "lmf_extent_base_high" || t == "lmf_extent_end_low" || t == "lmf_extent_end_high" || t == "lmf_anchor_count" || t == "lmf_intervals_found") s = "S6_CONVERSION"
+       else if (t == "bridge_cfg_gamedir" || t == "bridge_cfg_workdir" || t == "bridge_exepath_source") s = "S7_CFG_ATTACH"
+       else if (t == "runtime_start_ok") s = "S9_START_ACK"
+       else if (t == "module_start_return" || t == "runtime_stop_result") s = "S11_STOP"
+@@ -441,14 +456,14 @@
+         s = stage_of_tag(tag); if (s != "") note_stage(s)
+       }
+       if (line ~ /anchor_(cov|match|mm|c_either|owned_ref|refuse)/) { bump("BRIDGE_TAG"); note_stage("S5_IDENTITY_ANCHORS") }
+-      if (line ~ /lmf_(vmentry_cap|vm_scan_cap|linkmap_cap|provider_code|identity_source)/) { bump("BRIDGE_TAG"); note_stage("S6_CONVERSION") }
++      if (line ~ /lmf_(vmentry_cap|vm_scan_cap|linkmap_cap|provider_code|identity_source|extent_base_low|extent_base_high|extent_end_low|extent_end_high|anchor_count|intervals_found)/) { bump("BRIDGE_TAG"); note_stage("S6_CONVERSION") }
+       if (line ~ /bridge_cfg_gamedir=|bridge_cfg_workdir=|bridge_exepath_source=/) { bump("BRIDGE_CFG"); note_stage("S7_CFG_ATTACH") }
+       if (line ~ /MRS_ERR_[A-Z_]+|MRS_OK/) { bump("MRS_TOKEN") }
+       # ---- IGW exec-write probe verdict markers
+       if (line ~ /W_WORKS|W_FAILS_R_WORKS|BOTH_FAIL/) { bump("IGW"); notable("IGW"); print "CLASSLINE\t" stream "\t" line; next }
+       # ---- progress markers
+       if (line ~ /engine-ready|mods-started/) { bump("PROGRESS"); note_stage("S10_LADDER") }
+-      if (line ~ /TownfallItemSpawner/)       { bump("PROGRESS"); notable("PROGRESS"); note_stage("S10_LADDER") }
++      if (line ~ /TownfallItemSpawner/)       { bump("PROGRESS"); notable("PROGRESS"); note_stage("S10_LADDER"); bump("MODLOAD"); print "MODLOADLINE\t" stream "\t" line }
+       # ---- crash-tail vicinity (igf6 class)
+       if (line ~ /[Ll]oadMap|Finding GameEngine/) { bump("CRASH_TAIL"); tail[ntail++ % 5] = line }
+       # ---- UE4SS banner / everything else
+@@ -507,7 +522,7 @@
+       else if (t == "bridge_vmentry_entries" || t == "bridge_vm_walk_stop" || t == "bridge_kve_distinct0" || t == "bridge_kve_distinct1" || t == "bridge_kve_distinct2" || t == "bridge_kve_distinct3" || t == "bridge_kve_eboot" || t == "bridge_exepath_valid" || t == "bridge_exepath_sig") s = "S3_VMMAP_WALK"
+       else if (t == "bridge_lease_reg_spans" || t == "bridge_lease_reg" || t == "bridge_lease_cap" || t == "bridge_lease_gap" || t == "bridge_lease_gap_req" || t == "bridge_lease_ref_lo" || t == "bridge_lease_ref_hi" || t == "bridge_lease_ref_len" || t == "bridge_lease_near_lo" || t == "bridge_lease_near_hi" || t == "bridge_lease_near_len") s = "S4_LEASE_REG"
+       else if (t == "anchor_cov" || t == "anchor_match" || t == "anchor_mm" || t == "anchor_c_either" || t == "anchor_owned_ref" || t == "anchor_refuse") s = "S5_IDENTITY_ANCHORS"
+-      else if (t == "lmf_vmentry_cap" || t == "lmf_vm_scan_cap" || t == "lmf_linkmap_cap" || t == "lmf_provider_code" || t == "lmf_identity_source") s = "S6_CONVERSION"
++      else if (t == "lmf_vmentry_cap" || t == "lmf_vm_scan_cap" || t == "lmf_linkmap_cap" || t == "lmf_provider_code" || t == "lmf_identity_source" || t == "lmf_extent_base_low" || t == "lmf_extent_base_high" || t == "lmf_extent_end_low" || t == "lmf_extent_end_high" || t == "lmf_anchor_count" || t == "lmf_intervals_found") s = "S6_CONVERSION"
+       else if (t == "bridge_cfg_gamedir" || t == "bridge_cfg_workdir" || t == "bridge_exepath_source") s = "S7_CFG_ATTACH"
+       else if (t == "runtime_start_ok") s = "S9_START_ACK"
+       else if (t == "module_start_return" || t == "runtime_stop_result") s = "S11_STOP"
+@@ -525,6 +540,8 @@
+       if (tag == "runtime_start_failed") sfail++
+       if (tag == "bridge_lease_reg_spans") lease_spans = val
+       if (tag == "bridge_lease_reg")       lease_reg = val
++      if (tag == "lmf_anchor_count")       anchor_count = val
++      if (tag == "lmf_intervals_found")    intervals_found = val
+       if (tag == "bridge_vmentry_entries") vme = val
+       if (tag == "bridge_cfg_gamedir")     cfgdir = val
+       if (tms != "") {
+@@ -539,7 +556,7 @@
+       printf "SDIAG\t%s\t%s\n", tag, val
+     }
+     END {
+-      printf "SDIAGSUM\tevents=%d pid_first=%s start_ok=%d start_failed=%d lease_spans=%s lease_reg=%s vmentry=%s cfg_gamedir=%s\n", n + 0, pid_first, sok + 0, sfail + 0, lease_spans, lease_reg, vme, cfgdir
++      printf "SDIAGSUM\tevents=%d pid_first=%s start_ok=%d start_failed=%d lease_spans=%s lease_reg=%s anchor_count=%s intervals_found=%s vmentry=%s cfg_gamedir=%s\n", n + 0, pid_first, sok + 0, sfail + 0, lease_spans, lease_reg, anchor_count, intervals_found, vme, cfgdir
+       printf "SDIAGCHAIN\tsdiag\t"
+       for (i = 1; i <= nsorder; i++) printf "%s%s", (i > 1 ? " -> " : ""), sorder[i]
+       printf "\n"
+@@ -611,6 +628,7 @@
+ n_obs_mfa_failed=$(count_class OBS_MFA_FAILED)
+ n_lua=$(count_class OBS_LUA_HARNESS)
+ n_progress=$(count_class PROGRESS)
++n_modload=$(count_class MODLOAD)
+ n_igw=$(count_class IGW)
+ n_crash_tail=$(count_class CRASH_TAIL)
+ n_entry4=$(count_class ENTRY4)
+@@ -634,6 +652,18 @@
+ stage_hits=$(awk -F'\t' '$1=="STAGEHIT" {if (n < 6) { printf "  [%s] %s\n     %s\n", $2, $3, $4; n++ }} END{}' "$CLS")
+ stage_hits_n=$(awk -F'\t' '$1=="STAGEHIT"' "$CLS" | wc -l | tr -d ' ')
+ 
++# GAP-3 display quirk: bridge_exepath_source stages S7_CFG_ATTACH but the
++# bridge emits it mid-walk (before anchors/lease), so first-seen chains can
++# read S3 -> S7 -> S4/S5. Annotate it when it happens; the order itself is
++# the honest first-seen record and is NOT reordered.
++s7_quirk=$(printf '%s\n%s\n' "$sc_sdiag" "$sc_ue4ss" | awk '
++  /S7_CFG_ATTACH/ {
++    p7 = index($0, "S7_CFG_ATTACH")
++    p4 = index($0, "S4_LEASE_REG")
++    p5 = index($0, "S5_IDENTITY_ANCHORS")
++    if ((p4 > 0 && p7 < p4) || (p5 > 0 && p7 < p5)) { print "yes"; exit }
++  }')
++
+ # status facts
+ if [ "$ok_status" = 1 ]; then
+   ST=$(status_summary "$BASE_SESS_PID" "$BASE_SESS_MS" < "$STATUS_F")  last_state=$(printf '%s\n' "$ST" | sed -n 's/^last_state=//p')
+@@ -708,6 +738,7 @@
+ [ -n "$sc_ue4ss" ] && { emit "  ue4ss-text:    $sc_ue4ss"; n_chains=1; }
+ [ -n "$sc_entry" ] && [ "$ok_entry" = 1 ] && [ "$sz_entry" -gt "$BASE_ENTRY" ] && { emit "  entry-history: $sc_entry (entry log GREW — CONFIG-DRIFT, attribution untrusted)"; n_chains=1; }
+ [ "$n_chains" = 0 ] && emit "  (no staged markers observed)"
++[ -n "$s7_quirk" ] && emit "  note: S7_CFG_ATTACH appears before S4/S5 — bridge_exepath_source is emitted mid-walk by the bridge (before anchors/lease); first-seen order is correct, only the stage numbering looks out of order (display quirk, no misattribution)"
+ if [ "$stage_hits_n" -gt 0 ]; then
+   emit "terminal/attributed stage hits:"
+   printf '%s\n' "$stage_hits" >> "$sumf"
+@@ -725,6 +756,14 @@
+   emit "notable lines (verbatim, capped):"
+   awk -F'\t' '$1=="CLASSLINE" {printf "  [%s] %s\n", $2, $3}' "$CLS" | head -12 >> "$sumf"
+ fi
++# mod-load prints (GAP-2): the BEST-decisive [TownfallItemSpawner] lines,
++# verbatim and bounded — G2 (load prints present) vs G3 (mod-error lines,
++# also BEST) must be decidable without opening the raw log.
++if [ "$n_modload" -gt 0 ]; then
++  emit ""
++  emit "mod-load prints ([TownfallItemSpawner]): $n_modload — BEST-decisive, verbatim (capped 6; absence here + mod-error lines under 'other new lines' = G3):"
++  awk -F'\t' '$1=="MODLOADLINE" {printf "  [%s] %s\n", $2, $3}' "$CLS" | head -6 >> "$sumf"
++fi
+ if grep -q '^OTHERLINE' "$CLS"; then
+   emit ""
+   emit "other new lines (raw, capped):"
+@@ -775,7 +814,7 @@
+   NEXT="Fresh status session failed with NO matching failure line in the fetched window: status is the session truth (O_TRUNC). Detail above is the reason (init-thread throws reach status as failed(1,<what>) without a bridge line). Report verbatim; init-thread detail NEVER routes to bridge CONVERSION triage."
+ elif [ "$fresh" = "yes" ] && [ "$last_state" = "mods-started" ]; then
+   VERDICT="MODS_STARTED"
+-  NEXT="FULL LADDER REACHED for the first time (beyond every launch-9/10 prediction — apply fresh-eyes skepticism and re-run to confirm). Check [TownfallItemSpawner] prints (count above) before any rung claim; the ge.5 gate now OPENS: only after this evidence may the user test OPTIONS in-game. Then FIRST-RUN-PLAYBOOK §5 rung ladder + F7 contingency table."
++  NEXT="FULL LADDER REACHED for the first time (beyond every launch-9/10 prediction — apply fresh-eyes skepticism and re-run to confirm). Check the mod-load prints section ([TownfallItemSpawner] verbatim) before any rung claim; the ge.5 gate now OPENS: only after this evidence may the user test OPTIONS in-game. Then FIRST-RUN-PLAYBOOK §5 rung ladder + F7 contingency table."
+ elif [ "$fresh" = "yes" ] && [ "$last_state" = "engine-ready" ]; then
+   VERDICT="ENGINE_READY"
+   NEXT="Init thread finished Unreal setup — beyond prediction; mods-started ack follows immediately in-program. Re-run in ~30-60 s; if frozen here, bounded-wait hang check (F8). The ge.5 gate stays CLOSED until mods-started evidence."
+@@ -810,11 +849,11 @@
+ 
+ # optional machine-readable tail
+ if [ "${JSON_TAIL:-0}" = 1 ]; then
+-  printf '{"verdict":"%s","stage_chain":"%s","failure_lines":%d,"diag22":%d,"gmalloc":%d,"shape_a":%d,"seeds_refuted":%d,"stage_tags":%d,"bridge_cfg":%d,"observer":{"start_ok":%d,"start_failed":%d,"stop_result":%d},"progress":%d,"igw":%d,"crash_tail":%d,"entry4_lines":%d,"pathtest_stamps":%d,"pathtest_open_failed":%d,"diag_lines":%d,"xwp_mirror":%d,"status":{"present":%s,"session_pid":"%s","session_ms":"%s","fresh":"%s","last_state":"%s","last_code":"%s","ladder":"%s"},"sizes":{"ue4ss":%d,"entry":%d,"xwp":%d,"sdiag":%d,"baselines":{"ue4ss":%d,"entry":%d,"status":%d,"xwp":%d,"session_pid":%s,"session_ms":%s}},"config":"shortest-2plugin-1216aab6"}\n' \
++  printf '{"verdict":"%s","stage_chain":"%s","failure_lines":%d,"diag22":%d,"gmalloc":%d,"shape_a":%d,"seeds_refuted":%d,"stage_tags":%d,"bridge_cfg":%d,"observer":{"start_ok":%d,"start_failed":%d,"stop_result":%d},"progress":%d,"mod_load_lines":%d,"igw":%d,"crash_tail":%d,"entry4_lines":%d,"pathtest_stamps":%d,"pathtest_open_failed":%d,"diag_lines":%d,"xwp_mirror":%d,"status":{"present":%s,"session_pid":"%s","session_ms":"%s","fresh":"%s","last_state":"%s","last_code":"%s","ladder":"%s"},"sizes":{"ue4ss":%d,"entry":%d,"xwp":%d,"sdiag":%d,"baselines":{"ue4ss":%d,"entry":%d,"status":%d,"xwp":%d,"session_pid":%s,"session_ms":%s}},"config":"shortest-2plugin-1216aab6"}\n' \
+     "$VERDICT" "$stage_chain" \
+     "$n_fail" "$n_diag22" "$n_gmalloc" "$n_shapea" "$n_refuted" "$n_bridgetag" "$n_bridgecfg" \
+     "$n_obs_start_ok" "$n_obs_start_failed" "$n_obs_stop" \
+-    "$n_progress" "$n_igw" "$n_crash_tail" "$n_entry4" "$n_patht" "$n_patht_fail" "$n_diagl" "$n_xwp_mirror" \
++    "$n_progress" "$n_modload" "$n_igw" "$n_crash_tail" "$n_entry4" "$n_patht" "$n_patht_fail" "$n_diagl" "$n_xwp_mirror" \
+     "$([ "$ok_status" = 1 ] && echo true || echo false)" "$session_pid" "$session_ms" "$fresh" "$last_state" "$last_code" "$ladder" \
+     "$sz_ue4ss" "$sz_entry" "$sz_xwp" "$sz_sdiag" \
+     "$BASE_UE4SS" "$BASE_ENTRY" "$BASE_STATUS" "$BASE_XWP" "$BASE_SESS_PID" "$BASE_SESS_MS"
+```

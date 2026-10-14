@@ -1,0 +1,55 @@
+{
+  "worker": "worker-engine-ready-walkthrough",
+  "date": "2026-10-04",
+  "scope": "Static walkthrough of the init-thread sequence between 'context created successfully' and the 'engine-ready' ack in the composition-5 (r9) composed runtime: RuntimeOwner::start -> UE4SSProgram::init -> setup_unreal -> staged UnrealInitializer (ScanGame) -> properties -> share_lua_functions -> on_engine_initialized -> engine-ready/mods-started acks. Every hop cited file:line with inputs, filesystem touches, deadlines, and exact throw strings. No execution, no console contact, no nested subagents; proposal/review only.",
+  "sources_used": {
+    "OWNER": "outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/runtime_owner.cpp (204 lines; composition-5 runtime_owner replacement unit; :173 = mods_started emit, verified)",
+    "BACKEND": "outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-pad-runtime-1/build-1/source/ue4ss_backend.cpp (the unit composition-5 links via build_runtime_composition5.py:163; ack chain :41-45 verified; differs from the older outputs/ps5-mod-bridge copy only in the 4-arg PrepareActivatedUE4SSRuntime signature)",
+    "PROG": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/UE4SSProgram.cpp (sha256 dfdd5014a0bf74663152fa74a7f5d2b245517252788e6bc30225cdc71e3ee907, verified byte-identical to frozen-source-hashes.json AND to program.source_sha256 in ue4ss-native-tick-file-owner-1/ue4ss-native-supplier-composition-4/run-3/receipt.json - the object composition-5 reuses)",
+    "UI_LINKED": "outputs/2026-10-04-zcode-team/worker-query-s2-arm/staging/UnrealInitializer.cpp (1627 lines; the '--replace-runtime-unit unreal-unrealinitializer' unit composition-5 links)",
+    "UI0": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/UnrealInitializer.cpp (1543 lines port base; staged = port + NativeQueryHarness/layout-gate additions, diff reviewed)",
+    "SWC": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/include/Unreal/StartupWaitControl.hpp",
+    "NPC": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/include/Platform/NativeProgramContext.hpp",
+    "OTHERS": "SettingsManager.cpp, Signatures.cpp, NativeLayoutBinding.cpp, Mod/LuaMod.cpp, UObjectGlobals.cpp under the same port tree; runtime_ack_supplier.cpp under worker-query-s2-arm"
+  },
+  "claims": [
+    {
+      "id": "E1",
+      "claim": "On the init thread, between start() and engine-ready, NO consumer reads m_legacy_root_directory, m_game_executable_directory, or m_working_directory for behavior when mod_source is active. setup_paths' mod_source branch returns early (PROG:777-784) before the game-specific-config directory scan (:791-808) and legacy fallbacks (:814-817, :856-858); setup_mod_directory_path uses the logical key 'ue4ss/Mods' (PROG:835-839); load_unreal_offsets_from_file stages from logical keys (PROG:899-905); setup_lua_scan_overrides replaces the working dir with logical 'ue4ss' (Signatures.cpp:174-176); the VTableLayout.ini block is #ifndef __PROSPERO__ (PROG:1020-1220). All scan/config input on the init thread comes from context.module_source views + mod_source logical keys.",
+      "confidence": "high"
+    },
+    {
+      "id": "E2",
+      "claim": "game_executable_path (and its derivations) has exactly these behavioral consumers, none on the engine-ready path: ValidateNativeProgramContext requires it to be an absolute normalized path WITH a filename that names an EXISTING REGULAR FILE and file_size succeeds (NPC:85-100); constructor diagnostic line re-runs std::filesystem::file_size (PROG:427); Lua helpers IterateGameDirectories/CreateLogicModsDirectory/LogicMods-reconstruction read get_game_executable_directory at mod-runtime (LuaMod.cpp:2939/3134/3274); SDKGenerator reads get_game_executable_path (UEHeaderGenerator.cpp:4172). If game_executable_path became an explicit configured root: setup_unreal/ScanGame/properties behavior is UNCHANGED, but a directory-style root is REJECTED by validation ('Native module and executable paths must name existing regular files'), and the Lua directory-derivation helpers silently change meaning (they assume <root>/Binaries/Win64 shape).",
+      "confidence": "high"
+    },
+    {
+      "id": "E3",
+      "claim": "The only hard time bound on the init thread is StartupWait: Deadline = steady_clock::now() + 5 minutes (PROG:954-955, SWC:102 DefaultStartupWaitTimeout), checked cooperatively between engine calls (UI:67-98), throwing exact strings 'Unreal initialization cancelled' (SWC:20) and 'Unreal initialization startup deadline exceeded' (SWC:26); plus per-scan give-up settings_manager.General.SecondsToScanBeforeGivingUp (default coerced 30->120, SET:136-144) producing 'PS scan timed out' (UI:630). init() converts every exception to a stored error (PROG:691-714), Backend::initialize rethrows it (BACKEND:67-70), RuntimeOwner marks Failed and acks failed(1,<msg>) (OWNER:111-118). StartupCancelled with no stop request surfaces as failed(1,'Native runtime init returned without a stop request') (OWNER:102-109).",
+      "confidence": "high"
+    },
+    {
+      "id": "E4",
+      "claim": "CORRECTION to worker-lua-bootstrap-audit C1: in the composition-5 linked source, main.lua does NOT run on the loader thread and NOT before the init thread. start_native_mods (PROG:580-583) calls setup_mods (creates LuaMod objects/VMs only, PROG:1742-1751), install_cpp_mods (CppMod-only, PROG:1836-1839), and start_cpp_mods -> start_mods<CppMod>, whose native branch starts Lua mods only under 'if constexpr (std::is_same_v<ModType, LuaMod>)' (PROG:1946-1956) and otherwise returns immediately. The only reachable start_lua_mods() sites are on_program_start (PROG:1488, update thread) and reinstall_mods (PROG:2295). Proof of linkage: composition-4 run-3 receipt program.source_sha256 dfdd5014... equals the current port file. Consequence: true order is engine-ready -> mods-started (both at PROG:660 via BACKEND:41-45) -> event loop jthread (PROG:673) -> update/on_program_start (PROG:1514) -> start_lua_mods -> LuaMod::start_mod main.lua exec (LuaMod.cpp:6440/6459-6463).",
+      "confidence": "high"
+    },
+    {
+      "id": "E5",
+      "claim": "Reconciled ordering makes the Item Spawner OPTIONS (F7) chain safe: GUObjectArray is bound on the init thread BEFORE engine-ready (ScanGame second pass UObjectArray::SetupGUObjectArrayAddress, UI:895), together with the >=10000-object wait (UI:1062), KismetStringLibrary/Conv_NameToString/CDO location (UI:1076-1111), and IsInitialized()=true in PostInitialize (UI:454). main.lua's RegisterKeyBind(Key.F7) therefore registers against a fully bound object array; the load-time 'silent nil FindFirstOf' hazard in audit C5 does not apply on this path (no script runs before engine-ready). Remaining gap: no status line or default-verbosity log proves main.lua actually executed; a main.lua load failure logs 'Exception during mod startup: <what>' (LuaMod.cpp:6478-6480) and leaves runtime-status.txt ending at mods-started with F7 never registered.",
+      "confidence": "high"
+    },
+    {
+      "id": "E6",
+      "claim": "Exact-message throw inventory on the path (all verified in source): init one-shot 'Native UE4SS initialization is one-shot' (PROG:611); 'Native UE4SS program cannot initialize after rejected startup or shutdown' (PROG:615); layout 'Native activation requires both member and vtable layout files' (PROG:904); engine-version override 'Was unable to override engine version from ini file; The number in the ini file must be in range of a uint32' (PROG:1004); PreInitialize 'Native module source is not configured' / 'Native mapped scan source must retain the configured module owner' (UI:993/997 area, port :944/:947); layout gate 'Native layout files have not been staged', 'Native layout build axes require resolved or explicitly supplied facts', 'Native layout declarations disagree with resolved engine facts' (NLB:177-183); FName verification 'FName constructor verification callback registration failed' (UI:933 area, port :907); PostInitialize 'UnrealInitializer::PostInitialize: GMalloc is uninitialized.' (UI:389); required-objects throw uses an EMPTY message after logging 'Fatal error! The following objects were never constructed:' (UI:1482-1485); TypeChecker 'TypeChecker: Was unable to find some or all of the required core objects' (UI:1494); ProcessInternal 'Was unable to find locate ProcessInternal because /Script/CoreUObject.Object:ExecuteUbergraph was not found in GUObjectArray' (UI:1503); unknown-exception fallback 'Native UE4SS initialization failed with an unknown exception' (PROG:711).",
+      "confidence": "high"
+    }
+  ],
+  "unverified_or_risks": [
+    "Thread-scheduling latency from start() to engine-ready is not measured (static analysis only); bounded above by the 5-minute StartupWait deadline.",
+    "ps_scan internal retry/cost over the retained mapped snapshot is a black box here; only its wall-clock bounds (SecondsToScanBeforeGivingUp, StartupWait) were verified.",
+    "runtime_ack_supplier/bridge behavior (lmf capture, InstallDefaultEngineBindings) is cited from the sibling audit's verified path legend and the unit source, not independently re-derived beyond ACKSUP readback.",
+    "NativeModSource startup_mod_names content (which mods are enabled) comes from the staged activation snapshot; emptiness there would silently mean no main.lua and no OPTIONS - static audit could not verify the staged inventory."
+  ],
+  "deliverables": ["CLAIM.json", "ENGINE-READY-PATH.md", "REPORT.md"],
+  "writes": "outputs/2026-10-04-zcode-team/worker-engine-ready-walkthrough/ only"
+}

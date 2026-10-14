@@ -1,0 +1,349 @@
+--- fake_console_drive.py.asfound	2026-10-04 23:57:55
++++ ../tests/fake_console_drive.py	2026-10-05 00:27:47
+@@ -163,6 +163,35 @@
+            "Setting up mods...\n" + cb.GAME["tick_line"] + "\n" + cb.GAME["mod_banner"] + "\n")
+ C2_GREEN = '{"marker":"modbridge.ingamefacts","build_id":"qdrv1-c20c70ec4112","seq":1,"exp":"qh_counter"}\n'
+ 
++# probe verdict sinks (evidence-path law): pre-launch baseline EMPTY (first launch
++# with the probes), post-launch fixtures carry THIS launch's verdict records
++XWP_STAGES = [
++    "",  # baseline fetch (stage-ridealongs SC-0b): absent on a first probe launch
++    ('{"marker":"modbridge.execwriteprobe","schema":1,"seq":1,"exp":"row",'
++     '"build_id":"%s"}\n' % cb.XWP_ARMED["build_id"]) +
++    ('{"marker":"modbridge.execwriteprobe","schema":1,"seq":2,"exp":"attempt",'
++     '"build_id":"%s","mprotect_rc":0}\n' % cb.XWP_ARMED["build_id"]) +
++    ('{"marker":"modbridge.execwriteprobe","schema":1,"seq":3,"exp":"summary",'
++     '"build_id":"%s","module_start":"0"}\n' % cb.XWP_ARMED["build_id"]),
++]
++_FC1_BASE = ('{"marker":"modbridge.ingamefacts","schema":1,"seq":1,"exp":"entry",'
++             '"build_id":"%s"}\n' % cb.FC1POOL["build_id"]) + \
++            ('{"marker":"modbridge.ingamefacts","schema":1,"seq":2,"exp":"startup",'
++             '"build_id":"%s"}\n' % cb.FC1POOL["build_id"])
++FC1_STAGES = [
++    "",  # baseline fetch: absent on a first probe launch
++    _FC1_BASE +
++    ('{"marker":"modbridge.ingamefacts","schema":1,"seq":4,"exp":"fc1pool_result",'
++     '"build_id":"%s","verdict":"validated","reason_code":"none","fc1pool_validated":1,'
++     '"checks_passed":11,"checks_total":11}\n' % cb.FC1POOL["build_id"]) +
++    ('{"marker":"modbridge.ingamefacts","schema":1,"seq":6,"exp":"summary",'
++     '"build_id":"%s","write_failures":0}\n' % cb.FC1POOL["build_id"]),
++]
++
++# recorded v2 rollback pair (worker-engineversion-ini/package-v2) for the freeze gate
++SETTINGS_V2_LOCAL = cb.T + "/worker-engineversion-ini/package-v2/ue4ss/UE4SS-settings.ini"
++SETTINGS_V2_LOADLIST_LOCAL = cb.T + "/worker-engineversion-ini/package-v2/loadlist.txt"
++
+ E2E35_LINES = []
+ for _key, _n in [("S0_records", 2), ("S1_register", 2), ("S2a_prepare_archive", 4), ("S2b_bundle", 6),
+                  ("S3_install", 3), ("S4_simulate", 2), ("S0_records", 2), ("S4_simulate", 2), ("S0_records", 2),
+@@ -304,6 +333,39 @@
+             return emit(D1_GREEN)
+         if "modbridge-ingame-facts.jsonl" in joined:
+             return emit(C2_GREEN)
++        if "modbridge-exec-write-probe.jsonl" in joined:
++            stage = min(xwp_fetch_n["n"], len(XWP_STAGES) - 1)
++            xwp_fetch_n["n"] += 1
++            return emit(XWP_STAGES[stage])
++        if "modbridge-fc1pool-facts.jsonl" in joined:
++            stage = min(fc1_fetch_n["n"], len(FC1_STAGES) - 1)
++            fc1_fetch_n["n"] += 1
++            return emit(FC1_STAGES[stage])
++        # --- settings v3 pair (stage-settings; freeze serves v2, readback v3) ---
++        if "UE4SS-settings.ini" in joined:
++            if data_target:  # STOR
++                self.stor[joined.split()[-1]] = open(data_target, "rb").read()
++                self.settings_staged_v3 = True
++                return 0, ""
++            local = (cb.SETTINGS_V3["settings_local"] if self.settings_staged_v3
++                     else SETTINGS_V2_LOCAL)
++            if out_target:
++                with open(out_target, "wb") as f:
++                    f.write(open(local, "rb").read())
++                return 0, ""
++            return 0, open(local, "rb").read().decode("utf-8", "replace")
++        if "roots/PPSA33286/loadlist.txt" in joined:
++            if data_target:  # STOR
++                self.stor[joined.split()[-1]] = open(data_target, "rb").read()
++                self.settings_staged_v3 = True
++                return 0, ""
++            local = (cb.SETTINGS_V3["loadlist_local"] if self.settings_staged_v3
++                     else SETTINGS_V2_LOADLIST_LOCAL)
++            if out_target:
++                with open(out_target, "wb") as f:
++                    f.write(open(local, "rb").read())
++                return 0, ""
++            return 0, open(local, "rb").read().decode("utf-8", "replace")
+         # --- ploader.ini / qdrv1 ---
+         if "ploader.ini" in joined:
+             if data_target and data_target.endswith(".pre"):
+@@ -340,11 +402,37 @@
+             content = (self.prx_readback_corruptor(cb.QDRV1) if self.prx_readback_corruptor
+                        else self.law_readback(cb.QDRV1) if self.sht_law
+                        else open(cb.QDRV1["prx"], "rb").read())
++            if out_target:
++                with open(out_target, "wb") as f:
++                    f.write(content)
++                return 0, ""
++            return 0, content.decode("utf-8", "replace")
++        if "modbridge_exec_write_probe_armed.prx" in joined:
++            # xwp launch probe (definitive layout entry 1): SHT-strip law channel
++            if data_target:
++                self.prx_stors.append(joined.split()[-1])
++                return 0, ""
++            content = (self.prx_readback_corruptor(cb.XWP_ARMED) if self.prx_readback_corruptor
++                       else self.law_readback(cb.XWP_ARMED) if self.sht_law
++                       else open(cb.XWP_ARMED["prx"], "rb").read())
+             if out_target:
+                 with open(out_target, "wb") as f:
+                     f.write(content)
+                 return 0, ""
+             return 0, content.decode("utf-8", "replace")
++        if "modbridge_fc1pool.prx" in joined:
++            # fc1 launch probe (definitive layout entry 2): SHT-strip law channel
++            if data_target:
++                self.prx_stors.append(joined.split()[-1])
++                return 0, ""
++            content = (self.prx_readback_corruptor(cb.FC1POOL) if self.prx_readback_corruptor
++                       else self.law_readback(cb.FC1POOL) if self.sht_law
++                       else open(cb.FC1POOL["prx"], "rb").read())
++            if out_target:
++                with open(out_target, "wb") as f:
++                    f.write(content)
++                return 0, ""
++            return 0, content.decode("utf-8", "replace")
+         return emit("")
+ 
+     def __init__reset(self):
+@@ -356,6 +444,9 @@
+ fc.cmd_present = False
+ fc._pending = 0
+ fc._pending_next = 0
++fc.settings_staged_v3 = False
++xwp_fetch_n = {"n": 0}
++fc1_fetch_n = {"n": 0}
+ 
+ _orig_run_cmd = cb.run_cmd
+ 
+@@ -484,6 +575,8 @@
+ PRE5Q = PRE4 + "%s = 2\n" % Q_LINE
+ OBS_STOR_URL = "ftp://ps5-host-not-configured.invalid:2121" + cb.OBS["target_prx"]
+ Q_STOR_URL = "ftp://ps5-host-not-configured.invalid:2121" + cb.QDRV1["target_prx"]
++XWP_STOR_URL = "ftp://ps5-host-not-configured.invalid:2121" + cb.XWP_ARMED["target_prx"]
++FC1_STOR_URL = "ftp://ps5-host-not-configured.invalid:2121" + cb.FC1POOL["target_prx"]
+ 
+ 
+ def seed_ini(text):
+@@ -573,33 +666,183 @@
+       statuses.get("obs.4") == "SKIPPED_HALT" and stored_ini() == PRE5Q)
+ fc.prx_readback_corruptor = None
+ 
+-print("== fake-console drive: stage-ridealongs (combined SC-0..SC-7, law channel) ==")
+-seed_ini(PRE4)
++print("== fake-console drive: stage-ridealongs (DEFINITIVE 8-entry law: bootstrap on the "
++      "historical pre-image, then probes + ridealongs under the SHT-strip law channel) ==")
++HISTORICAL_INI = PRE4  # aligned_entry, path_test BEFORE composition — the historical shape
++seed_ini(HISTORICAL_INI)
+ fc.prx_stors = []
+-ctx = cb.Ctx(run_dir=fresh("ridealongs"), dry=False, assume_yes=True)
++xwp_fetch_n["n"] = 0
++fc1_fetch_n["n"] = 0
++ctx = cb.Ctx(run_dir=fresh("ridealongs-final-bootstrap"), dry=False, assume_yes=True)
+ res = cb.build_stage_ridealongs().run(ctx)
+ bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
+-check("stage-ridealongs all steps PASS (both PRXs, law readbacks, combined ini)", not bad, str(bad))
++check("stage-ridealongs all steps PASS (bootstrap + 4 PRXs, law readbacks, canonical ini)",
++      not bad, str(bad))
+ statuses = dict(res)
+-check("ride.1 §3 constants cross-check PASS", statuses.get("ride.1") == "PASS", statuses.get("ride.1"))
+-check("combined end-state on the fake console (6 entries, 5 registered)",
+-      cb.ridealong_verify_endstate(stored_ini(), required=[Q_LINE, O_LINE]) == [],
+-      repr(stored_ini()))
+-check("each PRX STORed exactly once, qdrv1 first (SC-1 before SC-3)",
+-      fc.prx_stors == [Q_STOR_URL, OBS_STOR_URL], str(fc.prx_stors))
++check("ride.1 §3 constants cross-check PASS (4 probes + canonical template)",
++      statuses.get("ride.1") == "PASS", statuses.get("ride.1"))
++CANON_INI = open(cb.FINAL_INI["canonical_template"]).read()
++check("BOOTSTRAP fired on the historical pre-image and stored the CANONICAL 8-line bytes",
++      stored_ini() == CANON_INI, repr(stored_ini()))
++check("INI-BOOTSTRAPPED verdict recorded (ONE sanctioned whole-file STOR)",
++      "INI-BOOTSTRAPPED" in open(os.path.join(ctx.run_dir, "ini-bootstrap-verdict.txt")).read())
++check("bootstrap pre-image .bak + local pre preserved",
++      os.path.exists(os.path.join(ctx.run_dir, "ploader.ini.pre")))
++check("final ini is byte-exact canonical: 8 entries, 7 registered, igf=0",
++      cb.final_ini_verify_endstate(stored_ini()) == [],
++      str(cb.final_ini_verify_endstate(stored_ini())))
++check("all FOUR PRXs STORed exactly once, file order (xwp, fc1, qdrv1, observer)",
++      fc.prx_stors == [XWP_STOR_URL, FC1_STOR_URL, Q_STOR_URL, OBS_STOR_URL], str(fc.prx_stors))
++check("xwp SHT-strip law verdict OK (67832 / daea2ff4…)",
++      json.load(open(os.path.join(ctx.run_dir, "xwp-readback-verdict.json")))["ok"] is True)
++check("fc1 SHT-strip law verdict OK (67848 / 7e2dce27…)",
++      json.load(open(os.path.join(ctx.run_dir, "fc1-readback-verdict.json")))["ok"] is True)
+ check("qdrv1 SHT-strip law verdict OK (87112 / 71406d3c…)",
+       json.load(open(os.path.join(ctx.run_dir, "qdrv1-readback-verdict.json")))["ok"] is True)
+ check("observer SHT-strip law verdict OK (30143976 / 3f89a5b6…)",
+       json.load(open(os.path.join(ctx.run_dir, "observer-readback-verdict.json")))["ok"] is True)
+-check("SC-0 baselines step recorded the freshness baselines",
+-      statuses.get("ride.3") == "PASS" and os.path.exists(os.path.join(ctx.run_dir, "baseline-UE4SS.log")))
++check("SC-0b baselines recorded (UE4SS.log + probe sinks)",
++      statuses.get("ride.5") == "PASS" and os.path.exists(os.path.join(ctx.run_dir, "baseline-UE4SS.log")))
++check("launch handoff step green (arm/launch gate reached with the canonical ini staged)",
++      statuses.get("ride.10") == "PASS", statuses.get("ride.10"))
++check("handoff prompt pins the 7-OK/zero-FAIL gate + both probe sinks",
++      "EXACTLY 7" in cb.FINAL_INI_HANDOFF and "modbridge-fc1pool-facts.jsonl" in cb.FINAL_INI_HANDOFF)
+ 
++print("== fake-console drive: stage-ridealongs ensure-only (canonically-ordered 6-entry "
++      "pre-image -> content-anchored appends, NO bootstrap) ==")
++ORDERED6 = (cb.FINAL_INI["header"] + "\n"
++            + "%s = 2\n" % C_LINE + "%s = 2\n" % Q_LINE + "%s = 2\n" % O_LINE
++            + "%s = 2\n" % E_LINE + "%s = 2\n" % P_LINE + "%s = 0\n" % I_LINE)
++seed_ini(ORDERED6)
++fc.prx_stors = []
++ctx = cb.Ctx(run_dir=fresh("ridealongs-final-ensure"), dry=False, assume_yes=True)
++res = cb.build_stage_ridealongs().run(ctx)
++bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
++check("ensure-only run all steps PASS", not bad, str(bad))
++check("ensure-only run reaches the SAME byte-exact canonical end-state (order-history "
++      "independence: bootstrap vs ensure paths converge)",
++      stored_ini() == CANON_INI, repr(stored_ini()))
++check("ensure-only run uploaded all FOUR PRXs (ini changed -> not the no-op path)",
++      len(fc.prx_stors) == 4, str(fc.prx_stors))
++decision = json.load(open(os.path.join(ctx.run_dir, "ploader-edit-decision.json")))
++check("decision recorded as INI-ENSURE-ONLY (no bootstrap): appends ONLY xwp + fc1 at their "
++      "anchored positions",
++      decision["status"] == "append" and decision["appended"] ==
++      ["%s = 2" % X for X in (cb.XWP_ARMED["module_line"], cb.FC1POOL["module_line"])],
++      str(decision)[:200])
++
++print("== fake-console drive: stage-ridealongs DIFFERENT staging history (observer "
++      "pre-staged early, qdrv1 absent) -> same canonical bytes ==")
++OBS_EARLY = (cb.FINAL_INI["header"] + "\n"
++             + "%s = 2\n" % C_LINE + "%s = 2\n" % O_LINE + "%s = 2\n" % E_LINE
++             + "%s = 2\n" % P_LINE + "%s = 0\n" % I_LINE)
++seed_ini(OBS_EARLY)
++fc.prx_stors = []
++ctx = cb.Ctx(run_dir=fresh("ridealongs-final-obs-early"), dry=False, assume_yes=True)
++res = cb.build_stage_ridealongs().run(ctx)
++bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
++check("observer-early history all steps PASS", not bad, str(bad))
++check("content-anchored ensure lands qdrv1 BETWEEN composition and observer (byte-exact "
++      "canonical regardless of how the ini got here)",
++      stored_ini() == CANON_INI, repr(stored_ini()))
++
++print("== fake-console drive: stage-ridealongs re-run on canonical ini is a FULL no-op ==")
++seed_ini(CANON_INI)
++fc.prx_stors = []
++ctx = cb.Ctx(run_dir=fresh("ridealongs-final-noop"), dry=False, assume_yes=True)
++res = cb.build_stage_ridealongs().run(ctx)
++bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
++check("canonical re-run all steps PASS", not bad, str(bad))
++check("re-run stores NOTHING (ini untouched) and uploads NO PRX",
++      stored_ini() == CANON_INI and len(fc.prx_stors) == 0, str(fc.prx_stors))
++check("re-run still verifies the on-console PRX artifacts against the law (readback-only)",
++      all(json.load(open(os.path.join(ctx.run_dir, "%s-readback-verdict.json" % k)))["stor_skipped_noop"]
++          is True for k in ("xwp", "fc1", "qdrv1", "observer")))
++
++print("== fake-console drive: stage-ridealongs STOP on an unknown ini line (no bootstrap, "
++      "no upload, no store) ==")
++seed_ini(HISTORICAL_INI + "/data/plugins/modbridge_surprise.prx = 2\n")
++fc.prx_stors = []
++ctx = cb.Ctx(run_dir=fresh("ridealongs-final-stop"), dry=False, assume_yes=True)
++res = cb.build_stage_ridealongs().run(ctx)
++statuses = dict(res)
++check("ride.2b FAILS on the unknown line (STOP class kept)", statuses.get("ride.2b") == "FAIL",
++      statuses.get("ride.2b"))
++check("later steps SKIPPED after the halt",
++      statuses.get("ride.3") == "SKIPPED_HALT" and statuses.get("ride.6") == "SKIPPED_HALT",
++      str(statuses))
++check("STOP scenario uploads NOTHING and stores NOTHING (bootstrap never fires on an "
++      "anomalous pre-image)",
++      fc.prx_stors == [] and stored_ini() == HISTORICAL_INI + "/data/plugins/modbridge_surprise.prx = 2\n")
++
++print("== fake-console drive: stage-settings (NEW-SETTINGS §3 lockstep restage, v3 pair) ==")
++fc.settings_staged_v3 = False  # console currently holds the recorded v2 pair
++ctx = cb.Ctx(run_dir=fresh("settings-v3"), dry=False, assume_yes=True)
++res = cb.build_stage_settings().run(ctx)
++bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
++check("stage-settings all steps PASS (freeze v2 -> upload v3 pair -> byte-exact readback)",
++      not bad, str(bad))
++statuses = dict(res)
++check("set.0 pair lockstep proven host-side (loadlist row == 1448 == settings bytes)",
++      statuses.get("set.0") == "PASS", statuses.get("set.0"))
++check("freeze classified the staged pair as v2 (recorded inventory)",
++      json.load(open(os.path.join(ctx.run_dir, "settings-freeze.json")))["classified"] == "v2")
++check("v3 settings ini (1448 B) read back byte-exact",
++      open(os.path.join(ctx.run_dir, "readback-settings"), "rb").read()
++      == open(cb.SETTINGS_V3["settings_local"], "rb").read())
++check("v3 loadlist (447 B) read back byte-exact",
++      open(os.path.join(ctx.run_dir, "readback-loadlist"), "rb").read()
++      == open(cb.SETTINGS_V3["loadlist_local"], "rb").read())
++
++print("== fake-console drive: stage-settings re-run is an honest idempotent no-op ==")
++ctx = cb.Ctx(run_dir=fresh("settings-v3-noop"), dry=False, assume_yes=True)
++res = cb.build_stage_settings().run(ctx)
++bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
++check("stage-settings re-run all steps PASS", not bad, str(bad))
++statuses = dict(res)
++check("freeze classifies the pair as ALREADY v3 (recorded inventory) and set.2 skips the upload",
++      json.load(open(os.path.join(ctx.run_dir, "settings-freeze.json")))["classified"] == "v3"
++      and statuses.get("set.2") == "PASS", str((statuses.get("set.1"), statuses.get("set.2"))))
++
++print("== fake-console drive: stage-settings divergent staged root FAILs the freeze ==")
++fc.settings_staged_v3 = "divergent"
++
++
++def divergent_settings(argv):
++    joined = " ".join(argv)
++    if "UE4SS-settings.ini" in joined and "-o" in argv:
++        with open(argv[argv.index("-o") + 1], "wb") as f:
++            f.write(b"[Hooks]\nHookProcessInternal=1\n")  # neither v2 nor v3
++        return (0, "")
++    return None
++
++
++fc3_orig = fc.handle_curl
++
++
++def divergent_handle(argv, *a, **k):
++    r = divergent_settings(argv)
++    return r if r is not None else fc3_orig(argv, *a, **k)
++
++
++fc.handle_curl = divergent_handle
++ctx = cb.Ctx(run_dir=fresh("settings-divergent"), dry=False, assume_yes=True)
++res = cb.build_stage_settings().run(ctx)
++statuses = dict(res)
++check("set.1 FREEZE FAILs on divergent/unowned staged bytes", statuses.get("set.1") == "FAIL",
++      statuses.get("set.1"))
++check("divergent scenario uploads NOTHING (later steps skipped)",
++      statuses.get("set.2") == "SKIPPED_HALT", str(statuses.get("set.2")))
++fc.handle_curl = fc3_orig
++fc.settings_staged_v3 = True
++
+ print("== fake-console drive: rollback-ridealongs (§7 single-character flips) ==")
++COMBINED = PRE4 + "%s = 2\n" % Q_LINE + "%s = 2\n" % O_LINE
++seed_ini(COMBINED)  # legacy 6-entry state for the legacy rollback flow (unchanged law)
+ ctx = cb.Ctx(run_dir=fresh("rollback"), dry=False, assume_yes=True)
+ res = cb.build_rollback_ridealongs().run(ctx)
+ bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
+ check("rollback-ridealongs all steps PASS", not bad, str(bad))
+-COMBINED = PRE4 + "%s = 2\n" % Q_LINE + "%s = 2\n" % O_LINE
+ ROLLED = COMBINED.replace(Q_LINE + " = 2", Q_LINE + " = 0").replace(O_LINE + " = 2", O_LINE + " = 0")
+ check("rolled-back ini: BOTH ridealong lines at = 0, every other byte identical",
+       stored_ini() == ROLLED, repr(stored_ini()))
+@@ -617,10 +860,16 @@
+ print("== fake-console drive: game-evidence ==")
+ ctx = cb.Ctx(run_dir=fresh("game"), dry=False, assume_yes=True)
+ l_fetch_n["n"] = 0
++xwp_fetch_n["n"] = 1   # post-launch sink content (fresh verdict records this launch)
++fc1_fetch_n["n"] = 1
+ res = cb.build_game_evidence().run(ctx)
+ bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
+ check("game-evidence all steps PASS/WARN", not bad, str(bad))
+ check("CP0-CP4 verdict PASS on green fixtures", json.load(open(os.path.join(ctx.run_dir, "cp0-cp4-verdict.json")))["verdict"] == "PASS")
++pv = json.load(open(os.path.join(ctx.run_dir, "probe-verdicts.json")))
++check("probe verdict sinks PASS (xwp records + fc1pool_result validated 11/11)",
++      pv["status"] == "PASS" and pv["sinks"]["fc1"]["validated_results"] == 1
++      and pv["sinks"]["xwp"]["fresh_records"] == 3, str(pv)[:200])
+ check("game receipt written", os.path.exists(os.path.join(ctx.run_dir, "game-evidence-receipt.json")))
+ 
+ print("== fake-console drive: dll8 (PREFERRED single DLL run) ==")

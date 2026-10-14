@@ -1,0 +1,13 @@
+STATUS OF THE HOST TEST RESULT (read this first)
+- RESULT-before-void-catch-probe.txt is the last COMPLETE run: 138 checks (C 65 + C++ 67 + 6 cross-build transcript
+  comparisons), 0 failed, "PASS run.sh". It ran with the first version of the startup probe (error + yield only).
+- After that run the probe gained the catch(void*) / catch(...) check (out[6..8]) and b7_host_test.cpp gained the
+  matching assertions. That extended test has NOT been run: every re-run was refused by memcheck_strict.sh
+  (Mac stayed under 2 GB free; first refusal printed "free=0.61GB min=2GB -> TOO-LOW"). run.sh exits 3 and keeps
+  the old result when that happens; a successful run writes RESULT.txt, a failing one RESULT-FAILED.txt.
+- To finish: free memory, then `sh host-test/run.sh` (about 10 s). Expected: 2 extra checks, probe line
+  "mode=1 ... void_catch=1 swallowed=0" for C++ and "mode=0 ... void_catch=0 swallowed=0" for C.
+- 2026-10-12 (after review P1): the H1-H3 game-boundary catch(...) in ScriptHookThunks.cpp has NO host test yet. It is
+  three lines of the same shape as the line above each, but nothing was compiled or run (vm_stat showed about 0.4-0.6 GB
+  free all session, under the 2 GB rule). A test would be: a noexcept "game frame" calling a thunk-shaped function whose
+  callback raises a Lua error through a pcall-less lua_error in the Lua-as-C++ build; expected: contained, process alive.

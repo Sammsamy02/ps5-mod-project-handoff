@@ -1,0 +1,50 @@
+{
+  "worker": "worker-iniparser-repro",
+  "date": "2026-10-05",
+  "mission": "Reproduce the IniParser settings-deserialization failure HOST-SIDE, recover the full exception message, identify the root cause, and stage the fix. LOCAL ONLY; no console contact.",
+  "verdict": "ROOT-CAUSED AND REPRODUCED BYTE-EXACT: the PS5 SDK's prebuilt libc++ (sdk-v0.43 locale.cpp.o) pairs short-wchar (2-byte) codecvt wrappers with 4-byte-unit helpers, so BOTH std::wstring_convert directions corrupt strings on __PROSPERO__ - from_bytes interleaves a NUL after every character (parser receives garbage -> real TokenParser syntax error) and to_bytes returns every OTHER character (the '[::2]' garble 'TeIiasrfie opre ' observed in both live runs). The full intended message is RECOVERED. The settings data and the parser code are CLEAN - the failure is conversion-layer, and it fired for the first time in the l11 combined candidate only because the wpd2 pad coexist deferral was the first change that let the UE4SSProgram constructor (and therefore settings deserialize) execute on target at all.",
+  "recovered_exception": {
+    "e.what()": "Syntax error(8 : 2): Expected state NewLineStarted or StartOfFile, got CreateSectionKey",
+    "full_intended_message": "The IniParser failed to parse: Syntax error(8 : 2): Expected state NewLineStarted or StartOfFile, got CreateSectionKey",
+    "line_column_meaning": "line 8 = the tokenizer's 0-based line counter after 8 newlines = the [General] header (9th text line); line numbers are preserved by the corruption because only '\\n' advances the counter. Column 2 is the interleaved-NUL-inflated column of the '[' token.",
+    "why_the_suffix_was_lost": "e.what() -> ensure_str() hits the broken from_bytes (NUL after every char); to_string() then reads with the stride-4 bug, so after the 16-char prefix garble every remaining emitted unit is a NUL; ErrorObject::copy_error does strlen()+memcpy, so the stored message is exactly 'TeIiasrfie opre ' (16 chars) - byte-exact vs both live status files (pids 466/492, /tmp/l11run{,2}-status.txt)."
+  },
+  "root_cause_chain": [
+    "1. StringType.hpp: CharType = wchar_t on __PROSPERO__ (FORCE_U16 only under __linux__); the PS5 clang is short-wchar (sizeof(wchar_t)==2; Utf16Utf8.hpp static_assert).",
+    "2. sdk-v0.43 ps5-payload-sdk target/lib/libc++.a locale.cpp.o, symbol _ZNSt3__1L13utf16_to_utf8EPKjS1_RS1_PhS3_RS3_mNS_12codecvt_modeE: per unit it loads 32-bit (movl), truncates to 16 (movzwl %r11w), emits UTF-8, then advances the source pointer by 4 bytes (addq $0x4; surrogate low +0x8) - a 4-BYTE stride over a 2-byte-element array = consumes every other char ([::2]).",
+    "3. __codecvt_utf8_utf16<wchar_t>::do_out calls that uint32 helper (reloc 0x44) and halves (sarq $1) the from_next byte distance - internally inconsistent pairing; the char16_t specialization correctly calls the uint16 helper (Pt), so FORCE_U16 builds were never affected.",
+    "4. __codecvt_utf8<wchar_t>::do_in likewise calls the uint32-writing utf8_to_utf16 (Pj) with a sarq $1 to_nxt fixup - from_bytes interleaves a NUL after every character.",
+    "5. SettingsManager::deserialize(PROSPERO) does ensure_str(std::string(settings->bytes)) -> NUL-interleaved contents -> Ini::Parser::parse throws 'Syntax error(8 : 2): Expected state NewLineStarted or StartOfFile, got CreateSectionKey' (mechanism: ParserBase TokenParser::get_data truncates every Characters token at the first NUL, so characters_to_string's peek(2)==NewLine section-end guard mis-fires, the ']' is consumed into the section name, no section registers, and the next '[' arrives in state CreateSectionKey).",
+    "6. UE4SSProgram ctor catch -> create_emergency_console_for_early_error -> to_string garbles [::2] -> copy_error_into_message stores 16 chars -> native_startup_error_message() -> ue4ss_backend 'Native UE4SS construction rejected: TeIiasrfie opre ' -> runtime-status 'failed' line. Reproduced host-side BYTE-EXACT."
+  ],
+  "evidence": {
+    "live_runs": [
+      "outputs/2026-10-04-zcode-controller/launch10-evidence/l11run2-ue4ss.log line 63: '[t=76997224ms pid=492] ... detail=Native UE4SS construction rejected: TeIiasrfie opre '",
+      "same line in run 1 (pid 466, line 60) - identical bytes incl. trailing space; raw hexdump shows 'TeIiasrfie opre 0a' (space then newline, no NUL, nothing after)",
+      "ledger zcode_l11_run2_iniparser_failure (2026-10-05T21:01:28Z): VTableLayout revert did NOT fix; all 7 loadlist files byte-exact; failure code-dependent"
+    ],
+    "data_is_clean": "UE4SS-settings.ini 1448 B sha256 d8faa4eca2ed2f22c02693b6841b7939412b4dd60c218a26438f985152d67038 (worker-data-preflight/current-staged-tree copy, byte-verified); harness CASE A parses it with the REAL port parser + conversions and all five spot-checks return the exact staged values (bUseUObjectArrayCache=0, SecondsToScanBeforeGivingUp=120, MajorVersion=5, HookProcessInternal=0, RenderMode=ExternalThread); 1448 % 8 == 0 so the from_bytes chunking has no partial-tail effects",
+    "parser_is_clean": "IniParser/ParserBase sources compiled in the harness are the exact composed-tree sources (native-coherent-runtime-1/source/port/first/src); settings unit source is byte-carried launch-10 == l11 (driver line: --replace-runtime-unit settings=CR1/source/port/ue4ss/src/SettingsManager.cpp in BOTH l10 and l11 drivers); the prebuilt ini.o/ini-value.o/ini-tokens.o/base-*.o objects are the same baseline in both compositions"
+  },
+  "why_it_fired_in_the_combined_candidate": "It is NOT a semantic regression from luamod/initializer/pad units. LAUNCH10-RESULTS.md shows every launch-10-era run (pids 317/341/355) refused EARLIER (PS5Pad.ini bytes, mfa size, pad unavailable phase=6) - the UE4SSProgram constructor and settings deserialize were NEVER reached before. The wpd2 pad coexist deferral is the first change that lets the constructor run; the latent conversion bug fired on first exercise. Same reason the failure is deterministic and VTableLayout-revert-proof.",
+  "layout_ini_question": "MemberVariableLayout.ini (588 B) / VTableLayout.ini (186 B) are NOT parsed by the IniParser: they go through NativeLayoutBinding.cpp ReadBounded + ParsePair (dedicated narrow-string parser with its own identity vocabulary), and on the activated path are read from the mod source as raw bytes (UE4SSProgram.cpp:901) - no wide conversion, cannot produce this exception, and the observed throw is inside the settings-only try block. EXCLUDED.",
+  "fix": {
+    "file": "outputs/2026-10-04-zcode-team/worker-iniparser-repro/staged/Helpers/String.hpp",
+    "sha256": "7c983db4548b39b16625f979bfd2256647df0f57788e9ae27672af51b8302524",
+    "base": "CR1/source/port/first/include/Helpers/String.hpp sha256 b9249d0819f117c3a241f3c876e10dfc41d949a0c1537e84ed8dc665808df4ec (byte-carried l10==l11)",
+    "content": "Route the four non-Windows conversion entry points (to_wstring(string), to_wstring(string_view), to_string(wstring), to_string(u16string_view)) through RC::Unicode::EncodeUtf8/DecodeUtf8 (Helpers/Utf16Utf8.hpp - already in the port, explicit, locale-free, correct by construction for 2-byte CharType) instead of std::wstring_convert/codecvt; PLATFORM_WINDOWS branches untouched; Windows wstring overloads keep signatures with CharType element bridges so FORCE_U16 host builds still compile",
+    "host_verification": "Staged header compiles (FORCE_U16 harness): clean-content regression unchanged (CASE A all five values exact); DecodeUtf8-fed parse of the real ini: OK 1:1 units; staged-to_string keeps the FULL 'Syntax error(8 : 2)...' suffix; fixed pipeline parse of the real ini via the staged conversions: OK with correct values"
+  },
+  "non_claims": [
+    "No console contact, no target execution, no composition/packaging runs; canonical trees untouched (staged copy + DIFF only, proposal-level).",
+    "The exact line:col '(8 : 2)' in the recovered message is the host reproduction's deterministic output from the disassembly-faithful libc++ emulation; the error CLASS and the byte-exact stored garble are the hard claims, the precise line:col is high-confidence derived (chunk pattern is buffer-size-independent for 1448%8==0 input).",
+    "The staged fix is not yet compiled into a composed candidate nor console-validated; freshen/regen of every TU including Helpers/String.hpp is required at compose time (the .d closure already lists the header).",
+    "Utf16Utf8 bounds (65536 units / 196608 bytes) now cap ensure_str/to_string inputs; fine for settings and error paths, honest caveat for any future >64Ki-unit conversion.",
+    "No claim that launch-10's runtime ever passed settings parsing on target - it never reached it; the 'launch-10 passed' premise was an inference, corrected here."
+  ],
+  "provenance": {
+    "harness": "outputs/2026-10-04-zcode-team/worker-iniparser-repro/harness/ (main.cpp repro, bisect.cpp, final_pipeline.cpp byte-exact match proof, fixed_proof.cpp, decode_proof.cpp, probe_tostring.cpp; all sources + built binaries)",
+    "evidence_copies": "outputs/2026-10-04-zcode-team/worker-iniparser-repro/evidence/ (both live status files, l11run2 log, staged ini)",
+    "libcxx_disassembly": "sdk-v0.43 ps5-payload-sdk target/lib/libc++.a locale.cpp.o (extracted to /tmp/l11cxx/locale.cpp.o): utf16_to_utf8(PKj...) stride-4 reads; __codecvt_utf8_utf16<wchar_t>::do_out reloc -> PKj helper + sarq $1; __codecvt_utf8<wchar_t>::do_in reloc -> Pj helper + sarq $1; char16_t (IDs/Pt) pair is correct"
+  }
+}

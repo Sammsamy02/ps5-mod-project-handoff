@@ -1,0 +1,199 @@
+#ifdef __PROSPERO__
+    // Source-only embedding observation; no Mono host or provider module lease.
+    namespace
+    {
+        struct Cap10BridgeState
+        {
+            UE4SSProgram* program{};
+            std::atomic_bool* shutdown{};
+            const void* admission{};
+        };
+        thread_local Cap10BridgeState cap10_bridge_state{};
+        enum class Call : std::uint8_t { None, Abi, Probe };
+        struct Cap10Window
+        {
+            Cap10Observation::Observation observed{};
+            const void* admission{};
+            std::uint64_t serial{};
+            Call in_flight{Call::None};
+            std::uint8_t phase{};
+            bool active{}, poisoned{};
+        };
+        thread_local Cap10Window window{};
+        // Loaded-provider-lifetime issuance: TLS addresses may be reused by new threads.
+        std::atomic<std::uint64_t> issued{0};
+        bool issue(std::uint64_t& serial) noexcept
+        {
+            auto value = issued.load(std::memory_order_relaxed);
+            for (;;)
+            {
+                if (value == std::numeric_limits<std::uint64_t>::max()) return false;
+                if (issued.compare_exchange_weak(value, value + 1, std::memory_order_relaxed))
+                { serial = value + 1; return true; }
+            }
+        }
+        void cancel_window() noexcept { window = {}; }
+        bool admitted() noexcept
+        {
+            try
+            {
+                const Cap10BridgeState state = cap10_bridge_state;
+                return state.program && state.shutdown && state.admission &&
+                       !state.shutdown->load(std::memory_order_acquire) &&
+                       state.program->is_program_started();
+            }
+            catch (...) { return false; }
+        }
+        bool same_admission() noexcept
+        {
+            return window.admission == cap10_bridge_state.admission && admitted();
+        }
+        void count(std::uint8_t& value) noexcept
+        {
+            if (value < 2) ++value; // Saturate; duplicate calls poison separately.
+        }
+        void record_entry(Call call, std::int32_t cookie = 0) noexcept
+        {
+            if (!window.active) return;
+            if (!same_admission() || window.in_flight != Call::None ||
+                window.observed.kind == Cap10Observation::WindowKind::NoNativeCalls)
+                window.poisoned = true;
+            if (call == Call::Abi)
+            {
+                count(window.observed.abi_entries);
+                if (window.phase != 0 || window.observed.abi_entries != 1) window.poisoned = true;
+            }
+            else
+            {
+                count(window.observed.probe_entries);
+                window.observed.probe_cookie = cookie;
+                if (window.phase != 1 || window.observed.probe_entries != 1 ||
+                    cookie != window.observed.expected_cookie) window.poisoned = true;
+            }
+            window.in_flight = call;
+        }
+        void record_exit(Call call, std::int32_t result, bool reply_written = false,
+                         std::int32_t reply = 0) noexcept
+        {
+            if (!window.active) return;
+            if (!same_admission() || window.in_flight != call) window.poisoned = true;
+            if (call == Call::Abi)
+            {
+                count(window.observed.abi_exits);
+                window.observed.abi_result = result;
+                if (window.observed.abi_exits != 1 || result != 1) window.poisoned = true;
+                window.phase = 1;
+            }
+            else
+            {
+                count(window.observed.probe_exits);
+                window.observed.probe_status = result;
+                window.observed.probe_reply_valid = reply_written;
+                window.observed.probe_reply = reply;
+                if (window.observed.probe_exits != 1 || result != 0 || !reply_written ||
+                    reply != window.observed.expected_cookie) window.poisoned = true;
+                window.phase = 2;
+            }
+            window.in_flight = Call::None;
+        }
+        struct Cap10BridgeAdmissionScope
+        {
+            Cap10BridgeState previous;
+            Cap10BridgeAdmissionScope(UE4SSProgram* program, std::atomic_bool* shutdown) noexcept
+                : previous(cap10_bridge_state)
+            {
+                cancel_window(); // Nested callback admission cannot inherit/resurrect proof.
+                cap10_bridge_state = {program, shutdown, this};
+            }
+            Cap10BridgeAdmissionScope(const Cap10BridgeAdmissionScope&) = delete;
+            Cap10BridgeAdmissionScope& operator=(const Cap10BridgeAdmissionScope&) = delete;
+            ~Cap10BridgeAdmissionScope() noexcept
+            {
+                cancel_window();
+                cap10_bridge_state = previous;
+            }
+        };
+    }
+    namespace Cap10Observation
+    {
+        bool begin(WindowKind kind, std::int32_t expected_cookie, WindowToken* token) noexcept
+        {
+            if (window.active) { window.poisoned = true; return false; }
+            if (!token || !admitted() ||
+                (kind != WindowKind::RunImports && kind != WindowKind::NoNativeCalls) ||
+                (kind == WindowKind::RunImports && expected_cookie == 0)) return false;
+            std::uint64_t serial{};
+            if (!issue(serial)) return false;
+            window = {};
+            window.active = true;
+            window.admission = cap10_bridge_state.admission;
+            window.serial = serial;
+            window.observed.kind = kind;
+            window.observed.expected_cookie = expected_cookie;
+            *token = {&window, serial};
+            return true;
+        }
+        bool finish(WindowToken token, Observation* observed) noexcept
+        {
+            if (token.provider_tls != &window || !window.active || token.serial != window.serial)
+            {
+                if (window.active) window.poisoned = true;
+                return false;
+            }
+            bool accepted = observed && !window.poisoned && same_admission() &&
+                            window.in_flight == Call::None;
+            const auto& o = window.observed;
+            if (o.kind == WindowKind::RunImports)
+                accepted = accepted && window.phase == 2 && o.abi_entries == 1 && o.abi_exits == 1 &&
+                           o.probe_entries == 1 && o.probe_exits == 1 && o.abi_result == 1 &&
+                           o.probe_status == 0 && o.probe_reply_valid &&
+                           o.probe_cookie == o.expected_cookie && o.probe_reply == o.expected_cookie;
+            else if (o.kind == WindowKind::NoNativeCalls)
+                accepted = accepted && window.phase == 0 && o.abi_entries == 0 && o.abi_exits == 0 &&
+                           o.probe_entries == 0 && o.probe_exits == 0;
+            else accepted = false;
+            window.observed.poisoned = window.poisoned;
+            window.observed.accepted = accepted;
+            if (observed) *observed = window.observed;
+            cancel_window();
+            return accepted;
+        }
+        void abort(WindowToken token) noexcept
+        {
+            if (token.provider_tls == &window && window.active && token.serial == window.serial)
+                cancel_window();
+            else if (window.active) window.poisoned = true;
+        }
+    }
+
+    extern "C" __attribute__((visibility("default")))
+    std::int32_t modbridge_cap10_abi_version() noexcept
+    {
+        record_entry(Call::Abi);
+        record_exit(Call::Abi, 1);
+        return 1;
+    }
+    // reply must be valid caller-owned writable int32 storage; only null is checked.
+    extern "C" __attribute__((visibility("default")))
+    std::int32_t modbridge_cap10_runtime_probe(std::int32_t cookie, std::int32_t* reply) noexcept
+    {
+        record_entry(Call::Probe, cookie);
+        const auto finish_probe = [cookie](std::int32_t status, bool written) noexcept
+        {
+            record_exit(Call::Probe, status, written, written ? cookie : 0);
+            return status;
+        };
+        if (!reply) return finish_probe(-4, false);
+        try
+        {
+            const Cap10BridgeState state = cap10_bridge_state;
+            if (!state.program || !state.shutdown ||
+                state.shutdown->load(std::memory_order_acquire) ||
+                !state.program->is_program_started()) return finish_probe(-3, false);
+            *reply = cookie;
+            return finish_probe(0, true);
+        }
+        catch (...) { return finish_probe(-5, false); }
+    }
+#endif
+

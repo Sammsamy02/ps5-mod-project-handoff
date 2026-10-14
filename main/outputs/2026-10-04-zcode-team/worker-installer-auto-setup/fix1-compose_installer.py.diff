@@ -1,0 +1,30 @@
+--- a/outputs/2026-10-04-zcode-team/worker-installer-composition/compose_installer.py
++++ b/outputs/2026-10-04-zcode-team/worker-installer-composition/compose_installer.py
+@@ -444,6 +444,27 @@
+     ("e2e-end",
+      '\n    return EX_OK;\n}\n',
+      '\n    e2e_status_end(EX_OK);\n    return EX_OK;\n}\n', 1),
++    ("namespace-bootstrap",
++     '    if (mkdirs((char *)g_state_dir)) die("cannot create state dir %s", g_state_dir);',
++     '''    /* composition bootstrap (recorded patch, worker-installer-composition):
++     * the file I/O owner's production namespace root must exist before any
++     * owner opens. The console E2E run failed at stage 41 only because
++     * /data/modbridge was absent and had to be created out-of-band (FTP MKD);
++     * verify/create it up front so a fresh console never fails that way. The
++     * ps5_io adapter additionally self-heals on first open (ps5_io.c).
++     * Console only: the host flavor must not create console namespaces. */
++#ifndef PS5IO_HOST
++    {
++        ps5io_stat ns_st;
++        if (ps5io_stat_path(PS5IO_NAMESPACE_ROOT, &ns_st) != 0
++            || !ns_st.exists || ns_st.is_dir != 1) {
++            int ns_rc = ps5io_mkdir_p(PS5IO_NAMESPACE_ROOT, 0755);
++            if (ns_rc) die("cannot create namespace root %s: %s",
++                           PS5IO_NAMESPACE_ROOT, ps5io_status_string(ns_rc));
++        }
++    }
++#endif
++    if (mkdirs((char *)g_state_dir)) die("cannot create state dir %s", g_state_dir);''', 1),
+ ]
+ 
+ 

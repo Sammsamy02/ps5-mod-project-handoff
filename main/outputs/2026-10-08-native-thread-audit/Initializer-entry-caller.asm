@@ -1,0 +1,23 @@
+0x3a145c0 file0x3a185c0 55 push rbp
+0x3a145c1 file0x3a185c1 4889e5 mov rbp, rsp
+0x3a145c4 file0x3a185c4 4157 push r15
+0x3a145c6 file0x3a185c6 4156 push r14
+0x3a145c8 file0x3a185c8 53 push rbx
+0x3a145c9 file0x3a185c9 50 push rax
+0x3a145ca file0x3a185ca 4989f6 mov r14, rsi
+0x3a145cd file0x3a185cd 4889fb mov rbx, rdi
+0x3a145d0 file0x3a185d0 e89bc07ffc call 0x210670
+0x3a145d5 file0x3a185d5 4889df mov rdi, rbx
+0x3a145d8 file0x3a185d8 4c89f6 mov rsi, r14
+0x3a145db file0x3a185db e840010000 call 0x3a14720
+0x3a145e0 file0x3a185e0 85c0 test eax, eax
+0x3a145e2 file0x3a185e2 7510 jne 0x3a145f4
+0x3a145e4 file0x3a185e4 4889df mov rdi, rbx
+0x3a145e7 file0x3a185e7 e864490000 call 0x3a18f50
+0x3a145ec file0x3a185ec 85c0 test eax, eax
+0x3a145ee file0x3a185ee 0f84a5000000 je 0x3a14699
+0x3a145f4 file0x3a185f4 48c7839800000000000000 mov qword ptr [rbx + 0x98], 0
+0x3a145ff file0x3a185ff 4189c6 mov r14d, eax
+0x3a14602 file0x3a18602 4c8bbba0000000 mov r15, qword ptr [rbx + 0xa0]
+0x3a14609 file0x3a18609 4d85ff test r15, r15
+0x3a1460c file0x3a1860c 742a je 0x3a14638

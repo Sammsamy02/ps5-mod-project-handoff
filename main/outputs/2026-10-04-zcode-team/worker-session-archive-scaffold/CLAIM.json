@@ -1,0 +1,47 @@
+{
+  "team": "2026-10-04-zcode-team",
+  "worker": "worker-session-archive-scaffold",
+  "date": "2026-10-04",
+  "role": "Build the LOCAL archive scaffold for the return session so its fetched evidence lands organized from the first command: runs/ scaffold, a session_run helper (stamps run dirs, copies evidence with source paths recorded, writes receipt.json as artifact index, appends a session INDEX.md), and pre-created expected flow entries (dll8, e2e, game-launch9, game-launch10) with expected-artifact checklists taken from ACCEPTANCE-RECORD.md. Host-tested with fixture files.",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "output_dir": "outputs/2026-10-04-zcode-team/worker-session-archive-scaffold/",
+  "constraints": {
+    "no_console_contact": true,
+    "no_nested_subagents": true,
+    "local_scaffolding_only": true,
+    "write_only_under": "outputs/2026-10-04-zcode-team/worker-session-archive-scaffold/",
+    "existing_files_read_only": true,
+    "claim_first_report_last": true,
+    "max_tool_calls": 40
+  },
+  "inputs_read": [
+    "outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/ACCEPTANCE-RECORD.md (archive law: runs/<YYYYMMDD-HHMMSS>-<flow>/, events.log + receipt.json minimum, controller backups under C/, receipt.json as index, stdout-only verdicts are not archived, SESSION-MANIFEST proposal, the record never contains completion claims)",
+    "outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py (make_run_dir law <YYYYMMDD-HHMMSS>-<flow>, Ctx.log events.log line format [HH:MM:SS] msg, receipt.json field shape: flow/date_utc/steps/honesty, flow name set, default --run-root runs/)",
+    "outputs/2026-10-04-zcode-team/worker-post-spawn-closure-prep/CLAIM.json (sibling deliverable + honesty conventions)",
+    "outputs/2026-10-04-zcode-team/worker-project-state-index/CURRENT-STATE-DIGEST.md (launches 1-8 history; launch 9 = next window; grounds the game-launch9/game-launch10 flow labels)"
+  ],
+  "planned_outputs": [
+    "CLAIM.json (this file, first)",
+    "session_run.py + session_run.sh (helper: start|note|capture|verdict|close|checklist)",
+    "runs/ (empty run-root with initialized INDEX.md header; real run dirs are stamped at run time per the law — never pre-created)",
+    "flows/dll8.md, flows/e2e.md, flows/game-launch9.md, flows/game-launch10.md (pre-created expected flow entries with expected-artifact checklists from ACCEPTANCE-RECORD §2-§3)",
+    "tests/test_session_run.sh + generated fixtures + tests/TEST-RECEIPT.json (host test receipt) + example run receipts under tests/tmp-runroot/",
+    "README.md (usage + law-compliance map)",
+    "REPORT.md (last)"
+  ],
+  "claims": [
+    "The scaffold implements the ACCEPTANCE-RECORD §1 archive law exactly: one fresh run dir per flow run stamped <YYYYMMDD-HHMMSS>-<flow> (same stamp format as console_batch.make_run_dir); events.log (append-only, [HH:MM:SS] msg format) and receipt.json exist in every run dir from the moment it is stamped; failed/aborted runs keep their dirs (the helper has no delete path); nothing re-runs into an existing dir (start refuses collisions, capture refuses overwrites, close refuses rewriting a closed receipt).",
+    "receipt.json is the run's index per the law: it carries flow, utc, overall verdict, every artifact with sha256 + byte count + the absolute source path it was copied from, the verdict lines captured from tool outputs (also archived as files, because a verdict that exists only in stdout is not part of the record), the expected-artifact checklist status, and an honesty note; closed runs append one row to the session INDEX.md.",
+    "The four expected flow entries are pre-created with checklists traced to ACCEPTANCE-RECORD §2-§3: dll8 (preflight identity, upload identity, <tag>-readback.elf EXACT gate, fetched /data/modbridge-owned-dll-candidate.jsonl copy, EXPECTED-DELTA-8FAM verdict at positions 37-40, console receipt), e2e (13/13 cmd-SHASUMS preflight, MODE=B payload readback gate, per-dispatch readback/consumed-twin artifacts, stale.chk, verbatim ledger copies, §7 reset proof, MODBRIDGE_INST_E2E-receipt.json), and game-launch9/game-launch10 (game-evidence law: S/L/D1/D2/C2 sinks, two probe verdict sinks, probe-verdicts.json, cp0-cp4/cp5/cp6 verdicts, rung_check RUNG1/RUNG2, post_launch_check, game-evidence-receipt.json with the two eye confirmations, stability-gate-verdict.md + spawn-count-table.csv).",
+    "Checklist rows are advisory-by-design: matching the record's own rule that exact filenames are whatever the flow's ctx.save wrote, the helper reports missing expected artifacts honestly instead of failing or guessing filenames, and INCOMPLETE is a legitimate terminal state.",
+    "The host test exercises every subcommand against fixture files and asserts the law properties (fresh-dir law, events.log-at-start, sha256 correctness vs shasum, source-path recording, verdict extraction, receipt fields, INDEX append, closed-receipt immutability, no-overwrite); it is all green and writes tests/TEST-RECEIPT.json."
+  ],
+  "out_of_scope": [
+    "Any contact with the console (ps5-host-not-configured.invalid), curl/ftp, or the real console_batch.py flows",
+    "Creating real run dirs for dll8/e2e/game-launch9/game-launch10 in worker-console-batch-runner/runs/ (run dirs are stamped by the return session at run time, never pre-created)",
+    "Certifying any CP checkpoint, rung, or verdict from host tests; the fixtures are synthetic and prove the scaffold mechanics only",
+    "Editing other workers' files or the console_batch.py tool itself",
+    "Writing the SESSION-MANIFEST (controller-owned per ACCEPTANCE-RECORD §5)"
+  ],
+  "honesty_notes": "Everything here is local scaffolding plus host-side fixture tests; nothing has run on the console and no acceptance row is advanced. The helper's default --run-root is this scaffold's own runs/ (kept pristine); the return session must pass --run-root pointing at worker-console-batch-runner/runs/ (or the controller console dir) for the canonical archive location. Checklist glob patterns (e.g. *-readback.elf, *shasum*) are best-effort keys taken from the record's named artifacts; where the record says exact filenames are flow-defined ('do not guess a filename — read the receipt'), the scaffold treats a missing match as a recorded gap, not an error. The two eye confirmations remain human-only facts the helper can carry but never synthesize."
+}

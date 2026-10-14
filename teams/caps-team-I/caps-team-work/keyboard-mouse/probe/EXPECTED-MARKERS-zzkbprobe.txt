@@ -1,0 +1,39 @@
+# zzkbprobe v1 -- EXPECTED-MARKERS (Team I2, 2026-10-13, Mac-only until launched)
+# Read-only probe: asks the game's own PlayerController IsInputKeyDown(key)
+# about 30 times a second (game thread, via LoopAsync + ExecuteInGameThread,
+# at most one queued poll at a time) and logs key up/down changes.
+# It registers NO key binds and writes nothing. main.lua is 2193 bytes
+# (< 4096 admission cap); the loadlist row must carry the exact size.
+# Decode the log with harvest/decode_session_log.py, then grep "[kb]".
+# Keys watched (Unreal key names): F8 F7 A SpaceBar Enter LeftShift
+# LeftControl LeftMouseButton RightMouseButton Gamepad_FaceButton_Bottom
+# (the last one = controller Cross, the built-in positive control).
+
+## Startup
+[kb] Z0 v1 keys=10        script ran. ABSENT -> not admitted (size row) or mods off.
+[kb] PC found             local player controller found (re-found after map loads).
+[kb] CAP fn=1 rt=boolean  the engine function answered. fn=0 + error text = the
+                          function or the FKey argument does not work on this
+                          engine: probe stops after 30 failures ("STOP fail=30").
+
+## Edges (at most 240 lines, then "EDGE cap=240")
+[kb] DN <key> n=<i> t=<s>   key went down     [kb] UP <key> n=<i> t=<s>   key went up
+
+## Every 10 s
+[kb] SUM v1 polls=<n> pc=<0|1> fn=<-1|0|1> edges=<n> fail=<n> F8=<n> F7=<n> ... Gamepad_FaceButton_Bottom=<n>
+  polls should grow by about 300 per 10 s (30/s). Much less = the game
+  thread is busy (loading) -- fine; zero for minutes = queue not draining.
+
+## Verdict table (this session's lines only)
+K-PASS     DN/UP lines for F8, A, SpaceBar, Enter AND LeftShift while typing,
+           DN/UP LeftMouseButton/RightMouseButton while clicking, AND
+           DN/UP Gamepad_FaceButton_Bottom when pressing Cross.
+           -> option C works on Townfall: the engine sees the USB keyboard/mouse.
+K-PARTIAL  Gamepad_FaceButton_Bottom edges seen, NO keyboard/mouse edges.
+           -> the probe works but the engine does not get the keyboard here
+              (or only in some screens). Option C is not enough for this game;
+              next step is the option-A diagnostic (DESIGN.md, plan B).
+K-NOPROBE  "CAP fn=0" or never "PC found" -> probe/API problem, not a
+           keyboard verdict. Fix the probe on the Mac first.
+Controller unchanged (must hold in every case): the L3+R3 chord (F7) still
+           works as in the last clean launch; no new error lines; no stutter.

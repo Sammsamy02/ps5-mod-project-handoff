@@ -1,0 +1,31 @@
+{
+  "id": "worker-launch10-readpath-guard",
+  "actor": "zcode-root-controller (hands-on)",
+  "utc": "2026-10-05T13:05:00+00:00",
+  "purpose": "Enforce the user's read-path law on the ARMED launch-10 initializer: data seeds read only from readable image spans; code seeds (FName ctor slot 2, SCO slot 4) are call-only with reads explicitly refused; 6-span readable registration establishes nothing about text coverage.",
+  "audit_facts": {
+    "check_pointer_probe": "pure arithmetic (null/8-align), no memory read \u2014 SeedValidation.hpp:161-172",
+    "fname_ctor_use": "assign_address + FName ProbeName{...} CALL (instruction fetch on X page, never a data read); detour verification skipped while seed-bound \u2014 UnrealInitializer.cpp Phase 4",
+    "sco_use": "assigned blind, identity/ABI unverified, no read \u2014 Phase 5",
+    "actual_reads": "GUA->pool chain (pool label + blocks + entries), GMalloc var read_u64, instance vptr read \u2014 all RW data",
+    "geometry": "phdr-verified from retained eboot 3b6cfad4: LOAD0 --X [0,0x7479b1c), LOAD1 R-- [0x747c000,0x7eba918), LOAD3/7 RW- [0x7ebc000,0x9633418), LOAD8 --- [0x9633420,0xbc602c8); gaps 0x24e4/0x16e8/0x8"
+  },
+  "patch": {
+    "SeedValidation.hpp": "SeedAddressClass enum + classify_seed_address(runtime,base) total classifier (CodeCallOnly/DataReadable/Refused) + seed_class_name; ca03e754...",
+    "UnrealInitializer.cpp": "5 guards: slots 0/1/3 require DataReadable before any read; slots 2/4 require CodeCallOnly before bind (mismatch = terminal seed_refused); 1fc82e6b...",
+    "base": "copied from worker-launch10-gmalloc-integration/staging-l10-gmalloc-validator (validator V1/V2 + armed SeedTable retained; SeedTable.h == SeedTable.launch10.h byte-identical, verified)"
+  },
+  "compile_gate": {
+    "argv": "exact 190-arg unit argv recovered from gmalloc receipts/compile-gate.argv.json, input/output swapped",
+    "LLVM_CONFIG": "outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin/llvm-config",
+    "exit": 0,
+    "warnings": "6, all pre-existing classes (enum-enum-conversion, asmjit deprecation, undefined-inline port headers); zero new",
+    "object": "receipts/unreal-unrealinitializer-readpath-guard.o 1933568 B (+4600 vs gmalloc baseline); 8b9e66b8...",
+    "string_proof": "7/7 guard refusal strings present exactly once; 0 in baseline; inline helpers fully inlined (nm empty, expected)"
+  },
+  "limits": "not yet composed into the launch-10 one-pass; not yet run in-game; classifier covers image spans only (heap pointers like the FMalloc instance are lease-governed, out of scope by design)",
+  "arming_verdict_input": "armed path makes NO unsupported reads as-built; guard makes the classification an enforced invariant for launch-10",
+  "revision": "v2 (launch10-b): pool-shape refusal now prints observed CurrentBlock + Blocks[0] + stale span bounds (was value-blind; oracle worker finding); compile gate re-run exit 0, object v2 carries the observed-CurrentBlock string",
+  "utc_v2": "2026-10-05T13:00:34.075739+00:00",
+  "v2_initializer_sha256": "b943aed5966270fb7e817ae6df7932637cd5437b526f4512036134907669a6a3"
+}

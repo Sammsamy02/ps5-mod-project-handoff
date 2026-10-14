@@ -1,0 +1,6 @@
+0xbb180 file0xbf180 55 push rbp
+0xbb181 file0xbf181 4889e5 mov rbp, rsp
+0xbb184 file0xbf184 b801000000 mov eax, 1
+0xbb189 file0xbf189 878788010000 xchg dword ptr [rdi + 0x188], eax
+0xbb18f file0xbf18f 5d pop rbp
+0xbb190 file0xbf190 c3 ret 

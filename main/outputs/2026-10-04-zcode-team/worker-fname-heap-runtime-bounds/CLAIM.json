@@ -1,0 +1,27 @@
+{
+  "worker": "worker-fname-heap-runtime-bounds",
+  "utc": "2026-10-05",
+  "priority": "LAUNCH-10 BLOCKING (controller ownership relay; supersedes the original launch-11 framing)",
+  "purpose": "Replace the frozen heap envelope kHeapLo/kHeapHi [0x8018c000,0x100118000) in the armed pool admission with CURRENT-INVOCATION published-span bounds (bridge walk-results snapshot), per the user directive chain: same-capture rule, truncation honesty via the captured envelope, coverage option (a) 16,384, empty table = loud refusal never frozen fallback.",
+  "bases": {
+    "initializer": "worker-launch10-readpath-guard/staging v2 (sha b943aed5…), SeedValidation ca03e754…, SeedTable d183e0c0… (byte-identical to gmalloc staging)",
+    "bridge": "worker-facts-geometry-fix/runtime_start_bridge_r13.geometrydiag.cpp sha c3d6c4de… (full staged copy) + trimmed hunks staging/spanpub-hunks-vs-geometrydiag.diff for the consolidated r14+diag fold (controller merge, fc06fe52); r14 itself sha 03a9acb1…"
+  },
+  "design": {
+    "predicate": "check_pool_shape v2: span-table-available -> CurrentBlock>=1 -> Blocks[0]!=0 -> 8-aligned -> OUTSIDE [base, base+0xbc602c8) -> INSIDE one published non-image readable span; miss below captured envelope = honest unmapped/unreadable; miss at/above envelope = 'snapshot truncated' (omitted, never 'unmapped')",
+    "publication": "bridge_spanpub_publish over the SAME frozen mappings[] the lease registration consumed (same-capture rule; never g_image_regions — image-clamped by design); filter pure in rc_seed (host-tested, single implementation both TUs consume): prot&1, extent-clipped outside remainder >= 0x20000 (one FName block = FNameBlockOffsets(1<<16) x stride 2), top-16 by size ascending; envelope = max record end over the WHOLE snapshot",
+    "extent_digit": "0xbc602c8 file bytes (GEOMETRY.md sections 3/8-4; bridge kImageExtentVaddr parity); the relayed 'base+0xc0602c8' spelling double-counts the slide — adjudicated before implementing, pinned by fixture G2",
+    "coverage_option_a": "bridge capture already 16,384 static bss (r4; launch-2 ENOMEM) vs observed vm_total 10,019 -> complete with margin; REQUIRED core-side hunk (kMaxVmMappings 1024->16384 + cpp:203 buffer -> static bss) delivered in DIFF.md section 3 for the controller fold (not my TU, not compiled by me)"
+  },
+  "verification": {
+    "fixtures": "52/52 PASS (receipts/fixture-pool-bounds.txt, receipts/PASS-pool-bounds-fixtures.json); includes the REQUIRED positive test (heap blocks0 outside image AND outside frozen range passes NEW, fails OLD) and the truncation-vs-unmapped split (A17/H5) and coverage proof (H1-H4, heap at record ~3.4k)",
+    "initializer_gate": "exact 190-arg argv (input/output/-MF swapped, LLVM_CONFIG pinned): exit 0, 6 warnings exactly in the 4 pre-existing baseline classes (identical multiset vs gmalloc baseline stderr); object receipts/unreal-unrealinitializer-spanpub.o 6f830293…",
+    "bridge_gate": "pinned prospero SDK -Wall -Wextra -Werror -std=c++20 -O1 (overlay l10r3-a includes): baseline geometrydiag exit 0 / 0 bytes stderr; spanpub exit 0 / 0 bytes stderr; llvm-nm shows the three extern C accessors defined; object receipts/bridge-spanpub.o 3ab04702…"
+  },
+  "controller_deviation_adjudications": {
+    "v2_wording": "value-printing preserved (observed CurrentBlock + Blocks[0]); frozen 'vs span [lo,hi)' tail replaced per approved refinement: success line names the CONTAINING published span [lo,hi); refusal tail prints capture envelope end",
+    "registration_internals": "exactly TWO additive touches inside bridge_register_readable_ranges (one publish call after the loop; one diagnostic on the walk-failure early return) — flagged per instruction; r14 re-application anchors in DIFF.md section 2"
+  },
+  "limits": "host-only: pure-function proof + both compile gates; no target/console run, no Blocks[0] dereference exercised (entry chain + behavioral probe unchanged, target-side); cap top-16 documented false-refuse limit (counted/diagnosed); SeedTable kHeapLo/kHeapHi retained in the generated table unused (regeneration contract)",
+  "not_claimed": "no in-game pass, no AAA/quality claim, no claim that 55 contexts or any concurrency number was verified — host fixtures and compile gates only"
+}

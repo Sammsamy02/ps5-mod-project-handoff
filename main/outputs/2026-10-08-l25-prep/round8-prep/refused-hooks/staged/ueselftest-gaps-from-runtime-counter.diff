@@ -1,0 +1,34 @@
+--- a/ue4ss/Mods/ueselftest/Scripts/main.lua
++++ b/ue4ss/Mods/ueselftest/Scripts/main.lua
+@@ -33,15 +33,20 @@
+ -- separately so the summary never hides a capability gap.
+ local GAP = 0
+ local GAPN = {}
++-- [REFUSED-LOG] the runtime counts every refused call and every registration it accepts but can never
++-- deliver (GetRefusedHookCount, same count as the [REFUSED] log lines). Absent on older PRX = 0 = old behaviour.
++local function RC() local ok, n = pcall(function() return GetRefusedHookCount() end) return (ok and type(n) == "number") and n or nil end
+ local function ONE(e)
+   S.n=S.n+1 PFW(S.n)
++  local rc0 = RC()
+   local t0=os.clock() local ok,a,b=pcall(e[2],S) local ms=(os.clock()-t0)*1000
++  local rc1 = RC()
+   local sl=ms>16 and " SLOW-ms="..string.format("%.0f",ms) or "" if ms>16 then SLOW=SLOW+1 end
+   local l=S.n.."/"..M.." "..e[1].." "
+   if not ok then P(l.."FAIL "..S.et(a)..sl)
+   elseif a == "SKIP" then P(l .. "SKIP " .. TS(b))
+   elseif a == false then P(l.."FAIL "..TS(b)..sl)
+-  else S.p = S.p + 1 if a == "soft-refused" then GAP = GAP + 1 GAPN[#GAPN + 1] = e[1] end P(l.."PASS"..((a~=nil and a~=true) and (" "..TS(a)) or "")..sl) end
++  else S.p = S.p + 1 if a == "soft-refused" or (rc0 and rc1 and rc1 > rc0) then GAP = GAP + 1 GAPN[#GAPN + 1] = e[1] end P(l.."PASS"..((a~=nil and a~=true) and (" "..TS(a)) or "")..sl) end
+ end
+ local function LP(k, cnt)
+   if S.h["lp" .. k] then return end
+@@ -98,7 +103,8 @@
+   for i = S.n + 1, #T do ONE(T[i]) end
+   PFW(-1)
+   P("SUMMARY "..S.p.." of "..M.." PASS SLOW "..SLOW)
+-  P("GAPS "..GAP.." soft-refused registrations counted in PASS (PC registers them): "..table.concat(GAPN, ","))
++  P("GAPS "..GAP.." refused-or-never-delivered registrations counted in PASS (PC registers them): "..table.concat(GAPN, ","))
++  P("REFUSED-EVENTS total=" .. tostring(RC()) .. " (runtime counter; see [REFUSED] lines in ue4ss.log)")
+   -- [IS-LUA-ALLOC 0003] post-run numbers: gc_kb delta vs "before" is what the
+   -- run pinned in the Lua heap; rising fails with flat gc_kb means the shared
+   -- backing store (game libc heap) refused, not Lua garbage.

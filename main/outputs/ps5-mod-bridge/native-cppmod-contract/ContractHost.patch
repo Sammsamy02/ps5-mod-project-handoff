@@ -1,0 +1,114 @@
+--- retained-gate-host/Program.cs
++++ native-cppmod-contract/ContractHost.cs
+@@ -1,8 +1,10 @@
++// Derived from the retained owned strict GateHost; only export inspection/selection added.
+ using System.Security.Cryptography;
+ using System.Text.Json;
+ using System.Buffers.Binary;
+ using System.Text;
+ using SharpProspero.Link;
++using SharpProspero.Prx;
+ 
+ // Owned host entry point. No SDK stubs/Core catalog/compat/start objects are added.
+ // The actual retained resolver decides which strong names remain required.
+@@ -22,7 +24,7 @@
+         string expectedHash = record.GetProperty("evidence").GetProperty("sha256").GetString()!;
+         if (!Sources.TryGetValue(source, out var input))
+         {
+-            if (new FileInfo(source).Length > 64 * 1024 * 1024) throw new InvalidDataException("Type source too large.");
++            if (new FileInfo(source).Length > 256 * 1024 * 1024) throw new InvalidDataException("Type source too large.");
+             byte[] bytes = File.ReadAllBytes(source);
+             input = (bytes, Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant());
+             Sources[source] = input;
+@@ -39,9 +41,10 @@
+         }
+         ulong shoff = BinaryPrimitives.ReadUInt64LittleEndian(Span(40, 8));
+         ushort stride = BinaryPrimitives.ReadUInt16LittleEndian(Span(58, 2));
+-        ushort count = BinaryPrimitives.ReadUInt16LittleEndian(Span(60, 2));
++        int count = BinaryPrimitives.ReadUInt16LittleEndian(Span(60, 2));
++        if (count == 0) count = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(Span(shoff + 32, 8)));
+         if (stride < 64 || count == 0) throw new InvalidDataException("Unsupported type metadata sections.");
+-        Span(shoff, (ulong)stride * count);
++        Span(shoff, (ulong)stride * (ulong)count);
+         uint requested = record.GetProperty("symbol_table").GetString() switch {
+             ".dynsym" => 11, ".symtab" => 2, _ => throw new InvalidDataException("Unsupported declared symbol table.")
+         };
+@@ -105,10 +108,45 @@
+         return (result, requirements, Convert.ToHexString(SHA256.HashData(raw)).ToLowerInvariant());
+     }
+ 
++    // Inspect our emitted module; never infer an external provider's identity.
++    static int DescribeExports(string module, string namesFile, string output)
++    {
++        var image = PrxImage.Load(module);
++        if (image.ModuleName.Length == 0 || image.ExportLibraryName.Length == 0)
++            throw new InvalidDataException("Emitted module lacks its own explicit names.");
++        var names = File.ReadAllLines(namesFile).Where(n => n.Length > 0).ToArray();
++        if (names.Length == 0 || names.Length > 64 || names.Distinct().Count() != names.Length)
++            throw new InvalidDataException("Invalid bounded export request.");
++        string hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(module))).ToLowerInvariant();
++        var rows = names.Select(name => {
++            var found = image.FindByName(name) ?? throw new InvalidDataException("Required export missing: " + name);
++            if (found.LibraryName != image.ExportLibraryName)
++                throw new InvalidDataException("Export library disagrees with emitted metadata.");
++            return new { name, symbol_type = found.IsFunction ? "FUNC" : "OBJECT",
++                identity = new { ModuleName = image.ModuleName, LibraryName = found.LibraryName,
++                    Soname = Path.GetFileName(module), ModuleVersion = image.ModuleVersion,
++                    LibraryVersion = image.LibraryVersion, PublishedName = name },
++                evidence = new { source = Path.GetFullPath(module), sha256 = hash,
++                    locator = "export/" + found.Nid, emitted_module_export_verified = true } };
++        }).ToArray();
++        File.WriteAllText(output, JsonSerializer.Serialize(new {schema = 1, declarations = rows}, Json) + "\n");
++        return 0;
++    }
++
+     static int Main(string[] args)
+     {
+         try
+         {
++            if (args.Length == 3 && args[0] == "extract")
++            {
++                if (new FileInfo(args[1]).Length > 256 * 1024 * 1024)
++                    throw new InvalidDataException("SELF input too large.");
++                byte[] elf = SelfContainer.ExtractElf(File.ReadAllBytes(args[1]));
++                using var file = new FileStream(args[2], FileMode.CreateNew, FileAccess.Write, FileShare.None);
++                file.Write(elf);
++                return 0;
++            }
++            if (args.Length == 4 && args[0] == "exports") return DescribeExports(args[1], args[2], args[3]);
+             if (args.Length < 3 || args[0] is not ("resolve" or "write"))
+                 throw new ArgumentException("resolve <object> <json>; write <object> <compiler-report> <output-prx-or-dash>");
+             var actual = Resolve(args[1]);
+@@ -136,7 +174,7 @@
+                 }, Json) + "\n");
+                 return 0;
+             }
+-            if (args.Length != 4) throw new ArgumentException("write requires object, report and output");
++            if (args.Length != 5) throw new ArgumentException("write requires object, report, output and export names file");
+             using var document = JsonDocument.Parse(File.ReadAllText(args[2]));
+             var root = document.RootElement;
+             if (root.GetProperty("input_object").GetProperty("sha256").GetString() != actual.Hash)
+@@ -184,13 +222,22 @@
+                 Imports = imports, Unresolved = Array.Empty<string>(),
+                 SkippedMembers = actual.Resolution.SkippedMembers, DroppedSections = actual.Resolution.DroppedSections
+             };
++            var exportNames = File.ReadAllLines(args[4]).Where(n => n.Length > 0).ToArray();
++            if (exportNames.Length == 0 || exportNames.Length > 64 || exportNames.Distinct().Count() != exportNames.Length)
++                throw new InvalidDataException("Invalid bounded export request.");
++            foreach (string name in exportNames)
++            {
++                if (!actual.Resolution.Defined.TryGetValue(name, out var owner) ||
++                    !owner.Symbols.Any(s => s.Name == name && !s.IsUndefined && s.Type is SymType.Func or SymType.Object))
++                    throw new InvalidDataException("Requested export is not a genuine defined function/data symbol: " + name);
++            }
+             if (args[3] != "-")
+             {
+                 if (Path.GetFullPath(args[3]) == Path.GetFullPath(args[1]) ||
+                     Path.GetFullPath(args[3]) == Path.GetFullPath(args[2]) || File.Exists(args[3]))
+                     throw new InvalidDataException("Output would overwrite an existing file or input evidence.");
+                 byte[] bytes = DynamicWriter.Write(explicitResolution, null, ModuleKind.Library,
+-                    moduleFileName: Path.GetFileName(args[3]));
++                    exportSymbols: exportNames, moduleFileName: Path.GetFileName(args[3]));
+                 using var output = new FileStream(args[3], FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                 output.Write(bytes);
+             }

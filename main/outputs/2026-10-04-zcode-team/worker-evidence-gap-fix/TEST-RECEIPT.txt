@@ -1,0 +1,60 @@
+== TEST-RECEIPT — worker-evidence-gap-fix, 2026-10-04, LOCAL ONLY ==
+script under test: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/evidence.sh
+  sha256 BEFORE: 5a034d460e642a51a7689e7cd498f9367609c9cddf64fcb31cdaed101601ba52 (pre-patch snapshot kept as evidence.sh.pre-patch)
+  sha256 AFTER:  76559126074c28dad936905a8d9c2c3c3d7fffedc47907cc7f0f356616ae858a  (the new recorded sha)
+
+== SUITE 1 — fixture suite: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/run_fixture_tests.sh ==
+command: sh host-test/run_fixture_tests.sh   (receipt: receipts/fixture-test-pass.txt)
+PRE-PATCH:  rc=0, 84 passed / 0 failed
+POST-PATCH: rc=0, 94 passed / 0 failed  (+10 new assertions, case 17 l10_success_conversion — GAP-1/2/3 regression lock)
+  PASS [l10_success_conversion] verdict MODS_STARTED
+  PASS [l10_success_conversion] success chain includes S6_CONVERSION (GAP-1)
+  PASS [l10_success_conversion] SDIAGSUM shows anchor_count=7 + intervals_found=1 next to spans=6 (GAP-1)
+  PASS [l10_success_conversion] BEST-decisive load print verbatim on the page (GAP-2)
+  PASS [l10_success_conversion] post-OPTIONS drain line verbatim (GAP-2)
+  PASS [l10_success_conversion] mod-load section labeled BEST-decisive (GAP-2)
+  PASS [l10_success_conversion] json tail carries mod_load_lines
+  PASS [l10_success_conversion] S7-before-S4/S5 quirk annotated, not reordered (GAP-3)
+  PASS [l10_success_conversion] no drift warnings (absent: /^WARN:/)
+  PASS [l10_success_conversion] exit 0 (rc=0)
+
+== SUITE 2 — rehearsal five sets (regression corpus, fixtures UNMODIFIED) ==
+command per set: sh evidence.sh --from-dir fixtures/<S>/from-dir --baseline-dir fixtures/_baselines --json-tail --out runs/<S>.post.summary.txt
+  set A: rc=0 stderr_bytes=0 WARN_lines=0 verdict=VERDICT: MODS_STARTED
+  set B: rc=0 stderr_bytes=0 WARN_lines=0 verdict=VERDICT: FAILED_STATUS
+  set C: rc=0 stderr_bytes=0 WARN_lines=0 verdict=VERDICT: FAILED_STATUS
+  set D: rc=0 stderr_bytes=0 WARN_lines=0 verdict=VERDICT: FAILED_S6_CONVERSION
+  set E: rc=0 stderr_bytes=0 WARN_lines=0 verdict=VERDICT: MODS_STARTED
+
+== GAP evidence on the rehearsal corpus (post-patch summaries) ==
+  set A:
+    chain:   supplier-diag: S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S5_IDENTITY_ANCHORS -> S4_LEASE_REG -> S6_CONVERSION -> S9_START_ACK -> S11_STOP
+    SDIAGSUM: lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1
+    mod-load prints verbatim: 4 line(s); S7 quirk note: 1
+  set B:
+    chain:   supplier-diag: S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S5_IDENTITY_ANCHORS -> S4_LEASE_REG -> S6_CONVERSION -> S9_START_ACK -> S11_STOP
+    SDIAGSUM: lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1
+    mod-load prints verbatim: 0 line(s); S7 quirk note: 1
+  set C:
+    chain:   supplier-diag: S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S5_IDENTITY_ANCHORS -> S4_LEASE_REG -> S6_CONVERSION -> S9_START_ACK -> S11_STOP
+    SDIAGSUM: lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1
+    mod-load prints verbatim: 0 line(s); S7 quirk note: 1
+  set D:
+    chain:   supplier-diag: S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S5_IDENTITY_ANCHORS -> S4_LEASE_REG -> S6_CONVERSION -> S11_STOP
+    SDIAGSUM: lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=0
+    mod-load prints verbatim: 0 line(s); S7 quirk note: 1
+  set E:
+    chain:   supplier-diag: S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S4_LEASE_REG -> S6_CONVERSION -> S7_CFG_ATTACH -> S9_START_ACK -> S11_STOP
+    SDIAGSUM: lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1
+    mod-load prints verbatim: 4 line(s); S7 quirk note: 0
+
+== verdict stability (classifier decisions unchanged by the patch) ==
+  A: MODS_STARTED (pre=post)  B: FAILED_STATUS (pre=post)  C: FAILED_STATUS (pre=post)  D: FAILED_S6_CONVERSION (pre=post)  E: MODS_STARTED (pre=post)
+
+== fixture immutability ==
+  rehearsal fixtures byte-identical across all test runs (fixtures-pre.sha256 == fixtures-post.sha256)
+
+== no-re-baselining check ==
+  diff of pre-patch vs patched script filtered for baseline constants/guard: NONE (BASE_* / PIN_*_SHA / BASE_SESS_* / check_baseline_ref / head_window_drift untouched)
+
+RESULT: BOTH SUITES GREEN. Raw outputs: rehearsal runs/{A..E}.post.summary.txt, runs/{A..E}.post.stdout.txt, runs/{A..E}.post.stderr.txt; host receipt receipts/fixture-test-pass.txt

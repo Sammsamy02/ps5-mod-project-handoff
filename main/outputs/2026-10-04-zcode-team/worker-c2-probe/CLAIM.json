@@ -1,0 +1,47 @@
+{
+  "worker": "worker-c2-probe",
+  "team": "2026-10-04-zcode-team",
+  "task": "C2 alternative correspondence probe (igf7- build): read the 5 candidate data windows from the retained image offline (expected values kept OUT of the probe), build the gated data-segment reader per C2-ALTERNATIVE-SPEC.md section 7, host-test, determinism double-build, deliver PRX + build script + receipt + offline expected values + STAGE-PLAN.",
+  "scope": {
+    "writes": "outputs/2026-10-04-zcode-team/worker-c2-probe/ ONLY",
+    "reads": [
+      "outputs/2026-10-04-zcode-team/worker-c2-alt-correspondence/C2-ALTERNATIVE-SPEC.md",
+      "outputs/2026-10-04-zcode-team/worker-c2-alt-correspondence/candidate-ranges.json",
+      "outputs/2026-10-04-zcode-team/worker-igf5-diagnosis-rebuild/ (igf6 lineage, read-only)",
+      ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin (read-only)"
+    ],
+    "console": "NONE — controller stages and launches; this worker builds and host-tests only",
+    "network": "NONE"
+  },
+  "probe_contract": {
+    "module": "modbridge_ingame_facts (same name/path/log as igf4/igf5/igf6 lineage)",
+    "log_path": "/data/modbridge-ingame-facts.jsonl",
+    "build_id_prefix": "igf7-",
+    "imports": "the SAME 7 verbatim frozen-contract rows (__error, sceKernelOpen, sceKernelWrite, sceKernelClose, sysctl, getpid, clock_gettime)",
+    "sequence": [
+      "seq1 entry marker",
+      "seq2 startup",
+      "seq3 mapscan (v3 stride walk, kve_structsize-respecting) + persisted readable-span list (paged mapspans records) + derived base (lowest prot&4 span start) and exec-span extent cross-check",
+      "seq4..seq8 candidate reads in order B, C, D, E, A (A last), each gated FIRST on the same-invocation map (covered by a span with prot&1, and never intersecting the derived exec span), else refusal record and continue",
+      "seq9 summary (base, per-candidate gated/refused flags, exec_reads_attempted=0, write-failure count)"
+    ],
+    "forbidden_in_probe": [
+      "expected bytes (none embedded, none compared on-console; no byte_match field)",
+      "raw syscall instruction (build gate asserts 0; 0F 05 byte-pair scan of final inner .text)",
+      "mprotect in any form (forbidden symbol gate)",
+      "exec-span dereferences (candidate list is data-only; explicit derived-exec-span intersection refusal)",
+      "writes to game memory"
+    ]
+  },
+  "bounds": {
+    "max_tool_calls": 60,
+    "reads_only": "probe reads data segments only; no exec-span access; no game-memory writes",
+    "no_nested_subagents": true
+  },
+  "honesty": {
+    "native_executed": false,
+    "in_game_results": false,
+    "claims": "host build + host logic test + determinism ONLY; any live correspondence claim requires the controller-staged launch and the offline comparison",
+    "tick_sco_status": "UNRESOLVED (never read by this probe)"
+  }
+}

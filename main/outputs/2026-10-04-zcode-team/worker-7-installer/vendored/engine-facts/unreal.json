@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "engine": "unreal",
+  "name": "Unreal Engine 4/5",
+  "framework": {"id": "ue4ss-ps5", "maturity": "integrating"},
+  "components": {
+    "ue4ss-ps5":  {"maturity": "integrating", "what": "UE4SS runtime ported to PS5: runs Lua and C++ (.prx) mods. Loads, links and starts in Townfall; engine hookup still in progress."},
+    "pak-loader": {"maturity": "available",   "what": "Loads extra .pak/.utoc/.ucas mods. Working on Townfall (user-reported)."}
+  },
+  "asset_converter": "unreal-assets",
+  "load_order": "manifest_priority",
+  "detect": {
+    "ext_any": [".pak", ".utoc", ".ucas"],
+    "path_contains_any": ["/content/paks/", "/paks/"]
+  },
+  "roles": {
+    "script":         {"dest": "", "supported": false},
+    "lua_mod":        {"dest": "ue4ss/Mods", "supported": true, "requires": ["ue4ss-ps5"]},
+    "pak":            {"dest": "mods/~mods", "supported": true, "requires": ["pak-loader"]},
+    "native_plugin":  {"dest": "ue4ss/Mods", "supported": true, "requires_rebuild": true, "requires": ["ue4ss-ps5"]},
+    "config":         {"dest": "ue4ss", "supported": true, "requires": ["ue4ss-ps5"]},
+    "asset_override": {"dest": "mods/~mods", "supported": true, "convert": "unreal-assets", "requires": ["pak-loader"]},
+    "data_plugin":    {"dest": "", "supported": false}
+  },
+  "layout": {"anchors": [{"marker": "Scripts/main.lua"}, {"marker": "dlls/main.dll"}], "flatten": [".pak", ".utoc", ".ucas", ".sig"], "provided": [{"component": "ue4ss-ps5", "names": ["UE4SS.dll", "UE4SS.pdb", "dwmapi.dll", "xinput1_3.dll", "UE4SS-settings.ini", "mods.txt", "UE4SS_Signatures/", "Keybinds/", "CheatManagerEnablerMod/", "ConsoleCommandsMod/", "ConsoleEnablerMod/", "LineTraceMod/", "SplitScreenMod/", "BPModLoaderMod/", "BPML_GenericFunctions/", "jsbLuaProfilerMod/", "shared/"]}], "ignore": ["readme*", "*.md", "*.url", "*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp", "*.bmp", "license*", "changelog*", "credits*"]},
+  "notes": "Paks install through the pak loader. Lua, C++ and UE4SS config mods run through UE4SS-PS5. Loose PC assets must be re-encoded and packed into a pak by the host-side converter (Unreal shipping builds do not load loose assets). No Bethesda-style .esp plugins."
+}

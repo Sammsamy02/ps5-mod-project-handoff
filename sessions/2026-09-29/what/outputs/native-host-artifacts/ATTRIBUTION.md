@@ -1,0 +1,5 @@
+# Native host artifact attribution
+
+These ELF artifacts include the unchanged community ps5-payload-dev SDK v0.43 runtime by John Törnblom and contributors, under GPL-3.0-or-later. The accompanying SDK-GPL-3.0.txt preserves the exact license bytes from that pinned source (SHA-256 3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986). Exact upstream source: https://github.com/ps5-payload-dev/sdk/tree/d9c9519116944a7f1c22d262012c53b80b3520b7 . Release archive SHA-256 is recorded in each manifest.
+
+Application source and offline build instructions are retained in ../ps5-mod-bridge/native-host. Toolchain, source-file hashes, build/profile identity and external artifact SHA-256 are separate fields in each manifest. No console runtime results are claimed here. Both artifacts are exclusively for an owned child launched through the reviewed socket-spawn contract. The temporary development artifact binds ps5-host-not-configured.invalid:8085 and expires after 600 monotonic seconds; the permanent loopback artifact binds 127.0.0.1:8085.

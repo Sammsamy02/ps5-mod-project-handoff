@@ -1,0 +1,48 @@
+{
+  "worker": "worker-lua-bootstrap-audit",
+  "date": "2026-10-04",
+  "scope": "Static audit of the composition-5 UE4SS bootstrap path: RuntimeOwner::start init thread vs Lua mod load timing, 'mods-started' ack write site, LuaRaw linkage, and main.lua load-time failure modes. Evidence = saved sources + llvm-nm on saved objects; no execution, no relink, no console contact.",
+  "claims": [
+    {
+      "id": "C1",
+      "claim": "Lua VM creation and main.lua execution happen on the module_start (loader) thread, BEFORE RuntimeOwner::start() is called and before any init thread exists. They are not gated on any game-thread tick or engine-ready state.",
+      "evidence": "ue4ss_backend.cpp:53 calls program_->start_native_mods() inside the UE4SSBackend constructor, which runs inside PrepareActivatedUE4SSRuntime during module_start; UE4SSProgram.cpp:580-583 (setup_mods + start_cpp_mods); LuaMod ctor creates the Lua state at LuaMod.cpp:900-902; LuaMod::start_mod executes main.lua at LuaMod.cpp:6459-6463.",
+      "confidence": "high"
+    },
+    {
+      "id": "C2",
+      "claim": "The 'mods-started' status line is written on the RuntimeOwner init thread, inside UE4SSProgram::init's on_engine_initialized call site (after setup_unreal + property setup + Lua sharing, before the event loop starts), only if start_native_mods had already succeeded during module_start (mods_startup_verified_).",
+      "evidence": "UE4SSProgram.cpp:654-661 calls m_native_context.on_engine_initialized; ue4ss_backend.cpp:33-46 chain emits ack_->engine_ready() then ack_->mods_started(); runtime_owner.cpp:173 maps mods_started() to emit(\"mods-started\",0,\"\") via mfa_status_write.",
+      "confidence": "high"
+    },
+    {
+      "id": "C3",
+      "claim": "The enabled.txt / mods.txt enablement decision is computed from the preloaded activation snapshot inside the NativeModSource constructor (during module_start), not from disk and not on the init thread; the native start path then starts exactly source->startup_mod_names().",
+      "evidence": "NativeModSource.cpp:106-135 (mods.txt rows then enabled.txt markers, pure snapshot reads); UE4SSProgram.cpp:1946-1956 native start_mods branch.",
+      "confidence": "high"
+    },
+    {
+      "id": "C4",
+      "claim": "Exactly one Lua implementation is statically linked: LuaRaw (PUC-Rio Lua 5.4) from ue4ss-unreal-native-build-1/source-dependencies/ue4ss/deps/first/LuaRaw. The composition probe (memory_lua.c) and the UE4SS port link the same core; the composed runtime object itself defines lua_newstate/luaL_newstate/lua_pcallk/luaV_execute.",
+      "evidence": "combined-full.o nm: 145 defined lua_*/luaL_* text symbols incl. lua_newstate, luaL_newstate, lua_close, lua_newthread, lua_pcallk, luaD_call, luaV_execute, luaS_new*; composition-4 run-3 coherent-tick-file-witness-runtime.o defines the same; compile-commands.json carries -I .../deps/first/LuaRaw/include; LuaRaw/include/lua.h: LUA_VERSION_MAJOR \"5\", MINOR \"4\".",
+      "confidence": "high"
+    },
+    {
+      "id": "C5",
+      "claim": "main.lua failure modes are mostly loud Error-level UE4SS.log lines (script syntax/runtime errors, missing UEHelpers require, missing main.lua, prepare exceptions) but are non-fatal: m_is_started is set before script execution, so mods-started is still written after a failed script. FindFirstOf at load time is silent (returns nil via the GUObjectArray null guard); NotifyOnNewObject at load time only queues and logs at Verbose level.",
+      "evidence": "LuaMod.cpp:6409-6428 (load/pcall error lines), 6465/6471-6473 (main.lua failure lines), 6452 (m_is_started before exec), 6478 (catch), 2627-2648 (queue + Verbose line), UObjectGlobals.cpp:747-757 + UnrealInitializer.cpp:108-110 (silent nil path).",
+      "confidence": "high"
+    },
+    {
+      "id": "C6",
+      "claim": "A successful native-path mod load has NO per-mod success log line; the only default-verbosity output is 'Setting up mods...' plus first-mod '[Lua] Exposing size of ...' lines. Success is observable primarily via runtime-status.txt lines activated -> engine-ready -> mods-started.",
+      "evidence": "UE4SSProgram.cpp:1739; LuaMod.cpp:956-958; native start branch UE4SSProgram.cpp:1946-1956 has no 'Starting Lua mod' log (that line, 2054, belongs to the non-native mods.txt branch).",
+      "confidence": "high"
+    }
+  ],
+  "unverified_or_risks": [
+    "NotifyOnNewObject at load time constructs FName with FNAME_Find/FNAME_Add (LuaMod.cpp:2627-2637) before setup_unreal establishes the name pool; no guard is visible in LuaMod.cpp. Safety depends on the port's FName implementation and was NOT verified here.",
+    "Exact init-thread latency to engine-ready depends on UnrealInitializer scan time over the retained loader snapshot; bounded by StartupWait deadline = 5 minutes (StartupWaitControl.hpp:102), cancelled cooperatively by owner stop. Not measured at runtime in this audit.",
+    "register_keydown_event enqueues into Input::Handler key data without touching the provider (Handler.hpp:68-71); I verified the header contract and the validate_native_services ordering but did not trace every Handler.cpp line."
+  ]
+}

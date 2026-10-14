@@ -1,0 +1,40 @@
+{
+  "worker": "worker-fname-validator-v4",
+  "utc": "2026-10-05",
+  "what": "PASS receipt — host fixture suite for the v4 FName-pool admission (RE-correction: CurrentBlock engine invariant, image-inclusive readable-span admission with storage separation, entry-0 'None' content anchor)",
+  "suite": {
+    "source": "host-test/test_pool_bounds_host.cpp",
+    "sha256": "674897f05b5969cc8bf8be0381801ed05ef690127bd39e8419af3e8c6ca6d326",
+    "drives": "REAL staged SeedValidation.hpp v4 functions: rc_seed::publish_readable_spans + the retired alias (proven identical, AL1) + rc_seed::check_pool_shape(v4 signature with none_id) + rc_seed::check_none_anchor (new) + v4-corrected check_entry_bounds/entry_location",
+    "compile": "clang++ -std=c++20 -Wall -Wextra -I<worker>/staging (rc=0, zero warnings; receipts/fixture-compile.stderr, 0 bytes)",
+    "run": "test_pool_bounds_v4 <receipt-path> — writes its own receipt file; stdout unused (harness pipe writes block uninterruptibly in this environment; self-written files complete instantly)",
+    "result": "69 passed, 0 failed (exit 0)",
+    "output": "receipts/fixture-pool-bounds-v4.txt sha256 3d34a7fac8d7b894a891546eb7b8468338737a33f57b31cdcfa0d0a8489dc096"
+  },
+  "required_positive_test": {
+    "case": "V1 MUST-PASS candidate-image-resident-shape (SYNTHETIC) + END-TO-END chain case; symmetric heap-resident MUST-PASS = A8/H3",
+    "labeling_law": "SYNTHETIC by directive: NO CAPTURE EXISTS (provenance verdict worker-blocks0-provenance) — no pinned observation ever recorded an actual Blocks[0] pointer value; [0x970c000,0x9a34000) is the REGION-CLASS mapping observation (LOAD7 BSS tail, igf3 v1_vmmap_page seq 4). MUST-PASS because the shape is plausible per FNAME-POOL-RE and v3 refused it on region-class evidence alone (CurrentBlock < 1 + outside-image clause) — the false-refuse class this correction owns. BOTH storage classes are plausible-but-unproven and the suite carries BOTH must-pass positives: heap-resident (A8/H3 — static RE predicts the ALLOCATION via FMemory::Malloc(0x20000, align 2) -> GMalloc binned -> OS-heap, likely outside the image, even though the ALLOCATOR OBJECT is static BSS) and candidate-image-resident (V1/V1b/END-TO-END/H6). Neither class is 'observed'; a real capture may come later from the fc1pool probe (built, never injected).",
+    "input": "blocks0=0x970c000 (8-aligned) inside the readable image span [0x953c000,0x9a34000) published in full from an 11-record realistic walk; current_block=0 (0-based open block); none_id block 0",
+    "verdict": "check_pool_shape -> ok, bounds_source=published-readable-spans; END-TO-END case additionally passes check_none_anchor (header 0x0100 'None') and check_entry_bounds for None (id 0, offset 0+6 <= CBO 20) and ByteProperty (id 3, offset 6+14 == CBO 20) in the open block",
+    "status": "PASS"
+  },
+  "class_coverage": {
+    "constants": "G1-G5 (extent bytes 0xbc602c8, runtime end 0xc0602c8, block capacity 0x20000, cap 16, PROT_READ=1)",
+    "publication_v4": "A1/A2 (7 spans: L1+L3+L7 image readable + vintage+heap+below-base+noise), A3/A3b (cap/envelope), A4 (ascending), A5/A6i (image-readable spans publish IN FULL — v4 inversion of the v3 no-image rule), A6ii (exec/prot-none never publish), A7 (sub-floor excluded)",
+    "positive": "A8 (REQUIRED retained: heap blocks0 outside the retired frozen range), A9 (vintage passes), H3/H4 (coverage-proven complete-capture admission), V1/V1b (candidate-image-resident-shape MUST-PASS incl. post-Init words), H6 (same under the 10,019-record capture)",
+    "engine_invariant": "V2 (none_id block 1 > CurrentBlock 0 refuses 'None entry block index exceeds CurrentBlock'), V3 (block == CurrentBlock passes — 0-based open block)",
+    "content_anchor": "AN1 (valid 'None' passes: h>>6==4, h&1==0), AN2 (wrong payload), AN3 (wide bit), AN4 (zero header), AN6 (truncated read), V4b (pool-label leading bytes refuse — the wrong-base guard)",
+    "honest_limit": "V4a (pinned: an image-resident non-block value passes SHAPE; content check owns wrong-value protection — documented R2/R3 trade)",
+    "boundaries": "A10-A12 (span lo inclusive, hi-8 ok, hi exclusive), A15 (first byte past extent = coverage class), V5 (unreadable image refuses BY COVERAGE — v3 extent string retired), V6 (exec-only text value refuses by coverage)",
+    "truncation_honesty": "A17 (beyond-envelope miss = 'snapshot truncated', bounds_source=capture-truncated), H5 (truncated prefix moves the envelope to the cut)",
+    "unmapped_below_envelope": "A16 (below-envelope miss = honest 'not covered')",
+    "legacy_preserved": "A19 (Blocks[0] is null), A20 (not 8-aligned), A21 (provenance string), F1/F3 (older-block bounds + id decomposition); A18 RETIRED with cause ('CurrentBlock < 1' refusal no longer exists by design — replaced by V-series)",
+    "entry_bounds_v4": "F2i (INVERTED: open-block entry passes — v3 'at or past CurrentBlock' false-refused), F2r (open-block entry past CBO refuses), F2x (block beyond CurrentBlock refuses)",
+    "no_fallback": "B1-B5 (null/zero-count table = loud 'span table unavailable' for ANY pool state incl. the candidate image shape; in-frozen-envelope blocks0 refused without a table)",
+    "cap": "C1-C5 (top-16 by size, saturation counters, ascending, smallest dropped, dropped-span pointer refuses — documented cap limit)",
+    "straddlers_v4": "D1/D1b (readable straddler publishes IN FULL, no extent clipping), D2 (past-extent membership), D3i (INVERTED: straddler image part admits)",
+    "bridge_parity": "AL1 (retired alias publish_nonimage_readable_spans == publish_readable_spans byte-for-byte — the bridge TU call site pre-rename is proven by the same fixtures)"
+  },
+  "fixture_defects_found_during_development": "1 initial FAIL was FIXTURE-side (V3 literal 0x20010 decodes to block 2, not 1 — the validator classified it correctly; fixed to 0x10010, rerun 69/69)",
+  "honest_limits": "Pure-function proof only: no target run, no console, no dereference of Blocks[0] (the anchor read, entry-chain reads and the behavioral probe are target-side in the initializer). Cap top-16 can false-refuse if >16 qualifying readable spans exist in one capture (counted + diagnosed); image spans now compete for the top-16 window (LOAD1/L3/L7 are large and survive realistically; documented)."
+}

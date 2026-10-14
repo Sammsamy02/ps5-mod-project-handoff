@@ -1,0 +1,1145 @@
+{
+  "schema": "modbridge.ue4ss-conformance-plan/1",
+  "suite_id": "townfall-itemspawner-v1-17-surfaces-v1",
+  "release_sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
+  "helper_sha256": "5a8f6609e555eee4a535f51d21fcdef768ac654bf4d4abe283c719b1c12215a7",
+  "script_sha256": "f0c782c5798b3f85b813be945146bb5666649349e60cddd96043b722447aebc0",
+  "bindings": [
+    "RegisterKeyBind",
+    "RegisterLoadMapPreHook",
+    "print",
+    "ExecuteInGameThread",
+    "FindFirstOf",
+    "require",
+    "CreateInvalidObject",
+    "FindAllOf",
+    "StaticFindObject",
+    "FName",
+    "StaticConstructObject",
+    "FText",
+    "LoadAsset"
+  ],
+  "cases": [
+    {
+      "api": "RegisterKeyBind",
+      "covers": [],
+      "id": "register_keys.accept",
+      "order": 1,
+      "permission": "register_keys",
+      "requires_thread": true,
+      "release_usage": "main.lua 694,698,703,708,713,722: original six key codes/order; isolated callback registration only",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "chunk"
+    },
+    {
+      "api": "RegisterLoadMapPreHook",
+      "covers": [],
+      "id": "loadmap.accept",
+      "order": 2,
+      "permission": "register_map_hook",
+      "requires_thread": true,
+      "release_usage": "main.lua 731: optional pcall registers hook; delivery separately required",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "chunk"
+    },
+    {
+      "api": "print",
+      "covers": [],
+      "id": "print.emit",
+      "order": 3,
+      "permission": "print",
+      "requires_thread": true,
+      "release_usage": "main.lua 6/746: exact tag + string + newline shape; independent log capture required",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "chunk"
+    },
+    {
+      "api": "ExecuteInGameThread",
+      "covers": [],
+      "id": "game_thread.delivery",
+      "order": 4,
+      "permission": "dispatch",
+      "requires_thread": true,
+      "release_usage": "main.lua 695/700/705/710/716/725: default executor callback; native game-thread delivery separately witnessed",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "F7/UMG"
+    },
+    {
+      "api": "FindFirstOf",
+      "covers": [],
+      "id": "database.findfirst",
+      "order": 5,
+      "permission": "engine_read",
+      "requires_thread": true,
+      "release_usage": "main.lua 64: F7 scan runs before buildUI/require",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "F7/UMG"
+    },
+    {
+      "api": "UObject:IsValid",
+      "covers": [],
+      "id": "object.validity",
+      "order": 6,
+      "permission": "engine_read",
+      "requires_thread": true,
+      "release_usage": "main.lua 8-11: nil guard and IsValid()==true; invalid wrapper separately tested",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "F7/UMG"
+    },
+    {
+      "api": "UObject.__index / __newindex",
+      "covers": [],
+      "id": "object.read",
+      "order": 7,
+      "permission": "engine_read",
+      "requires_thread": true,
+      "release_usage": "main.lua 31: Pawn property selected as representative __index read; method lookup also occurs earlier at IsValid",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "F7/UMG"
+    },
+    {
+      "api": "FName/FText/FString:ToString",
+      "covers": [],
+      "id": "strings.native",
+      "order": 8,
+      "permission": "engine_read",
+      "requires_thread": true,
+      "release_usage": "main.lua 57-60/163/168/313: Lua strings bypass ToString; native FName/FText/FString need real userdata fixtures",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "F7/UMG"
+    },
+    {
+      "api": "require",
+      "covers": [],
+      "id": "require.helper",
+      "order": 9,
+      "permission": "engine_read",
+      "requires_thread": true,
+      "release_usage": "main.lua 15: UEHelpers imported inside getPlayerController; module init creates two invalid caches",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "F7/UMG"
+    },
+    {
+      "api": "CreateInvalidObject",
+      "covers": [
+        "UObject:IsValid"
+      ],
+      "id": "object.invalid",
+      "order": 10,
+      "permission": "engine_read",
+      "requires_thread": true,
+      "release_usage": "UEHelpers.lua 35/45/81: invalid wrappers on import and failed controller lookup",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "F7/UMG"
+    },
+    {
+      "api": "FindAllOf",
+      "covers": [
+        "UScriptStruct / array / OUT marshalling"
+      ],
+      "id": "controller.findall",
+      "order": 11,
+      "permission": "engine_read",
+      "requires_thread": true,
+      "release_usage": "UEHelpers.lua 72: PlayerController or Controller fallback only if falsy, not empty table",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "F7/UMG"
+    },
+    {
+      "api": "StaticFindObject",
+      "covers": [],
+      "id": "findobject.umg",
+      "order": 12,
+      "permission": "engine_read",
+      "requires_thread": true,
+      "release_usage": "main.lua 499/506/455: WidgetBlueprintLibrary, UserWidget, TextBlock paths",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "F7/UMG"
+    },
+    {
+      "api": "FName",
+      "covers": [],
+      "id": "fname.add-default",
+      "order": 13,
+      "permission": "name_pool",
+      "requires_thread": true,
+      "release_usage": "main.lua 50/516: default Add1 constructor; not Replace2",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "F7/UMG"
+    },
+    {
+      "api": "StaticConstructObject",
+      "covers": [],
+      "id": "construct.umg",
+      "order": 14,
+      "permission": "construct",
+      "requires_thread": true,
+      "release_usage": "main.lua 50/516: exactly class, outer, FName; owned fixture plus verified cleanup required",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "F7/UMG"
+    },
+    {
+      "api": "UScriptStruct / array / OUT marshalling",
+      "covers": [
+        "UObject.__index / __newindex"
+      ],
+      "id": "marshal.struct-write",
+      "order": 15,
+      "permission": "property_write",
+      "requires_thread": true,
+      "release_usage": "main.lua 470/483: nested Font.Size and ShadowOffset writes with independent scalar snapshot, readback, restore",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "F7/UMG"
+    },
+    {
+      "api": "FText",
+      "covers": [
+        "FName/FText/FString:ToString"
+      ],
+      "id": "ftext.roundtrip",
+      "order": 16,
+      "permission": "text",
+      "requires_thread": true,
+      "release_usage": "main.lua 434/469: native FText construction + ToString; representative Unicode extension",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "F7/UMG"
+    },
+    {
+      "api": "LoadAsset",
+      "covers": [],
+      "id": "loadasset.fallback",
+      "order": 17,
+      "permission": "load_asset",
+      "requires_thread": true,
+      "release_usage": "main.lua 283-286: invalid initial lookup, LoadAsset(path), second lookup; returned object/found/loaded flags retained",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "asset/explicit extensions"
+    },
+    {
+      "api": "RegisterKeyBind",
+      "covers": [],
+      "id": "register_keys.delivery",
+      "order": 18,
+      "permission": "register_keys",
+      "requires_thread": true,
+      "release_usage": "explicit once-each F7,UP_ARROW,DOWN_ARROW,RETURN,LEFT_ARROW,RIGHT_ARROW manual event order; callback guards",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "asset/explicit extensions"
+    },
+    {
+      "api": "RegisterLoadMapPreHook",
+      "covers": [],
+      "id": "loadmap.delivery",
+      "order": 19,
+      "permission": "register_map_hook",
+      "requires_thread": true,
+      "release_usage": "actual approved manual map-prehook event; registration accepted alone is insufficient",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "asset/explicit extensions"
+    },
+    {
+      "api": "require",
+      "covers": [],
+      "id": "require.searchers",
+      "order": 20,
+      "permission": "engine_read",
+      "requires_thread": true,
+      "release_usage": "loader inventory only; retained-buffer/preload route differs from PC file/C searchers; file/C behavior pending",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "asset/explicit extensions"
+    },
+    {
+      "api": "FName",
+      "covers": [],
+      "id": "fname.find-existing",
+      "order": 21,
+      "permission": "name_pool",
+      "requires_thread": true,
+      "release_usage": "explicit existing-name Find0 extension",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "asset/explicit extensions"
+    },
+    {
+      "api": "FName",
+      "covers": [],
+      "id": "fname.replace2",
+      "order": 22,
+      "permission": "name_pool",
+      "requires_thread": true,
+      "release_usage": "full-API Replace2 extension is observed only; native adapter refuses mode2 while release uses Add1",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "asset/explicit extensions"
+    },
+    {
+      "api": "FName",
+      "covers": [],
+      "id": "fname.unicode",
+      "order": 23,
+      "permission": "name_pool",
+      "requires_thread": true,
+      "release_usage": "explicit Add1 non-BMP UTF16 roundtrip extension",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "asset/explicit extensions"
+    },
+    {
+      "api": "UScriptStruct / array / OUT marshalling",
+      "covers": [],
+      "id": "marshal.trace-out",
+      "order": 24,
+      "permission": "trace",
+      "requires_thread": true,
+      "release_usage": "main.lua 245-258: 12 positional arguments, ignored pawn array, writable hit table, vectors/colors; projected OUT fields only",
+      "engine_result_pending": true,
+      "required": true,
+      "mod_flow_stage": "asset/explicit extensions"
+    }
+  ],
+  "api_count": 17,
+  "apis": [
+    {
+      "api": "RegisterKeyBind",
+      "status": "implemented-untested",
+      "used_overload_status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+        "lines": [
+          1945
+        ]
+      },
+      "mod_lines": [
+        694,
+        698,
+        703,
+        708,
+        713,
+        722
+      ],
+      "dependency_only": false,
+      "gap": "Six PC key registrations; actual F7/navigation delivery must be proved separately. Mod did not finish loading.",
+      "case_ids": [
+        "register_keys.accept",
+        "register_keys.delivery"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "RegisterLoadMapPreHook",
+      "status": "behaves differently",
+      "used_overload_status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+        "lines": [
+          2741
+        ]
+      },
+      "mod_lines": [
+        731
+      ],
+      "dependency_only": false,
+      "gap": "Registration stores callback; deferred LoadMap arm can permanently refuse delivery. Optional mod pcall does not prove hook behavior.",
+      "case_ids": [
+        "loadmap.accept",
+        "loadmap.delivery"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "print",
+      "status": "implemented-untested",
+      "used_overload_status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+        "lines": [
+          1551
+        ]
+      },
+      "mod_lines": [
+        6,
+        499,
+        501
+      ],
+      "dependency_only": false,
+      "gap": "Registered global_print; no ItemSpawner Loaded line in l15. Pure diagnostic Lua is separate.",
+      "case_ids": [
+        "print.emit"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "ExecuteInGameThread",
+      "status": "behaves differently",
+      "used_overload_status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+        "lines": [
+          5319
+        ]
+      },
+      "mod_lines": [
+        695,
+        700,
+        705,
+        710,
+        716,
+        725
+      ],
+      "dependency_only": false,
+      "gap": "Prospero uses FuncPtr-marshal carrier instead of ordinary PC queues; carrier availability/refusal and actual game-thread delivery need parity evidence.",
+      "case_ids": [
+        "game_thread.delivery"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "FindFirstOf",
+      "status": "implemented-untested",
+      "used_overload_status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+        "lines": [
+          1662
+        ]
+      },
+      "mod_lines": [
+        21,
+        64
+      ],
+      "dependency_only": false,
+      "gap": "Object-array traversal needs real target class/name/layout validation.",
+      "case_ids": [
+        "database.findfirst"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "UObject:IsValid",
+      "status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUObject.cpp"
+      },
+      "gap": "Real target object validity/lifetime not exercised by this mod.",
+      "case_ids": [
+        "object.validity",
+        "object.invalid"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "UObject.__index / __newindex",
+      "status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUObject.cpp"
+      },
+      "gap": "Nested property reads/writes and reflected-method lookup require exact offsets/ownership.",
+      "case_ids": [
+        "object.read",
+        "marshal.struct-write"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "FName/FText/FString:ToString",
+      "status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFName.cpp"
+      },
+      "gap": "Pool anchor matching is not constructor + ToString conformance.",
+      "case_ids": [
+        "strings.native",
+        "ftext.roundtrip"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "require",
+      "status": "behaves differently",
+      "used_overload_status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+        "lines": [
+          1163,
+          1188,
+          1199
+        ]
+      },
+      "mod_lines": [
+        15
+      ],
+      "dependency_only": false,
+      "gap": "Native branch replaces file/C searchers with package.preload plus retained-buffer searcher. Test the mod UEHelpers import; whole API filesystem/C-loading behavior differs.",
+      "case_ids": [
+        "require.helper",
+        "require.searchers"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "CreateInvalidObject",
+      "status": "implemented-untested",
+      "used_overload_status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+        "lines": [
+          1554
+        ]
+      },
+      "mod_lines": [],
+      "dependency_only": true,
+      "gap": "Reachable through shared UEHelpers initialization and GetPlayerController fallback; wrapper implemented.",
+      "case_ids": [
+        "object.invalid"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "FindAllOf",
+      "status": "implemented-untested",
+      "used_overload_status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+        "lines": [
+          1697
+        ]
+      },
+      "mod_lines": [],
+      "dependency_only": true,
+      "gap": "Reachable through UEHelpers.GetPlayerController; enumeration/controller validation untested.",
+      "case_ids": [
+        "controller.findall"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "StaticFindObject",
+      "status": "implemented-untested",
+      "used_overload_status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+        "lines": [
+          1559
+        ]
+      },
+      "mod_lines": [
+        44,
+        283,
+        286,
+        499
+      ],
+      "dependency_only": false,
+      "gap": "Local object traversal, not a verified native StaticFindObject function; path/name matching untested.",
+      "case_ids": [
+        "findobject.umg"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "FName",
+      "status": "behaves differently",
+      "used_overload_status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFName.cpp"
+      },
+      "mod_lines": [
+        50,
+        516
+      ],
+      "dependency_only": false,
+      "gap": "Mod uses default Add1; output/UTF16 fix host-tested, never called in l15. Full API differs: Replace2 accepted by Lua binding is rejected by native adapter.",
+      "case_ids": [
+        "fname.add-default",
+        "fname.find-existing",
+        "fname.replace2",
+        "fname.unicode"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "StaticConstructObject",
+      "status": "implemented-untested",
+      "used_overload_status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+        "lines": [
+          2230
+        ]
+      },
+      "mod_lines": [
+        50,
+        516
+      ],
+      "dependency_only": false,
+      "gap": "Native FStaticConstructObjectParameters layout and game ctor ABI remain unverified; used for UMG.",
+      "case_ids": [
+        "construct.umg"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "UScriptStruct / array / OUT marshalling",
+      "status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUScriptStruct.cpp"
+      },
+      "gap": "Vector, Rotator, color, margin, anchors, transform, font and HitResult; concrete native layouts/OUT semantics untested.",
+      "case_ids": [
+        "controller.findall",
+        "marshal.struct-write",
+        "marshal.trace-out"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "FText",
+      "status": "implemented-untested",
+      "used_overload_status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFText.cpp"
+      },
+      "mod_lines": [
+        434,
+        469
+      ],
+      "dependency_only": false,
+      "gap": "Native FText construction plus reflected property ownership/layout untested.",
+      "case_ids": [
+        "ftext.roundtrip"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    },
+    {
+      "api": "LoadAsset",
+      "status": "implemented-untested",
+      "used_overload_status": "implemented-untested",
+      "console_proof_this_mod": false,
+      "source": {
+        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+        "lines": [
+          3648
+        ]
+      },
+      "mod_lines": [
+        285
+      ],
+      "dependency_only": false,
+      "gap": "Pickup fallback requires true game thread and live asset services; not invoked in l15.",
+      "case_ids": [
+        "loadasset.fallback"
+      ],
+      "engine_behavior_proved": false,
+      "surface_scope": "selected release overloads/fields, not full UE4SS API"
+    }
+  ],
+  "game_reflected_method_count": 33,
+  "game_reflected_methods": [
+    {
+      "name": "AddChild",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        456,
+        531
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "AddToViewport",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        631
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "BeginDeferredActorSpawnFromClass",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        295
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "Create",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        510
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "FinishSpawningActor",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        303
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "GetComponentByClass",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        208
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "GetControlRotation",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        234
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "GetInteractablePickupIDActorPath",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        168
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "GetItemIDFromDeprecatedEnum",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        163
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "GetPawn",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        32
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "IsLocalPlayerController",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [],
+      "dependency_only": true,
+      "console_proven": false
+    },
+    {
+      "name": "IsPlayerController",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [],
+      "dependency_only": true,
+      "console_proven": false
+    },
+    {
+      "name": "K2_DestroyActor",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        345
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "K2_GetActorLocation",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        233
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "K2_GetPawn",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        33
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "LineTraceSingle",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        245
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetActorEnableCollision",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        330
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetActorHiddenInGame",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        329
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetAlignment",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        539
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetAnchors",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        534
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetAutoWrapText",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        476
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetBrushColor",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        547,
+        557
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetColorAndOpacity",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        364
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetContent",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        551,
+        561
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetEnabled",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        327
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetIgnoreLookInput",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        450
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetIgnoreMoveInput",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        451
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetPadding",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        460,
+        544,
+        554
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetPosition",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        540
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetShadowColorAndOpacity",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        478
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetSize",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        541
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetText",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        434,
+        469
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    },
+    {
+      "name": "SetVisibility",
+      "status": "implemented-untested",
+      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
+      "mod_lines": [
+        632,
+        655,
+        660
+      ],
+      "dependency_only": false,
+      "console_proven": false
+    }
+  ],
+  "release": {
+    "schema": "modbridge.unmodified-mod-release/1",
+    "mod": "TownfallItemSpawner",
+    "version": "V1.0",
+    "source_url": "https://www.nexusmods.com/silenthilltownfall/mods/95?tab=files&file_id=218",
+    "source_basis": "saved Nexus intake and original ZIP; no fresh account download performed",
+    "archive_sha256": "a9f7ed004dd053e02f6206d8ed6886174f9b5aaecf55244447a2c5fb9d6fa7fb",
+    "archive_bytes": 5939,
+    "console_root": "/data/modbridge/roots/PPSA33286/ue4ss/Mods/TownfallItemSpawner",
+    "files": [
+      {
+        "path": "Scripts/main.lua",
+        "bytes": 21415,
+        "sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
+        "console_sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
+        "byte_identical": true,
+        "original_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-full-build/console-test-20261007T170125Z-b1b2fd00/provenance/original/TownfallItemSpawner/Scripts/main.lua",
+        "saved_console_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-full-build/console-test-20261007T170125Z-b1b2fd00/provenance/console/main.lua",
+        "current_original_sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
+        "current_saved_console_sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
+        "immutable_recheck": true
+      },
+      {
+        "path": "enabled.txt",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "console_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "byte_identical": true,
+        "original_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-full-build/console-test-20261007T170125Z-b1b2fd00/provenance/original/TownfallItemSpawner/enabled.txt",
+        "saved_console_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-full-build/console-test-20261007T170125Z-b1b2fd00/provenance/console/enabled.txt",
+        "current_original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "current_saved_console_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "immutable_recheck": true
+      }
+    ],
+    "extra_console_files": [],
+    "differences": [],
+    "change_authors": [],
+    "mod_changes_for_ps5": false,
+    "console_manifest_uploaded": false,
+    "verified_utc": "2026-10-07T17:12:06.133447+00:00"
+  },
+  "selected_source_hash_checks": [
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+      "sha256": "8bd12c623bab4e35203e4faa13fb829b141a46a586a0426b47eaa32cb12f75b8",
+      "receipt_sha256": "8bd12c623bab4e35203e4faa13fb829b141a46a586a0426b47eaa32cb12f75b8",
+      "match": true
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFName.cpp",
+      "sha256": "a20cb4816f9516735365c3f0f6ab041f871cfd03d0cd003f7c67c6a23d06e3ea",
+      "receipt_sha256": "a20cb4816f9516735365c3f0f6ab041f871cfd03d0cd003f7c67c6a23d06e3ea",
+      "match": true
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFText.cpp",
+      "sha256": "2492c7802dba628071e65d2eac30710862623e0bbb7c00b2b57a611c21c4dbb5",
+      "receipt_sha256": "2492c7802dba628071e65d2eac30710862623e0bbb7c00b2b57a611c21c4dbb5",
+      "match": true
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUObject.cpp",
+      "sha256": "50192ef184ed2cd5267a4eb21c2466de29466419726fd1afac981258070f18e3",
+      "receipt_sha256": "50192ef184ed2cd5267a4eb21c2466de29466419726fd1afac981258070f18e3",
+      "match": true
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUScriptStruct.cpp",
+      "sha256": "d7896437d23331d799a1cdce0225df7cd03cc02e3052693c6d646e0a4d09d277",
+      "receipt_sha256": "d7896437d23331d799a1cdce0225df7cd03cc02e3052693c6d646e0a4d09d277",
+      "match": true
+    }
+  ],
+  "build_receipt_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-full-build/runs/run-l16-2/receipt.json",
+  "build_receipt_sha256": "a723df2de58cf1d01b440cf80e3fc54d91e8646bf98788b2f4c011ba43743d58",
+  "platform_pins": {
+    "ps5": {
+      "runtime_sha256": "34e43b25cb99333e472146ebd518a0d9d8418e8fe762f90084cd88c0c190c121",
+      "game_binary_sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc"
+    }
+  },
+  "pc_reference": {
+    "status": "pending",
+    "reason": "user owns PS5 only; no same-game PC capture available",
+    "platform_pins": "must be supplied with independently harvested future PC receipts before evidence is trusted"
+  },
+  "console_api_surfaces_proved": 0,
+  "console_reflected_methods_proved": 0,
+  "scope": {
+    "local_only": true,
+    "disabled_by_default": true,
+    "autoloaded": false,
+    "deployed": false,
+    "original_mod_changes": false,
+    "runtime_changes": false,
+    "network_contact": false
+  },
+  "normalization": {
+    "location": "top-level volatile object only",
+    "allowed_fields": [
+      "identity",
+      "object_address",
+      "thread_id",
+      "known_game_thread_id",
+      "proof_id",
+      "duration_ms",
+      "timestamp_utc"
+    ],
+    "never_normalized": [
+      "error",
+      "reason",
+      "value",
+      "return_count",
+      "callback_count",
+      "property_readback",
+      "cleanup_result",
+      "content/scenario/context/release/helper/script metadata"
+    ]
+  },
+  "ordering_note": "First 17 cases cover the 17 source-censused surfaces in release flow order. UObject method lookup (__index) starts with IsValid; optional/fallback branches differ. Later delivery/extensions are separate cases. The runner is not a substitute for original menu/spawn acceptance."
+}

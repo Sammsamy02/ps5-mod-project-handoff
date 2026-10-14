@@ -1,0 +1,35 @@
+--- a/main.c
++++ b/main.c
+@@ -513,6 +513,9 @@
+ 	return count_modules(pid) >= min_mod;
+ }
+ 
++// forward declaration: wait_stable below enforces a TRUE wall-clock deadline (patch 05)
++static long now_ms(void);
++
+ // waits for the process to reach stable state, then settles before returning
+ // returns 1 when ready, 0 if process died
+ static int wait_stable(pid_t pid, char needs[][MAX_DEP_NAME_LEN], int nneeds,
+@@ -520,11 +523,22 @@
+ 	const int tick_ms = 50;
+ 	const int stable_req = (mp->stable_ms / tick_ms) < 2 ? 2 : (mp->stable_ms / tick_ms);
+ 	const int max_ticks = max_ms / tick_ms;
++
++	// max_ms bounds the TICK COUNT, not wall time: every tick also pays
++	// count_modules + deps_ready (~264 kernel calls). Measured on launch-10
++	// (worker-ploader-70s): a full 500-tick burn takes ~60-70 s wall, not 25 s.
++	// Enforce the intended wall budget so a slow kernel-call path cannot
++	// stretch a "25 s" readiness wait past its design bound.
++	const long deadline_ms = now_ms() + max_ms;
+ 
+ 	int stable_hits = 0;
+ 	int prev_count = -1;
+ 
+ 	for (int t = 0; t < max_ticks; t++) {
++		if (now_ms() >= deadline_ms)
++			break; // wall budget exhausted; falls through to the same
++		           // "try anyway if still alive" exit as tick exhaustion
++
+ 		if (kill(pid, 0) != 0)
+ 			return 0; // process died
+ 

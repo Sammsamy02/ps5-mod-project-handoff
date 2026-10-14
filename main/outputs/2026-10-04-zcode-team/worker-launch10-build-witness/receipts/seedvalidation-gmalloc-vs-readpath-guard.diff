@@ -1,0 +1,46 @@
+--- worker-launch10-gmalloc-integration/staging-l10-gmalloc-validator/SeedValidation.hpp	2026-10-05 06:58:39
++++ worker-launch10-readpath-guard/staging/SeedValidation.hpp	2026-10-05 07:42:18
+@@ -158,6 +158,43 @@
+ 
+     // Admission-grade probe for data slots (SLOTS-FEASIBILITY section 4b):
+     // non-null and 8-aligned. Explicitly NOT identity proof.
++    // ---- Launch-10 read-path guard (controller audit 2026-10-05) ----
++    // Verified phdr geometry (retained eboot sha 3b6cfad4..., file vaddrs;
++    // runtime = file + base): LOAD0 --X [0,0x7479b1c), LOAD1 R--
++    // [0x747c000,0x7eba918), LOAD3/7 RW- [0x7ebc000,0x9633418), LOAD8 ---
++    // [0x9633420,0xbc602c8). Seed slots 2/4 (FName ctor, SCO) land in
++    // exec-only LOAD0: prot=4 pages are hardware-READ-blocked on this
++    // target and are never covered by the readable-span registration, so
++    // code seeds are CALL-ONLY (assign + indirect call; detour-verification
++    // reads stay skipped while seed-bound). Alignment gaps between LOADs
++    // and all of LOAD8 are refused for both classes. The 6-span successful
++    // registration establishes nothing about text coverage.
++    enum class SeedAddressClass : uint8_t
++    {
++        DataReadable = 0, // readable image span: reads permitted after this check
++        CodeCallOnly = 1, // exec-only text: assign + call only, data reads refused
++        Refused = 2       // alignment gap or prot-none: neither reads nor calls
++    };
++
++    [[nodiscard]] inline auto classify_seed_address(uint64_t runtime_address, uint64_t base) -> SeedAddressClass
++    {
++        const uint64_t v = runtime_address - base;
++        if (v < 0x7479b1cull) { return SeedAddressClass::CodeCallOnly; }                        // LOAD0 --X
++        if (v >= 0x747c000ull && v < 0x7eba918ull) { return SeedAddressClass::DataReadable; }   // LOAD1 R--
++        if (v >= 0x7ebc000ull && v < 0x9633418ull) { return SeedAddressClass::DataReadable; }   // LOAD3+LOAD7 RW-
++        return SeedAddressClass::Refused;                                                       // gaps + LOAD8 ---
++    }
++
++    [[nodiscard]] inline auto seed_class_name(SeedAddressClass c) -> const char*
++    {
++        switch (c)
++        {
++        case SeedAddressClass::DataReadable: return "data-readable";
++        case SeedAddressClass::CodeCallOnly: return "exec-only (call-only)";
++        case SeedAddressClass::Refused: default: return "unmapped/prot-none gap (refused)";
++        }
++    }
++
+     [[nodiscard]] inline auto check_pointer_probe(uint64_t value) -> Check
+     {
+         if (value == 0)

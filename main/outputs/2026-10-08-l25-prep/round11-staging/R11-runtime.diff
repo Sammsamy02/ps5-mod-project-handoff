@@ -1,0 +1,366 @@
+--- 2026-10-08-l25-prep/round11-staging/merge-backup/UObjectGlobals.cpp.r10b	2026-10-12 19:50:13
++++ 2026-10-08-l26-runtime/typescan-r4/candidate/src/UObjectGlobals.cpp	2026-10-12 19:51:22
+@@ -14,6 +14,8 @@
+ #include <Unreal/UObjectHashTables.hpp>
+ #include <Unreal/UnrealInitializer.hpp>
+ #include <DynamicOutput/Output.hpp>
++#include <algorithm>
++#include <iterator>
+ #include <memory>
+ #include <new>
+ 
+@@ -1415,8 +1417,15 @@
+             Vec<uint32_t> SeenStamp{}; // per index: last query that kept it (de-duplication)
+             Vec<UClass*> ListedUnder{}; // per index: class list it is currently pushed to
+             Vec<int32_t> Dirty{};      // freed indices reported since the last sync
+-            Vec<int32_t> FreeWatch{};  // empty / unreachable slots, re-checked every sync until filled
+-            Vec<uint8_t> InWatch{};    // per index: 1 while the index is listed in FreeWatch (at most once)
++            // [R11-WATCH] empty / unreachable slots, re-checked every sync until filled. Sorted ascending,
++            // each listed once; a listed slot's ObjAt/ClassAt/name entry is already cleared, so a slot
++            // that is still vacant costs one read (launch 12: ~30k listed after a level change, the
++            // old unsorted re-check with per-slot writes cost ~2 ms per exact sync).
++            Vec<int32_t> FreeWatch{};
++            Vec<int32_t> WatchAdd{};   // newly watched, merged into FreeWatch (unsorted)
++            Vec<int32_t> WatchTmp{};   // merge buffer (keeps its capacity)
++            int32_t WatchResume{0};    // slot index a cut budgeted pass resumes at (0 = start)
++            Vec<uint8_t> InWatch{};    // per index: 1 while listed in FreeWatch or WatchAdd (at most once)
+             Vec<UClass*> Classes{};
+             Vec<int32_t> ClassSelfIndex{}; // the class object's own array index (liveness check)
+             Vec<uint64_t> ClassNameKey{};  // the class's own FName (comparison + number) at insert
+@@ -1651,7 +1660,7 @@
+                 S.ObjAt[Index] = nullptr;
+                 S.ClassAt[Index] = nullptr;
+                 NameUnlink(S, Index); // [R9-NAME]
+-                if (!S.InWatch[Index]) { S.InWatch[Index] = 1; S.FreeWatch.push_back(Index); }
++                if (!S.InWatch[Index]) { S.InWatch[Index] = 1; S.WatchAdd.push_back(Index); }
+                 return;
+             }
+             UClass* Class = Object->GetClassPrivate();
+@@ -1674,9 +1683,22 @@
+                 ClassSlot(S, Class); // refresh liveness bookkeeping (dead flag, self index)
+             }
+         }
++        // [R11-WATCH] merge the newly watched slots into the sorted watch list (no per-sync allocation
++        // once both buffers have grown)
++        static auto MergeWatch(State& S) -> void
++        {
++            if (S.WatchAdd.empty()) { return; }
++            if (!std::is_sorted(S.WatchAdd.begin(), S.WatchAdd.end())) { std::sort(S.WatchAdd.begin(), S.WatchAdd.end()); }
++            if (S.FreeWatch.empty()) { S.FreeWatch.swap(S.WatchAdd); S.WatchAdd.clear(); return; }
++            S.WatchTmp.clear();
++            S.WatchTmp.reserve(S.FreeWatch.size() + S.WatchAdd.size());
++            std::merge(S.FreeWatch.begin(), S.FreeWatch.end(), S.WatchAdd.begin(), S.WatchAdd.end(), std::back_inserter(S.WatchTmp));
++            S.FreeWatch.swap(S.WatchTmp);
++            S.WatchAdd.clear();
++        }
+         // BudgetExpired == nullptr: exact (every watched slot re-checked). Otherwise the watched-slot
+-        // re-check stops once it returns true (checked every 256 slots); the rest stays watched, first in
+-        // line for the next sync. Appended indices are always observed.
++        // re-check stops once it returns true (checked every 256 slots); the next budgeted pass resumes
++        // there (round robin). Appended indices are always observed.
+         static auto Sync(State& S, bool (*BudgetExpired)() = nullptr) -> bool
+         {
+             const uint64_t r9_t0 = __builtin_readcyclecounter();
+@@ -1697,8 +1719,11 @@
+             if (!S.Built)
+             {
+                 S.FreeWatch.clear();
++                S.WatchAdd.clear();
++                S.WatchResume = 0;
+                 S.InWatch.assign(S.InWatch.size(), 0);
+                 for (int32_t i = 0; i < Num; ++i) { Observe(S, i); }
++                MergeWatch(S); // ascending already
+                 S.SyncedNum = Num;
+                 S.Built = true;
+                 S.Dirty.clear();
+@@ -1719,45 +1744,54 @@
+                 __atomic_store_n(&g_r9_watch_fwd, static_cast<uint64_t>(S.FreeWatch.size()), __ATOMIC_RELAXED);
+                 return true;
+             }
+-            // re-check watched slots first (they are re-added by Observe if still empty). Newly freed
+-            // indices lead (the engine reuses the most recently freed index first), then the watch list
+-            // in order (unvisited ones from a budgeted pass first). A freed slot's entry is cleared at
+-            // once: a new object reusing the same address and class is then still seen as new, however
+-            // long the slot waits for its re-check.
+-            Vec<int32_t> Watch{};
+-            Watch.reserve(S.Dirty.size() + S.FreeWatch.size());
++            // A freed slot's entry is cleared at once: a new object reusing the same address and class
++            // is then still seen as new, however long the slot waits for its re-check.
+             for (int32_t i : S.Dirty)
+             {
+                 if (i >= 0 && i < Num)
+                 {
+                     S.ObjAt[i] = nullptr;
+                     S.ClassAt[i] = nullptr;
+-                    if (!S.InWatch[i]) { S.InWatch[i] = 1; Watch.push_back(i); }
++                    NameUnlink(S, i); // [R9-NAME]
++                    if (!S.InWatch[i]) { S.InWatch[i] = 1; S.WatchAdd.push_back(i); }
+                 }
+             }
+             S.Dirty.clear();
+-            Watch.insert(Watch.end(), S.FreeWatch.begin(), S.FreeWatch.end());
+-            S.FreeWatch.clear(); // keeps its capacity: no per-frame regrowth
+-            size_t k = 0;
+-            for (; k < Watch.size(); ++k)
++            MergeWatch(S);
++            // [R11-WATCH] re-check the watched slots in index order: still vacant = one read, no write.
++            // A filled slot leaves the list and is observed (Observe re-watches it if it emptied again).
++            const size_t n = S.FreeWatch.size();
++            size_t Start = 0;
++            if (BudgetExpired != nullptr && S.WatchResume > 0)
+             {
+-                if (BudgetExpired != nullptr && k > 0 && (k & 255) == 0 && BudgetExpired()) { break; }
+-                const int32_t i = Watch[k];
+-                if (i < Num) { S.InWatch[i] = 0; Observe(S, i); }
+-                else { S.FreeWatch.push_back(i); }
++                Start = static_cast<size_t>(std::lower_bound(S.FreeWatch.begin(), S.FreeWatch.end(), S.WatchResume) - S.FreeWatch.begin());
++                if (Start >= n) { Start = 0; }
+             }
+-            if (k < Watch.size())
++            bool bCut = false;
++            size_t Filled = 0;
++            for (size_t Step = 0; Step < n; ++Step)
+             {
+-                // budget reached: unvisited slots (still flagged InWatch) go first next time
+-                Vec<int32_t> Rest{};
+-                Rest.reserve(Watch.size() - k + S.FreeWatch.size());
+-                Rest.insert(Rest.end(), Watch.begin() + static_cast<std::ptrdiff_t>(k), Watch.end());
+-                Rest.insert(Rest.end(), S.FreeWatch.begin(), S.FreeWatch.end());
+-                S.FreeWatch.swap(Rest);
+-                __atomic_fetch_add(&g_r9_watch_cut_fwd, uint64_t{1}, __ATOMIC_RELAXED);
++                size_t Pos = Start + Step;
++                if (Pos >= n) { Pos -= n; }
++                if (BudgetExpired != nullptr && Step > 0 && (Step & 255) == 0 && BudgetExpired())
++                {
++                    S.WatchResume = S.FreeWatch[Pos];
++                    bCut = true;
++                    break;
++                }
++                const int32_t i = S.FreeWatch[Pos];
++                if (i >= Num || LiveAt(i) == nullptr) { continue; }
++                S.FreeWatch[Pos] = -1;
++                ++Filled;
++                S.InWatch[i] = 0;
++                Observe(S, i);
+             }
++            if (Filled > 0) { S.FreeWatch.erase(std::remove(S.FreeWatch.begin(), S.FreeWatch.end(), -1), S.FreeWatch.end()); }
++            if (bCut) { __atomic_fetch_add(&g_r9_watch_cut_fwd, uint64_t{1}, __ATOMIC_RELAXED); }
++            else { S.WatchResume = 0; }
+             for (int32_t i = S.SyncedNum; i < Num; ++i) { Observe(S, i); }
+             S.SyncedNum = Num;
++            MergeWatch(S);
+             __atomic_store_n(&g_r9_watch_fwd, static_cast<uint64_t>(S.FreeWatch.size()), __ATOMIC_RELAXED);
+             return true;
+         }
+@@ -2061,6 +2095,15 @@
+         }
+     }
+ 
++    // [R11-WORLD] true once the index is switched off for this process (exception, failed self-check,
++    // implausible array size): the [WORLD-EV] route then refuses instead of waiting.
++    auto r9_index_disabled() -> bool
++    {
++        r9idx::State& S = *r9idx::g_state;
++        std::lock_guard Lock{S.Mutex};
++        return S.Disabled;
++    }
++
+     // [R9-NOTIFY] no registrations left: stop collecting.
+     auto r9_index_notify_disarm() -> void
+     {
+--- 2026-10-08-l25-prep/round11-staging/merge-backup/LuaMod.cpp.r10b	2026-10-12 19:50:13
++++ 2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp	2026-10-12 19:51:39
+@@ -5244,6 +5244,7 @@
+     namespace Unreal::UObjectGlobals
+     {
+         auto r9_index_collect_new(std::vector<int32_t>& Out, std::vector<void*>& OutObj, bool (*BudgetExpired)()) -> bool; // [R9-NOTIFY] UObjectGlobals.cpp
++        auto r9_index_disabled() -> bool; // [R11-WORLD] UObjectGlobals.cpp
+     }
+ 
+     // [R9-NOTIFY] NotifyOnNewObject producer for the PS5 (the StaticConstructObject seam is not
+@@ -5331,9 +5332,10 @@
+     // EndPlay stays REFUSED (counted): by the time the index sees an actor gone it is already
+     // freed, so there is no live actor to hand to Lua, and the Blueprint ReceiveEndPlay
+     // Func-swap route would consume script-thunk slots the pump carriers need.
+-    // FAIL CLOSED: a missing / non-class engine class or an object index that never becomes
+-    // usable (60 s) turns the route off with one [WORLD-EV] line + one counted [REFUSED] line
+-    // per registered hook kind.
++    // FAIL CLOSED: a missing / non-class engine class or a switched-off object index turns the
++    // route off with one [WORLD-EV] line + one counted [REFUSED] line per registered hook kind.
++    // [R11-WORLD] an index that is merely not usable YET (no delete seen: launch 12 took ~2.5 min,
++    // until the first level change) is waited for: one "pending" line at 60 s, live when usable.
+     // =====================================================================================
+     namespace world_ev
+     {
+@@ -5362,6 +5364,7 @@
+         static bool s_index_ok{false};
+         static int s_resolve_tries{0};
+         static int64_t s_first_wanted_ms{0};
++        static bool s_pending_logged{false}; // [R11-WORLD]
+         static int64_t s_last_resolve_ms{0};
+         // events waiting for their map (FIFO from s_hold_pos)
+         static std::vector<Held> s_hold{};
+@@ -5589,7 +5592,8 @@
+         }
+ 
+         // Game thread, from the feed, when the route is wanted. Resolves the four engine classes
+-        // (once; retried every 2 s) and applies the 60 s fail-closed rule.
++        // (once; retried every 2 s) and applies the fail-closed rules (classes: 3 tries / 60 s; index:
++        // refused only when switched off, otherwise waited for).
+         static auto ensure_ready() -> bool
+         {
+             const int state = refused_log::world_route_state.load(std::memory_order_acquire);
+@@ -5631,13 +5635,31 @@
+             {
+                 if (refused_log::world_route_state.exchange(1, std::memory_order_acq_rel) == 0)
+                 {
+-                    try { Output::send(STR("[WORLD-EV] route live: object index + engine classes Actor/GameModeBase/GameStateBase/World resolved and class-checked (tries={}); LoadMap/InitGameState/BeginPlay Lua hooks deliver after the event on the game-thread pump\n"), s_resolve_tries); } catch (...) {}
++                    try { Output::send(STR("[WORLD-EV] route live: object index + engine classes Actor/GameModeBase/GameStateBase/World resolved and class-checked (tries={}, waited_ms={}); LoadMap/InitGameState/BeginPlay Lua hooks deliver after the event on the game-thread pump\n"), s_resolve_tries, now - s_first_wanted_ms); } catch (...) {}
+                 }
+                 return true;
++            }
++            static int64_t s_last_disabled_check_ms{0}; // takes the index lock: at most once a second
++            if (s_classes_ok && now - s_last_disabled_check_ms >= 1000)
++            {
++                s_last_disabled_check_ms = now;
++                if (Unreal::UObjectGlobals::r9_index_disabled())
++                {
++                    refuse("object-index-disabled");
++                    return false;
++                }
+             }
+             if (now - s_first_wanted_ms >= 60000)
+             {
+-                refuse(!s_classes_ok ? (s_class_check_failed ? "engine-class-check-failed" : "engine-class-lookup-failed") : "object-index-unusable-60s");
++                if (!s_classes_ok)
++                {
++                    refuse(s_class_check_failed ? "engine-class-check-failed" : "engine-class-lookup-failed");
++                }
++                else if (!s_pending_logged)
++                {
++                    s_pending_logged = true;
++                    try { Output::send<LogLevel::Warning>(STR("[WORLD-EV] route pending: object index not usable yet (delete listener not yet proven live); LoadMap/InitGameState/BeginPlay Lua hooks deliver once it is\n")); } catch (...) {}
++                }
+             }
+             return false;
+         }
+--- 2026-10-08-l25-prep/round11-staging/merge-backup/LuaUObject.cpp	2026-10-12 19:53:35
++++ 2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaUObject.cpp	2026-10-12 19:53:41
+@@ -1836,7 +1836,7 @@
+             std::string prop_name = to_string(params.property->GetName());
+ #endif
+ 
+-            for (const auto& elem : enum_ptr->ForEachName()) // FIELD-GATE-OK: UEnum::Names not declared (the frozen accessor-width table has no width for it, launch 11); the generated accessor throws instead of reading a guessed offset, so this enum call fails closed as in launches 1-10 (open item: width-table support)
++            for (const auto& elem : enum_ptr->ForEachName())
+             {
+ #ifdef __PROSPERO__
+                 char elem_key[LuaFNameBridge::kMaxPushUtf8Bytes + 1];
+--- 2026-10-08-l25-prep/round11-staging/merge-backup/LuaUEnum.cpp	2026-10-12 19:53:35
++++ 2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaType/LuaUEnum.cpp	2026-10-12 19:53:41
+@@ -68,7 +68,7 @@
+             }
+ 
+             auto value = lua.get_integer();
+-            LuaType::FName::construct(lua, lua_object.get_remote_cpp_object()->GetNameByValue(value)); // FIELD-GATE-OK: UEnum::Names not declared (the frozen accessor-width table has no width for it, launch 11); the generated accessor throws instead of reading a guessed offset, so this enum call fails closed as in launches 1-10 (open item: width-table support)
++            LuaType::FName::construct(lua, lua_object.get_remote_cpp_object()->GetNameByValue(value));
+             return 1;
+         });
+ 
+@@ -97,12 +97,12 @@
+             auto* uen_enum = lua_object.get_remote_cpp_object();
+             try
+             {
+-                uen_expected = uen_enum->NumEnums(); // FIELD-GATE-OK: UEnum::Names not declared (the frozen accessor-width table has no width for it, launch 11); the generated accessor throws instead of reading a guessed offset, so this enum call fails closed as in launches 1-10 (open item: width-table support)
++                uen_expected = uen_enum->NumEnums();
+             }
+             catch (...)
+             {
+             }
+-            for (auto& [name, value] : lua_object.get_remote_cpp_object()->ForEachName()) // FIELD-GATE-OK: UEnum::Names not declared (the frozen accessor-width table has no width for it, launch 11); the generated accessor throws instead of reading a guessed offset, so this enum call fails closed as in launches 1-10 (open item: width-table support)
++            for (auto& [name, value] : lua_object.get_remote_cpp_object()->ForEachName())
+             {
+                 ++uen_reported;
+ 
+@@ -162,7 +162,7 @@
+             }
+ 
+             auto value = lua.get_integer();
+-            auto enum_pair = lua_object.get_remote_cpp_object()->GetEnumNameByIndex(value); // FIELD-GATE-OK: UEnum::Names not declared (the frozen accessor-width table has no width for it, launch 11); the generated accessor throws instead of reading a guessed offset, so this enum call fails closed as in launches 1-10 (open item: width-table support)
++            auto enum_pair = lua_object.get_remote_cpp_object()->GetEnumNameByIndex(value);
+ 
+             LuaType::FName::construct(lua, enum_pair.Key);
+             lua.set_integer(enum_pair.Value);
+@@ -235,7 +235,7 @@
+             const Unreal::FName key{param_name, Unreal::FNAME_Add};
+             const auto pair = Unreal::TPair<Unreal::FName, int64_t>{key, param_value};
+ 
+-            lua_object.get_remote_cpp_object()->InsertIntoNames(pair, param_index, param_shift); // FIELD-GATE-OK: UEnum::Names not declared (the frozen accessor-width table has no width for it, launch 11); the generated accessor throws instead of reading a guessed offset, so this enum call fails closed as in launches 1-10 (open item: width-table support)
++            lua_object.get_remote_cpp_object()->InsertIntoNames(pair, param_index, param_shift);
+             return 1;
+         });
+ 
+@@ -281,7 +281,7 @@
+             }
+ 
+             Unreal::FName new_key = Unreal::FName(ensure_str(param_new_name), Unreal::FNAME_Add);
+-            lua_object.get_remote_cpp_object()->EditNameAt(param_index, new_key); // FIELD-GATE-OK: UEnum::Names not declared (the frozen accessor-width table has no width for it, launch 11); the generated accessor throws instead of reading a guessed offset, so this enum call fails closed as in launches 1-10 (open item: width-table support)
++            lua_object.get_remote_cpp_object()->EditNameAt(param_index, new_key);
+ 
+             return 0;
+         });
+@@ -327,7 +327,7 @@
+                 lua.throw_error("'UEnum.EditValueAt' Could not load parameter for \"NewValue\"");
+             }
+ 
+-            lua_object.get_remote_cpp_object()->EditValueAt(param_index, param_new_value); // FIELD-GATE-OK: UEnum::Names not declared (the frozen accessor-width table has no width for it, launch 11); the generated accessor throws instead of reading a guessed offset, so this enum call fails closed as in launches 1-10 (open item: width-table support)
++            lua_object.get_remote_cpp_object()->EditValueAt(param_index, param_new_value);
+             return 0;
+         });
+ 
+@@ -379,7 +379,7 @@
+                 param_allow_shrinking = allow_shrinking ? Unreal::EAllowShrinking::Yes : Unreal::EAllowShrinking::No;
+             }
+ 
+-            lua_object.get_remote_cpp_object()->RemoveFromNamesAt(param_index, param_count, param_allow_shrinking); // FIELD-GATE-OK: UEnum::Names not declared (the frozen accessor-width table has no width for it, launch 11); the generated accessor throws instead of reading a guessed offset, so this enum call fails closed as in launches 1-10 (open item: width-table support)
++            lua_object.get_remote_cpp_object()->RemoveFromNamesAt(param_index, param_count, param_allow_shrinking);
+             return 0;
+         });
+ 
+--- 2026-10-07-l19-local-profile-r4/units/NativeLayoutActiveWidths.hpp	2026-10-07 17:27:09
++++ 2026-10-08-l26-runtime/profile/units/NativeLayoutActiveWidths.hpp	2026-10-12 19:55:23
+@@ -55,7 +55,15 @@
+         return WidthDetail::ValueWidth<decltype(std::declval<T&>().GetFunctionFlags())>();
+     return std::nullopt;
+ }
++// [R11-UENUM] UE 4.15 up to below 5.7 the port reads UEnum names only through GetNames415()
++// (port UEnum.cpp Version::IsBelow(5, 7) branches). All five versioned Names getters are private
++// in the generated wrapper, so the broad table (and a requires-probe) sees none of them and gives
++// no width. GetNames415's return type is named here exactly as the wrapper declares it
++// (MemberVariableLayout_HeaderWrapper_UEnum.hpp: TArray<TPair<FName,__int64>,FDefaultAllocator>&).
++constexpr auto EnumNamesWidth() noexcept -> std::optional<uint32_t> {
++    return WidthDetail::ValueWidth<Unreal::TArray<Unreal::TPair<Unreal::FName, __int64>, Unreal::FDefaultAllocator>&>();
+ }
++}
+ // These public accessors select the genuine active versioned getter. The broad
+ // provider can be unavailable or include a larger alternate accessor type.
+ // This adapter derives active access widths without supplying game layout values.
+@@ -83,6 +91,8 @@
+         return ActiveWidthDetail::PropertyFlagsWidth<Unreal::FProperty>();
+     if (class_name == "UFunction" && key == "FunctionFlags")
+         return ActiveWidthDetail::FunctionFlagsWidth<Unreal::UFunction>();
++    if (class_name == "UEnum" && key == "Names")
++        return ActiveWidthDetail::EnumNamesWidth();
+     return GetAccessorWidth(class_name, key);
+ }
+ }
+--- 2026-10-08-l25-prep/round11-staging/merge-backup/CompiledNativeLayoutDeclarations.hpp.r10b	2026-10-12 19:53:35
++++ 2026-10-08-l26-runtime/profile/units/CompiledNativeLayoutDeclarations.hpp	2026-10-12 19:53:35
+@@ -1,7 +1,7 @@
+ #pragma once
+ namespace RC::Platform::NativeLayouts {
+ inline constexpr CompiledNativeLayoutDeclarations kCompiledNativeLayoutDeclarations{
+-"[NativeLayout]\nFormat=1\nTarget=prospero-x86_64-sysv\nPointerSize=8\nEngineMajor=5\nEngineMinor=6\nNonShipping=0\nStats=0\nEngineRevision=5.6.1-0+++UE5\nBuildId=04bb4330a7d71dcefe1cc2c4d19769d5\n\n[FArrayProperty]\nInner=0x78\nUEP_TotalSize=0x80\n\n[FBoolProperty]\nByteMask=0x72\nByteOffset=0x71\
++"[NativeLayout]\nFormat=1\nTarget=prospero-x86_64-sysv\nPointerSize=8\nEngineMajor=5\nEngineMinor=6\nNonShipping=0\nStats=0\nEngineRevision=5.6.1-0+++UE5\nBuildId=04bb4330a7d71dcefe1cc2c4d19769d5\n\n[FArrayProperty]\nInner=0x78\nUEP_TotalSize=0x80\n\n[FBoolProperty]\nByteMask=0x72\nByteOffset=0x71\
+ "[NativeLayout]\nFormat=1\nTarget=prospero-x86_64-sysv\nPointerSize=8\nEngineMajor=5\nEngineMinor=6\nNonShipping=0\nStats=0\nEngineRevision=5.6.1-0+++UE5\nBuildId=04bb4330a7d71dcefe1cc2c4d19769d5\n\n[AGameModeBase]\nInitGameState=0x7b8\n\n[FProperty]\nCopyValuesInternal=0xf8\nDestroyValueInternal=0
+ "compiled-audited-townfall-l25",
+ "d648e85ef79caa207025a8123c093a67f47ef12ff5ef9eb0801ba9c3b52ab135"

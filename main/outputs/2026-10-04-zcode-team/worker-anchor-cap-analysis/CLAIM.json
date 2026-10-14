@@ -1,0 +1,108 @@
+{
+  "worker": "worker-anchor-cap-analysis",
+  "utc": "2026-10-05",
+  "task": "Quantify kMaxAnchorMappings=8 truncation risk in the staged geometry fix (worker-facts-geometry-fix controller-verify item 2); recommend a safe cap for launch-10.",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "method": "local in-tree evidence only: no console, no network, no canonical edits",
+  "facts": {
+    "cap_constants": {
+      "kMaxAnchorMappings": {
+        "value": 8,
+        "file": ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/include/live_module_facts.hpp",
+        "line": 88,
+        "note": "same value referenced by worker-facts-geometry-fix/CLAIM.json reads.supplier_core_anchor_rule.anchor_collection"
+      },
+      "kMaxVmMappings": {
+        "value": 1024,
+        "file": ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/include/live_module_facts.hpp",
+        "line": 85,
+        "note": "core first-pass VMMAP snapshot capacity; core walks more (10019 records at launch-9) and copies the first 1024 (address order); truncation flag capabilities.vm_mappings_truncated=1 is already observed in-game"
+      },
+      "snapshot_fields": {
+        "file": ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/include/live_module_facts.hpp",
+        "lines": "178-179",
+        "note": "size_t anchor_mapping_count; VmMapping anchor_mappings[kMaxAnchorMappings]; VmMapping = {u64 start; u64 end; i32 protection} (lines 91-96), 20B padded to 24B"
+      }
+    },
+    "collection_loop_staged_fix": {
+      "file": "outputs/2026-10-04-zcode-team/worker-facts-geometry-fix/staging/live_module_facts.geometryfix.cpp",
+      "lines": "467-490",
+      "behavior": "intersect_mode only when identity_source==VmScan && vm_scan.chosen && chosen_extent!=0; test = mappings[m].start < scan_end && base < mappings[m].end (scan_end = checked_add_u64(base, chosen_extent), overflow falls back to containing rule); collects in VMMAP order (ascending address), cap test facts_.anchor_mapping_count < kMaxAnchorMappings BEFORE insert (line 483) -> on overflow the HIGHEST intersecting records are silently dropped, lowest 8 kept"
+    },
+    "extent_constants": {
+      "file": "outputs/2026-10-04-zcode-team/worker-bridge-r13-polish/staging/lineage-overlay-2-r13/lifecycle/runtime_start_bridge.cpp",
+      "kCandidateBase": "line 157: 0x400000",
+      "kImageExtentVaddr": "line 165: 0xbc602c8 (comment: max(p_vaddr+p_memsz))",
+      "extent_used_by_fix": "[0x400000, 0xc0602c8) — chosen_base+chosen_extent; same numbers reach the core via VmScanResult (r13 lines 620-621)",
+      "extent_end_is_exact_phdr_boundary": "0xc0602c8 == LOAD8 p_vaddr+p_memsz end EXACTLY (worker-geometry-reference/phdrs-derived.json phdrs[8]); NOT 16K-page-aligned (page-up 0xc064000)",
+      "r11_comment_variant": "r13 line ~510 comment mentions 'the extent clamp 0xfc602c8' (r11-era); task brief's [0x400000,0xfc602c8) matches that stale figure; on the pinned igf3 boot BOTH extents intersect the SAME 7 records (zero records in [0xc0602c8,0xfc602c8)) so the discrepancy does not change the count on observed evidence"
+    },
+    "launch9_observed_registration": {
+      "file": "outputs/2026-10-04-zcode-controller/launch9-evidence/aligned-entry-log-snapshot.log",
+      "lines": "17035-17040",
+      "values": "bridge_vm_walk_stop=0 (clean end), bridge_lease_reg=0x6, bridge_lease_reg_spans=0x6, bridge_vmentry_entries=0x26ee (9966 records walked)",
+      "meaning": "6 READABLE spans intersect [0x400000,0xc0602c8) in the launch-9 boot; raw span list is NOT logged (counter only)",
+      "registration_code": "outputs/2026-10-04-zcode-team/worker-bridge-r13-polish/staging/lineage-overlay-2-r13/lifecycle/runtime_start_bridge.cpp lines 483-523: counts EVERY readable (prot&1) span intersecting the extent, registers page-quantized up to 128"
+    },
+    "igf3_clean_walk_best_known_fragmentation": {
+      "source_file": "outputs/2026-10-04-zcode-team/worker-parser-validation/run2/ingame-v3-full-results.parsed.jsonl",
+      "full_event_line": 66,
+      "build_id": "igf3-de0c0cb644d3",
+      "walk_quality": "walk_mode=1 (kve_structsize per-record stride), ksz_variable_records=21721, ksz_144_records=21721, insane_records=0, fallback_used=0, buffer_mod_exact=1, trust=1; retained 16384 of 21721 (truncated=5337, tail)",
+      "records_family": "1024 v1_vmmap_page parts x 16 entries (fields.parts==1024) — distinct from the 48-part igf2 fixed-stride REPLICA family in the same file (lines ~10-57)",
+      "records_intersecting_extent": 7,
+      "table": [
+        {"n": 1, "start": "0x400000", "end": "0x787c000", "prot": 4, "role": "LOAD0 --X exec, contains anchor base, byte-pinned by ledger + r13 comment + IGW far-page 0x7878000 prot=4"},
+        {"n": 2, "start": "0x787c000", "end": "0x82bc000", "prot": 1, "role": "LOAD1 R-- page-quantized (page-round(0x82ba918)+gap merged by kernel)"},
+        {"n": 3, "start": "0x82bc000", "end": "0x953c000", "prot": 1, "role": "LOAD3 RW- observed R-- (RELRO-demoted); page-exact vs phdr [0x82bc000,0x953c000)"},
+        {"n": 4, "start": "0x953c000", "end": "0x9568000", "prot": 3, "role": "LOAD7 head RW (start pinned by v3 breakthrough: first RW span EXACTLY 0x953c000)"},
+        {"n": 5, "start": "0x9568000", "end": "0x96dc000", "prot": 1, "role": "LOAD7 mid R-- demoted fragment"},
+        {"n": 6, "start": "0x96dc000", "end": "0x970c000", "prot": 3, "role": "LOAD7 RW (contains launch-10 GMalloc candidate 0x970add8)"},
+        {"n": 7, "start": "0x970c000", "end": "0x9a34000", "prot": 3, "role": "LOAD7 tail RW, contains GUA 0x97ba110 (FUObjectArray validated); page-up end == LOAD7 page-up 0x9a34000"}
+      ],
+      "readable_count": 6,
+      "consistency": "readable_count==6 EXACTLY matches launch-9 bridge_lease_reg_spans=6 (independent boots, igf3 2026-10-04 19:15 vs launch-9 2026-10-05 ~11:58)",
+      "load8_note": "LOAD8 --- [0x9a33420,0xc0602c8) is NOT materialized as any vmmap record in the igf3 walk (no record in [0x9a34000,0xc0602c8))",
+      "prot0_in_extent": 0,
+      "records_below_base_spanning_it": 0,
+      "exec_span_snapshot_index": 0,
+      "process_wide_prot_histogram": {"4": 71, "1": 147, "3": 16011, "7": 1, "0": 153, "5": 1}
+    },
+    "phdr_image_shape": {
+      "file": "outputs/2026-10-04-zcode-team/worker-geometry-reference/phdrs-derived.json",
+      "eboot_sha256_prefix": "3b6cfad4",
+      "loads": "5 PT_LOADs: LOAD0 --X [0x0,0x7479b1c) vaddr; LOAD1 R-- [0x747c000,0x7eba918); LOAD3 RW- [0x7ebc000,0x913c000); LOAD7 RW- [0x913c000,0x9633418); LOAD8 --- [0x9633420,0xbc602c8); runtime=file+0x400000 for LOAD0/LOAD1 only (controller-supplied geometry in worker-facts-geometry-fix/CLAIM.json reads.controller_supplied_geometry)",
+      "relro": "PT_GNU_RELRO phdrs[4] covers ALL of LOAD3's file range -> observed as prot=1 record (relro demotion), 16K page-exact"
+    },
+    "stride_law": {
+      "file": "outputs/2026-10-04-zcode-team/worker-span-arbitration/VERDICT.md",
+      "sections": "1-2",
+      "fact": "kernel kinfo_vmentry records are 144B (kve_structsize=144, path stripped before copyout); SDK struct is 1160B; v1/v2 fixed-1160 walks were corrupt (period-18 artifacts incl. rows like start=0,end=0x100000000 that WOULD pass the fix's intersect test); the shipped r13 bridge walk and the igf3 walk are structsize-driven and clean; bridge walk fails loudly on malformed structsize (query_vmentry -6, stop_reason=1)"
+    },
+    "bridge_walk_wiring": {
+      "file": "outputs/2026-10-04-zcode-team/worker-bridge-r13-polish/staging/lineage-overlay-2-r13/lifecycle/runtime_start_bridge.cpp",
+      "query": "line 256 bridge_query_vmentry (structsize walk, kKveHdr validation); line 591 ops.query_vmentry = bridge_query_vmentry — the CORE's capture uses the SAME clean walk with capacity kMaxVmMappings=1024",
+      "truncation_semantics": "stop_reason==2 -> *count = entries+1 honest lower bound; malformed -> -6"
+    },
+    "fixture_shapes": {
+      "file": "outputs/2026-10-04-zcode-team/worker-facts-geometry-fix/host-test/test_geometry_fix_host.cpp",
+      "lines": "134-154",
+      "note": "fixture 'observed' shape carries 3 readable spans; parity shape adds 2 SYNTHETIC readable spans to reach the bridge-observed 6; fixture models readable spans as NON-ADJACENT (page gaps, line 144-145) whereas the igf3 clean records are ADJACENT (see CAP-ANALYSIS.md coalescing note)"
+    }
+  },
+  "count_claim": "Expected anchor_mapping_count under the staged fix on the best-known (igf3/launch-9) shape = 7 (1 exec + 6 readable + 0 prot-0/other). Margin vs cap 8 = 1 slot. Any single additional fragment (LOAD8 materializing as 1 record -> exactly 8, zero margin; 2 records -> 9) silently drops record #7 [0x970c000,0x9a34000) — the GUA-hosting, highest, most load-bearing span (first-come ascending-address cap semantics).",
+  "recommendation": {
+    "change": "kMaxAnchorMappings 8 -> 16",
+    "file": ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/include/live_module_facts.hpp",
+    "line": 88,
+    "one_liner": "-static constexpr size_t kMaxAnchorMappings = 8;\n+static constexpr size_t kMaxAnchorMappings = 16;",
+    "rationale": "observed 7 with zero slack after ONE extra fragment; worst pinned fragmentation behavior (LOAD7 -> 4 records) plus LOAD8 materialization plus RELRO splits plus a guard/reservation plausibly reaches 11-14; 16 covers it; cost = +8 slots x 20B (24B padded) ~= +192B in an in-process snapshot that already carries a 1024-entry mapping array (~20KB); the collection loop bound (line 483) and the adapter's count-bounded iteration need no change; all consumers (bridge PRX, entry PRX, core TU, adapter TU, fixtures) compile the single shared header, and the raw snapshot never crosses a module boundary (conversion happens in-process), so no ABI skew; saturation remains visible via lmf_anchor_count==16",
+    "fallback_if_not_folded": "shipping cap=8 is acceptable-but-fragile: conversion REFUSAL risk stays low (all 6 readable records rank in the first 8 under any plausible shape, so the D2 filter keeps >=1 readable span); the realistic failure is silent loss of the top RW span -> stage-2 GUA reads land outside declared ranges -> readpath-guard/required-slot degradation (deterministic, memory-safe), NOT a crash"
+  },
+  "limits": [
+    "The igf3 clean walk is a 2026-10-04 boot; the launch-9 boot (2026-10-05) is pinned only by the COUNT 6 (readable, intersecting), not by an itemized span list — the launch-9 registration logs counters only.",
+    "The task brief's extent [0x400000,0xfc602c8) matches the r11-era clamp comment, not the r13/fix constants ([0x400000,0xc0602c8)); on pinned evidence both give the same 7-record count.",
+    "No observation pins whether LOAD8 (---, 40MB) can materialize as records on some boot; its materialization is the most plausible +1/+2 fragmentation source.",
+    "fixture 'observed' shape (3 readable) and its page-gap assumption are NOT the igf3 shape; see CAP-ANALYSIS.md 5 for the lmf_intervals_found expectation correction."
+  ]
+}

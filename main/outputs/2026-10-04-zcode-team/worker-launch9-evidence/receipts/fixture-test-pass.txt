@@ -1,0 +1,232 @@
+== evidence.sh fixture tests — 2026-10-05T12:00:00Z ==
+host: Darwin 24.6.0 arm64 / shell: sh
+evidence.sh sha256: b30665a88a4d4932de518e4cb4768a05d32eb793297e14ce3b95c54a7e42294f
+
+fixture body sizes: ue4ss=    2892B aligned= 2210424B (baselines 2892/2210306)
+=== case shape_a (rc=0) ===
+== launch-9 (composition-6) post-launch evidence ==
+fetch ue4ss.log   OK 3702B (dir)
+fetch status      OK (dir)
+fetch aligned log OK 2210719B (dir)
+baseline: UE4SS.log >= 2892B, aligned >= 2210306B (controller-captured pre-launch)
+
+signatures (new lines vs baseline):
+  (a) pass markers conv/roots/lease/D2 : 4 (bridge_cfg/exepath diag lines: 1)
+  (b) Shape-A seeds-incomplete line    : 1  [EXPECTED for this launch]
+  (c) [Seeds] REFUTED / other          : 0 / 0
+  (d) progress markers                 : 0
+  (g) failure lines                    : 0 (diag_channel_open_failed/-22: 0)
+  (g) MRS_* tokens / observer events   : 0 / start_ok=1 start_failed=0 stop_result=0 mfa_failed=0
+  (f) entry-r4 [t= prefixed lines      : 1 (freshness oracle)
+  IGW exec-write probe markers         : 0; GMalloc throw lines: 0; LoadMap-tail lines: 0
+
+status: pid=414 ms=9534000 fresh=yes states=2 ladder=[ activated ] last=failed code=1
+status detail: [Seeds] Required-slot seed table incomplete: present [g_uobject_array fname_ctor_wchar static_construct_object_internal] missing [gmalloc]
+
+notable lines (verbatim, capped):
+  [ue4ss] [Seeds] Required-slot seed table incomplete: present [g_uobject_array fname_ctor_wchar static_construct_object_internal] missing [gmalloc]. Arming requires all four REQUIRED slots (SHAPE A safe default, LAUNCH9-PREDICTION): a partial table would walk into the LoadMap vtable-walk text read (igf6 crash class) before the honest PostInitialize GMalloc throw. Derive the missing seeds against the sha-pinned image (SEED-TABLE-FORMAT.md) and rebuild. Startup blocked; nothing bound, nothing exec-side touched.
+  [aligned] [PPSA33286] modbridge-runtime-aligned-entry/v1 build=f6530c7905934e5a8cc201aa9400ebb0 runtime_start_ok value=0x00000000
+  [aligned] [PPSA33286] modbridge-runtime-aligned-entry/v1 build=f6530c7905934e5a8cc201aa9400ebb0 module_start_return value=0x00000000
+
+other new lines (raw, capped):
+  [ue4ss] lmf_to_native_loader_facts provider=vmmap identity_source=window
+  [ue4ss] anchor_ladder_verify B=1 D=1 E=1 C=1 C2=0
+  [ue4ss] bridge_vmentry_entries n=16384 walk=r5
+  [ue4ss] bridge_cfg_gamedir=1 bridge_cfg_workdir=1 bridge_exepath_source=0
+  [aligned] modbridge runtime wiring begin
+
+VERDICT: SHAPE_A_SEEDS_GATE
+NEXT: EXPECTED-PREDICTED-STOP (LAUNCH9-PREDICTION §4 #2): the all-4 generator rule refused the 3-slot Shape-A table; nothing bound, game continues UNMODDED, this is NOT a launch failure and NOT a bridge/conversion problem — never run bridge stage-1 CONVERSION vm-scan triage on it. Products of this launch: pass-marker counts above (first console evidence for r11+D2+configured roots), IGW markers, observer/fc1/qdrv1 records. Next work: slot-3 (GMalloc) seed derivation for launch 10 (worker-seed-table-derivation / LAUNCH10 matrix); a NEW launch is a NEW evidence window.
+
+PASS [shape_a] exit 0 for expected terminal (rc=0)
+PASS [shape_a] verdict is SHAPE_A_SEEDS_GATE
+PASS [shape_a] labeled EXPECTED
+PASS [shape_a] no bridge-triage guidance
+PASS [shape_a] pass markers counted
+PASS [shape_a] shape-a count 1
+PASS [shape_a] observer start_ok seen
+PASS [shape_a] entry-r4 prefix lines counted
+PASS [shape_a] status shown
+=== case mods_started (rc=0) ===
+== launch-9 (composition-6) post-launch evidence ==
+fetch ue4ss.log   OK 3024B (dir)
+fetch status      OK (dir)
+fetch aligned log OK 2210424B (dir)
+baseline: UE4SS.log >= 2892B, aligned >= 2210306B (controller-captured pre-launch)
+
+signatures (new lines vs baseline):
+  (a) pass markers conv/roots/lease/D2 : 0 (bridge_cfg/exepath diag lines: 0)
+  (b) Shape-A seeds-incomplete line    : 0  [EXPECTED for this launch]
+  (c) [Seeds] REFUTED / other          : 0 / 0
+  (d) progress markers                 : 1
+  (g) failure lines                    : 0 (diag_channel_open_failed/-22: 0)
+  (g) MRS_* tokens / observer events   : 0 / start_ok=0 start_failed=0 stop_result=0 mfa_failed=0
+  (f) entry-r4 [t= prefixed lines      : 0 (freshness oracle)
+  IGW exec-write probe markers         : 0; GMalloc throw lines: 0; LoadMap-tail lines: 0
+
+status: pid=501 ms=9534000 fresh=yes states=3 ladder=[ activated engine-ready mods-started ] last=mods-started code=0
+
+other new lines (raw, capped):
+  [ue4ss] [Lua] [TownfallItemSpawner] mod started
+
+VERDICT: MODS_STARTED
+NEXT: FULL LADDER REACHED — beyond the launch-9 prediction (LAUNCH9-PREDICTION §5 said engine-ready was not the expected outcome; treat with fresh-eyes skepticism and re-run to confirm). Check [TownfallItemSpawner] prints (count above) before any rung claim; then FIRST-RUN-PLAYBOOK §5 rung ladder + the F7 contingency table (§3).
+
+PASS [mods_started] verdict is MODS_STARTED
+PASS [mods_started] beyond-prediction skepticism present
+PASS [mods_started] itemspawner print counted
+PASS [mods_started] exit 0 (rc=0)
+=== case crash_shaped (rc=0) ===
+== launch-9 (composition-6) post-launch evidence ==
+fetch ue4ss.log   OK 3035B (dir)
+fetch status      OK (dir)
+fetch aligned log OK 2210424B (dir)
+baseline: UE4SS.log >= 2892B, aligned >= 2210306B (controller-captured pre-launch)
+
+signatures (new lines vs baseline):
+  (a) pass markers conv/roots/lease/D2 : 0 (bridge_cfg/exepath diag lines: 0)
+  (b) Shape-A seeds-incomplete line    : 0  [EXPECTED for this launch]
+  (c) [Seeds] REFUTED / other          : 0 / 0
+  (d) progress markers                 : 0
+  (g) failure lines                    : 0 (diag_channel_open_failed/-22: 0)
+  (g) MRS_* tokens / observer events   : 0 / start_ok=0 start_failed=0 stop_result=0 mfa_failed=0
+  (f) entry-r4 [t= prefixed lines      : 0 (freshness oracle)
+  IGW exec-write probe markers         : 0; GMalloc throw lines: 0; LoadMap-tail lines: 2
+
+status: pid=502 ms=9534000 fresh=yes states=1 ladder=[ activated ] last=activated code=0
+
+other new lines (raw, capped):
+  [ue4ss] Finding GameEngine CDO
+  [ue4ss] Finding GameEngine::LoadMap
+
+VERDICT: CRASH_SHAPED_SUSPECTED
+NEXT: igf6-class candidate (LAUNCH9-PREDICTION §4 #3): fresh session still activated-only, no failure line, and the UE4SS.log new tail sits in the LoadMap/GameEngine vtable-walk vicinity — module likely died mid-init on the first exec-page READ (FLAG-2), game surviving. Confirm with observer/qdrv1 tails and the UE4SS.log tail above; if confirmed, first-in-launch exec-read evidence.
+
+PASS [crash_shaped] verdict is CRASH_SHAPED_SUSPECTED
+PASS [crash_shaped] names the exec-read candidate
+PASS [crash_shaped] exit 0 (rc=0)
+=== case failed_diag (rc=0) ===
+== launch-9 (composition-6) post-launch evidence ==
+fetch ue4ss.log   OK 2892B (dir)
+fetch status      OK (dir)
+fetch aligned log OK 2210562B (dir)
+baseline: UE4SS.log >= 2892B, aligned >= 2210306B (controller-captured pre-launch)
+
+signatures (new lines vs baseline):
+  (a) pass markers conv/roots/lease/D2 : 0 (bridge_cfg/exepath diag lines: 0)
+  (b) Shape-A seeds-incomplete line    : 0  [EXPECTED for this launch]
+  (c) [Seeds] REFUTED / other          : 0 / 0
+  (d) progress markers                 : 0
+  (g) failure lines                    : 1 (diag_channel_open_failed/-22: 1)
+  (g) MRS_* tokens / observer events   : 0 / start_ok=0 start_failed=0 stop_result=0 mfa_failed=0
+  (f) entry-r4 [t= prefixed lines      : 1 (freshness oracle)
+  IGW exec-write probe markers         : 0; GMalloc throw lines: 0; LoadMap-tail lines: 0
+
+status: pid=410 ms=100 fresh=no states=0 ladder=[ ] last= code=
+
+notable lines (verbatim, capped):
+  [aligned] modbridge module_start failed: diag_channel_open_failed code=-22 detail=diagnostic channel unavailable before wiring
+
+VERDICT: FAILED_diag_channel_open_failed
+NEXT: Diagnostic channel open failed (code -22): game continues UNMODDED. NOTE: this line only appears with the channel-postmortem 3-line patch resident — the delivered entry is SILENT on -22; absence of this line never excludes -22. Check /data/townfall_runtime_aligned_entry.log accessibility.
+
+PASS [failed_diag] verdict FAILED_diag_channel_open_failed (stage verbatim)
+PASS [failed_diag] -22 silence guidance
+PASS [failed_diag] entry-r4 prefix line counted
+PASS [failed_diag] exit 0 (rc=0)
+=== case not_started (rc=0) ===
+== launch-9 (composition-6) post-launch evidence ==
+fetch ue4ss.log   OK 2892B (dir)
+fetch status      OK (dir)
+fetch aligned log OK 2210424B (dir)
+baseline: UE4SS.log >= 2892B, aligned >= 2210306B (controller-captured pre-launch)
+
+signatures (new lines vs baseline):
+  (a) pass markers conv/roots/lease/D2 : 0 (bridge_cfg/exepath diag lines: 0)
+  (b) Shape-A seeds-incomplete line    : 0  [EXPECTED for this launch]
+  (c) [Seeds] REFUTED / other          : 0 / 0
+  (d) progress markers                 : 0
+  (g) failure lines                    : 0 (diag_channel_open_failed/-22: 0)
+  (g) MRS_* tokens / observer events   : 0 / start_ok=0 start_failed=0 stop_result=0 mfa_failed=0
+  (f) entry-r4 [t= prefixed lines      : 0 (freshness oracle)
+  IGW exec-write probe markers         : 0; GMalloc throw lines: 0; LoadMap-tail lines: 0
+
+status: pid=411 ms=100 fresh=no states=0 ladder=[ ] last= code=
+
+VERDICT: NOT_STARTED
+NEXT: Nothing beyond baseline (or stale probe-era repeats only) and no fresh status session. Records appear ~1 min after launch: wait and re-run. If still empty, treat as F0 (composition never ran): verify staging via FTP readback + ploader logs; observer module_start_entered count in the aligned log is the launch counter.
+
+PASS [not_started] verdict NOT_STARTED
+PASS [not_started] no truncation warning at exact-or-greater sizes
+PASS [not_started] exit 0 (rc=0)
+=== case truncation (rc=0) ===
+== launch-9 (composition-6) post-launch evidence ==
+fetch ue4ss.log   OK 1024B (dir)
+fetch status      OK (dir)
+fetch aligned log OK 2210424B (dir)
+baseline: UE4SS.log >= 2892B, aligned >= 2210306B (controller-captured pre-launch)
+WARN: UE4SS.log fetched 1024B < baseline 2892B (log replaced/truncated or wrong file fetched)
+
+signatures (new lines vs baseline):
+  (a) pass markers conv/roots/lease/D2 : 0 (bridge_cfg/exepath diag lines: 0)
+  (b) Shape-A seeds-incomplete line    : 0  [EXPECTED for this launch]
+  (c) [Seeds] REFUTED / other          : 0 / 0
+  (d) progress markers                 : 0
+  (g) failure lines                    : 0 (diag_channel_open_failed/-22: 0)
+  (g) MRS_* tokens / observer events   : 0 / start_ok=0 start_failed=0 stop_result=0 mfa_failed=0
+  (f) entry-r4 [t= prefixed lines      : 0 (freshness oracle)
+  IGW exec-write probe markers         : 0; GMalloc throw lines: 0; LoadMap-tail lines: 0
+
+status: pid=412 ms=100 fresh=no states=0 ladder=[ ] last= code=
+
+VERDICT: NOT_STARTED
+NEXT: Nothing beyond baseline (or stale probe-era repeats only) and no fresh status session. Records appear ~1 min after launch: wait and re-run. If still empty, treat as F0 (composition never ran): verify staging via FTP readback + ploader logs; observer module_start_entered count in the aligned log is the launch counter.
+NOTE: UE4SS.log fetched 1024B < baseline 2892B (log replaced/truncated or wrong file fetched)
+
+PASS [truncation] truncation warning present
+PASS [truncation] exit 0 (rc=0)
+=== case boundary (rc=0) ===
+== launch-9 (composition-6) post-launch evidence ==
+fetch ue4ss.log   OK 3026B (dir)
+fetch status      OK (dir)
+fetch aligned log OK 2210424B (dir)
+baseline: UE4SS.log >= 2892B, aligned >= 2210306B (controller-captured pre-launch)
+
+signatures (new lines vs baseline):
+  (a) pass markers conv/roots/lease/D2 : 0 (bridge_cfg/exepath diag lines: 0)
+  (b) Shape-A seeds-incomplete line    : 0  [EXPECTED for this launch]
+  (c) [Seeds] REFUTED / other          : 0 / 0
+  (d) progress markers                 : 0
+  (g) failure lines                    : 0 (diag_channel_open_failed/-22: 0)
+  (g) MRS_* tokens / observer events   : 0 / start_ok=0 start_failed=0 stop_result=0 mfa_failed=0
+  (f) entry-r4 [t= prefixed lines      : 0 (freshness oracle)
+  IGW exec-write probe markers         : 0; GMalloc throw lines: 0; LoadMap-tail lines: 0
+
+status: pid=413 ms=100 fresh=no states=0 ladder=[ ] last= code=
+
+other new lines (raw, capped):
+  [ue4ss] NEWMARKER-FIRST-NEW-LINE
+
+VERDICT: UNKNOWN_NEW_LINES
+NEXT: New non-baseline lines exist but status gives no verdict (stale/absent session). Could be mid-launch: re-run in ~60 s. Compare lines above against LAUNCH9-PREDICTION §2; anything unexpected = report raw to the controller.
+
+PASS [boundary] straddling baseline-region line not leaked
+PASS [boundary] first line starting at/after the cut is present
+PASS [boundary] exit 0 (rc=0)
+
+== fixture test summary: 28 passed, 0 failed ==
+fixture shas:
+8b7f0899c64e96a2c3e1f3403b3ec7dbd1dd99c253b6e4e97f695277533ed8b4  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/boundary/from-dir/UE4SS.log
+02b4d98137d5a1175e0c818f03261d52d0be1178c78a28ae194a8e42429f783c  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/crash_shaped/from-dir/UE4SS.log
+3014a4657dae4f872880fd1bbbb4bf29d72816ad3df52283915e97571f1e928b  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/failed_diag/from-dir/UE4SS.log
+8c47760305943a71df50100e63a04a4098c16ba117d6bed363d0c2aef40f75c9  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/mods_started/from-dir/UE4SS.log
+3014a4657dae4f872880fd1bbbb4bf29d72816ad3df52283915e97571f1e928b  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/not_started/from-dir/UE4SS.log
+6d7913ab76f86f58cdaf3afd9edbdc6c2c718307892995a736830fd24986f790  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/shape_a/from-dir/UE4SS.log
+ecd64c6cd61db09333a4c21e5f1cf2d2c309a40101a4c769d9201cc0c82577c6  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/truncation/from-dir/UE4SS.log
+49c0034fafaa23076ea24aa6be7d84af885ce4bb7fbaf2e497757870fac4ed0f  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/boundary/from-dir/townfall_runtime_aligned_entry.log
+49c0034fafaa23076ea24aa6be7d84af885ce4bb7fbaf2e497757870fac4ed0f  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/crash_shaped/from-dir/townfall_runtime_aligned_entry.log
+5bc1ff3a6658fdcd0de380b6fb7249ef64648087f4a1e60121c08d5c40540a71  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/failed_diag/from-dir/townfall_runtime_aligned_entry.log
+49c0034fafaa23076ea24aa6be7d84af885ce4bb7fbaf2e497757870fac4ed0f  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/mods_started/from-dir/townfall_runtime_aligned_entry.log
+49c0034fafaa23076ea24aa6be7d84af885ce4bb7fbaf2e497757870fac4ed0f  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/not_started/from-dir/townfall_runtime_aligned_entry.log
+91f3a328d4c976e2ca72946726acdfa9a8f7f6239bc83b9707c3d1798fa83ef1  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/shape_a/from-dir/townfall_runtime_aligned_entry.log
+49c0034fafaa23076ea24aa6be7d84af885ce4bb7fbaf2e497757870fac4ed0f  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch9-evidence/host-test/../fixtures/truncation/from-dir/townfall_runtime_aligned_entry.log

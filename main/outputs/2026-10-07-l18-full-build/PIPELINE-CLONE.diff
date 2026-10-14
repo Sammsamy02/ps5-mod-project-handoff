@@ -1,0 +1,528 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-full-build/launch16_one_pass.py
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l18-full-build/launch18_one_pass.py
+@@ -1,38 +1,37 @@
+ #!/usr/bin/env python3
+-"""Controller launch-11 COMBINED one-pass runner (worker-combined-editions PRE-BUILD;
+-compose is pure execution once the pad-defer admission lands). Lineage: the proven
+-launch-10 pair + LAUNCH11-PLAN A-chain — combined luamod (marshal-consumer + enqueue
+--ladder + loadmap-r2; source dc687602..., unit-object comparator 813b249d...), the plan
+-A0 ARMED initializer staging (8b0c7e99...; pre-final-c caveat recorded in the driver and
+-EDITIONS-l16.json), the pad unit as a PLACEHOLDER (plan A3, BLOCKING), fold-1 asmhelper OFF
+-by default (admissible flip comparator 6604ce2d...; f5627427 rejected, basename
+-discipline).
+-
+-Driver edition: launch11-combined/build_runtime_composition6_l16.py (EDITIONS-l16.json
+-records base shas + the five tagged deltas L11-E1..E5 + the placeholder inventory +
+-the exact loop edits). The runner re-verifies every unit sha at start and refuses on
+-drift. HOLD-PASS mode (default) stops after verify-only; --full FIRST runs the
+-admission gate (refuses while admissions.pad_defer / admissions.initializer_fold are
+-unresolved — plan A3: absent pad at compose time = STOP or recorded waiver), then
+-receipt regen + two passes (candidates prx-candidate-l16-{1,2}; SeedValidation/
+-live_module_facts stage-header pins carried from launch-10, same shas) + the
+-merged-luamod object comparator gate + the plan-D three-consumer UND pairing-law gate
+-+ ODR + finalize + gate v2 + determinism twin.
++"""L18 cleanup + XOM code-verification pipeline, isolated local preparation.
++
++Current status: no l18 source selection or full build has been accepted; execution
++is held by PREP-MANIFEST.json until the reviewed source manifest, reported XOM
++audit and parent BUILD-GO bind the same hashes. Upload remains HOLD.
++
++The inherited launch11 comments describe historical admission mechanisms. Pad
++coexist and the combined LuaMod baseline remain admitted; the NEW l18 initializer,
++owner, bridge, headers and disk/XOM routing are pending. Historical PLACEHOLDER
++text never admits a new source. EDITIONS-l18.json records the current status;
++inputs/frozen-l16/ preserves the exact prior edition and receipts unchanged.
++
++After source admission, this pipeline regenerates local receipts, composes and
++packages two candidates, verifies the merged LuaMod comparator, consumer UND,
++ODR, whole selected sources, bridge providers/final imports, manifest, static
++packaging gates and byte determinism. It contacts no console or network.
+ """
+ import hashlib, json, subprocess, sys, time, shutil
+ from pathlib import Path
++sys.dont_write_bytecode = True
++from prep_guard import require_ready, local_environment
+ 
+ ROOT = Path('/WORKSPACE/.codex/worktrees/translation-core/what')
+ TEAM = ROOT / 'outputs/2026-10-04-zcode-team'
+-MY = Path('/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-full-build')
+-DRIVER = MY / 'build_runtime_composition6_l16.py'
+-EDITION = json.loads((MY / 'EDITIONS-l16.json').read_text())
+-GATE2 = TEAM / 'worker-gate-evolution/gate_check_composition5_v2.py'
+-ODR = TEAM / 'worker-odr-emitter-check/check_odr_emitters.py'
+-FIN = TEAM / 'worker-manifest-finalizer/finalize_manifest.py'
++MY = Path(__file__).resolve().parent
++DRIVER = MY / 'build_runtime_composition6_l18.py'
++EDITION = json.loads((MY / 'EDITIONS-l18.json').read_text())
++GATE2 = MY / 'gate_check_composition5_v2_l18.py'
++ODR = MY / 'check_odr_emitters_l18.py'
++FIN = MY / 'finalize_manifest_l18.py'
+ INT = MY / 'integration'
+-REGEN_X = TEAM / 'worker-comp6-driver/regen_extra_receipt.py'
+-REGEN_R = TEAM / 'worker-comp6-driver/regen_replace_receipt.py'
++REGEN_X = MY / 'regen_extra_receipt_l18.py'
++REGEN_R = MY / 'regen_replace_receipt_l18.py'
+ W = ROOT / '.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1'
+ W_INC = W / 'include'
+ COMP_RUNS = MY / 'runs'
+@@ -41,7 +40,7 @@
+ def sh(p): return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+ def run(name, argv, tail=4):
+     print(f'== {name}', flush=True)
+-    r = subprocess.run([str(a) for a in argv], capture_output=True, text=True, cwd=ROOT)
++    r = subprocess.run([str(a) for a in argv], capture_output=True, text=True, cwd=ROOT, env=local_environment())
+     (MY/'logs'/f'{time.time_ns()}-{name.replace(chr(47), chr(95))}.json').write_text(json.dumps({'argv':list(map(str,argv)), 'exit':r.returncode,'stdout':r.stdout,'stderr':r.stderr},indent=2))
+     for l in (r.stdout + r.stderr).strip().splitlines()[-tail:]:
+         print('   |', l[:170])
+@@ -49,12 +48,12 @@
+     return r
+ 
+ def verify_units():
+-    print('== unit sha verification (EDITIONS-l16.json)')
++    print('== unit sha verification (EDITIONS-l18.json)')
+     for e in EDITION['units'] + [EDITION['bridge_cli']]:
+         actual = sh(e['file'])
+         if actual != e['sha256']:
+             die(f"unit drift: {e['file']}\n  edition {e['sha256'][:16]} vs actual {actual[:16]}\n"
+-                "  (if a staging file moved or was folded, refresh EDITIONS-l16.json first — never edit pins)")
++                "  (if a staging file moved or was folded, refresh EDITIONS-l18.json first — never edit pins)")
+         print(f"   | OK {Path(e['file']).name} {actual[:12]}")
+     print('   | all units verified')
+ 
+@@ -113,7 +112,7 @@
+     # add its --file admissions HERE — per the pad DIFF's OWN --file list, BACKEND/
+     # BOOTSTRAP lineage, never the luamod stack — either inside the regen call above or as
+     # a follow-up receipt merge (same mechanism as the initializer coverage below). Also
+-    # set EDITIONS-l16.json admissions.pad_defer (status ADMITTED/WAIVED + files + shas, and
++    # set EDITIONS-l18.json admissions.pad_defer (status ADMITTED/WAIVED + files + shas, and
+     # add the files to EDITIONS['units']) and fill the driver compose_argv "LAUNCH11 PAD
+     # PLACEHOLDER" entry. --full refuses while admissions.pad_defer is PENDING (A3:
+     # absent at compose time = STOP, or an explicit recorded waiver — never silent).
+@@ -124,14 +123,14 @@
+     # merge mechanism as launch-10.
+     rr_p = rcpts/'l11-replace-receipt.json'
+     rr = json.loads(rr_p.read_text())
+-    orig_rr = TEAM / 'worker-comp6-driver/receipts/composition6-replace-receipt.json'
++    orig_rr = MY / 'inputs/composition6-replace-receipt.snapshot.json'
+     if orig_rr.is_file():
+         o = json.loads(orig_rr.read_text())
+         for k, v in o.items():
+             if k not in ('files', 'reasons') and k not in rr:
+                 rr[k] = v
+     init = EDITION['compose']['initializer_armed']['dir']
+-    for f, reason in [(Path(init)/'UnrealInitializer.cpp', 'LAUNCH11-PLAN A0 armed fold: DIFF-2 rev B R3-marshal-mode fold 1 on the launch-10 readpath staging (R3_MARSHAL_MODE=1 fallback; PRE-FINAL-C caveat recorded in the driver L11-E2 comment and EDITIONS-l16.json admissions.initializer_fold)'),
++    for f, reason in [(Path(init)/'UnrealInitializer.cpp', 'LAUNCH11-PLAN A0 armed fold: DIFF-2 rev B R3-marshal-mode fold 1 on the launch-10 readpath staging (R3_MARSHAL_MODE=1 fallback; PRE-FINAL-C caveat recorded in the driver L11-E2 comment and EDITIONS-l18.json admissions.initializer_fold)'),
+                       (Path(init)/'SeedValidation.hpp', 'armed-staging seed classifier (included by the armed initializer; b8d851e9)'),
+                       (Path(init)/'SeedTable.h', 'armed seed table 4/4 (LAUNCH11-PLAN A0 pin 59effe6e)'),
+                       (Path(init)/'ImageCoverage.hpp', 'L14 exact segment proof policy'),
+@@ -158,7 +157,7 @@
+     run_seq = out_name.rsplit('-', 1)[-1]
+     # conscious move-aside of prior attempt artifacts (precedent: suffixed renames)
+     import time as _t
+-    rd = COMP_RUNS / f'run-l16-{run_seq}'
++    rd = COMP_RUNS / f'run-l18-{run_seq}'
+     if rd.exists(): rd.rename(rd.with_name(rd.name + f'-aside-{int(_t.time())}'))
+     ov = MY / 'driver/staging/lineage-overlay-2'
+     if ov.exists(): ov.rename(ov.with_name(ov.name + f'-aside-{int(_t.time())}'))
+@@ -180,7 +179,7 @@
+          '--stage-header', 'SeedValidation.hpp=/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch11-combined/units/SeedValidation.hpp=c2e6e66331cf45defab4dec4eee120341fcba5a73f3a23c6810edeae485dcfe8',
+          '--stage-header', 'live_module_facts.hpp=/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-build/staging/live_module_facts.hpp=917f13a7381a85cac513b9efe6b48d833f083d0cd426d629fb1f7cf20ea460a3',
+          *[v for name in ('PoolAdmissionEngine.hpp','CopyinSink.hpp','CopyinStartup.hpp','ImageCoverage.hpp','ImageLoadProfile.hpp','FNamePoolChecks.hpp','NativeFNameAdapter.hpp','NativeFNameChecks.hpp','FNameAbiProfile.hpp') for v in ('--stage-header', f"{name}={EDITION['compose']['initializer_armed']['dir']}/{name}={sh(Path(EDITION['compose']['initializer_armed']['dir'])/name)}")],
+-         '--composition-run', COMP_RUNS/f'run-l16-{run_seq}',
++         '--composition-run', COMP_RUNS/f'run-l18-{run_seq}',
+          '--out', MY/out_name])
+ 
+ def admission_gate():
+@@ -195,7 +194,7 @@
+     pad = ad.get('pad_defer', {}).get('status', 'PENDING')
+     if pad not in ('ADMITTED', 'WAIVED'):
+         die(f"admission gate: pad_defer is {pad} — plan A3: fill the PAD PLACEHOLDERs "
+-            "(driver compose_argv + regen_receipts + EDITIONS-l16.json admissions.pad_defer) "
++            "(driver compose_argv + regen_receipts + EDITIONS-l18.json admissions.pad_defer) "
+             "or record an explicit waiver; NEVER compose with the pad unit silently absent")
+     if pad == 'ADMITTED':
+         for f, want in ad.get('pad_defer', {}).get('files', {}).items():
+@@ -207,7 +206,7 @@
+         die(f"admission gate: initializer_fold is {init} — set ACK-PLAN-PINNED (the plan's "
+             "A0 armed staging 8b0c7e99, pre-final-c caveat accepted), or ADMITTED-V4ARMED-FOLD "
+             "(new worker-delivered staging; re-point driver L11-E2), or a recorded WAIVER, "
+-            "in EDITIONS-l16.json")
++            "in EDITIONS-l18.json")
+     print(f'   | admission gate OK: pad_defer={pad}, initializer_fold={init}')
+ 
+ def luamod_comparator_gate(run_dir):
+@@ -274,7 +273,7 @@
+     print(f'   | consumer UND resolution OK: 3/3 resolve; 0 R3Marshal* undefined; UND total {len(und)}')
+ 
+ def post_build(out_name):
+-    run_dir = COMP_RUNS / ('run-l16-' + out_name.rsplit('-',1)[-1])
++    run_dir = COMP_RUNS / ('run-l18-' + out_name.rsplit('-',1)[-1])
+     if not run_dir.is_dir(): die('exact composition run missing')
+     print('   | composition run dir:', run_dir.name)
+     # LAUNCH11-PLAN D structural gates (worker-combined-editions additions):
+@@ -292,7 +291,7 @@
+                               '--composition-run', run_dir,
+                               '--candidate', MY/out_name])
+     verify_accessors(out_name)
+-    compare_args = ['--compare-dir', MY/'prx-candidate-l16-1'] if out_name.endswith('2') else []
++    compare_args = ['--compare-dir', MY/'prx-candidate-l18-1'] if out_name.endswith('2') else []
+     gate = subprocess.run(['python3', str(GATE2),
+                     '--build-dir', str(MY/out_name),
+                     '--manifest', str(INT/'change-manifest.finalized.json'),
+@@ -330,7 +329,7 @@
+     (they bind internally; appearing as imports = unresolved)."""
+     import subprocess
+     nm = ROOT / 'outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin/llvm-nm'
+-    acc = {'bridge_image_range', 'bridge_capture_envelope', 'bridge_readable_span_at', 'bridge_readable_span_count', 'bridge_kernel_write_copyin_probe_until', 'bridge_copyin_range_faulted'}
++    acc = {'bridge_copyin_initializer_enter', 'bridge_copyin_initializer_leave', 'bridge_copyin_initializer_complete', 'bridge_image_range', 'bridge_capture_envelope', 'bridge_readable_span_at', 'bridge_readable_span_count', 'bridge_kernel_write_copyin_probe_until', 'bridge_copyin_range_faulted'}
+     c = MY / out_name
+     receipt = {'candidate': str(c), 'accessors': sorted(acc), 'errors': []}
+ 
+@@ -463,25 +462,26 @@
+     return a
+ 
+ def main():
++    require_ready()
+     mode = sys.argv[1] if len(sys.argv) > 1 else 'verify'
+     verify_units()
+     if mode == 'verify':
+         preflight_and_verify()
+         print('HOLD-PASS complete: units verified + verify-only PASS. --full stays REFUSED '
+-              'until EDITIONS-l16.json admissions are resolved (pad_defer + initializer_fold).')
++              'until EDITIONS-l18.json admissions are resolved (pad_defer + initializer_fold).')
+         return
+     assert mode == '--full'
+     admission_gate()
+     regen_receipts()
+     preflight_and_verify()
+-    the_pass('prx-candidate-l16-1')
+-    rd1 = post_build('prx-candidate-l16-1')
++    the_pass('prx-candidate-l18-1')
++    rd1 = post_build('prx-candidate-l18-1')
+     o1 = determinism(rd1)
+-    the_pass('prx-candidate-l16-2')
+-    rd2 = post_build('prx-candidate-l16-2')
++    the_pass('prx-candidate-l18-2')
++    rd2 = post_build('prx-candidate-l18-2')
+     o2 = determinism(rd2)
+     if o1 != o2: die(f'DETERMINISM FAIL: {o1[:16]} vs {o2[:16]}')
+-    print(f'L16 FULL PIPELINE COMPLETE: candidate-1 provisional D1; candidate-2 gate GO with twin, determinism proven ({o1[:16]}), candidates in {MY}/prx-candidate-l16-{{1,2}}')
++    print(f'L18 FULL PIPELINE COMPLETE: candidate-1 provisional D1; candidate-2 gate GO with twin, determinism proven ({o1[:16]}), candidates in {MY}/prx-candidate-l18-{{1,2}}')
+ 
+ if __name__ == '__main__':
+     main()
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-full-build/build_runtime_composition6_l16.py
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l18-full-build/build_runtime_composition6_l18.py
+@@ -81,24 +81,26 @@
+ import subprocess
+ import sys
+ from pathlib import Path
++sys.dont_write_bytecode = True
++from prep_guard import require_ready, require_owned, local_environment
+ 
+ ROOT = Path('/WORKSPACE/.codex/worktrees/translation-core/what')
+ TEAM = ROOT / 'outputs/2026-10-04-zcode-team'
+-MY = Path('/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-full-build/driver')
++MY = Path(__file__).resolve().parent / 'driver'
+ RECEIPTS = MY / 'receipts'
+ 
+-COMPOSE6_FIXED = ROOT / '/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-full-build/build_runtime_composition6_fixed_l16.py'
++COMPOSE6_FIXED = Path(__file__).resolve().parent / 'build_runtime_composition6_fixed_l18.py'
+ # L11-E1: fixed edition 6e943678 = l10 fixed b78fb031 (= frozen 8dd92a6f + the l10
+ # linker_provided extension, byte-carried) + the L11 admission-notes comment block ONLY
+ # (zero executable change; diff-verified). Re-measured on every run by check_sha.
+-COMPOSE6_FIXED_SHA = 'e02634c3127cc2d2b5cd15b7f342fab3886f11235cec30b6ab8c3d4c4ceeaa02'
+-PKG_FIXED = Path('/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-full-build/package_prx_l16.py')
+-PKG_FIXED_SHA = '7919dbaec00b6d78e8db4c6a906a432e8d604eb5dea8d9e59dde152bc3466571'  # l12: +sceKernelVirtualQuery extended import (VirtualQuery rescue)
++COMPOSE6_FIXED_SHA = 'f1342c52cfe5e56005512fc1f9ad5c4b6a1785dc9441d376eb33a02745a5ab71'
++PKG_FIXED = Path(__file__).resolve().parent / 'package_prx_l18.py'
++PKG_FIXED_SHA = '15de23c04cc7370b8eb799ae5de1c12d50c3fff33a337a6d1bcffe71573f08d5'  # l12: +sceKernelVirtualQuery extended import (VirtualQuery rescue)
+ 
+ SPIKE = ROOT / '.superpowers/native-dependency-spike'
+ OWNER = SPIKE / 'ue4ss-native-tick-file-owner-1'
+-RUN4 = OWNER / 'ue4ss-native-supplier-composition-4/run-3'
+-RUN6 = OWNER / 'ue4ss-native-supplier-composition-6/run-1'
++RUN4 = ROOT / 'outputs/2026-10-07-l16-full-build/runs/run-l16-2'  # read-only chain-symbol reference
++RUN6 = Path(__file__).resolve().parent / 'runs/run-l18-1'
+ LINEAGE = SPIKE / 'native-full-runtime-aligned-entry-1'
+ LLVM_BIN = ROOT / 'outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin'
+ CR1 = SPIKE / 'native-coherent-runtime-1'
+@@ -570,7 +572,7 @@
+             raise SystemExit('--stage-header source missing: ' + spec)
+         staged[rel] = (rel, src, sha)
+     for name, (rel, src, sha) in staged.items():
+-        dest = overlay / rel
++        dest = require_owned(overlay / rel)
+         if dest.exists() or dest.is_symlink():
+             raise SystemExit('--stage-header would shadow an overlay path: ' + rel)
+         dest.parent.mkdir(parents=True, exist_ok=True)
+@@ -591,7 +593,7 @@
+         rel, sep, src = spec.partition('=')
+         if not sep or not rel or not Path(src).is_file():
+             raise SystemExit('bad --stage-unit spec (REL=SRC): ' + spec)
+-        dest = overlay / rel
++        dest = require_owned(overlay / rel)
+         if dest.exists() or dest.is_symlink():
+             raise SystemExit('--stage-unit would shadow an overlay path: ' + rel)
+         dest.parent.mkdir(parents=True, exist_ok=True)
+@@ -613,7 +615,7 @@
+     if sha256_file(Path(rec['runtime_object'])) != rec['runtime_sha256']:
+         raise SystemExit('composed object hash drift vs run receipt')
+ 
+-    real_ledger = ROOT / '.superpowers/native-observations/transport-experiments-progress.json'
++    real_ledger = Path(__file__).resolve().parent / 'inputs/transport-ledger.snapshot.json'
+     led = json.loads(real_ledger.read_text())
+     led['zcode_supplier_composition_6'] = {
+         'utc': __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat(),
+@@ -692,7 +694,7 @@
+             res = sorted(delta.get('expected_bootstrap_resolutions', []))
+             want = sorted(set(_CHECKPOINT) | set(res))
+             recon = (not others_failed and res and sorted(delta.get('added', [])) == want
+-                     and not [x for x in res if x not in ('bridge_image_range', 'bridge_capture_envelope', 'bridge_readable_span_at', 'bridge_readable_span_count', 'diagnostic_event', 'bridge_kernel_range_verdict', 'bridge_kernel_write_copyin_probe', 'bridge_write_copyin_capture', 'bridge_kernel_write_copyin_probe_until', 'bridge_copyin_range_faulted', 'scePadGetHandle')])  # l11: +diagnostic_event (wpd1 program extern C; diagnostic.c bootstrap)  # l11 v5.1: +bridge_kernel_range_verdict (initializer extern C; bridge packaging TU defines it — same class as the span accessors)
++                     and not [x for x in res if x not in ('bridge_image_range', 'bridge_capture_envelope', 'bridge_readable_span_at', 'bridge_readable_span_count', 'diagnostic_event', 'bridge_kernel_range_verdict', 'bridge_kernel_write_copyin_probe', 'bridge_write_copyin_capture', 'bridge_kernel_write_copyin_probe_until', 'bridge_copyin_range_faulted', 'bridge_copyin_initializer_enter', 'bridge_copyin_initializer_leave', 'bridge_copyin_initializer_complete', 'scePadGetHandle')])  # l11: +diagnostic_event (wpd1 program extern C; diagnostic.c bootstrap)  # l11 v5.1: +bridge_kernel_range_verdict (initializer extern C; bridge packaging TU defines it — same class as the span accessors)
+             resolved_ok = False
+             if recon:
+                 try:
+@@ -707,7 +709,7 @@
+                     _overlay = MY / 'staging/lineage-overlay-2'
+                     _src = Path(overlay) / 'lifecycle' / 'runtime_start_bridge.cpp'  # overlay param in scope; args is not
+                     assert _src.is_file(), 'bridge source missing: ' + str(_src)
+-                    with _tf.TemporaryDirectory() as _td:
++                    with _tf.TemporaryDirectory(dir=Path(__file__).resolve().parent / 'tmp') as _td:
+                         _obj = Path(_td) / 'bridge-preproof.o'
+                         _inc = ['-I' + str(p) for p in (_overlay / 'generated', _overlay / 'probe', _overlay / 'lifecycle', _overlay)]
+                         b.run([str(ROOT / 'outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/bin/prospero-clang++'),
+@@ -722,7 +724,7 @@
+                         _diag_src = ROOT / 'outputs/2026-10-04-zcode-team/worker-diagnostic-sink/staging/diagnostic.c'
+                         _diag_ok = True
+                         if 'diagnostic_event' in res:
+-                            with _tf.TemporaryDirectory() as _td2:
++                            with _tf.TemporaryDirectory(dir=Path(__file__).resolve().parent / 'tmp') as _td2:
+                                 _obj2 = Path(_td2) / 'diag-preproof.o'
+                                 b.run([str(ROOT / 'outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/bin/prospero-clang'),
+                                        *m.CLANG_FLAGS, *_inc, '-c', str(_diag_src), '-o', str(_obj2)],
+@@ -733,7 +735,7 @@
+                                 _diag_ok = 'diagnostic_event' in ddefs
+                         # split by provider: bridge accessors must be defined by the BRIDGE object;
+                         # diagnostic_event by the STAGED diagnostic.c object (its provider).
+-                        _bridge_acc = {'bridge_image_range', 'bridge_capture_envelope', 'bridge_readable_span_at', 'bridge_readable_span_count', 'bridge_kernel_range_verdict', 'bridge_kernel_write_copyin_probe', 'bridge_write_copyin_capture', 'bridge_kernel_write_copyin_probe_until', 'bridge_copyin_range_faulted'}
++                        _bridge_acc = {'bridge_image_range', 'bridge_capture_envelope', 'bridge_readable_span_at', 'bridge_readable_span_count', 'bridge_kernel_range_verdict', 'bridge_kernel_write_copyin_probe', 'bridge_write_copyin_capture', 'bridge_kernel_write_copyin_probe_until', 'bridge_copyin_range_faulted', 'bridge_copyin_initializer_enter', 'bridge_copyin_initializer_leave', 'bridge_copyin_initializer_complete'}
+                         resolved_ok = (set(res) - {'diagnostic_event', 'scePadGetHandle'}) <= defs and _diag_ok
+                 except Exception as _ex:
+                     recon = False
+@@ -789,6 +791,9 @@
+ 
+ 
+ def main() -> None:
++    require_ready()
++    os_env = local_environment()
++    __import__('os').environ.update(os_env)
+     ap = argparse.ArgumentParser(description=__doc__)
+     ap.add_argument('--program-source', type=Path,
+                     default=MY / 'staging/comp6-program/UE4SSProgram.cpp',
+@@ -835,6 +840,8 @@
+     ap.add_argument('--out', type=Path, default=MY / 'prx-candidate-composition6-1',
+                     help='packaging output dir (must not exist)')
+     args = ap.parse_args()
++    require_owned(args.out)
++    if args.composition_run is not None: require_owned(args.composition_run)
+     if args.composition_run is None:
+         # D1 FIX (worker-d1-determinism-diagnosis, adopted by controller): reuse
+         # must re-verify THIS driver's own composition-6 run, never the stale
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-full-build/build_runtime_composition6_fixed_l16.py
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l18-full-build/build_runtime_composition6_fixed_l18.py
+@@ -84,6 +84,9 @@
+ # =============================================================================================
+ import argparse,hashlib,importlib.util,json,os,struct,subprocess
+ from pathlib import Path
++import sys
++sys.dont_write_bytecode = True
++from prep_guard import require_ready, require_owned
+ W=Path('/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1');S=W.parent;ROOT=S.parent.parent
+ BASE=S/'ue4ss-native-notify-cancel-1/build-1/receipt.json'
+ BASE_SHA='bcd23a2a4abef518d8f220786e80cb131036e351b2218a322d26aee6adca8384'
+@@ -92,7 +95,7 @@
+ RETAINED_REPLACEABLE={'program','luamod','cppmod','settings','asmhelper-asmhelper','native-pad-input','native-pad-PS5PadSource','native-pad-PS5PadNative','input-handler'}  # +wpd2 coexist  # +pad-defer-1 (FOLD.md 2: SEC32-3 own-pinned-argv path)
+ def read(p):return json.loads(Path(p).read_text())
+ def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+-def save(p,v):Path(p).write_text(json.dumps(v,indent=2)+'\n')
++def save(p,v):require_owned(p).write_text(json.dumps(v,indent=2)+'\n')
+ def check(p,h):
+  if not Path(p).is_file() or sha(p)!=h:raise ValueError('Changed input: '+str(p))
+ def deps(p):return {str(Path(x).resolve()) for x in Path(p).read_text().replace('\\\n',' ').split()[1:] if Path(x).is_file()}
+@@ -122,8 +125,9 @@
+    pins[rp]=h
+  return pins
+ def main():
++ require_ready()
+  ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--output',required=True,type=Path);ap.add_argument('--rust-receipt',required=True,type=Path);ap.add_argument('--host-receipt',required=True,type=Path);ap.add_argument('--extra-unit',action='append',default=[],help='name=source_path; compiled with the loader-context argv template and appended to the link inputs');ap.add_argument('--extra-receipt',type=Path,help='hash-pinned attestation receipt covering the extra units');ap.add_argument('--extra-define',action='append',default=[],help='preprocessor define appended to extra-unit compiles')
+- ap.add_argument('--extend-undefined-baseline',action='store_true',help='Allow NEW undefined native symbols introduced by extra units; every added symbol must be declared by a pinned SDK target library; the extended baseline is recorded');ap.add_argument('--replace-bootstrap-unit',action='append',default=[],help='name=source_path; recompile a base bootstrap unit from an attested replacement source');ap.add_argument('--replace-receipt',type=Path,help='hash-pinned attestation covering replacement sources and every spike project file the replacement touches');ap.add_argument('--replace-runtime-unit',action='append',default=[],help='name=source_path; recompile a freshly compiled affected runtime unit, or an attested retained allow-list unit %s, from an attested replacement source'%sorted(RETAINED_REPLACEABLE));a=ap.parse_args()
++ ap.add_argument('--extend-undefined-baseline',action='store_true',help='Allow NEW undefined native symbols introduced by extra units; every added symbol must be declared by a pinned SDK target library; the extended baseline is recorded');ap.add_argument('--replace-bootstrap-unit',action='append',default=[],help='name=source_path; recompile a base bootstrap unit from an attested replacement source');ap.add_argument('--replace-receipt',type=Path,help='hash-pinned attestation covering replacement sources and every spike project file the replacement touches');ap.add_argument('--replace-runtime-unit',action='append',default=[],help='name=source_path; recompile a freshly compiled affected runtime unit, or an attested retained allow-list unit %s, from an attested replacement source'%sorted(RETAINED_REPLACEABLE));a=ap.parse_args();require_owned(a.output)
+  check(BASE,BASE_SHA);base=read(BASE);rust=read(a.rust_receipt);host=read(a.host_receipt)
+  if host['status']!='OWNED_CPP_FILE_FALLBACK_HOST_PASS':raise ValueError('Host connection has not passed')
+  # SEC32-4 (controller 2026-10-04): host/rust lineage pin layers become
+@@ -280,7 +284,7 @@
+   if a.extra_unit and a.extend_undefined_baseline and not delta['removed'] and not delta['changed_bindings']:
+    sdk_lib_dir=ROOT/'outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/target/lib'
+    libsyms={lib.name:set(line.split()[0] for line in run('sdknm-'+lib.name,[build.LLVM/'llvm-nm','-D','--defined-only','--format=posix',lib]).stdout.splitlines() if line.strip()) for lib in sorted(sdk_lib_dir.glob('*.so'))}
+-   linker_provided={'_DYNAMIC','bridge_image_range','bridge_capture_envelope','bridge_readable_span_at','bridge_readable_span_count','diagnostic_event','bridge_kernel_range_verdict', 'bridge_kernel_write_copyin_probe', 'bridge_write_copyin_capture', 'bridge_kernel_write_copyin_probe_until', 'bridge_copyin_range_faulted', 'scePadGetHandle'}  # +diagnostic_event: declared extern C by the wpd1 program unit; defined by the diagnostic.c bootstrap unit at packaging link (same class)  # resolved against the final PRX's own dynamic section at link time  # l11 v5.1 tagged edit: +bridge_kernel_range_verdict — declared extern C by the initializer unit (listing-gap resolution), defined by the bridge packaging TU (same class as the span accessors; pre-build one-TU bridge compile proves the definition)
++   linker_provided={'bridge_copyin_initializer_enter','bridge_copyin_initializer_leave','bridge_copyin_initializer_complete','_DYNAMIC','bridge_image_range','bridge_capture_envelope','bridge_readable_span_at','bridge_readable_span_count','diagnostic_event','bridge_kernel_range_verdict', 'bridge_kernel_write_copyin_probe', 'bridge_write_copyin_capture', 'bridge_kernel_write_copyin_probe_until', 'bridge_copyin_range_faulted', 'scePadGetHandle'}  # +diagnostic_event: declared extern C by the wpd1 program unit; defined by the diagnostic.c bootstrap unit at packaging link (same class)  # resolved against the final PRX's own dynamic section at link time  # l11 v5.1 tagged edit: +bridge_kernel_range_verdict — declared extern C by the initializer unit (listing-gap resolution), defined by the bridge packaging TU (same class as the span accessors; pre-build one-TU bridge compile proves the definition)
+    providers={sym:(['<linker-provided>'] if sym in linker_provided else [n for n,s in libsyms.items() if sym in s]) for sym in delta['added']}
+    missing=[s for s,v in providers.items() if not v]
+    if missing:raise ValueError('Extra-unit imports not declared by any pinned SDK library: '+','.join(missing))
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-full-build/package_prx_l16.py
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l18-full-build/package_prx_l18.py
+@@ -67,6 +67,8 @@
+ import subprocess
+ import sys
+ from pathlib import Path
++sys.dont_write_bytecode = True
++from prep_guard import require_ready, require_owned, local_environment
+ 
+ BASE = Path(__file__).resolve().parent
+ 
+@@ -176,15 +178,15 @@
+ # The existing EXTENDED_IMPORTS remain the pre-bootstrap runtime contract.
+ # These two calls are introduced only by the packaging bridge, and must be
+ # proved there before the combined object and final PRX use the full contract.
+-BOOTSTRAP_ONLY_IMPORTS = {'sceKernelPread': 'sceKernelOpen', 'getuid': 'sceKernelOpen', 'geteuid': 'sceKernelOpen', 'getgid': 'sceKernelOpen', 'getegid': 'sceKernelOpen', 'sceKernelIsInSandbox': 'sceKernelOpen', 'sysctlbyname': 'sceKernelOpen'}
++BOOTSTRAP_ONLY_IMPORTS = {'sceKernelPread': 'sceKernelOpen', 'getuid': 'sceKernelOpen', 'geteuid': 'sceKernelOpen', 'getgid': 'sceKernelOpen', 'getegid': 'sceKernelOpen', 'sceKernelIsInSandbox': 'sceKernelOpen', 'sysctlbyname': 'sceKernelOpen', 'sceKernelUnlink': 'sceKernelOpen'}
+ ALL_EXTENDED_IMPORTS = {**EXTENDED_IMPORTS, **BOOTSTRAP_ONLY_IMPORTS}
+ ALL_EXTENDED_IMPORT_EVIDENCE = {
+     **EXTENDED_IMPORT_EVIDENCE,
+     **{name: "sdknm-libkernel.so.stdout" for name in BOOTSTRAP_ONLY_IMPORTS},
+ }
+ PIN.update({
+-    "bootstrap_import_evidence": ROOT / "outputs/2026-10-07-l16-local-handles/receipts/l16-import-extension.json",
+-    "bootstrap_import_evidence_sha256": "7e17af1096418099e1b3e9d97c90a3f916142bd934f76c27dab1930a8d056834",
++    "bootstrap_import_evidence": Path(__file__).resolve().parent / "receipts/l18-bootstrap-import-extension.json",
++    "bootstrap_import_evidence_sha256": '0b6d63fc42c7325e07a145325c3a1b938591df23bda0f2386b7bdca83c1e24f2',
+     "bootstrap_import_base_contract": ROOT / "outputs/2026-10-04-zcode-controller/launch11-combined/prx-candidate-l12-2/supplier-contract.json",
+     "bootstrap_import_base_contract_sha256": "649b90ce5200203a61f64234dfaef62f1d291a7a619b5eddfc01d069d7802ccc",
+     "bootstrap_import_provider": PIN["sdk"] / "target/lib/libkernel.so",
+@@ -194,6 +196,8 @@
+ # composition-1 runtime referenced _DYNAMIC untyped; composition-2 no longer
+ # does (its undefined-delta.json current set drops exactly _DYNAMIC), so the
+ # boundary entry is retained only as a no-op safety net.
++PIN.update({"unlink_import_evidence": Path(__file__).resolve().parent / "receipts/l18-unlink-import-evidence.json",
++            "unlink_import_evidence_sha256": '4c8b6e54e06a193614b47028cd2d0c8526696bd5ddc15dc7558c37c6538567aa'})
+ BOUNDARY_ADDITIONS = ["_DYNAMIC"]
+ 
+ CANDIDATE_BASENAME = "modbridge_supplier_composition.prx"
+@@ -228,7 +232,7 @@
+ 
+ class Build:
+     def __init__(self, out: Path, link: bool):
+-        self.out = out
++        self.out = require_owned(out)
+         self.link = link
+         self.gaps: list[str] = []
+         self.records: list[dict] = []
+@@ -245,7 +249,7 @@
+ 
+     def run(self, argv: list, *, env_extra: dict | None = None,
+             allow_fail: bool = False):
+-        env = dict(os.environ)
++        env = local_environment()
+         if env_extra:
+             env.update(env_extra)
+         self.note("run: " + " ".join(str(a) for a in argv))
+@@ -260,7 +264,7 @@
+         return result
+ 
+     def write_json(self, rel: str, payload) -> Path:
+-        target = self.out / rel
++        target = require_owned(self.out / rel)
+         target.parent.mkdir(parents=True, exist_ok=True)
+         target.write_text(json.dumps(payload, indent=2) + "\n")
+         return target
+@@ -289,6 +293,39 @@
+     return strong, weak, defined
+ 
+ 
++def unlink_import_evidence(b: Build) -> dict:
++    """Exact new name, donor identity, provider, encoder and NID; no target claim."""
++    path = PIN["unlink_import_evidence"]
++    if sha256_file(path) != PIN["unlink_import_evidence_sha256"]:
++        raise RuntimeError("Unlink evidence receipt hash mismatch")
++    evidence = json.loads(path.read_text())
++    if evidence.get("new_imports") != ["sceKernelUnlink"] or evidence.get("name") != "sceKernelUnlink":
++        raise RuntimeError("Unlink evidence must admit exactly sceKernelUnlink")
++    for role in ("base_contract", "provider", "baseline_bootstrap_evidence", "nid_encoder"):
++        record = evidence[role]
++        if sha256_file(Path(record["path"])) != record["sha256"]:
++            raise RuntimeError("Unlink evidence pin drift: " + role)
++    if (Path(evidence["provider"]["path"]).resolve() != PIN["bootstrap_import_provider"].resolve()
++            or evidence["provider"]["sha256"] != PIN["bootstrap_import_provider_sha256"]
++            or Path(evidence["base_contract"]["path"]).resolve() != PIN["bootstrap_import_base_contract"].resolve()
++            or evidence["base_contract"]["sha256"] != PIN["bootstrap_import_base_contract_sha256"]):
++        raise RuntimeError("Unlink SDK/base identity provenance mismatch")
++    contract = json.loads(Path(evidence["base_contract"]["path"]).read_text())
++    donor = next(r["ImportSymbol"] for r in contract["contract"]["imports"] if r["ImportSymbol"]["Name"] == "sceKernelOpen")
++    identity = {key: donor[key] for key in ("Name", "ModuleName", "ModuleVersion", "LibraryName", "LibraryVersion", "Soname", "PublishedName")}
++    identity["Name"] = identity["PublishedName"] = "sceKernelUnlink"
++    if evidence.get("identity_donor") != "sceKernelOpen" or evidence.get("identity") != identity:
++        raise RuntimeError("Unlink donor identity mismatch")
++    if evidence.get("nid") != "AUXVxWeJU-A" or sce_nid("sceKernelUnlink") != evidence["nid"]:
++        raise RuntimeError("Unlink NID mismatch")
++    nm = b.run([PIN["llvm"] / "llvm-nm", "-D", "--defined-only", "--format=posix", PIN["bootstrap_import_provider"]])
++    matches = [line.strip() for line in nm.stdout.splitlines() if line.split() and line.split()[0] == "sceKernelUnlink"]
++    if matches != [evidence["sdk_defined_match"]] or evidence["sdk_defined_match"] != "sceKernelUnlink T 1218c 0":
++        raise RuntimeError("Unlink pinned SDK export mismatch")
++    return {"receipt": str(path), "sha256": sha256_file(path), "nid": evidence["nid"], "identity": identity,
++            "sdk_defined_matches": matches, "console_resolution_tested": False}
++
++
+ def bootstrap_import_evidence(b: Build, contract: dict) -> dict:
+     """Verify explicit L13 identities and exact exports of the pinned SDK stub."""
+     for key in ("bootstrap_import_evidence", "bootstrap_import_base_contract",
+@@ -302,6 +339,7 @@
+         if (Path(evidence[field]).resolve() != PIN[key].resolve()
+                 or evidence[field + "_sha256"] != PIN[key + "_sha256"]):
+             raise RuntimeError("L13 bootstrap import evidence provenance mismatch: " + field)
++    unlink_proof = unlink_import_evidence(b)
+     rows = evidence["imports"]
+     names = [row["Name"] for row in rows]
+     if sorted(names) != sorted(BOOTSTRAP_ONLY_IMPORTS):
+@@ -328,6 +366,7 @@
+             "provider": str(PIN["bootstrap_import_provider"]),
+             "provider_sha256": PIN["bootstrap_import_provider_sha256"],
+             "identities": rows, "sdk_exports_verified": sorted(BOOTSTRAP_ONLY_IMPORTS),
++            "unlink_import_evidence": unlink_proof,
+             "target_resolution_observed": False}
+ 
+ 
+@@ -697,7 +736,7 @@
+                               "relocations (mirrors PayloadWriter); applied to a "
+                               "copied SharpProspero source tree only"})
+     b.run([PIN["dotnet"], "build", str(tools_dst / "SharpProspero.Link/SharpProspero.Link.csproj"),
+-           "-c", "Release", "--ignore-failed-sources",
++           "-c", "Release", "-p:RestoreConfigFile=" + str(Path(__file__).resolve().parent / "inputs/NuGet.Config"),
+            "-p:TargetFramework=net10.0"])  # source csproj omits TFM (parent build context)
+     local_dll_dir = tools_dst / "SharpProspero.Link/bin/Release/net10.0"
+     for asm in ("SharpProspero.Link.dll", "SharpProspero.Prx.dll"):
+@@ -837,7 +876,7 @@
+     if harness_dll.exists():
+         raise RuntimeError("refuse to reuse an existing Packager build")
+     b.run([PIN["dotnet"], "build", str(b.out / "harness/Packager.csproj"),
+-           "-c", "Release", "--ignore-failed-sources"])
++           "-c", "Release", "-p:RestoreConfigFile=" + str(Path(__file__).resolve().parent / "inputs/NuGet.Config")])
+     bare_original = b.out / "bare-original" / CANDIDATE_BASENAME
+     bare_original.parent.mkdir(parents=True, exist_ok=True)
+     pack = b.run([PIN["dotnet"], str(harness_dll), str(combined),
+@@ -1116,6 +1155,7 @@
+ 
+ # ------------------------------------------------------------------------ main
+ def main() -> int:
++    require_ready()
+     parser = argparse.ArgumentParser(
+         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+     parser.add_argument("--out", type=Path, default=None,
+@@ -1131,6 +1171,7 @@
+     if out.exists():
+         print(f"refusing to overwrite history: {out} already exists", file=sys.stderr)
+         return 2
++    require_owned(out)
+     out.mkdir(parents=True)
+     b = Build(out, link=args.link)
+     b.note(f"output dir: {out}")

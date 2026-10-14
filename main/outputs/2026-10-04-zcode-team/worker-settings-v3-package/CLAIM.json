@@ -1,0 +1,35 @@
+{
+  "worker": "worker-settings-v3-package",
+  "written_first": true,
+  "date": "2026-10-04",
+  "scope": "Settings package v3: resolve A-PI (all-signatures-inventory FLAG-3, SINI:1497-1557 ProcessInternal/ProcessLocalScriptFunction built-in derivation init-time code reads) via ini keys, re-verify through the v2 oracles.",
+  "claims": [
+    {
+      "id": "V3-KEYS-IDENTIFIED",
+      "claim": "The exact ini keys controlling the derivation are [Hooks] HookProcessInternal and [Hooks] HookProcessLocalScriptFunction (SettingsManager.cpp:279-280 REGISTER_BOOL_SETTING -> parser.get_bool('Hooks', key); consumed at UE4SSProgram.cpp:1075-1076 into UnrealConfig.bHookProcessInternal/bHookProcessLocalScriptFunction). ScanOverrides.process_internal / process_local_script_function (SINI:1508/1516 sub-gates) are NOT ini-reachable (zero references in SettingsManager.cpp) - they are programmatic lambdas only (UE4SSProgram.cpp:868 sets version_finder). Therefore the ONLY ini way to skip the 164-byte Zydis read is making the outer gate false: BOTH keys must be 0, because SINI:1497 is an OR and the PLSF sub-derivation at SINI:1516 does not consult bHookProcessLocalScriptFunction.",
+      "evidence": "port/ue4ss/src/SettingsManager.cpp:278-303; port/unreal/src/UnrealInitializer.cpp (staged copy worker-query-s2-arm/staging/UnrealInitializer.cpp:1497-1558); UE4SSProgram.cpp:868,1075-1076,1148-1165"
+    },
+    {
+      "id": "V3-LUA-PATH-SURVIVES",
+      "claim": "Setting both keys to 0 does NOT kill the Lua event path; it only skips the built-in PI/PLSF derivation + detour install. ProcessEvent resolution is a separate PostInitialize step (SINI:1448-1456) gated by its own key [Hooks] HookUObjectProcessEvent (default true, untouched) and resolved from the vtable via OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL - a data read, no Zydis text read. ExecuteInGameThread drains via engine_tick_hook (HookEngineTick=true untouched) with a cross-fallback to ProcessEvent mode (worker-engine-tick-fallback REPORT). RegisterKeyBind is independent. Failure mode of the skipped block is warning-only: UE4SSProgram.cpp:1148-1165 sets can_create_custom_events=false and logs; nothing throws. Package Lua (TownfallItemSpawner main.lua + shared UEHelpers.lua) uses zero RegisterHook and no custom events, so no consumer of PI/PLSF exists in this package.",
+      "evidence": "staged UnrealInitializer.cpp:1448-1456,1497-1558; UE4SSProgram.cpp:1148-1165; package-v2 Lua grep; worker-engine-tick-fallback/REPORT.md"
+    },
+    {
+      "id": "V3-SAFE-BOTH-OUTCOMES",
+      "claim": "Key inclusion is NOT conditional on the pending exec-writability verdict (worker-exec-writability/ is empty - no verdict landed). Under exec-only/unreadable text the defaults FAULT at SINI:1506 (ASM::resolve_function_address_from_potential_jmp -> get_first_instruction_at_address reads instruction bytes at the ExecuteUbergraph FuncPtr; ASMHelper.cpp:49-69, no null short-circuit) before the 164-byte loop - keys=false removes that unconditional init-time read. Under readable text the keys are behavior-neutral for this package and additionally avoid the FLAG-1-class on-demand detour WRITE against text (inventory E5). So ONE package ships; the two-package v3-safe-now/v3-conditional split is unnecessary and would imply a hazard that the code does not support.",
+      "evidence": "ASMHelper.cpp:49-69; SIGNATURES-INVENTORY.md C10/E5 rows; empty worker-exec-writability/; staged UnrealInitializer.cpp:1505-1506"
+    },
+    {
+      "id": "V3-ORACLES",
+      "claim": "Finalized package-v3 bytes re-verified through the same oracles as v2: (1) retained IniParser parse + deserialize replay + validate_native_services gates, extended to assert both [Hooks] keys read back false (guards the silent true-default trap), negative probes still discriminate; (2) mfa activation over the package with the regenerated loadlist row (settings size updated), T1-T6 + negative controls; (3) loadlist size/sha discipline: row size == actual bytes, lockstep mismatch probe refuses stale pairs.",
+      "evidence": "host-test/ receipts in this directory; see REPORT.md"
+    }
+  ],
+  "non_claims": [
+    "No engine/console execution: all verification is host-only.",
+    "The keys do not make init text-read-free: EngineTick sig-scan resolution (EngineTickResolveMethod default Scan), the diagnostic vtable walk, and the sig-scanner paths are separate scan dependencies owned by other workers (tick-address-validation, seed-table work). Only the SINI:1497-1558 reads are addressed here.",
+    "No claim that PackageIngester/mfa semantics changed; only the settings size row moved.",
+    "Not an acceptance of the writability verdict - it has not landed."
+  ],
+  "rollback": "v2 bytes remain valid and oracle-clean: redeploy worker-engineversion-ini/package-v2 (settings 834B 9570ead3..., loadlist 446B 3afd10ce...) to revert; v3 is a strict append of the [Hooks] section plus the loadlist row resize."
+}

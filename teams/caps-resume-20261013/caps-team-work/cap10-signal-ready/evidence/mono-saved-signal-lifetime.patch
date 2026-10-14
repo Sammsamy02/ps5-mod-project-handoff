@@ -1,0 +1,19 @@
+--- a/mono/mini/mini-posix.c
++++ b/mono/mini/mini-posix.c
+@@ -156,7 +156,7 @@
+ 		/* The hash is only modified during startup, so no need for locking */
+ 		struct sigaction *handler = (struct sigaction*)g_hash_table_lookup (mono_saved_signal_handlers, GINT_TO_POINTER (signo));
+ 		if (remove && handler)
+-			g_hash_table_remove (mono_saved_signal_handlers, GINT_TO_POINTER (signo));
++			g_hash_table_steal (mono_saved_signal_handlers, GINT_TO_POINTER (signo));
+ 		return handler;
+ 	}
+ 	return NULL;
+@@ -415,6 +415,7 @@
+ 		sigaction (signo, &sa, NULL);
+ 	} else {
+ 		g_assert (sigaction (signo, saved_action, NULL) != -1);
++		g_free (saved_action);
+ 	}
+ }
+ 

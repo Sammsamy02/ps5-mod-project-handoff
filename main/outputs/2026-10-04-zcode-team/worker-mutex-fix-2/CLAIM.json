@@ -1,0 +1,36 @@
+{
+  "worker": "worker-mutex-fix-2",
+  "date": "2026-10-04",
+  "task": "Second mutex integration fix round: reproduce, root-cause, and fix WorkerBegin -100 (0xFFFFFF9C / windows error 2) that blocks token retirement after MFR-1, plus MFR-2 (retire kept tokens on every failure path in the mutex fixture).",
+  "inputs_read_only": [
+    "outputs/ps5-mod-bridge/windows-candidate/tests/worker-fixture.c",
+    "outputs/ps5-mod-bridge/windows-candidate/tests/worker-mutex.h",
+    "outputs/ps5-mod-bridge/windows-candidate/owned_runtime.c",
+    "outputs/2026-10-04-zcode-team/worker-4-win-services/",
+    "outputs/2026-10-04-zcode-team/worker-mutex*/"
+  ],
+  "write_scope": "outputs/2026-10-04-zcode-team/worker-mutex-fix-2/",
+  "plan": [
+    "CLAIM.json",
+    "vendor real current windows-candidate sources into harness/ under my output dir",
+    "alarm-guarded reproduction harness (watchdog, no wedge) tracing -100 origin",
+    "root cause analysis of -100 in mb_win_mutex / combined_close_handle path",
+    "diffs: fix -100 cause + MFR-2 all-exit token retirement",
+    "verify fixed harness: clean exit, full owner teardown green, WAIT_ABANDONED semantics",
+    "REPORT.md with trace, root cause, diffs, results, build.py prediction"
+  ],
+  "status": "complete",
+  "evidence_baseline": {
+    "checkpoint": "zcode_worker_mutex.build4_result",
+    "symptom_reported": "host-normal.jsonl phases [1,2,3,4]; first_failure stage 24; native_status 0xFFFFFF9C (-100); windows_error 2; worker result all zeros",
+    "correction": "native_status is 4294967228 = 0xFFFFFFBC = -68, NOT -100 (brief misread hex); reproduced live and traced"
+  },
+  "result_summary": "Root cause: worker-mutex.h:65 expects a same-thread owner re-wait through a second handle to grant (WAIT_OBJECT_0), but mb_win_mutex.c:368-385 (adapter policy) never re-grants an owner re-wait and returns WAIT_TIMEOUT 258, so mb_worker_mutex_prepare fails with -68 BEFORE CreateThread; WorkerBegin's failure handler calls mb_worker_mutex_finish which (pre-MFR-2) returns -72 at its first check, before the retirement loop, leaking the 5 kept tokens; mb_win_mutex_close then BUSYs forever and sdk_driver's cleanup retry loop hangs (phases stop at 4=CLEANUP_PENDING; watchdog kill). windows_error 2 comes from that same failure-path finish(): OpenMutexW on the not-yet-existing abandon name -> ERROR_FILE_NOT_FOUND.",
+  "deliverables": [
+    "worker-mutex.h.diff (fix 1: reorder named-mutex checks so owner re-wait is only tested as WAIT_TIMEOUT and the second handle grants after release; fix 2: MFR-2 all-exit retirement in finish)",
+    "worker-fixture.c.diff (MFR-2: retire kept tokens on every failure exit; bounded worker drain in fixture_fail; finishes on -2/-16/-17/-18 paths; all codes unchanged)",
+    "harness/: vendored real sources, alarm(45)-guarded repro (repro_current: prepare -68 / finish -72 / close BUSY) and fixed verification (repro_fixed 3/3 exit 0: prepare 1, WAIT_ABANDONED+transfer+reacquire, 7/7 retired, mutex close OK, threads close OK)",
+    "harness/lldb2.log + harness/WorkerBegin.build4.disasm.txt: live trace of the real build-4 binary (WorkerBegin returned 0xFFFFFFBC in eax)"
+  ],
+  "prediction": "With both diffs applied (no runtime/build.py changes needed; combined_close_handle already applied), build.py --host-only --entry --clock --workers --sync --init-once --mutex: WorkerBegin 1, WorkerCollect 1 (begin [h,tid,258,259], result [259,cookie,err,0]), stage-40 mutex close OK, host-normal.jsonl reaches phase 5 RETIRED with cleanup {pending:0, retired:1} and all-zero first_failure; test-sdk-driver normal exits 0; no watchdog kill. Import counts unchanged (no new import names; CloseHandle already bound to the combined dispatch)."
+}

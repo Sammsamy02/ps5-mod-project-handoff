@@ -1,0 +1,5 @@
+# Stage 35: do not reserve a CRT namespace with only unavailable shim rows
+
+Base: isolated stage 34. User goal: unchanged DLL route reusable across games, with automatic discovery and precise refusal for unsupported ABI. Current evidence: `VCRUNTIME140.dll` has only unreviewed raw catalog entries, yet `has_module_surface` and `register_mapped_module` treat it as reserved; stage 32 therefore ignores a supplied local CRT DLL.
+
+Test first with a copied synthetic PE renamed VCRUNTIME140.dll: a copied consumer imports `VCRUNTIME140.dll!start_mod`, closure fetches that local provider, attaches it, and calls it. Then dynamically call GetModuleHandleA/GetProcAddress on that attached PE using an explicit validating reader; verify detach clears lookup. Never edit original DLLs. Keep reviewed system builtins (e.g. KERNEL32) reserved, and continue refusing absent/unsupported symbols. Change only namespace classification and resolution path necessary for this case; do not claim Windows CRT compatibility. Full 15 runners, original synthetic E2E, exact-stage-34 patch replay and evidence.

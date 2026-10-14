@@ -1,0 +1,92 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l14-image-admission/units/UnrealInitializer.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-fname-adapter/units/UnrealInitializer.cpp
+@@ -72,6 +72,9 @@
+ // two headers only — never an inline guess.
+ #include "SeedTable.h"
+ #include "SeedValidation.hpp"
++#include "NativeFNameAdapter.hpp"
++#include "NativeFNameChecks.hpp"
++#include "FNameAbiProfile.hpp"
+ #include <string>
+ #include <vector>
+ #endif
+@@ -883,6 +886,27 @@
+             }
+             ~L14TotalAdmissionLog() noexcept {finish();}
+         };
++
++        struct L15BindingLog {
++            L13AdmissionOps& ops;admission::Budget& budget;const char* outcome="refused-or-exception";
++            ~L15BindingLog() noexcept {
++                try {Output::send(STR("[Seeds][L15] FName binding total elapsed={}ms shared-budget={}ms outcome={}\n"),
++                    ops.now_ms()-budget.start_ms,admission::kAdmissionBudgetMs,ensure_str(outcome));}catch(...){}
++            }
++        };
++
++        // Retained public UE4SS Function API still returns a value. Only this
++        // local thunk does that; the game always receives an explicit output.
++        static rc::fnameabi::Ctor g_native_fname_ctor=nullptr;
++        static auto native_fname_thunk(const CharType* text,EFindName mode) -> FName
++        {
++            static_assert(sizeof(FName)==rc::fnameprofile::kOutputBytes);
++            static_assert(alignof(rc::fnameabi::Name)==rc::fnameprofile::kOutputAlignment);
++            static_assert(sizeof(CharType)==2 && sizeof(TCHAR)==2);
++            const auto result=rc::fnameabi::invoke(g_native_fname_ctor,text,static_cast<uint32_t>(mode));
++            if(!result.ok) seed_refused(result.reason);
++            return FName{result.value.index,result.value.number};
++        }
+ 
+         static auto consume_required_slot_seeds(std::chrono::seconds validation_budget) -> void
+         {
+@@ -1004,23 +1028,45 @@
+             // mutate the pool on a miss (NameTypes.hpp:319 vs :315-318).
+             const uint64_t ctor_runtime = base + SeedTableNS::kFNameCtorWchar.label;
+             // Read-path guard: code seeds are CALL-ONLY. The ctor is assigned
+-            // and invoked (instruction fetch, X-permitted); no data read of
+-            // exec-only text exists on this path and any future one must be
+-            // refused (6-span readable registration never covers text).
++            // and invoked only after an owned kernel-copyin prologue match.
++            // No direct CPU data read or protection change of exec-only text
++            // exists on this path (readable spans never cover this text).
+             if (const auto cls = rc_seed::classify_seed_address(ctor_runtime, base); cls != rc_seed::SeedAddressClass::CodeCallOnly)
+             {
+                 seed_refused(fmt::format("slot 2 FName ctor 0x{:X}: seed class {} (expected exec-only call-only); refusing bind", ctor_runtime, rc_seed::seed_class_name(cls)));
+             }
+-            FName::ConstructorInternal.assign_address(reinterpret_cast<void*>(ctor_runtime));
+-            FName ProbeName{STR("ByteProperty"), FNAME_Find};
+-            const uint32_t probe_id = ProbeName.GetComparisonIndex().ToUnstableInt();
++            // Do not CPU-read execute-only pages or fall back to disk bytes.
++            // This dedicated gate only compares OWNED live kernel-copyin bytes.
++            L15BindingLog binding_log{admission_ops,admission_budget};
++            const auto signature=rc::fnameabi::signature(admission_ops,admission_budget,ctor_runtime,
++                rc::fnameprofile::kPrefix,sizeof(rc::fnameprofile::kPrefix));
++            if(!signature.ok) seed_refused(signature.reason);
++            Output::send(STR("[Seeds][L15] FName constructor live prologue matched: 32 owned bytes at 0x{:X}; native ABI out/UTF16/mode; no-length overload\n"),ctor_runtime);
++            CheckStartupWait();
++            if(admission_budget.expired(admission_ops.now_ms()))seed_refused("FName constructor shared admission deadline expired before first call");
++            const auto native_ctor=std::bit_cast<rc::fnameabi::Ctor>(ctor_runtime);
++            const auto probe=rc::fnameabi::invoke(native_ctor,u"ByteProperty",static_cast<uint32_t>(FNAME_Find));
++            if(!probe.ok) seed_refused(probe.reason);
++            const uint32_t probe_id=probe.value.index;
++            const auto roundtrip=rc::fnameabi::roundtrip(admission_ops,admission_budget,admission_session,
++                pool_runtime,words.current_block,words.current_byte_offset,probe.value,u"ByteProperty");
++            if(!roundtrip.ok) {
++                Output::send(STR("[Seeds][L15] FName output refused: pool ToString did not verify ByteProperty; id=0x{:X} number={}\n"),probe.value.index,probe.value.number);
++                seed_refused(roundtrip.reason);
++            }
++            Output::send(STR("[Seeds][L15] FName output verified: pool ToString=ByteProperty, UTF16 input, id=0x{:X}, number=0, native return register ignored\n"),probe_id);
+             if (const auto probe_check = rc_seed::check_probe_id(probe_id, words.byte_property_id); !probe_check.ok)
+             {
+                 FName::ConstructorInternal.reset_address();
+                 seed_refused(fmt::format("slot 2 FName ctor behavioral probe at 0x{:X} (probe id 0x{:X} vs pool id 0x{:X}): {}",
+                                          ctor_runtime, probe_id, words.byte_property_id, probe_check.failure));
+             }
++            CheckStartupWait();
++            if(admission_budget.expired(admission_ops.now_ms()))seed_refused("FName constructor shared admission deadline expired before binding");
++            g_native_fname_ctor=native_ctor;
++            FName::ConstructorInternal.assign_address(&native_fname_thunk);
+             bSeedBoundFNameCtor = true;
++            binding_log.outcome="verified-and-bound";
+             Output::send(STR("[Seeds] slot 2 FName ctor bound at {} and behaviorally verified (ByteProperty probe id == pool id 0x{:X}); detour verification skipped\n"),
+                          reinterpret_cast<void*>(ctor_runtime), words.byte_property_id);
+ 

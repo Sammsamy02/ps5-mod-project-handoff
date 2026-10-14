@@ -1,0 +1,7 @@
+0x1d4680 file0x1d8680 55 push rbp
+0x1d4681 file0x1d8681 4889e5 mov rbp, rsp
+0x1d4684 file0x1d8684 488d05f545cf07 lea rax, [rip + 0x7cf45f5] rip->0x7ec8c80
+0x1d468b file0x1d868b 488907 mov qword ptr [rdi], rax
+0x1d468e file0x1d868e 66c747080001 mov word ptr [rdi + 8], 0x100
+0x1d4694 file0x1d8694 5d pop rbp
+0x1d4695 file0x1d8695 c3 ret 

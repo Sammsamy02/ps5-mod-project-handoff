@@ -1,0 +1,49 @@
+zzdiag v7 loadlist admission sidecar (agent-CX, 2026-10-08)
+===========================================================
+
+MFA admission is SIZE-EXACT: the loadlist row byte count must equal the
+on-console file size byte-for-byte (modforge MFA size-exact admission law;
+agent-I-mfa-audit.md). Last verified console state held zzdiag v2 at 1107
+bytes (RUNBOOK-MOD-MENU-UP.md); zzdiag-v3 (2314) was staged after that --
+PULL THE LIVE loadlist FIRST and change ONLY the zzdiag main.lua size.
+
+v7 file (this directory):
+  main.lua  2487 bytes
+  sha256    6c7624c5114f2cf83ddaec18fbcafa4285bd828e4fb55ef5643a973d044ae4ac
+  (luac -p clean; re-measure after ANY edit: wc -c main.lua ; shasum -a 256 main.lua)
+
+Exact replacement loadlist rows (TAB between fields, verbatim):
+  file	lua_mod	ue4ss/Mods/zzdiag/Scripts/main.lua	2487
+  file	lua_mod	ue4ss/Mods/zzdiag/enabled.txt	0
+
+Reference full loadlist if the live console composition still matches the
+l23+v3 staging (12 rows; staged next to this sidecar as
+loadlist-zzdiag-v7.txt -- only the zzdiag main.lua size differs from v3's
+staging, 2314 -> 2487):
+
+  modforge-loadlist	1
+  title	PPSA33286
+  engine	unreal
+  framework	ue4ss-ps5
+  mod	TownfallItemSpawner	1.0.0
+  file	config	ue4ss/UE4SS-settings.ini	1947
+  file	config	ue4ss/MemberVariableLayout.ini	588
+  file	config	ue4ss/VTableLayout.ini	216
+  file	config	ue4ss/PS5Pad.ini	3718
+  file	lua_mod	ue4ss/Mods/TownfallItemSpawner/Scripts/main.lua	21415
+  file	lua_mod	ue4ss/Mods/TownfallItemSpawner/enabled.txt	0
+  file	lua_mod	ue4ss/Mods/shared/UEHelpers/UEHelpers.lua	9962
+  file	lua_mod	ue4ss/Mods/zzdiag/Scripts/main.lua	2487
+  file	lua_mod	ue4ss/Mods/zzdiag/enabled.txt	0
+
+If the live loadlist has NO zzdiag rows (post-v3 removal per RUNBOOK phase
+5), append the two rows above to the live 10-row file instead. If any OTHER
+row differs from the reference above, keep the LIVE values and touch only
+the two zzdiag rows. Verify after upload:
+  cmp <(curl -s ftp://ps5-host-not-configured.invalid:2121/data/modbridge/roots/PPSA33286/loadlist.txt) loadlist-zzdiag-v7.txt
+
+Trigger in-game: press the key bound to Key.F7 once (same bind zzdiag v2/v3
+used; l22 logs show it fires, key=118). Tokens stream to the UE4SS log via
+the wide-char writer; keep presses single and spaced (rapid re-entry is not
+a tested path). Removal after test: delete BOTH zzdiag rows and the two
+remote zzdiag files (RUNBOOK phase 5 procedure).

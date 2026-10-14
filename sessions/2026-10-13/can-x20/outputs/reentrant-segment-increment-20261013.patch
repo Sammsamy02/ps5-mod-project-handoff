@@ -1,0 +1,243 @@
+--- a/loader/src/guest_teb_lifecycle.h
++++ b/loader/src/guest_teb_lifecycle.h
+@@ -57,6 +57,23 @@
+     void leave() noexcept override {}
+ };
+ 
++// Share one instance across a root PE and its dynamic dependencies. The
++// backend sees one transition for a same-TEB nested guest call. A backend
++// returning false from enter must leave the segment unchanged; a throwing
++// backend is asked to restore it. The wrapper and backend must outlive all
++// balanced entries on every participating thread.
++class ReentrantGuestSegmentSwitch final : public GuestSegmentSwitch
++{
++  public:
++    explicit ReentrantGuestSegmentSwitch(GuestSegmentSwitch& backend)
++        : backend_(backend) {}
++    bool enter(void* guest_teb) override;
++    void leave() noexcept override;
++
++  private:
++    GuestSegmentSwitch& backend_;
++};
++
+ enum class GuestNotifyStatus
+ {
+     Ok,
+--- a/loader/src/guest_teb_lifecycle.cpp
++++ b/loader/src/guest_teb_lifecycle.cpp
+@@ -6,6 +6,7 @@
+ #include <cstring>
+ #include <new>
+ #include <stdexcept>
++#include <unordered_map>
+ #include <utility>
+ 
+ namespace cap13 {
+@@ -29,7 +30,54 @@
+   private:
+     GuestSegmentSwitch& segment_;
+ };
++
++struct SegmentFrame
++{
++    void* teb = nullptr;
++    size_t depth = 0;
++};
++
++thread_local std::unordered_map<const ReentrantGuestSegmentSwitch*,
++                                SegmentFrame> segment_frames;
+ } // namespace
++
++bool ReentrantGuestSegmentSwitch::enter(void* guest_teb)
++{
++    if (!guest_teb) return false;
++    auto frame = segment_frames.find(this);
++    if (frame != segment_frames.end())
++    {
++        if (frame->second.teb != guest_teb || frame->second.depth == SIZE_MAX)
++            return false;
++        ++frame->second.depth;
++        return true;
++    }
++    try
++    {
++        if (!backend_.enter(guest_teb)) return false;
++    }
++    catch (...)
++    {
++        backend_.leave();
++        return false;
++    }
++    try { segment_frames.emplace(this, SegmentFrame{guest_teb, 1}); }
++    catch (...)
++    {
++        backend_.leave();
++        return false;
++    }
++    return true;
++}
++
++void ReentrantGuestSegmentSwitch::leave() noexcept
++{
++    auto frame = segment_frames.find(this);
++    if (frame == segment_frames.end()) return;
++    if (--frame->second.depth) return;
++    segment_frames.erase(frame);
++    backend_.leave();
++}
+ 
+ GuestTebView::GuestTebView(StaticTlsBank& bank)
+     : bank_(bank), owner_(std::this_thread::get_id()) {}
+--- a/loader/tests/teb_lifecycle_test.cpp
++++ b/loader/tests/teb_lifecycle_test.cpp
+@@ -6,6 +6,7 @@
+ #include <cstdio>
+ #include <cstring>
+ #include <mutex>
++#include <stdexcept>
+ #include <string>
+ #include <thread>
+ #include <vector>
+@@ -91,6 +92,27 @@
+     {
+         ++leaves;
+         published_teb = nullptr;
++    }
++};
++
++class StrictSwitch : public cap13::GuestSegmentSwitch
++{
++  public:
++    bool active = false;
++    bool throw_after_enter = false;
++    int enters = 0;
++    int leaves = 0;
++    bool enter(void* teb) override
++    {
++        if (!teb || active) return false;
++        active = true;
++        ++enters;
++        if (throw_after_enter) throw std::runtime_error("after segment entry");
++        return true;
++    }
++    void leave() noexcept override
++    {
++        if (active) { active = false; ++leaves; }
+     }
+ };
+ 
+@@ -105,6 +127,26 @@
+           main_teb.tls_array() == initial.slots.data() &&
+           main_teb.self() == main_teb.address(),
+           "TEB prefix publishes self at 0x30 and static TLS array at 0x58");
++    StrictSwitch strict;
++    cap13::ReentrantGuestSegmentSwitch nested_switch(strict);
++    int another_teb = 0;
++    const bool first_enter = nested_switch.enter(main_teb.address());
++    const bool nested_enter = nested_switch.enter(main_teb.address());
++    const bool wrong_nested = nested_switch.enter(&another_teb);
++    check(first_enter && nested_enter && !wrong_nested &&
++          strict.active && strict.enters == 1,
++          "same-TEB nested entry shares one segment transition");
++    nested_switch.leave();
++    check(strict.active && strict.leaves == 0,
++          "inner leave keeps the outer guest segment active");
++    nested_switch.leave();
++    check(!strict.active && strict.leaves == 1,
++          "outer leave restores the host segment exactly once");
++    strict.throw_after_enter = true;
++    check(!nested_switch.enter(main_teb.address()) && !strict.active &&
++          strict.leaves == 2,
++          "throwing backend restores the host segment before refusal");
++    strict.throw_after_enter = false;
+     void* const* initial_slots = main_teb.tls_array();
+     (void)main_teb.refresh();
+     check(main_teb.tls_array() == initial_slots &&
+--- a/loader/tests/guest_pe_batch_test.cpp
++++ b/loader/tests/guest_pe_batch_test.cpp
+@@ -66,6 +66,24 @@
+     int allow_until = 1000;
+     bool enter(void* teb) override { return ++enters <= allow_until && teb; }
+     void leave() noexcept override {}
++};
++class StrictSwitch final : public cap13::GuestSegmentSwitch
++{
++  public:
++    bool active = false;
++    int enters = 0;
++    int leaves = 0;
++    bool enter(void* teb) override
++    {
++        if (!teb || active) return false;
++        active = true;
++        ++enters;
++        return true;
++    }
++    void leave() noexcept override
++    {
++        if (active) { active = false; ++leaves; }
++    }
+ };
+ struct SourceState
+ {
+@@ -632,6 +650,59 @@
+           retained_dynamic[1].modules.empty() &&
+           shim.resolve("provider.dll", "start_mod", 0) == nullptr,
+           "retained dynamic rollback can be cleaned after backend recovery");
++    retained_dynamic.clear();
++    StrictSwitch strict_backend;
++    cap13::ReentrantGuestSegmentSwitch nested_segment(strict_backend);
++    cap13::GuestPeDirectorySource nested_directory(dynamic_folder,
++                                                   &nested_segment);
++    dynamic_context.fetch = cap13::GuestPeDirectorySource::fetch;
++    dynamic_context.fetch_user = &nested_directory;
++    auto nested_image = fixture;
++    auto* nested_import = reinterpret_cast<cap13::PeImportDescriptor*>(
++        nested_image.data() + 0x600);
++    nested_import->Name = 0x3100;
++    const uint64_t nested_thunk = 0x3120;
++    std::memcpy(nested_image.data() + 0x800, &nested_thunk,
++                sizeof(nested_thunk));
++    std::memset(nested_image.data() + 0x900, 0, 0x80);
++    std::memcpy(nested_image.data() + 0x900, "KERNEL32.dll",
++                sizeof("KERNEL32.dll"));
++    std::memcpy(nested_image.data() + 0x922, "LoadLibraryA",
++                sizeof("LoadLibraryA"));
++    std::memcpy(nested_image.data() + 0x940, "late.dll",
++                sizeof("late.dll"));
++    const uint8_t nested_entry[] = {
++        0x48, 0x83, 0xec, 0x28,
++        0x48, 0x8d, 0x0d, 0x35, 0x21, 0x00, 0x00, // guest image literal RVA 0x3140
++        0x48, 0x8b, 0x05, 0x0e, 0x20, 0x00, 0x00, // LoadLibraryA IAT RVA 0x3020
++        0xff, 0xd0, 0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc0,
++        0x0f, 0xb6, 0xc0, 0x48, 0x83, 0xc4, 0x28, 0xc3
++    };
++    std::memcpy(nested_image.data() + 0x400, nested_entry,
++                sizeof(nested_entry));
++    auto nested_pe = cap13::pe_prepare_guest_with_shim(
++        nested_image.data(), nested_image.size(), shim, options, bank,
++        nested_segment, "/mods/nested.dll");
++    check(nested_pe.ok && nested_pe.module && nested_directory.ready(),
++          "nested LoadLibraryA PE prepares with one shared segment wrapper");
++    if (nested_pe.ok && nested_pe.module)
++    {
++        void* const* prior_tls_slots = teb.tls_array();
++        check(nested_pe.module->process_attach(teb) ==
++                  cap13::GuestNotifyStatus::Ok &&
++              retained_dynamic.size() == 1 && retained_dynamic[0].ok &&
++              strict_backend.enters == 1 && strict_backend.leaves == 1 &&
++              !strict_backend.active && teb.tls_array() == prior_tls_slots &&
++              shim.resolve("late.dll", "start_mod", 0) != nullptr,
++              "DllMain dynamically loads a neighboring PE under one segment transition");
++        check(nested_pe.module->process_detach(teb) ==
++                  cap13::GuestNotifyStatus::Ok &&
++              cap13::pe_detach_guest_batch(retained_dynamic[0], teb) &&
++              strict_backend.enters == 3 && strict_backend.leaves == 3 &&
++              !strict_backend.active &&
++              shim.resolve("late.dll", "start_mod", 0) == nullptr,
++              "nested DLLs detach with balanced segment restoration");
++    }
+     check(read_map.remove(&dynamic_request),
+           "dynamic request range is revoked after use");
+     unlink(dynamic_path.c_str());

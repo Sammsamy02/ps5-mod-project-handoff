@@ -1,0 +1,78 @@
+{
+  "worker": "worker-initonce-review",
+  "date": "2026-10-04",
+  "review_target": "controller InitOnce integration, build 1a6b37b7",
+  "verdict": "PASS",
+  "actionable_mismatches": [],
+  "checks": [
+    {
+      "id": 1,
+      "name": "Opt-in isolation with MB_OWNED_INIT_ONCE=0",
+      "result": "PASS",
+      "evidence": [
+        "owned_runtime.c guard pairs all balanced: 19-21 include, 39-41 session field, 52-54 owner+live flag, 138-140 bind, 153-155 session end, 196-198 session begin, 232-235 owner open, 353-356 owner close; with flag 0 preprocessing yields the prior code exactly",
+        "owned_runtime.c:212 unguarded 'owned.report.init_once_enabled=MB_OWNED_INIT_ONCE;' writes 0 when off; field is new (owned_runtime.h:30, appended after sync_enabled) and JSON emission is guarded at result_report.c:51, so no prior-observable behavior changes with flag off",
+        "owned_runtime.c:274, test_entry_candidate.c:58, test_worker_candidate_failures.c:112 add '+(...?2u:0u)' terms that are +0 when off (value-identical expressions); test checks at test_entry_candidate.c:60 and test_worker_candidate_failures.c:114 compare against the same macro",
+        "owned_runtime.c:24 IMPORT_CAPACITY unchanged (no init-once term); --init-once requires --sync so capacity 64 applies, 46 bound imports fit",
+        "tests/worker-fixture.c guard pairs balanced: 11-13 default, 30-32 include, 48-50 thread_begin, 66-68 thread_complete, 97-100 prepare, 158-160 finish; all pre-existing sync blocks (45-47,53-65,77-81,93-96,105-107,112-114,133-137,155-157) unmodified",
+        "result_report.c:51 emits init_once key only when r->init_once_enabled; all other JSON unchanged",
+        "build.py: every init_once branch conditional (lines 39,55-56,66,78,96,102,108,169-170); owned_profile.h always defines the macro (line 44) so unguarded uses resolve to 0; census entry 'mb_win_init_once_abi':2 (line 209) is consulted only for compiled sources and mb_win_init_once_abi.c is absent from abi_c when flag off"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Pattern fidelity vs sync slice",
+      "result": "PASS",
+      "evidence": [
+        "Session begin order owned_runtime.c:180-197: heap,tls,loader,clock,worker,critical,address_wait,srw,init_once; service_end 153-173 exact reverse (init_once,srw,address_wait,critical,worker,clock,loader,tls,heap)",
+        "Owner open owned_runtime.c:225-234: critical(31),address_wait(32),srw(33),init_once(37); config '{&owned.domain,16}' (233) mirrors srw config shape {domain,capacity} (mb_win_init_once.h:16)",
+        "Owner close owned_runtime.c:345-356: srw(34),address_wait(35),critical(36),init_once(38) - init_once closes AFTER sync owners as the design specifies; dependency-safe: init_once pins only the thread domain (mb_win_init_once.c:84 open, :103 close) and the domain closes later at stage 16 (owned_runtime.c:363)",
+        "Nuance (not a defect): owner-level close is strict LIFO within the sync triple but init_once, though opened last among service owners, closes last rather than first; this matches the stated design 'init_once closes AFTER sync owners' and no dependency runs in either direction between the sibling services",
+        "Bind chain position owned_runtime.c:134-148: init_once bind (139) after all three sync binds, before workers and clock",
+        "Fail-stage uniqueness: fail(37) only at owned_runtime.c:234, fail(38) only at :355; grep across the whole candidate tree finds no other reference to stages 37/38; native-error propagation formula '(io==MB_WIN_INIT_ONCE_NATIVE_ERROR&&native?native:(int)io)' mirrors sync stages 34-36",
+        "Begin-session failure unwinds via service_end (owned_runtime.c:197) mirroring sync (192-194); a failed begin leaves the session inactive (mb_win_init_once_abi.c:12-18 sets active only on success) so the active-guarded end at owned_runtime.c:154 is skipped correctly"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Fixture semantics (tests/worker-initonce.h)",
+      "result": "PASS",
+      "evidence": [
+        "Only documented behavior asserted: pending=1 grant on begin (lines 31,47), complete stores context with CHECK_ONLY read-back (32,34,54-55,62), CHECK_ONLY on never-begun fails with GetLastError 997 (37), unknown flag bit 0x8 fails with 87 (39); header comment lines 3-10 state exactly this contract",
+        "Duplicate-complete (line 35) asserts failure only - 'if(InitOnceComplete(...))return -48' - with NO GetLastError pin; the only pinned codes are 997 and 87, both documented (also in mb_win_init_once.h:26,48,57-58)",
+        "LastError contract preserved: adapter saves/restores last_error on success in begin/complete (mb_win_init_once.c:119/127/134/147/153/166/170 and 175+); thread_begin hook (worker-fixture.c:48) sits in the SetLastError(44)->GetLastError read(61) window but only makes successful calls, same convention as the sync calls already in that window; thread_complete (67) runs after the worker_error read (61); finish (159) runs AFTER the -18 GetLastError check (154) and after sync_finish (156) - exact reverse of prepare order (sync_prepare 94 -> initonce_prepare 98)",
+        "Observation (non-defect, unreachable in asserted profiles): CreateThread-failure path (worker-fixture.c:104-108) calls sync_finish but not initonce_finish. Harmless: if the thread never ran, once_b was never begun (prepare's CHECK_ONLY passes create=0 per mb_win_init_once.c:121), once_a's sidecar is COMPLETE and its re-zeroed storage (worker-initonce.h:41) is never touched again, so owner close (requires all sidecars COMPLETE/quiet, mb_win_init_once.c:91-92) still succeeds; mirrors the sync slice which also skips finish in mb_worker_fixture_fail paths"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Builder invariants (build.py)",
+      "result": "PASS",
+      "evidence": [
+        "Census: 'mb_win_init_once_abi':2 (build.py:209) matches exactly two ms_abi/WIN64 definitions in mb_win_init_once_abi.c:27-28 (begin_initialize, complete_initialize) and the def file's two exports InitOnceBeginInitialize/InitOnceComplete (tests/worker-initonce-kernel.def:3-4); bind matches the same two names (mb_win_init_once_abi.c:35-36)",
+        "Receipt formulas: consumer 46 = 18(clock)+5(workers)+21(sync)+2(init-once), helper 10 (owned_runtime.c:274, build.py:78 actual_pe_imports:2 = def count); sync-only 44/10 confirmed by the 6d295f56 group's final record in the same console log",
+        "Guard chain mirrors sync: '--init-once requires --sync' (build.py:39) chains onto '--sync requires --workers' (38) and '--workers requires --entry' (37); fixture compile receives -DMB_OWNED_INIT_ONCE (102); initonce.lib built from the def (96) and linked into the consumer only (108); new headers and def added to the hashed source list (66)"
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Evidence cross-check (console result + receipt, build 1a6b37b7)",
+      "result": "PASS",
+      "evidence": [
+        "Result copy sha256 4f68182b50c4193ea165db207ec92fa8b1448adb35883b3438a5f397ebbe4287 matches receipt line 24 and the file on disk",
+        "Note on record count: the copy is an accumulated console log with 16 records (4 builds x 4); the 1a6b37b7 slice is the final 4 records with phases [1,2,3,5] matching build.py:146's normal-entry expectation; receipt final_record matches the last record exactly; the briefing's '4 records' describes this build's slice, not the whole file - characterization nuance, not a defect; receipt itself preserves prior history ('history_preserved')",
+        "Final record consistent with fixture assertions and receipt: init_once {enabled:1}, synchronization {enabled:1}, counts 46/10, worker 2/2 with begin [5,1,258,259] and result [0x81234567, 0x1122334455667788, 0xe17395ab, 0], dll_calls 3/3, results [86,93], cleanup retired, first_failure all zeros, delivery file_errors 0 / stdout error 32 (EPIPE, console has no stdout reader; file delivery is the evidence channel and receipt labels it 'stdout_error_delivery_only')",
+        "Phase-1 record lacks feature keys (init_once/synchronization/clock) because it snapshots the zeroed report before mb_owned_dll_open sets the enabled flags; identical behavior in the 6d295f56 sync build, so this is established phase-1 semantics, not an init-once regression",
+        "Scope: receipt line 59 explicitly limits to 'standalone owned SDK ELF diagnostic ... not UE4SS/game integration, not arbitrary DLL support'; game_files_modified false, game_launched false; correction_note documents superseded build c49108fe as a distinct implementation (no unchanged-diagnostic repeat)"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Promotion fidelity (windows-services vs worker-4 originals)",
+      "result": "PASS",
+      "evidence": [
+        "diff: mb_win_init_once.h, mb_win_init_once.c, mb_win_init_once_abi.c byte-identical; mb_win_init_once_abi.h differs only at line 6 '#include \"pe_module.h\"' -> '#include \"../windows-execution/pe_module.h\"' - exactly the expected single change"
+      ]
+    }
+  ]
+}

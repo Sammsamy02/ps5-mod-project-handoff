@@ -1,0 +1,86 @@
+{
+  "worker": "worker-probe-pairing-prep",
+  "date": "2026-10-05",
+  "scope": "PAIRED staging design for the IGW row-0 exec-write probe (igd1-e030a09eb4d1) + fc1pool Blocks[0]-capture probe (fc1pool1-78508a2e2940) in ONE future user-coordinated probe window",
+  "proposal_only": true,
+  "console_contact": false,
+  "launches": 0,
+  "ini_writes": 0,
+  "local_only": true,
+  "claims": [
+    {
+      "id": "PPP-1",
+      "claim": "The fc1pool probe's artifacts, ini entry and output channel are fully identified: modbridge_fc1pool.prx (22733 B, sha256 d2431bf842fdba85321a6a08b2c1b6fdc9426c971fbc7cddfcd2b14fb49f0d96, build fc1pool1-78508a2e2940) at console path /data/plugins/modbridge_fc1pool.prx, canonical ini entry 2 mode 2 anchored to the xwp line; own single-writer channel /data/modbridge-fc1pool-facts.jsonl (envelope marker modbridge.ingamefacts, build_id fc1pool1-78508a2e2940) plus exactly ONE 'FC1POOL: build=fc1pool1-78508a2e2940 verdict=...' line per launch in /data/plugins/UE4SS.log; the Blocks[0] capture fields are fields.blocks0 (hex u64), fields.current_block, fields.id_none, fields.id_none_is_zero_expected, fields.id_byteproperty, fields.byteprop_id_for_find_crosscheck in the seq-4 fc1pool_result record (driver.c:583 ig_kv_hex blocks0).",
+      "evidence": [
+        "outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/REPORT.md",
+        "outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/STAGE-PLAN.md",
+        "outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/build-receipt.json",
+        "outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/src/fc1pool_driver.c",
+        "outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/src/record_sink.c",
+        "outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/determinism/run1/generated/ingame_config.h"
+      ],
+      "verification": "local artifact hashes re-verified on disk this session; readback constants 67848 B / body 7e2dce27 recomputed with the exact console_batch.py sht_prefix_end law and MATCH the pinned values; export entry is /data/plugins/modbridge_fc1pool.prx = 2"
+    },
+    {
+      "id": "PPP-2",
+      "claim": "One ini can enable BOTH probes; recommended target is a NEW 3-entry probe-only layout (Option P): header + xwp = 2 + fc1pool = 2 + path_test = 2, 149 B, sha256 d6770f44f5908e9188e981175b4797917f524c0404a8c75cb92f069312084598 (host-computed TARGET). It matches the window's probes-only/composition-excluded purpose, needs 2 uploads + 3 presence proofs, and keeps the path_test traversal terminator. It is NOT law-ready: verify_final_ini_layout.py correctly rejects it today; adoption requires the layout owner's NEW pinned-bytes decision under a NEW id (ninth-slot-adoption precedent). FALLBACK: the preserved 9-entry canonical fd9c7393 (440 B, FINAL-INI-OK) already enables both probes at entries 1-2 and is law-ready, but is NOT probes-only (composition runs at entry 3) and requires staging 4 files missing on console since launch-9 (fc1pool, qh_driver, observer, carrier) plus the xwp rebuild - 5 uploads, 8 presence proofs, ridealong thread noise.",
+      "evidence": [
+        "outputs/2026-10-04-zcode-team/worker-igw-row0-rebuild/STAGING-PROPOSAL.md",
+        "outputs/2026-10-04-zcode-team/worker-final-ini-layout/FINAL-INI-LAYOUT.md",
+        "outputs/2026-10-04-zcode-team/worker-final-ini-layout/ploader.ini.canonical",
+        "README-RETURN.md section 1 (current console ini 1216aab6 2-plugin shortest)",
+        "outputs/2026-10-04-zcode-controller/launch9-evidence/ (launch-9 incident: fc1pool/qh_driver/observer/carrier 0B not injected)"
+      ],
+      "verification": "both byte-strings computed locally this session; canonical re-verified byte-identical on disk (sha fd9c7393); no ini written anywhere"
+    },
+    {
+      "id": "PPP-3",
+      "claim": "Both probes run safely in ONE game launch. Interference analysis found NO coupling: ploader injects sequentially in file order so xwp's one-shot module_start (mprotect 0x7878000 1 page 0x4->0x5, read test, ALWAYS restore to 0x4, post_restore re-proof) fully completes before fc1pool's module_start begins; the xwp page [0x7878000,+0x1000) overlaps zero fc1pool read targets (GUA 0x97ba110, pool 0x9765ec0, heap block/entry windows); the flip is a permission WIDENING (X->RX adds R) so even a failed restore cannot block a read; neither probe reads the other's outputs; channels are disjoint; UE4SS.log writers are append-only and strictly time-ordered (path_test precedent class); worst case ~8 s (fc1pool grace) + ~1.6 s (xwp settle) inside the 25 s per-plugin cap and 120 s injector timeout. Ordering contract: xwp line BEFORE fc1pool line (canonical positions 1-2 preserved in both options). No two-launch split is needed; a two-launch spec exists only as reconcile-first contingency, never as a default.",
+      "evidence": [
+        "outputs/2026-10-04-zcode-team/worker-igw-row0-rebuild/src/exec_write_probe.c",
+        "outputs/2026-10-04-zcode-team/worker-igw-row0-rebuild/src/exec_write_probe.h (XWP_PROT_R=1 W=2 X=4)",
+        "outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/src/fc1pool_driver.c",
+        "outputs/2026-10-04-zcode-team/worker-fc1-validator-probe/src/module_entry.c",
+        "outputs/2026-10-04-zcode-team/worker-final-ini-layout/FINAL-INI-LAYOUT.md section 2 (pinned parser facts)"
+      ],
+      "verification": "source-level analysis only; the probes' one-shot synchronous module_start contracts and import surfaces are host-proven by their build gates and launch-9/igf lineage; actual co-resident execution remains target-unproven until the window runs"
+    },
+    {
+      "id": "PPP-4",
+      "claim": "The combined window yields two independent evidence classes: (1) the IGW row-0 verdict W_WORKS or W_FAILS_R_WORKS from the seq-5 attempt record rc (outcome 8 vs 7), unlocking the walkguard fold decision or the D-1-only route per the L11 matrix; (2) the FIRST REAL Blocks[0] u64 (fields.blocks0) resolving the candidate/synthetic labeling (worker-blocks0-provenance: NO CAPTURE EXISTS) and calibrating validator v4's R1 invariant (none_id>>16 <= current_block), R2 either-class span admission, and R3 None-anchor content identity before launch-12. Exact expected jsonl lines for both probes (19-record xwp chain, 6-record fc1pool chain) are pinned in EVIDENCE-CONTRACT.md; xwp grammar is corroborated by launch-9's real 15-record capture.",
+      "evidence": [
+        "outputs/2026-10-04-zcode-team/worker-probe-pairing-prep/EVIDENCE-CONTRACT.md",
+        "outputs/2026-10-04-zcode-controller/launch9-evidence/xwp-jsonl-final.jsonl",
+        "outputs/2026-10-04-zcode-team/worker-blocks0-provenance/PROVENANCE.md",
+        "outputs/2026-10-04-zcode-team/worker-fname-validator-v4/VALIDATOR-V4.md",
+        "outputs/2026-10-04-zcode-team/worker-launch11-integration-matrix/LAUNCH11-MATRIX.md"
+      ],
+      "verification": "record grammars read from the probes' pinned record_sink.c/driver sources; no outcome predicted; all verdict classes have pre-agreed consequences"
+    },
+    {
+      "id": "PPP-5",
+      "claim": "HAZARD FOUND: console_batch.py's XWP_ARMED constant still pins the LAUNCH-9 build (worker-writability-probe-build, igd1-6ebab07f2111, fself 48949316..., readback body daea2ff4). A batch flow staging 'xwp' as-is would upload the OLD bytes under the same console filename and self-verify them PASS against its own constants - a consistent-but-wrong-build half-state that would reproduce launch-9's all-skip evidence instead of the row-0 verdict. The runbook requires either a batch-tool-owner constants update under NEW ids, or explicit controller staging from worker-igw-row0-rebuild/modbridge_exec_write_probe_armed.prx (e1541af6...), with the on-console build identity checked against the seq-1 entry record's build_id.",
+      "evidence": [
+        "outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py (XWP_ARMED dict, lines ~247-272)",
+        "outputs/2026-10-04-zcode-team/worker-igw-row0-rebuild/BINARY-DELTA.md",
+        "outputs/2026-10-04-zcode-team/worker-igw-row0-rebuild/build-receipt-armed.json"
+      ],
+      "verification": "constant read directly from the batch tool source this session; rebuild fself hash re-verified on disk"
+    }
+  ],
+  "non_claims": [
+    "No console contact, no staging, no launch, no ini write anywhere by this worker.",
+    "No claim that either probe has ever executed on target in this configuration (xwp rebuild: never executed; fc1pool: never injected).",
+    "No prediction of W_WORKS vs W_FAILS_R_WORKS or of any Blocks[0] value; every refusal/verdict class is specified, none is promised.",
+    "No claim that the 149 B Option P layout is lawful today - it is a PIN PROPOSAL requiring the layout owner's new pinned-bytes decision.",
+    "No claim that Option A stages probes only - it provably includes the composition at entry 3 and four currently-missing files.",
+    "No re-rating or replay of launch-9 evidence; the launch-9 all-skip xwp capture and fc1pool absence stand unchanged.",
+    "No quality score and no completion claim of any kind."
+  ],
+  "deliverables": [
+    "CLAIM.json",
+    "PAIRED-STAGING.md",
+    "EVIDENCE-CONTRACT.md",
+    "REPORT.md"
+  ]
+}

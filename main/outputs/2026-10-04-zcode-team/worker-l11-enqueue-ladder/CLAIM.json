@@ -1,0 +1,65 @@
+{
+  "worker": "worker-l11-enqueue-ladder",
+  "date": "2026-10-05",
+  "attempt": "restart (prior attempt lost mid-flight; this dir's partial compile-gate artifacts verified and reused)",
+  "mission": "launch-11 enqueue-ladder blocker (RUNBOOK worker-l11-marshal-integration §5.1 item 1): in W_FAILS_R_WORKS the default ExecuteInGameThread throws before enqueueing, bypassing the armed FuncPtr marshal (the mod's F7 closure is lost)",
+  "scope": "LOCAL ONLY: this worker dir + owned staging; launch10 artifacts read-only; no console contact, no composition, no packaging",
+  "claims": {
+    "throw_site_trace": {
+      "status": "DELIVERED",
+      "base_source": "outputs/2026-10-04-zcode-team/worker-l11-marshal-integration/staging/luamod-l11-marshal-consumer/LuaMod.cpp",
+      "base_sha256": "04c9d91664dd82c7831cfc7eff79b6c20c62df9e6fd6eced60d419310966ad9f",
+      "binding_registered_at": "LuaMod.cpp:4973",
+      "default_method": "EngineTick (SettingsManager.hpp:50 DefaultExecuteInGameThreadMethod)",
+      "trap": "address IS assigned in W_FAILS_R_WORKS (vtable fallback) so the PROSPERO ladder at LuaMod.cpp:5002-5021 (marshal fallback 5010-5012) is skipped; the else branch calls ensure_engine_tick_hooked at LuaMod.cpp:5024",
+      "throw_site": "LuaMod.cpp:4807 — throw std::runtime_error(\"EngineTick callback registration failed\") inside LuaMod::ensure_engine_tick_hooked (defined at 4797)",
+      "loss_mechanics": "the throw exits the binding before the mutex (5069) and before every enqueue (5083/5087/5095/5099); closure lost; armed marshal never consulted",
+      "runtime_surface": "LuaMadeSimple::process_lua_function's TRY (LuaMadeSimple.hpp:797-810) converts the throw to a Lua error at the mod's call site",
+      "reproduced_by": "host-test/receipts/host-test-control.stdout [S-CTRL-WFAILS]/[S-CTRL-ARMED]"
+    },
+    "staged_fix": {
+      "status": "DELIVERED",
+      "diff": "diffs/l11-enqueue-ladder.diff",
+      "diff_sha256": "3b19068a194ec82dd58fecac1a1d53051a05aa2965558d706db7de68bc3c4a04",
+      "staged_source": "staging/luamod-l11-el-ladder/LuaMod.cpp",
+      "staged_sha256": "f50976ae1e2626b08e68a9a8d20022c6dc2b4b2cfc5e3beb5e759f8713ac0726",
+      "patch_roundtrip": "work/patchcheck/LuaMod.cpp == staging (verified byte-identical)",
+      "semantics": "marshal-first when armed; lazy detour arm moved AFTER the enqueue inside the real port TRY; loud LogLevel::Error stall log when the pump is not registered; marshal-selected paths arm nothing",
+      "untouched": "ensure_* throw-site bodies, marshal_state/queues/drain/availability regions (hash-proven identical across worlds), all other files, the WithDelay family ladders (explicitly out of scope)"
+    },
+    "compile_gate": {
+      "status": "PASS",
+      "route": "frozen argv pattern, prospero-clang++ -c, LLVM_CONFIG=outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin/llvm-config",
+      "frozen_argv": "work/argv-el-ladder.json (fixed) / work/argv-control-el.json (control)",
+      "objects": {
+        "control": "work/control-el-luamod.o sha256 854a476bdd4f998581f206af9faaa10b64eba8814fc590350c9565dce47f9565 (== marshal-integration consumer object: frozen-argv route path-independent)",
+        "fixed": "work/el-ladder-luamod.o sha256 8593884ea825d523d7d0f69636283488cd8553762eca329b36b35d7fe31f858b"
+      },
+      "warnings": "23/23, warn-kind parity (receipts/gate-el-ladder.warn-kinds.txt == receipts/gate-control-el.warn-kinds.txt)",
+      "errors": "0/0 (receipts/gate-el-ladder.stdout, gate-control-el.stdout empty; stderr warnings only)"
+    },
+    "host_integration_test": {
+      "status": "PASS",
+      "receipt": "host-test/PASS-receipt.txt",
+      "worlds": {
+        "control_unpatched": "14/14 checks, exit 0 — default call THROWS the traced error BEFORE any enqueue; both queues empty; armed-marshal bypass reproduced (test detects the bug)",
+        "fixed_staged": "23/23 checks, exit 0 — armed world: enqueued onto marshal queue + drained by the marshal pump, no detour attempted, zero error logs; W_FAILS world: enqueued + loud stall log + refused-registration log, closure stays queued, never executed, never discarded; working world: enqueued + armed + drained (no regression); address-unavailable ladder fallback intact in both lineages"
+      },
+      "fidelity": "REAL staged binding/queues/drain/throw-sites/TRY/Lua5.4/LuaMadeSimple; REAL default API (single-arg ExecuteInGameThread, default method EngineTick, main.lua:695 shape); declared host-only shims: Unreal::Hook refusal knob, UE4SSRuntime availability knob, Output capture, FName, single-threaded luauser lock no-ops",
+      "regions_guards": "host-test/regions/regions.json — fix markers only in fixed; ensure_hooks/marshal_state/process_simple_actions/availability/hook_state byte-identical across worlds; bindings differ"
+    }
+  },
+  "not_claimed": [
+    "in-game/console acceptance of any kind (no PS5 run was performed or simulated)",
+    "the WithDelay family ladders (WithDelay, RetriggerableExecuteInGameThreadWithDelay, ExecuteInGameThreadAfterFrames, LoopInGameThreadWithDelay, LoopInGameThreadAfterFrames — base 5108-5705): still arm-before-enqueue in the write-refused world; own distinct-ID revision required (RUNBOOK §5.1 item 1 scope)",
+    "R3-world bootability: the LoadMap eager-registration blocker (RUNBOOK §5.1 item 2) is unowned here and unchanged",
+    "F-1 carrier rate calibration (still OPEN, unchanged)",
+    "composition/packaging/controller steps (controller-owned; this revision is proposal-only until composed)"
+  ],
+  "receipts": {
+    "compile_gate": ["receipts/gate-el-ladder.stdout", "receipts/gate-el-ladder.stderr", "receipts/gate-el-ladder.warn-kinds.txt", "receipts/gate-control-el.stdout", "receipts/gate-control-el.stderr", "receipts/gate-control-el.warn-kinds.txt", "receipts/undefined-el-ladder.txt", "receipts/undefined-control-el.txt", "receipts/nm-el-ladder-all.txt"],
+    "frozen_argv": ["work/argv-el-ladder.json", "work/argv-control-el.json"],
+    "host_test": ["host-test/PASS-receipt.txt", "host-test/receipts/host-test-control.stdout", "host-test/receipts/host-test-fixed.stdout", "host-test/regions/regions.json", "host-test/build_host_test.sh", "host-test/run_host_test.sh"],
+    "analysis": ["ANALYSIS.md", "DIFF.md", "REPORT.md"]
+  }
+}

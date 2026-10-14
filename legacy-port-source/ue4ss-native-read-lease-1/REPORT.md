@@ -1,0 +1,9 @@
+# Owned mapped-image read lease — frozen local evidence
+
+The additive ReadLease pins already registered readable ranges under the authoritative owned-memory service mutex through synchronous Rust reads. Coverage is checked and split on actual uniform protection/registration boundaries. It performs no source registration or discovery. OwnedMappedImageCaller retains the actual ModuleSnapshot owner, derives wire flags from registry permissions, and checks exact supplied coverage plus bounded metadata and code/data/pointer-slot admission. These checks establish no engine identity, resolver semantics or runtime ABI.
+
+build-1 records passing host ASan/UBSan ownership, refusal and blocked protect/free/write controls, plus actual SDK provider/consumer compilation. caller-2 records passing actual ModuleSnapshot geometry/permission/role controls under host ASan/UBSan and an SDK caller compile. There is no standalone native link or target execution claim for this new lease. Caller-1 remains retained as earlier build evidence.
+
+The lease is synchronous, noncopyable/nonmovable and same-thread; the service mutex is nonrecursive. No other owned-service call or reentrant logging callback may run before the caller is destroyed. Snapshot ownership outlives lease unlock, including constructor failure. Direct writes, external protection changes and external unmapping remain prohibited by the supplied-owner contract; this service cannot synchronize them.
+
+Independent review found no actionable lifetime/deadlock/coverage issue for that contract. Source/test/header hashes, exact build commands, recorded outputs, compiled object hashes and the review are pinned in manifest.json. Existing allocator and MemAccessor interfaces remain unchanged; the new ReadLease types/symbols are additive. No provider source was changed while freezing these records.

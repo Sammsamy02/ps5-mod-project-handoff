@@ -1,0 +1,276 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch11-combined/units/UnrealInitializer.cpp	2026-10-05 21:07:28
++++ staging/UnrealInitializer.cpp	2026-10-05 21:23:53
+@@ -691,10 +691,25 @@
+         // Listing-gap probe (v5.2, session 934 evidence): the mincore raw
+         // syscall was FATAL in-game (0xa002030a SYSTEM_ILLEGAL_FUNCTION_CALL
+         // — the sandboxed game process permits only NID-resolved calls) and
+-        // bridge_kernel_range_verdict was REMOVED. The replacement is the
+-        // write-copyin probe (bridge_kernel_write_copyin_probe, NID-routed
+-        // fwrite — worker-copyin-unit); until it is integrated this block
+-        // resolves the gap as Unavailable and refuses honestly.
++        // bridge_kernel_range_verdict was REMOVED. This is the replacement,
++        // now INTEGRATED (worker-copyin-unit): the SOLE listing-gap oracle.
++        // Every kernel touch is NID-resolved (POSIX fd wrappers open/write/
++        // fstat/read/close/unlink — all in the composed module's existing
++        // 196-import contract; no raw syscall anywhere). The probe writes
++        // the probed range into a bridge-owned real file: refused (0) means
++        // the kernel refuses that source (EFAULT class — never "unmapped",
++        // address-class-unknown); readable (1) means the FULL range was
++        // already transferred — authorization AND execution in one event;
++        // unavailable (-1) is an oracle failure (open/policy/partial/
++        // vacuous-sink) and admits nothing. Tags: pool_copyin_probe_fresh
++        // (1/0/2/3) + raw rc/errno/sink captures.
++        extern "C" int bridge_kernel_write_copyin_probe(uint64_t addr, uint64_t len);
++        // Sink-capture lookup BY PROBED ADDRESS (R-4 sink-fed validation):
++        // 1 + pointer/len when a READABLE probe captured that range's first
++        // page; 0 on a miss. On a copyin-admitted boot EVERY downstream pool
++        // read consumes capture bytes — a capture miss REFUSES LOUDLY and
++        // never falls back to a direct block read.
++        extern "C" int bridge_write_copyin_capture(uint64_t addr, const uint8_t** out_bytes, uint32_t* out_len);
+ 
+         // Set only after the ctor was seed-bound AND behaviorally verified.
+         // While true, the detour-based VerifyFNameConstructor pass must not arm
+@@ -985,6 +1000,12 @@
+                 if (bridge_capture_envelope(&env) && env > capture_envelope) { capture_envelope = env; }
+             }
+             PoolWords words{};
++            // v5.2 (worker-copyin-unit): set at loop exit when the admission
++            // was carried by the copyin owned-read gap path rather than span
++            // membership — switches the anchor AND the entry validation to
++            // SINK-FED bytes (R-4) and the provenance line in the success
++            // message.
++            bool pool_admitted_via_copyin = false;
+             const auto pool_wait_start = std::chrono::steady_clock::now();
+             for (;;)
+             {
+@@ -997,48 +1018,52 @@
+                 // non-image). The already-read words feed the invariant; no
+                 // extra reads.
+                 const auto shape = rc_seed::check_pool_shape(words.current_block, words.none_id, words.blocks0, published, published_count, capture_envelope);
+-                // v5 listing-gap resolution: when the LISTING cannot decide
+-                // (CaptureTruncated: no decoded record covers Blocks[0] —
+-                // above the envelope; NotCovered: below the envelope but in
+-                // no published span), consult the fresh RANGE verdict over
+-                // the first block's full capacity (the read range admission
+-                // plus the entry-0 anchor and block-0 entry validation need;
+-                // later blocks get their own probe if this path ever
+-                // authorizes reads). resolve_listing_gap holds the evidence
+-                // contract: mapped-ness alone NEVER authorizes a read, so
+-                // with no readable-coverage source for listing-absent
+-                // addresses this resolution is expected to REFUSE today —
+-                // with a strictly better-informed note (mapped-but-unreadable
+-                // vs snapshot-truncated) and fresh durable evidence
+-                // (pool_range_verdict_fresh). Structural checks gate
+-                // everything; the content anchors stay downstream either way.
+-                // The probe fires ONCE per boot on the first listing-gap miss
+-                // (the mapping is static; re-probing every retry would
+-                // multiply fresh-evidence events without new information).
++                // v5.2 listing-gap resolution (worker-copyin-unit): the
++                // write-copyin probe is the SOLE listing-gap oracle (the
++                // mincore range verdict is gone — edits 13b/14; no Mapped
++                // gating exists or is needed: the probe is inherently
++                // self-gating, a refused or unmapped range cannot classify
++                // readable). Fired ONCE per boot on the first listing-gap
++                // miss with a RESCUABLE class (CaptureTruncated /
++                // NotCovered — structural classes stay unrescuable; the
++                // mapping is static, re-probing every retry would multiply
++                // fresh-evidence events without new information).
++                // resolve_listing_gap holds the evidence contract: admission
++                // rests on the copyin classification ALONE (Readable means
++                // the full range was ALREADY transferred — authorization AND
++                // execution), and Refused never reads as "unmapped"
++                // (address-class-unknown). Structural checks gate everything.
+                 const char* gap_note = nullptr;
+                 static bool gap_probed_this_boot = false;
+                 static const char* gap_note_cached = nullptr;
++                // v5.2: copyin owned-read gap admission, address-pinned — it
++                // counts only while words.blocks0 stays the probed value.
++                static bool gap_admitted_via_copyin = false;
++                static uint64_t gap_admitted_blocks0 = 0;
+                 if (!shape.ok)
+                 {
+                     if (!gap_probed_this_boot)
+                     {
+-                        const auto resolution = rc_seed::resolve_listing_gap(
+-                            shape,
+-                            rc_seed::RangeMappedVerdict::Unavailable,
+-                            rc_seed::ReadableCoverageSource::None);
++                        const auto copyin_class = static_cast<rc_seed::CopyinProbeClass>(
++                            bridge_kernel_write_copyin_probe(words.blocks0, rc_seed::kFNameBlockCapacityBytes));
++                        const auto resolution = rc_seed::resolve_listing_gap(shape, copyin_class);
+                         gap_probed_this_boot = true;
+                         gap_note_cached = resolution.note;
++                        gap_admitted_via_copyin = resolution.ok;
++                        gap_admitted_blocks0 = words.blocks0;
+                     }
+                     gap_note = gap_note_cached;
+                 }
+-                if (shape.ok && words.none_id != 0 && words.byte_property_id != 0)
++                const bool pool_admitted = (shape.ok || (gap_admitted_via_copyin && words.blocks0 == gap_admitted_blocks0));
++                if (pool_admitted && words.none_id != 0 && words.byte_property_id != 0)
+                 {
++                    pool_admitted_via_copyin = !shape.ok; // shape ok ⇒ span membership carried it
+                     break;
+                 }
+                 if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - pool_wait_start).count() > validation_budget.count())
+                 {
+                     seed_refused(shape.ok ? fmt::format("FName pool at 0x{:X}: interned ids still zero after the wait budget (pool never initialized)", pool_runtime)
+-                                          : fmt::format("FName pool at 0x{:X}: {} (observed CurrentBlock {}, Blocks[0] 0x{:X}; published readable spans {}; range-verdict resolution: {})",
++                                          : fmt::format("FName pool at 0x{:X}: {} (observed CurrentBlock {}, Blocks[0] 0x{:X}; published readable spans {}; copyin-probe resolution: {})",
+                                                        pool_runtime, shape.failure, words.current_block, words.blocks0, published_count,
+                                                        gap_note ? gap_note : "not consulted (failure class not rescuable)"));
+                 }
+@@ -1048,24 +1073,128 @@
+             // ---- v4 entry-0 content anchor (FNAME-POOL-RE.md R3) ----
+             // With image residency no longer a refusal, wrong-base/wrong-pool
+             // protection is CONTENT: entry 0 of Blocks[0] is ANSI 'None'
+-            // (header u16 with h>>6 == 4, h&1 == 0, payload "None"). Bounded
+-            // 6-byte read through the same volatile byte discipline; the
++            // (header u16 with h>>6 == 4, h&1 == 0, payload "None"). Terminal
++            // on mismatch (content identity, same class as the entry matches
++            // below — never retried).
++            // v5.2 (worker-copyin-unit): SINK-FED VALIDATION (R-4 + the
++            // user's standing rule — copy success must not silently
++            // authorize later unsupported direct reads). On a
++            // copyin-admitted boot EVERY entry byte comparison below reads
++            // SINK-CAPTURED bytes via bridge_write_copyin_capture: the
++            // anchor from the Blocks[0] capture, and each validated entry
++            // from its OWN block's capture (a non-zero entry block is
++            // probed once — bounded: only the blocks referenced by the two
++            // validated ids + block 0). A capture miss or a byte range
++            // beyond a capture's first page REFUSES LOUDLY — never a
++            // fallback to a direct block read. The span-membership path
++            // keeps the direct volatile byte reads exactly as before (the
+             // address is ownership-covered by the published-span membership
+-            // check that just passed. Terminal on mismatch (content identity,
+-            // same class as the entry matches below — never retried).
++            // check that just passed).
+             {
+-                const auto anchor_bytes = read_bytes_at(words.blocks0, 2 + rc_seed::kNoneString.size());
+-                if (const auto anchor = rc_seed::check_none_anchor(anchor_bytes.data(), anchor_bytes.size()); !anchor.ok)
++                rc_seed::Check anchor{false, "anchor bytes unavailable"};
++                if (pool_admitted_via_copyin)
+                 {
++                    const uint8_t* capture = nullptr;
++                    uint32_t capture_len = 0;
++                    if (bridge_write_copyin_capture(words.blocks0, &capture, &capture_len) == 1 &&
++                        capture != nullptr && capture_len >= 2 + rc_seed::kNoneString.size())
++                    {
++                        anchor = rc_seed::check_none_anchor(capture, capture_len);
++                    }
++                    else
++                    {
++                        anchor = rc_seed::Check{false, "copyin sink capture unavailable or short for the 'None' anchor"};
++                    }
++                }
++                else
++                {
++                    const auto anchor_bytes = read_bytes_at(words.blocks0, 2 + rc_seed::kNoneString.size());
++                    anchor = rc_seed::check_none_anchor(anchor_bytes.data(), anchor_bytes.size());
++                }
++                if (!anchor.ok)
++                {
+                     seed_refused(fmt::format("FName pool at 0x{:X}: Blocks[0] 0x{:X}: {}", pool_runtime, words.blocks0, anchor.failure));
+                 }
+             }
+ 
++            // v5.2 sink-fed entry bytes for copyin-admitted boots (see the
++            // anchor note above). A non-zero entry id's block address comes
++            // from the pool pointer array, read through the SAME volatile
++            // byte-wise discipline as read_pool_words: the pool STRUCT is
++            // image-resident and was never the listing-gap concern — the
++            // BLOCK storage is what the probe owns on this path. Probes are
++            // bounded (<= 2 distinct entry blocks) and once-per-boot each.
++            const auto copyin_entry_view = [&](uint32_t id, size_t needed, const uint8_t** out_bytes, uint32_t* out_avail) -> bool {
++                const uint64_t block_index = id >> rc_seed::kPoolLayout.block_offset_bits;
++                const uint64_t entry_offset = (id & 0xFFFFu) * 2ull;
++                uint64_t block_addr = words.blocks0;
++                if (block_index != 0)
++                {
++                    const auto* pool = reinterpret_cast<const volatile uint8_t*>(pool_runtime);
++                    block_addr = read_u64(pool, rc_seed::kPoolLayout.blocks_offset + 8ull * block_index);
++                    static uint64_t probed_entry_block[2] = {0, 0};
++                    bool known = false;
++                    for (const uint64_t a : probed_entry_block)
++                    {
++                        if (a == block_addr) { known = true; break; }
++                    }
++                    if (!known)
++                    {
++                        int slot = -1;
++                        for (int i = 0; i < 2 && slot < 0; ++i)
++                        {
++                            if (probed_entry_block[i] == 0) { slot = i; }
++                        }
++                        if (slot < 0)
++                        {
++                            return false; // bounded: >2 distinct entry blocks cannot be sink-fed
++                        }
++                        if (bridge_kernel_write_copyin_probe(block_addr, rc_seed::kFNameBlockCapacityBytes) != 1)
++                        {
++                            return false; // entry block not readable by the sole oracle: refuse
++                        }
++                        probed_entry_block[slot] = block_addr;
++                    }
++                }
++                const uint8_t* capture = nullptr;
++                uint32_t capture_len = 0;
++                if (bridge_write_copyin_capture(block_addr, &capture, &capture_len) != 1 || capture == nullptr)
++                {
++                    return false;
++                }
++                if (entry_offset + needed > capture_len)
++                {
++                    return false; // first-page capture law: entries beyond it refuse loudly
++                }
++                *out_bytes = capture + entry_offset;
++                *out_avail = static_cast<uint32_t>(capture_len - entry_offset);
++                return true;
++            };
+             const auto validate_entry = [&](uint32_t id, const rc_seed::Check& bounds, std::string_view expected) -> void {
+                 if (!bounds.ok)
+                 {
+                     seed_refused(fmt::format("FName pool entry id 0x{:X}: {}", id, bounds.failure));
+                 }
++                if (pool_admitted_via_copyin)
++                {
++                    // Sink-fed (R-4): the byte comparison consumes the
++                    // capture; the bounds check above stayed pure address
++                    // arithmetic. A capture gap REFUSES LOUDLY — never a
++                    // direct block read on this boot.
++                    const uint8_t* entry_bytes = nullptr;
++                    uint32_t entry_avail = 0;
++                    if (!copyin_entry_view(id, 2 + expected.size(), &entry_bytes, &entry_avail))
++                    {
++                        seed_refused(fmt::format("FName pool entry id 0x{:X}: copyin sink capture cannot cover the entry bytes "
++                                                 "(entry-block probe refused, capture cap exceeded, or entry beyond the captured "
++                                                 "first page) — refusing rather than reading directly", id));
++                    }
++                    if (const auto match = rc_seed::entry_matches_ascii(entry_bytes, entry_avail, expected); !match.ok)
++                    {
++                        seed_refused(fmt::format("FName pool entry id 0x{:X} (expected '{}'): {}", id, expected, match.failure));
++                    }
++                    return;
++                }
+                 const auto bytes = pool_entry_bytes(pool_runtime, id, 2 + expected.size());
+                 if (const auto match = rc_seed::entry_matches_ascii(bytes.data(), bytes.size(), expected); !match.ok)
+                 {
+@@ -1078,8 +1207,16 @@
+             validate_entry(words.byte_property_id,
+                            rc_seed::check_entry_bounds(words.byte_property_id, words.current_block, words.current_byte_offset, 2 + rc_seed::kBytePropertyString.size()),
+                            rc_seed::kBytePropertyString);
+-            Output::send(STR("[Seeds] FName pool validated at {} (CurrentBlock {}, Blocks[0] 0x{:X} inside a published readable span (image or non-image) of {}; 'None' anchor ok; 'None' id 0x{:X}, 'ByteProperty' id 0x{:X})\n"),
+-                         reinterpret_cast<void*>(pool_runtime), words.current_block, words.blocks0, published_count, words.none_id, words.byte_property_id);
++            // v5.2 (worker-copyin-unit): the provenance phrase names the
++            // actual admission source — span membership OR the copyin
++            // owned-read gap path (never claim span membership for a
++            // listing-gap admission).
++            Output::send(STR("[Seeds] FName pool validated at {} (CurrentBlock {}, Blocks[0] 0x{:X} {}; 'None' anchor ok; 'None' id 0x{:X}, 'ByteProperty' id 0x{:X})\n"),
++                         reinterpret_cast<void*>(pool_runtime), words.current_block, words.blocks0,
++                         pool_admitted_via_copyin
++                             ? std::string{"admitted via kernel-write-copyin-read (listing-gap owned-read probe; all entry bytes sink-fed)"}
++                             : fmt::format("inside a published readable span (image or non-image) of {}", published_count),
++                         words.none_id, words.byte_property_id);
+ 
+             // ---- Phase 4: bind the ctor + behavioral ByteProperty probe (FNAME-VERDICT section 5) ----
+             // FNAME_Find EXPLICITLY: the default is FNAME_Add, which would

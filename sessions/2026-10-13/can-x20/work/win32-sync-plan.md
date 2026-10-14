@@ -1,0 +1,7 @@
+# Common Win32 SRW lock and condition-variable imports
+
+Stage `cg-win32-sync-20261013-20`, copied from isolated stage 19. Shared candidate and unchanged DLL binaries remain untouched.
+
+Add process-wide opaque host states keyed by guest lock/condition-variable addresses. Publish exact integer/pointer signatures for `AcquireSRWLockExclusive`, `ReleaseSRWLockExclusive`, `AcquireSRWLockShared`, `ReleaseSRWLockShared`, `SleepConditionVariableSRW`, and `WakeAllConditionVariable`. Static zero-initialized guest objects are accepted by first-use state creation. Use a shared mutex for exclusive/shared modes and a separate condition mutex/generation to make release-and-wait atomic relative to wake, then reacquire the SRW lock before returning. `SleepConditionVariableSRW` returns `FALSE` with `ERROR_TIMEOUT` (1460) when the deadline expires; success leaves last error unchanged. Null arguments, invalid ownership, unsupported flags, and host state allocation failures fail closed. The mappings remain process-lifetime, which avoids use-after-free when multiple shims share an object.
+
+First add a failing Win64 host test. Verify exact publication, mutual exclusion, wake-after-atomic-release, two-waiter wake-all, timeout/error/reacquisition, shared acquisition, and refusal cases. Run prior regressions and package exact-base patch/evidence. This host emulation does not establish PS5 scheduler/GS behavior, prove direct guest use of internal SRWLOCK bits, or cover all synchronization APIs.

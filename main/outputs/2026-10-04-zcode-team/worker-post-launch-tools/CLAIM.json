@@ -1,0 +1,57 @@
+{
+  "worker": "worker-post-launch-tools",
+  "date": "2026-10-04",
+  "scope": "Post-launch evidence tooling for the composition-5 launch window. One stdlib-only host script (post_launch_check.py) the controller runs after each Townfall launch to pull the three evidence files over anonymous FTP (one fresh curl connection per fetch, bounded timeouts), diff /data/plugins/UE4SS.log against the recorded 3-line baseline, parse runtime-status.txt state order, and classify the outcome (NOT_STARTED / FAILED_<stage> / ACTIVATED / ENGINE_READY / MODS_STARTED / UNKNOWN_NEW_LINES / FETCH_FAILED) with a per-classification recommended next action. Includes --from-dir fixture mode for host tests and --baseline-file override. NO console contact was made by this worker; all FTP behavior is exercised only through local fixtures and a loopback-free --from-dir mode. No nested subagents.",
+  "claims": {
+    "baseline_three_lines": {
+      "claim": "The current console /data/plugins/UE4SS.log baseline is exactly the 3 lines embedded in post_launch_check.py (individual sha256 and combined sha256 recorded there). Lines 1 and 3 are verbatim ledger records; line 2 is reconstructed from the module's exact emit format plus the ledger-recorded 16 bytes.",
+      "evidence": [
+        "outputs/2026-10-04-zcode-team/worker-composition-5-rebuild/transport-ledger.composition5-mirror.json zcode_path_test_target_run.ue4ss_log == 'PATH_TEST: /data/plugins/UE4SS.log writable at 8866785633337 monotonic-ns' (verbatim ledger line 1)",
+        "same ledger zcode_sdg2_target_run.line == 'DIAG: module_start reached at 1791155755.879 pid=298 build=sdg2-6f404cee6b94 variant=imp' (verbatim ledger line 3)",
+        "outputs/2026-10-04-zcode-team/worker-minimal-path-test/src/path_test_entry.c:115-146 emits 'ACTIVATION_TEST: loadlist.txt readable, first 16 bytes: ' + lowercase hex of the first 16 loadlist bytes ('0123456789abcdef' table, pt_emit_hex :69-76); ledger zcode_path_test_target_run.activation_root records those 16 bytes as hex 6d6f64666f7267652d6c6f61646c6973 ('modforge-loadlis'), giving line 2 'ACTIVATION_TEST: loadlist.txt readable, first 16 bytes: 6d6f64666f7267652d6c6f61646c6973' (format+content confirmed, not a verbatim console readback)",
+        "worker-first-run-playbook FIRST-RUN-PLAYBOOK.md:143-149 records the same 3-line baseline with line-1/line-2 format templates and line 3 verbatim"
+      ],
+      "shas": {
+        "line1": "02c1950e2add7f1d62ed8de96890baac81c7db43751d4e4894d86b0d88b27a73",
+        "line2": "a2a609ca32ae5d01bea92e88f3d1caf803451ccd9fd0b11f6f000d1801814d54",
+        "line3": "ee8c12fa6b4f30ed68bf80f4dbedb7b43d4b861f6953e446d4ecaf8379556e71",
+        "blob_lf_terminated": "8cf921838db920329215252ade8726cf8670b16ffb2ceeb4258ba4bf976fb58f"
+      }
+    },
+    "classification_contract": {
+      "claim": "post_launch_check.py classifies each fetch into exactly one verdict, with precedence FETCH_FAILED > FAILED_<stage> (UE4SS.log failure lines, then status failed) > MODS_STARTED > ENGINE_READY > ACTIVATED > UNKNOWN_NEW_LINES > NOT_STARTED, and stale PATH_TEST:/ACTIVATION_TEST:/DIAG: module_start reached repeats are never counted as new lines.",
+      "evidence": [
+        "failure-line grammar 'modbridge module_start failed: <stage> code=<n> detail=<...>' from worker-module-start-wiring entry :166-192 via ACTIVATION-PREDICTION.md section 5",
+        "status grammar modforge-runtime-status\\t1 / session\\t<pid>\\t<ms> / state\\t<seq>\\t<state>\\t<code>\\t<detail> with states activated, engine-ready, mods-started, failed, stopped from FIRST-RUN-PLAYBOOK.md section 1.3 (mfa .h:137-148)",
+        "stale-repeat rule mirrors playbook freshness oracle O3 (:161-163): only lines not matching the 3 baseline formats and not matching the PATH_TEST:/ACTIVATION_TEST:/DIAG prefixes are composition-5+ lines"
+      ]
+    },
+    "guidance_mapping": {
+      "claim": "Recommended next actions are derived from the mfa-audit refusal table and the channel postmortem signatures: code=-2 => /data readability timing window (loadlist not openable at module_start); code=-6/-8 => staged loadlist/file divergence (error.path names the file; first path-sorted candidate ue4ss/MemberVariableLayout.ini); runtime_start_failed code=1/2/3 => conversion/context/start stage codes 1-4; diag_channel_open_failed code=-22 => diagnostic channel open failure (only observable with the postmortem's 3-line patch applied; the delivered entry is silent on -22); status failed without a UE4SS.log failure line => F6/F7 silent-failure traps (status is the session truth).",
+      "evidence": [
+        "outputs/2026-10-04-zcode-team/worker-mfa-activation-audit/ACTIVATION-PREDICTION.md section 1 refusal table (codes -1..-12 with exact messages) and section 5 signature lines",
+        "outputs/2026-10-04-zcode-team/worker-diag-channel-postmortem/CHANNEL-POSTMORTEM.md sections 2-4 (-22 silence, marker line 'modbridge module_start failed: diag_channel_open_failed code=-22 detail=diagnostic channel unavailable before wiring')",
+        "FIRST-RUN-PLAYBOOK.md section 3 failure table F0-F10 (stage codes 0-4 bridge.h:36-41; F6 start-refusal trap; F7 pre-engine-ready init throw)"
+      ]
+    },
+    "freshness_oracle": {
+      "claim": "runtime-status.txt session monotonic-ms and the PATH_TEST CLOCK_MONOTONIC ns share a clock base, so status session-ms > 8866785 (PATH_TEST at 8866785633337 ns) proves the status session postdates the path-test launch; the script reports status freshness as FRESH/STALE_UNKNOWN on that basis and never claims launch attribution from it alone.",
+      "evidence": [
+        "transport-ledger zcode_path_test_target_run.ue4ss_log monotonic-ns 8866785633337",
+        "FIRST-RUN-PLAYBOOK.md O2 (:155-160): 'Monotonic bases are comparable across status and the PATH_TEST/DIAG lines (all CLOCK_MONOTONIC/DIAG epoch on the same console boot)'"
+      ]
+    },
+    "host_test_coverage": {
+      "claim": "Host tests (host-test/run_host_tests.py) pass 20/20 cases, 73 checks, with local fixtures: exact-baseline fetch => NOT_STARTED; stale probe repeats => NOT_STARTED (repeats reported, not new); mfa_activate_failed code=-2/-6/-8 single and multiple failure lines => FAILED_<stage> with code-specific guidance and cumulative count; diag_channel_open_failed code=-22 => postmortem guidance; runtime_start_failed code=2 => CONTEXT bridge guidance; status-only failed (fresh) => FAILED_STATUS for mfa and bridge codes; activated/engine-ready/mods-started progressions; mods-started plus new UE4SS.log lines => MODS_STARTED with new lines listed and [TownfallItemSpawner] print counted; unknown new lines only => UNKNOWN_NEW_LINES with raw lines; empty/unreadable fetches => FETCH_FAILED with RETRY guidance (exit 4, human-mode render regression-checked, no crash); partial fetch (status only) still classifies; stale session => NOT_STARTED; fresh-progress-vs-failure-line conflict => CONFLICT warning; fresh stopped => STOPPED; --baseline-file override; --json parses; --dry-run prints the three exact curl commands; embedded baseline shas re-verified against CLAIM.json.",
+      "evidence": [
+        "receipts/host-test-pass.txt (20/20 cases, 0 failed, per-case checks, environment + script sha256 provenance)"
+      ]
+    },
+    "limits": [
+      "No console contact, no FTP fetch against the real console, no launch performed: the FTP path is exercised only as constructed argv (curl is invoked only in --from-dir-free live mode, never executed by the host tests; live mode is for the controller after the user launches).",
+      "Baseline line 2 is format+ledger reconstructed, not a verbatim console readback (see baseline_three_lines). The baseline prefix rules (PATH_TEST:/ACTIVATION_TEST:/DIAG:) keep classification correct even if the exact bytes differ.",
+      "The script is stateless between runs: UE4SS.log and the aligned-entry log are append-only, so failure-line and observer-event counts are cumulative across launches (playbook O5); per-launch attribution relies on runtime-status.txt session replacement (O_TRUNC) and is labeled accordingly.",
+      "Classification is evidence interpretation, not acceptance: rung advancement stays governed by FIRST-RUN-PLAYBOOK section 5."
+    ]
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "worker": "worker-staging-next",
+  "date": "2026-10-05",
+  "comparison": {
+    "reference": "ploader-return-message-1/baseline/ploader.elf (pinned unmodified Ploader v1.1.0, locally compiled in the SAME retained toolchain, sha256 720b1989880b8b55a5f3a92efae32ffdfc62de3d63f7b51bbca6809729683f72, 142896 bytes)",
+    "subject": "worker-staging-next/ploader-build/ploader.elf (cleanup-candidate + 05r, sha256 4c33923521ee8d8b810f8daaa719b935e9e92f6e8892deae43143fb9ec81d292, 144248 bytes)",
+    "tool": "llvm-readelf / llvm-nm from the retained LLVM 21.1.8 (same toolchain as the build)"
+  },
+  "raw_dumps": "structural-checks/{baseline,new}.{ehdr,phdr,sections,dynamic,dynsyms.clean,nm,strings}",
+  "checks": [
+    {
+      "name": "ELF header class",
+      "result": "PASS",
+      "detail": "Both: ELF64, little-endian, EI_OSABI byte 09 (FreeBSD), ET_DYN, EM_X86_64, entry 0x0, flags 0x0. Only delta: start-of-section-headers offset (file grew 142896 -> 144248). llvm-readelf 'invalid PT_DYNAMIC size' warning appears for BOTH files (identical 0x1558 size) — a known ps5-payload-sdk output class property, not a regression."
+    },
+    {
+      "name": "program headers",
+      "result": "PASS",
+      "detail": "Same 3 LOAD segments, same offsets/vaddrs/alignments/flags classes (RWE text identical to reference). Only sizes grew: text LOAD filesz 0xbcbe -> 0xbf4e (+0x290); RW memsz 0x7028 -> 0x702c (+4 B = the new static)."
+    },
+    {
+      "name": "sections",
+      "result": "PASS",
+      "detail": "Identical section SET (31 entries, same names/order/type/flags). Growth only: .text +0x290, .rodata +0x20 (new format strings), .bss +4, debug sections larger (more source), .strtab +0x12. No section added or removed."
+    },
+    {
+      "name": "dynamic / imports sanity",
+      "result": "PASS",
+      "detail": "Identical 21-entry dynamic table class; NEEDED identical: libkernel_web.sprx, libSceLibcInternal.sprx, libSceNet.sprx; BIND_NOW + NOW PIE identical. Only INIT_ARRAY/FINI_ARRAY addresses shifted +0x20 with code growth. NO new library dependency, NO import added/removed."
+    },
+    {
+      "name": "dynamic symbol table",
+      "result": "PASS",
+      "detail": "33 dynsyms in both; identical set, bound/type; only a code-growth address shift on one function (dup). No dynamic symbol added/removed."
+    },
+    {
+      "name": "symbol-level diff (llvm-nm, 523 -> 524)",
+      "result": "PASS",
+      "detail": "Exactly ONE symbol-level delta: ADDED 'b proven_stable_pid' — the static per-boot readiness memo of patch 05r. No function symbol added/removed/renamed (wait_stable/count_modules/deps_ready/now_ms all keep identical shapes; 05r adds only the memo static and a forward declaration of the existing now_ms)."
+    },
+    {
+      "name": "strings sanity",
+      "result": "PASS",
+      "detail": "All key functional strings present in the new binary: 'Finished', NIDs wzvqT4UqKX8 (sceKernelLoadStartModule) and HoLVWNanBBc (getpid), 'sceKernelLoadStartModule', libkernel/libc.prx readiness names. The FAIL notification string is '[%s] FAIL (%ldms, restore=%d, detach=%d): %s' — the cleanup-candidate lineage's reworked string, exactly as this source lineage specifies (05r does not touch it). String-table diffs otherwise: debug paths (build dir) and layout-shifted debug fragments only. NO functional string lost."
+    },
+    {
+      "name": "readback-law constants (for the staging plan)",
+      "result": "RECORDED",
+      "detail": "Local file magic 7f 45 4c 46 (plain ELF — NOT FSELF, so no decrypt-oracle gate applies; expected readback is full byte identity). max(p_offset+p_filesz) = 0x1801C = 98332 bytes — the SHT-strip tail-artifact fallback length if the channel ever serves a stripped view."
+    }
+  ],
+  "verdict": "STRUCTURALLY SOUND — same artifact class as the precedent baseline ploader.elf; every delta is exactly the cleanup-candidate rework + 05r (code growth, one new static, new strings), zero structural or import changes.",
+  "limits": [
+    "Static host-side checks only; no execution, no console, no compatibility claim with the console's installed ploader binary beyond class identity.",
+    "Symbol-level comparison covers the static symtab the -g build retains; the compiled-code diff itself is not disassembled here — behavior is attested by the 9/9 host wait controls on the exact source (dry-runs/host-wait-controls-green/)."
+  ]
+}

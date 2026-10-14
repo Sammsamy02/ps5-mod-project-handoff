@@ -1,0 +1,81 @@
+{
+  "worker": "worker-ue4ss-docs-fidelity",
+  "date": "2026-10-05",
+  "task": "Fidelity pass over the RUNTIME-expectation doc chain (LAUNCH9-PREDICTION, ENGINE-READY-PATH, LAUNCH10-MATRIX, MASTER-VERIFICATION-RUNBOOK CP table) against the FINAL runtime pieces (merged initializer staging, bridge r13, entry r4, SeedTable.h 3-slot vs SeedTable.launch10.h 4-slot, settings v3).",
+  "mode": "read-only verification; no console contact; no nested subagents; nothing executed; no source or doc edited",
+  "final_artifacts_verified": {
+    "merged_initializer": "outputs/2026-10-04-zcode-team/worker-initializer-integration/staging/UnrealInitializer.cpp (2044 lines, 101224 B; byte-identical copy in worker-launch10-prebuild/staging/initializer-launch10/)",
+    "bridge": "outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_start_bridge_r13.cpp (734 lines, sha256 10385e2265af0a12236bc7f713ed343a7f13796644aac0de511f6663f579209a; r12 byte-frozen at feed5254...; comp6 driver BRIDGE_DEFAULT moved to r13)",
+    "entry": "outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_module_entry_r4.c",
+    "seed_tables": "staging/SeedTable.h = 3-slot launch-9 table (kGMalloc.present=false, kRequiredSetComplete=false); staging/SeedTable.launch10.h = 4-slot armed table (kGMalloc present, linked 0x930add8 / runtime 0x970add8, kRequiredSetComplete=true); launch10 prebuild stages the 4-slot content AS SeedTable.h",
+    "settings_v3": "worker-settings-v3-package/package-v3/ue4ss/UE4SS-settings.ini (1448 B, sha256 d8faa4eca2ed2f22c02693b6841b7939412b4dd60c218a26438f985152d67038)"
+  },
+  "claims": [
+    {
+      "id": "FID-1",
+      "claim": "All cited refusal strings are byte-exact in the FINAL merged initializer: '[Seeds] Required-slot seed table incomplete: present [...] missing [...]' at :908 (line drifted from cited :876; string grew a '(SHAPE A safe default, LAUNCH9-PREDICTION)' tail), '[Seeds] REFUTED: ... Terminal for this launch; derive afresh with new evidence, never replay.' at :662 (cited :635-641), 'UnrealInitializer::PostInitialize: GMalloc is uninitialized.' at :396-398 (unchanged, exact).",
+      "verdict": "VERIFIED_WITH_LINE_DRIFT"
+    },
+    {
+      "id": "FID-2",
+      "claim": "Settings v3 keys verified exact: [EngineVersionOverride] MajorVersion=5 MinorVersion=6 at ini :24-26; [Hooks] HookProcessInternal=0 HookProcessLocalScriptFunction=0 at ini :34-35 with the REQUIRED-0 rationale comment; 1448 B; sha d8faa4ec... as the launch-9 doc states. The final initializer gate (bHookProcessInternal || bHookProcessLocalScriptFunction, :1914) confirms the launch-9 prediction's 'Zydis block gated off' claim — no invalidation.",
+      "verdict": "VERIFIED"
+    },
+    {
+      "id": "FID-3",
+      "claim": "Entry r4 timestamp format verified: '[t=<monotonic ms>ms pid=<pid>]' prefix assembled at entry :198-202 (doc cited :190-202, holds); best-effort failed status write_status_failed at :228 (doc cited :224-247, within 4 lines); mfa_activate_failed at :296 (exact).",
+      "verdict": "VERIFIED"
+    },
+    {
+      "id": "FID-4",
+      "claim": "Bridge diagnostic tags verified in the FINAL r13: bridge_cfg_gamedir / bridge_cfg_workdir (:670-671), anchor_cov / anchor_match / anchor_mm / anchor_c_either (:380-395), bridge_exepath_source (:426/:456/:465), and the r13-NEW bridge_lease_reg_spans (:521) plus bridge_lease_reg (:488/:522). The launch-9 doc's r12 citations are all exact against r12 (:149, :360-375, :606-611, :638-639, :658, :684/:689, :695/:700) but the FINAL bridge is r13 (behavior byte-identical per r13 header; lines shifted +~20-32).",
+      "verdict": "VERIFIED_WITH_VERSION_CAVEAT"
+    },
+    {
+      "id": "FID-5",
+      "claim": "Tick constant convention: the runbook CP2 expectation 0x37ac8c0 (= 'linked 0x33ac8c0' + base 0x400000) is INVALIDATED by the final byte evidence. SEED-TABLE.json slot-10 correction_recorded and the initializer comment (:1746-1757) pin: runtime Tick = base + linked 0x2fac8c0 = 0x33ac8c0; 0x37AC8C0 was the runtime value mislabeled as linked (linked 0x33ac8c0 decodes mid-instruction, contains ud2). Additional CP2 stale detail: with seeds armed the scan arm is skipped, so the 'both addresses equal' pass criterion can never print (vtable fallback is the only route; the initializer binds from the live vtable and the constant deliberately never enters the unit).",
+      "verdict": "INVALIDATED_WITH_FIX"
+    },
+    {
+      "id": "FID-6",
+      "claim": "Bridge r13 STOP_EXN renumber (2 -> 5 in runtime_start_bridge.h, was colliding with MRS_ERR_CONTEXT) invalidates NO doc error-code table. The only doc table (MASTER-VERIFICATION-RUNBOOK §1 line-grammar + §6 triage) covers module_start codes 1=CONVERSION 2=CONTEXT 3=START 4=INTERNAL, which are unchanged in the final header; STOP_EXN is a stop-path code never cited by any of the four docs. Final header: MRS_OK=0, CONVERSION=1, CONTEXT=2, START=3, INTERNAL=4, STOP_EXN=5.",
+      "verdict": "NO_INVALIDATION"
+    },
+    {
+      "id": "FID-7",
+      "claim": "Seed-table sequencing: launch 9 runs the 3-slot table (Shape A arming gate throws at :908 — the launch-9 prediction's candidate #2); the gmalloc constant (runtime 0x970add8) was deliberately HELD OUT of the launch-9 build per SEED-TABLE.json :106/:112; the armed 4-slot table (SeedTable.launch10.h / prebuild SeedTable.h, kRequiredSetComplete=true) enters at launch 10. Under the armed table the launch-9 doc's candidates #1 (PostInitialize GMalloc throw) and #2 (incomplete-table throw) CANNOT fire: the gate passes and the slot-3 consumer binds GMalloc at :781. LAUNCH10-MATRIX U-SWAP-1 has effectively LANDED (table staged), and matrix rows keyed on T-A/T-GM describe launch-9 outcomes only.",
+      "verdict": "SEQUENCING_CONFIRMED_PREDICTION_SCOPE_CLARIFIED"
+    },
+    {
+      "id": "FID-8",
+      "claim": "IGW gating is OFF in the final initializer: kExecWritabilityVerdictGating = false ('DESIGNED, NOT ARMED', :620-637) — nothing reads any verdict file; the folded shape is exactly the compiled Shape-A default. This confirms the context's 'Shape-A + IGW-gating-off' description of the merged initializer.",
+      "verdict": "VERIFIED"
+    },
+    {
+      "id": "FID-9",
+      "claim": "ENGINE-READY-PATH is faithful to its own (superseded) artifact but STALE versus the final chain: initializer replaced (GMalloc string :389 -> :398; ps_scan path skipped when armed; VerifyFNameConstructor skipped when seed-bound :1425-1432; ProcessInternal now settings-gated :1914). Its P1-P6 loader-thread facts and §6 ordering are the parts the launch-9 doc explicitly reuses; those citations remain the base. No settings-v3 / seed / Shape-A awareness (doc predates all of them, as the launch-9 doc already records).",
+      "verdict": "STALE_SUPERSEDED_REUSED_PARTS_STAND"
+    },
+    {
+      "id": "FID-10",
+      "claim": "MASTER-VERIFICATION-RUNBOOK §1 'no timestamp' grammar is STALE: entry r4 prefixes the freshness prefix on every UE4SS.log failure line. Its D1 diagnostic tag grammar (module_start_entered, runtime_start_ok/runtime_start_failed, mfa_activated_low/high) is CURRENT — all tags present in entry r4 (:316/:323/:324/:327/:345/:296). Its §4.3a restage heuristic keyed to settings sha 9f3fa127... is INVALIDATED by the authorized settings-v3 restage (sha d8faa4ec..., 1448 B) — ini-sha divergence no longer proves an unauthorized restage.",
+      "verdict": "PARTIALLY_STALE_WITH_FIX"
+    },
+    {
+      "id": "FID-11",
+      "claim": "LAUNCH10-MATRIX §3.1 '--bridge-sha256 <r12-sha-from-REPORT>' is STALE: the comp6 driver default is now bridge r13 (BRIDGE_DEFAULT :81, --bridge-sha256 default = r13 measurement :604; r13 sha 10385e22...; r12 byte-frozen feed5254...). ONE-PASS-CHECKLIST.md (:21/:63/:77/:85/:129) carries the same r12 wording and needs the same one-token fix. Matrix MERGED :876 -> :908; U-SWAP-5 initializer line cites :1876 -> :1914, :1385-1397 -> :1425-1432, :1749-1764 -> :1787-1804, :480 -> :479-481 (its substantive claim — tick/SCO arms still unconditional — still holds).",
+      "verdict": "STALE_WITH_ONE_LINE_FIXES"
+    },
+    {
+      "id": "FID-12",
+      "claim": "Seed constants cross-checked consistent everywhere: GUA linked 0x93ba110 / runtime 0x97ba110; FName pool label 0x9365ec0 / runtime 0x9765ec0; FName ctor linked 0x23d590 / runtime 0x63d590; SCO linked 0x490aa0 / runtime 0x890aa0; GMalloc linked 0x930add8 / runtime 0x970add8 (4-slot only); image sha 3b6cfad4... pinned in both generated tables. The launch-9 doc's numeric citations all match.",
+      "verdict": "VERIFIED"
+    }
+  ],
+  "honesty_notes": [
+    "Everything here is static read-back of saved files; no launch happened and no console was contacted.",
+    "Line drift figures are against the 2044-line staging initializer; any later re-merge shifts them again.",
+    "The armed 4-slot table is staged for launch 10 per the recorded sequencing decision; which composition actually ships a given launch remains the controller's call, not a claim of this worker.",
+    "No quality or completion claim of any kind is made; this is a documentation-fidelity verdict only."
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "worker": "worker-v3-startup-diag",
+  "date": "2026-10-04",
+  "task": "Diagnose and fix v3 probe (igf3-de0c0cb644d3) in-game startup crash: zero igf3- records, entry marker never written, while aligned v2 (igf2) ran cleanly in the same slot.",
+  "scope": {
+    "write_only_under": "outputs/2026-10-04-zcode-team/worker-v3-startup-diag/",
+    "read_only_inputs": [
+      "outputs/2026-10-04-zcode-team/worker-ingame-probe-v3/",
+      "outputs/2026-10-04-zcode-team/worker-ingame-probe-v2/",
+      "outputs/2026-10-04-zcode-team/worker-prx-packaging/"
+    ],
+    "no_network": true,
+    "no_console": true,
+    "no_nested_subagents": true
+  },
+  "plan": [
+    "Build minimal v3 variant (same recipe/imports, module_start only writes entry marker + startup record) with two-run determinism proof.",
+    "If minimal works locally-verified, build incremental series: +VMMAP, +base scan, +predicates for bisection.",
+    "Diff v3 vs v2 inner ELFs: init_array, relocations, C++ static constructors (llvm-readelf/objdump).",
+    "Identify any static C++ objects running code before module_start.",
+    "Deliver variants + diagnosis + fix in REPORT.md."
+  ],
+  "bounds": {
+    "max_tool_calls": 100,
+    "determinism_two_run_per_variant": true,
+    "report_required_even_if_partial": true
+  }
+}

@@ -1,0 +1,66 @@
+SPOT-AUDIT RECEIPTS — worker-final-cert-spot-audit (2026-10-04)
+All commands were run read-only in the workspace root. Values below are verbatim tool output.
+
+=== GROUND TRUTH (recomputed this pass) ===
+$ shasum -a 256 worker-final-ini-layout/ploader.ini.canonical worker-ninth-slot-ini-adoption/law/ploader.ini.canonical   [under outputs/2026-10-04-zcode-team/]
+fd9c73937b2b1e45d0cc22721c3e03d977cf027a7a335e5599577b2b7f7c3507  outputs/2026-10-04-zcode-team/worker-final-ini-layout/ploader.ini.canonical
+fd9c73937b2b1e45d0cc22721c3e03d977cf027a7a335e5599577b2b7f7c3507  outputs/2026-10-04-zcode-team/worker-ninth-slot-ini-adoption/law/ploader.ini.canonical
+$ wc -c < (each copy) -> 440 / 440
+$ census per copy: grep -c '= 2' -> 8 ; grep -c '= 0' -> 1   (8x '= 2' + 1x '= 0')
+
+$ shasum -a 256 outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py
+5ca8d1c70f4d3349d34bd3746b1cfa8647d56ffbc7b61fa42bdc5862dbd74563  ...console_batch.py   (298909 B)
+
+$ shasum -a 256 outputs/2026-10-04-zcode-team/worker-composition-5-rebuild/prx-candidate-composition5-1/modbridge_supplier_composition.prx
+0911af0cd5b4a1f22eac49a79f8b3c9a3d9cac7358b246e16ae2a969b537cab9  ...modbridge_supplier_composition.prx   (30792151 B)
+
+C/console prx files recomputed (outputs/2026-10-04-zcode-controller/console/):
+76ee6af39b407ab7  30773943  comp6-staged-fself.prx
+d8cb4a7637b2ac58  30818247  comp6-armed-staged-fself.prx
+d4fc0acf6a3ab8df  30769672  composition4-console-backup.prx
+NO r11 (0911af0c) mirror present in C/console.
+
+=== ITEM 1 + 6: EVE-STATE.md (worker-session-eve-coherence) ===
+line 38: | L11 | FINAL ploader.ini canonical (9-entry) | `…/worker-final-ini-layout/ploader.ini.canonical` | `fd9c73937b2b1e45621ad337632d0ff29a116b0aa6e86e45ad219e8ef7539b369a5a6fe1` | 400 |
+  -> HYBRID: true 16-hex prefix + superseded tail 621ad337... ; matches no on-disk artifact; size 400 != 440. FAIL.
+line 60: (L11/L12 — registered count 8), ...                                     [fixed]
+line 66: - ploader.ini final state: 8 entries / **exactly 8 registered** ...     [fixed]
+
+=== ITEM 2: cheat sheet (outputs/2026-10-04-zcode-controller/RETURN-SESSION-COMMANDS.md) ===
+line 51: - comp6 slot: r11 backup outputs/2026-10-04-zcode-controller/console/r11 restore chain 0911af0c (RESTORE-PATH §A.5) chain
+  -> identity now r11 0911af0c; composition4-console-backup no longer the restore target. PASS (with wording note).
+line 3 confirms: "Slot holds r11 `0911af0c` (backed up)."
+RESTORE-PATH.md §A.5 exists (worker-post-spawn-closure-prep/RESTORE-PATH.md, "### A.5 Slot: restore r11-era bytes or go stock")
+  and line 139 names "r11 identity `0911af0c…` 30,792,151 B" with receipts worker-fresh-r11-gate-receipt/{live,v2}-r11-receipt.json.
+
+=== ITEM 3: INDEX-FINAL.md (worker-index-final-edition) ===
+line  44: final tool `5ca8d1c7 (post ninth-slot adoption)`, VERIFIED — selftest 372 ok/0 failed     <- FAIL (true 405/0)
+line  68: ... canonical 440 B template `fd9c7393` ... `5ca8d1c7 (post ninth-slot adoption)` selftest 405/0 ...  [ok]
+line  86: final `5ca8d1c7 (post ninth-slot adoption)`                                               [ok]
+line  88: ini end state BYTE-EXACT = canonical 440 B `fd9c7393…`, **exactly 8 registered**          [ok]
+line 123: 5. **Canonical ini** — 440 B `fd9c7393…` — VERIFIED; line census 8×`= 2` + 1×`= 0` ...    [ok, matches recomputed]
+line 124: 6. **Final batch tool** — sha16 `5ca8d1c7 ...` — VERIFIED ... matches the DOC-SYNC header of
+          RETURN-SESSION-MASTER-PLAN.md (selftest 372 ok/0 failed, quoted)
+          -> master plan line 11 still pins b00b3a69…/372-0, so "matches" is false (master plan itself out of scope).
+
+=== ITEM 4: CURRENT-STATE-DIGEST-FINAL.md (worker-index-final-edition) ===
+line 33: ... final tool `5ca8d1c7 (post tools-final)`; ini ends byte-exact = 440 B `fd9c7393…`, **8 registered** ...  [ok]
+line 57: ... 440 B template adopted into the batch tool (`5ca8d1c7 (post tools-final)`, selftest 405/0) ...           [ok]
+PASS.
+
+=== ITEM 5: README-RETURN.md (workspace root) ===
+line 39: comp6 slot — r11 backup chain `C/console/the r11 fself mirror in outputs/2026-10-04-zcode-controller/console/ (see worker-post-spawn-closure-prep/RESTORE-PATH.md)`
+  -> not a resolvable path; asserts a nonexistent C/console r11 mirror (recomputed above: none). FAIL.
+
+=== ITEM 6 SWEEP ===
+grep -rn "621ad337" over outputs/2026-10-04-zcode-controller, outputs/2026-10-04-zcode-team, README-RETURN.md
+  (excluding .git, worker-cert-reverify, worker-return-readiness-cert, this dir):
+  all hits are the full superseded hash bbc34c16621ad337... in historical records/receipts/as-found copies
+  (worker-final-ini-layout REPORT + receipts + FINAL-INI-LAYOUT.md historical body under a corrected
+  9-entry/8-registered banner, worker-batch-final-ini-adoption receipts/CLAIM, worker-ninth-slot-ini-adoption
+  as-found records, worker-pre-session-inventory historical note, console_batch.py superseded-comment lines)
+  — EXCEPT worker-session-eve-coherence/EVE-STATE.md:38, the single hybrid.
+grep -rn "fd9c7393[0-9a-f]{20,}" (same scope, excluding the true full sha): sole hit = EVE-STATE.md:38.
+
+=== VERDICT ===
+Items 2, 4 PASS. Items 1, 3, 5, 6 FAIL as named. STAMP NOTHING: READINESS-CERT.md was NOT modified by this audit.

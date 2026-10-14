@@ -1,0 +1,247 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-readpath-guard/staging/SeedValidation.hpp	2026-10-05 07:42:18
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-fname-heap-runtime-bounds/staging/SeedValidation.hpp	2026-10-05 08:31:29
+@@ -58,30 +58,233 @@
+             static_cast<uint64_t>(id & 0xFFFFu) * 2ull};
+     }
+ 
+-    // FNAME-VERDICT.md section 5 steps 1-2: CurrentBlock >= 1; Blocks[0]
+-    // nonzero and inside the readable heap span.
++    // ---- launch10-c runtime bounds (worker-fname-heap-runtime-bounds) ----
++    // The frozen heap envelope kHeapLo/kHeapHi = [0x8018c000,0x100118000) is
++    // RETIRED from admission: it is vintage-transient non-image memory
++    // (GEOMETRY.md section 6 — real at igf/igf2, absent from the igf3 7-span
++    // walk), so a live heap placed anywhere else refused a legitimate pool.
++    // The bound is replaced by CURRENT-INVOCATION span publication: the bridge
++    // TU publishes the non-image readable spans of ITS OWN kernel VMMAP walk
++    // (same walk that feeds bridge_register_readable_ranges), and admission
++    // requires Blocks[0] to fall inside exactly one published span. Pure
++    // values only — every function here stays total (never dereferences);
++    // the caller owns all reads and has already classified the pool label as
++    // data-readable (classify_seed_address) before this chain runs.
++    struct AddressSpan
++    {
++        uint64_t lo; // inclusive
++        uint64_t hi; // exclusive
++    };
++
++    // Image extent in FILE vaddrs (runtime extent = [base, base + this)).
++    // Adjudicated: max(p_vaddr+p_memsz) = 0xbc602c8 over the phdr table of the
++    // retained eboot (GEOMETRY.md section 2; runtime extent end 0xc0602c8 =
++    // base 0x400000 + 0xbc602c8, GEOMETRY.md sections 3 and 8 item 4 — the
++    // '0xc0602c8 as an OFFSET from base' spelling double-counts the slide and
++    // is the exact false-digit class GEOMETRY section 8 retracts). Matches
++    // kImageExtentVaddr in runtime_start_bridge_r13.cpp.
++    inline constexpr uint64_t kImageFileExtentBytes = 0xbc602c8ull;
++
++    // A span can only host Blocks[0] if it can hold ONE WHOLE FName block:
++    // FNameBlockOffsetBits = 16 (kPoolLayout above; port NameTypes.hpp:155)
++    // with entry stride 2 gives FNameBlockOffsets * Stride = 0x10000 * 2 =
++    // 0x20000 contiguous bytes per engine allocation (FNAME-VERDICT.md
++    // section 4 step 3/4). A single contiguous allocation lies inside one
++    // kernel span, so the span containing Blocks[0] is necessarily >= this;
++    // the publication floor therefore can never false-refuse a live pool.
++    inline constexpr uint64_t kFNameBlockCapacityBytes =
++        (1ull << kPoolLayout.block_offset_bits) * 2ull;
++
++    // Bounded publication: top-N qualifying spans by size, published ascending
++    // by address (coordinator directive: "top 16 by size, ascending").
++    inline constexpr size_t kMaxPublishedSpans = 16;
++
++    // PS5 PROT_READ (FNAME-VERDICT.md section 2 table; byte-parity with
++    // kVmProtRead in runtime_start_bridge_r13.cpp:169).
++    inline constexpr uint32_t kVmProtRead = 1u;
++
++    // Minimal walk record (field parity with lmf::OsVmMapping; freestanding —
++    // rc_seed never includes lmf/SDK types).
++    struct VmSpanRecord
++    {
++        uint64_t start;
++        uint64_t end; // exclusive
++        uint32_t protection;
++    };
++
++    struct PublicationResult
++    {
++        uint32_t published;     // spans stored in out (<= kMaxPublishedSpans)
++        uint32_t total;         // qualifying spans seen, including dropped
++        uint32_t cap_saturated; // 1 when qualifying > published
++        uint64_t envelope_end;  // max record end over the WHOLE captured
++                                // snapshot: the capture is address-ordered
++                                // (kernel VMMAP enumeration; c2-probe walker
++                                // lineage), so a truncated capture is a
++                                // PREFIX — every address below this point is
++                                // completely enumerated, everything at/above
++                                // it is UNKNOWN (omitted, not unmapped).
++    };
++
++    // Pure publication filter over one kernel VMMAP walk snapshot (the
++    // bridge calls this over its FROZEN capture — the same-capture rule; host
++    // fixtures drive the SAME function). A record publishes its
++    // OUTSIDE-EXTENT remainder(s) when: prot carries the READ bit, the
++    // remainder is at least one FName block capacity, and it fits the
++    // top-N-by-size window. Image memory is never published (admission
++    // accepts class (ii) only). The caller passes the WHOLE captured record
++    // set (readable or not): envelope_end is computed over ALL of it, since
++    // non-readable records still prove enumeration coverage.
++    [[nodiscard]] inline auto publish_nonimage_readable_spans(
++        const VmSpanRecord* records, size_t record_count,
++        uint64_t image_base, uint64_t image_extent_bytes,
++        AddressSpan* out, size_t out_capacity) -> PublicationResult
++    {
++        // Top-N by size, insertion-maintained; address-sorted on the way out.
++        AddressSpan kept[kMaxPublishedSpans];
++        uint64_t kept_size[kMaxPublishedSpans];
++        size_t kept_count = 0;
++        PublicationResult result{0, 0, 0, 0};
++        const uint64_t extent_lo = image_base;
++        const uint64_t extent_hi = image_base + image_extent_bytes;
++        for (size_t i = 0; i < record_count; ++i)
++        {
++            const VmSpanRecord& r = records[i];
++            if (r.end > result.envelope_end)
++            {
++                result.envelope_end = r.end; // enumeration coverage grows with every record
++            }
++            if ((r.protection & kVmProtRead) == 0 || r.end <= r.start)
++            {
++                continue;
++            }
++            // Two disjoint outside-extent remainders per record (a record
++            // straddling the whole extent is pathological but handled).
++            const AddressSpan parts[2] = {
++                AddressSpan{r.start, r.end < extent_lo ? r.end : extent_lo},
++                AddressSpan{r.start > extent_hi ? r.start : extent_hi, r.end}};
++            for (const auto& span : parts)
++            {
++                if (span.lo >= span.hi)
++                {
++                    continue; // empty or fully inside the extent
++                }
++                const uint64_t size = span.hi - span.lo;
++                if (size < kFNameBlockCapacityBytes)
++                {
++                    continue; // cannot host a whole FName block
++                }
++                ++result.total;
++                if (kept_count < kMaxPublishedSpans)
++                {
++                    kept[kept_count] = span;
++                    kept_size[kept_count] = size;
++                    ++kept_count;
++                }
++                else
++                {
++                    // Replace the smallest kept span when the new one is
++                    // strictly larger (deterministic top-N by size).
++                    size_t smallest = 0;
++                    for (size_t k = 1; k < kept_count; ++k)
++                    {
++                        if (kept_size[k] < kept_size[smallest]) { smallest = k; }
++                    }
++                    if (size > kept_size[smallest])
++                    {
++                        kept[smallest] = span;
++                        kept_size[smallest] = size;
++                    }
++                }
++            }
++        }
++        result.cap_saturated = result.total > kept_count ? 1u : 0u;
++        // Publish ascending by address (evidence-stable ordering).
++        for (size_t a = 0; a < kept_count; ++a)
++        {
++            for (size_t b = a + 1; b < kept_count; ++b)
++            {
++                if (kept[b].lo < kept[a].lo)
++                {
++                    const AddressSpan ts = kept[a]; kept[a] = kept[b]; kept[b] = ts;
++                    const uint64_t zs = kept_size[a]; kept_size[a] = kept_size[b]; kept_size[b] = zs;
++                }
++            }
++        }
++        const size_t stored = kept_count < out_capacity ? kept_count : out_capacity;
++        for (size_t k = 0; k < stored; ++k) { out[k] = kept[k]; }
++        result.published = static_cast<uint32_t>(stored);
++        return result;
++    }
++
++    // FNAME-VERDICT.md section 5 steps 1-2, launch10-c edition: CurrentBlock
++    // >= 1; Blocks[0] nonzero, 8-aligned, OUTSIDE the image extent, and
++    // inside exactly one PUBLISHED current-invocation readable span (class
++    // (ii), non-image). No frozen envelope, no fallback: an empty span table
++    // is a loud refusal naming it, never silent admission. Content identity
++    // stays downstream ('None'/'ByteProperty' entry matching + probe id).
++    //
++    // Truncation honesty (same-capture rule): capture_envelope_end is the
++    // max record end over the WHOLE captured snapshot. The kernel VMMAP
++    // enumeration is address-ordered, so a truncated capture is a PREFIX —
++    // an admission miss BELOW the envelope is a genuine unmapped/unreadable
++    // verdict, while a miss AT OR ABOVE the envelope must NEVER read as
++    // 'unmapped' (the mapping may exist past the cut): it refuses with the
++    // dedicated truncation message instead. A valid pool is therefore never
++    // mis-refused as unmapped when its heap span was dropped by a short
++    // capture — and with the bridge capture at 16,384 records (static bss;
++    // launch-2 ENOMEM evidence; observed vm_total 10,019) the complete-
++    // coverage case is the production norm (coverage-proven fixture H).
++    struct PoolShapeCheck
++    {
++        bool ok;
++        const char* failure;      // nullptr when ok
++        const char* bounds_source; // provenance of the bound that was applied
++    };
++
+     [[nodiscard]] inline auto check_pool_shape(uint32_t current_block,
+                                                uint64_t blocks0,
+-                                               uint64_t heap_lo,
+-                                               uint64_t heap_hi) -> Check
++                                               const AddressSpan* published_spans,
++                                               size_t published_span_count,
++                                               uint64_t capture_envelope_end,
++                                               uint64_t base) -> PoolShapeCheck
+     {
++        if (published_spans == nullptr || published_span_count == 0)
++        {
++            return {false, "span table unavailable (bridge published no non-image readable spans this invocation)",
++                    "span-table-unavailable"};
++        }
+         if (current_block < 1)
+         {
+-            return {false, "CurrentBlock < 1 (pool not initialized or wrong pool/base)"};
++            return {false, "CurrentBlock < 1 (pool not initialized or wrong pool/base)", "structural"};
+         }
+         if (blocks0 == 0)
+         {
+-            return {false, "Blocks[0] is null"};
++            return {false, "Blocks[0] is null", "structural"};
+         }
+-        if (heap_lo >= heap_hi)
++        if ((blocks0 & 0x7ull) != 0)
+         {
+-            return {false, "heap span is empty"};
++            return {false, "Blocks[0] is not 8-aligned", "structural"};
+         }
+-        if (blocks0 < heap_lo || blocks0 >= heap_hi)
++        if (blocks0 >= base && blocks0 < base + kImageFileExtentBytes)
+         {
+-            return {false, "Blocks[0] outside the readable heap span"};
++            return {false, "Blocks[0] inside the image extent (wrong-base/wrong-pool arithmetic; pool blocks are heap allocations)",
++                    "published-readable-spans"};
+         }
+-        return {true, nullptr};
++        for (size_t i = 0; i < published_span_count; ++i)
++        {
++            if (blocks0 >= published_spans[i].lo && blocks0 < published_spans[i].hi)
++            {
++                return {true, nullptr, "published-readable-spans"};
++            }
++        }
++        if (blocks0 >= capture_envelope_end)
++        {
++            return {false, "snapshot truncated: cannot prove heap coverage at or past the captured envelope (omitted mapping, not proven unmapped)",
++                    "capture-truncated"};
++        }
++        return {false, "Blocks[0] not covered by any published readable span (unmapped or unreadable at this address; capture complete below the envelope)",
++                "published-readable-spans"};
+     }
+ 
+     // Bounds that must hold before any entry byte is touched: the block index

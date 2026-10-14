@@ -1,0 +1,13 @@
+66c66,75
+<             auto contents = ensure_str(std::string(settings->bytes));
+---
+>             // Direct ASCII-to-wchar_t conversion: the PS5 SDK's libc++ has a
+>             // codecvt bug (4-byte-unit helpers with 2-byte wchar_t) that garbles
+>             // ensure_str on this platform. The settings file is pure ASCII, so
+>             // each byte maps 1:1 to a wchar_t of the same value.
+>             StringType contents;
+>             contents.reserve(settings->bytes.size());
+>             for (const char c : settings->bytes)
+>             {
+>                 contents.push_back(static_cast<CharType>(static_cast<unsigned char>(c)));
+>             }

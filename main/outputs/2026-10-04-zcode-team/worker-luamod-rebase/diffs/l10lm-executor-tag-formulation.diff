@@ -1,0 +1,133 @@
+--- a/port/ue4ss/src/Mod/LuaMod.cpp
++++ b/port/ue4ss/src/Mod/LuaMod.cpp
+@@ -4124,6 +4124,16 @@
+         };
+     }
+ #endif
++
++    // [R3-L10LM] File-local executor tag for the FuncPtr-marshal drain (this
++    // rebase edition, worker-luamod-rebase 2026-10-04). DIFF-1's SettingsManager.hpp
++    // enum append is deliberately NOT landed in this edition: the appended
++    // enumerator's value would be 2 (ProcessEvent=0, EngineTick=1 in the base
++    // enum, appended last per DIFF-1 hunk 1), so a file-local constexpr with
++    // that exact value is assignment-/comparison-/template-argument-compatible
++    // WITHOUT touching the shared header - zero additional recompile set. The
++    // named Lua table key below is a string, not the C++ identifier, unchanged.
++    static constexpr auto kFuncPtrMarshalExecutor = static_cast<GameThreadExecutionMethod>(2);
+ 
+     // =====================================================================================
+     // [R3] FuncPtr-marshal state (DIFF 1, worker-r3-diffs-authoring 2026-10-04;
+@@ -4348,12 +4358,12 @@
+                         continue;
+                     }
+                 }
+-                else if constexpr (Executor == GameThreadExecutionMethod::FuncPtrMarshal)
++                else if constexpr (Executor == kFuncPtrMarshalExecutor)
+                 {
+                     // [R3] the marshal drains only marshal-tagged delayed actions
+                     // (time-based; frame-based delays remain EngineTick-only, so the
+                     // readiness block below leaves them untouched for this executor).
+-                    if (action.method != GameThreadExecutionMethod::FuncPtrMarshal)
++                    if (action.method != kFuncPtrMarshalExecutor)
+                     {
+                         continue;
+                     }
+@@ -4570,7 +4580,7 @@
+         }
+ 
+         process_simple_actions(LuaMod::m_game_thread_actions);
+-        process_delayed_actions<GameThreadExecutionMethod::FuncPtrMarshal>(LuaMod::m_delayed_game_thread_actions);
++        process_delayed_actions<kFuncPtrMarshalExecutor>(LuaMod::m_delayed_game_thread_actions);
+ 
+         process_pending_notify_on_new_object_callbacks();
+ 
+@@ -4887,7 +4897,7 @@
+             lua_pushinteger(L, static_cast<int>(GameThreadExecutionMethod::ProcessEvent));
+             lua_setfield(L, -2, "ProcessEvent");
+             // [R3] EGameThreadMethod.FuncPtrMarshal (DIFF 1; R3D 4.5)
+-            lua_pushinteger(L, static_cast<int>(GameThreadExecutionMethod::FuncPtrMarshal));
++            lua_pushinteger(L, static_cast<int>(kFuncPtrMarshalExecutor));
+             lua_setfield(L, -2, "FuncPtrMarshal");
+             lua_setglobal(L, "EGameThreadMethod");
+         }
+@@ -4941,7 +4951,7 @@
+                     }
+                     else if (is_funcptr_marshal_armed())
+                     {
+-                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++                        method = kFuncPtrMarshalExecutor;
+                     }
+                     else
+                     {
+@@ -4970,7 +4980,7 @@
+                     }
+                     else if (is_funcptr_marshal_armed())
+                     {
+-                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++                        method = kFuncPtrMarshalExecutor;
+                     }
+                     else
+                     {
+@@ -4985,7 +4995,7 @@
+                     LuaMod::ensure_process_event_hooked(mod);
+                 }
+             }
+-            else if (method == GameThreadExecutionMethod::FuncPtrMarshal)
++            else if (method == kFuncPtrMarshalExecutor)
+             {
+                 // [R3] availability = carrier armed (module state), NOT an address
+                 // is_ready() (R3D 3 trap / 4.5). Enqueueing before arming is safe and
+@@ -5085,7 +5095,7 @@
+                         {
+                             lua.throw_error("ExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
+                         }
+-                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++                        method = kFuncPtrMarshalExecutor;
+ #else
+                         lua.throw_error("ExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available (AOB scans failed)");
+                         method = GameThreadExecutionMethod::ProcessEvent;
+@@ -5122,7 +5132,7 @@
+                         {
+                             lua.throw_error("ExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
+                         }
+-                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++                        method = kFuncPtrMarshalExecutor;
+ #else
+                         lua.throw_error("ExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available (AOB scans failed)");
+                         method = GameThreadExecutionMethod::EngineTick;
+@@ -5272,7 +5282,7 @@
+                         {
+                             lua.throw_error("RetriggerableExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
+                         }
+-                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++                        method = kFuncPtrMarshalExecutor;
+ #else
+                         lua.throw_error("RetriggerableExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available (AOB scans failed)");
+                         method = GameThreadExecutionMethod::ProcessEvent;
+@@ -5309,7 +5319,7 @@
+                         {
+                             lua.throw_error("RetriggerableExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
+                         }
+-                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++                        method = kFuncPtrMarshalExecutor;
+ #else
+                         lua.throw_error("RetriggerableExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available (AOB scans failed)");
+                         method = GameThreadExecutionMethod::EngineTick;
+@@ -5487,7 +5497,7 @@
+                         {
+                             lua.throw_error("LoopInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
+                         }
+-                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++                        method = kFuncPtrMarshalExecutor;
+ #else
+                         lua.throw_error("LoopInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available (AOB scans failed)");
+                         method = GameThreadExecutionMethod::ProcessEvent;
+@@ -5524,7 +5534,7 @@
+                         {
+                             lua.throw_error("LoopInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
+                         }
+-                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++                        method = kFuncPtrMarshalExecutor;
+ #else
+                         lua.throw_error("LoopInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available (AOB scans failed)");
+                         method = GameThreadExecutionMethod::EngineTick;

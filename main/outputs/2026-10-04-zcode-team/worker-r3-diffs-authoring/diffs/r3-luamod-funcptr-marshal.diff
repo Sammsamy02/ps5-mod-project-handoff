@@ -1,0 +1,489 @@
+--- a/source/port/ue4ss/include/SettingsManager.hpp	2026-10-05 02:23:35
++++ b/source/port/ue4ss/include/SettingsManager.hpp	2026-10-05 02:23:35
+@@ -16,7 +16,11 @@
+     enum class GameThreadExecutionMethod
+     {
+         ProcessEvent, // Use ProcessEvent hook
+-        EngineTick    // Use Engine Tick hook (once per frame)
++        EngineTick,   // Use Engine Tick hook (once per frame)
++        // [R3] Drain via the R3-hooked carrier UFunction's FuncPtr post-hook (DIFF 1,
++        // worker-r3-diffs-authoring 2026-10-04; R3-TIER-DESIGN 4/5.2). PROSPERO
++        // both-fail route; appended last so existing integer values are unchanged.
++        FuncPtrMarshal
+     };
+ 
+     class RC_UE4SS_API SettingsManager
+--- a/source/port/ue4ss/src/Mod/LuaMod.cpp	2026-10-05 02:23:35
++++ b/source/port/ue4ss/src/Mod/LuaMod.cpp	2026-10-05 02:23:35
+@@ -78,6 +78,21 @@
+ 
+ namespace RC
+ {
++    namespace Unreal
++    {
++        // =================================================================================
++        // [R3] FuncPtr-marshal bridges (DIFF 1; R3-TIER-DESIGN 4.4a/4.4b). Defined in the
++        // replaced initializer unit (DIFF 2). Deliberately declared here rather than in a
++        // shared header: touching Unreal/UnrealInitializer.hpp would force a tree-wide
++        // recompile. The definitions exist only under __PROSPERO__; every reference below
++        // is inside #ifdef __PROSPERO__ so non-PROSPERO builds never odr-use them.
++        // Signatures are part of the DIFF 1/DIFF 2 contract and must not drift.
++        // =================================================================================
++        auto R3MarshalPublishGameThreadIdentity() -> bool;
++        auto R3MarshalQueryHarnessDispatch() -> void;
++        auto R3MarshalPumpPending() -> bool;
++    }
++
+     LuaMadeSimple::Lua* LuaStatics::console_executor{};
+     bool LuaStatics::console_executor_enabled{};
+ 
+@@ -4109,7 +4124,34 @@
+         };
+     }
+ #endif
++
++    // =====================================================================================
++    // [R3] FuncPtr-marshal state (DIFF 1, worker-r3-diffs-authoring 2026-10-04;
++    // R3-TIER-DESIGN 4/5.2). The R3-compatible game-thread pump: ONE carrier UFunction
++    // ("the calibration-selected carrier", R3D 4.2) is R3-hooked via RegisterPostHook
++    // (UFunction.cpp:91-101 -> GetFunctionHookData :78-89: save current FuncPtr as the
++    // original, then SetFuncPtr(&Internal::UnrealScriptFunctionHook) - ONE aligned
++    // pointer store into already-RW heap memory, zero syscalls). Its post-callback body
++    // (funcptr_marshal_hook below) drains the SAME m_game_thread_actions queue
++    // process_event_hook drains. Arming is parameterized by the carrier's FName id:
++    // the calibration owner calls arm_funcptr_marshal_drain; this unit owns readiness,
++    // the drain, and the registration only. File scope by design: no LuaMod.hpp change,
++    // so no additional unit recompiles.
++    // =====================================================================================
++    static std::atomic<bool> m_funcptr_marshal_armed{false};
++    static int32_t m_funcptr_marshal_callback_id{-1};
++    static Unreal::FName m_funcptr_marshal_carrier_id{};
++    [[maybe_unused]] static bool m_funcptr_marshal_identity_published{false};
++    [[maybe_unused]] static bool m_funcptr_marshal_pump_pending_logged{false};
+ 
++    // Backend-reality predicate (R3D 4.5): "carrier armed" module state, NOT an AOB
++    // address is_ready() - the ExecuteInGameThread/WithDelay availability trap of R3D 3
++    // (address-availability is not arming) cannot recur through this path.
++    static auto is_funcptr_marshal_armed() -> bool
++    {
++        return m_funcptr_marshal_armed.load(std::memory_order_acquire);
++    }
++
+     static auto process_simple_actions(std::vector<LuaMod::SimpleLuaAction>& actions) -> void
+     {
+         std::vector<LuaMod::SimpleLuaAction> to_run{};
+@@ -4302,6 +4344,16 @@
+                         continue;
+                     }
+                 }
++                else if constexpr (Executor == GameThreadExecutionMethod::FuncPtrMarshal)
++                {
++                    // [R3] the marshal drains only marshal-tagged delayed actions
++                    // (time-based; frame-based delays remain EngineTick-only, so the
++                    // readiness block below leaves them untouched for this executor).
++                    if (action.method != GameThreadExecutionMethod::FuncPtrMarshal)
++                    {
++                        continue;
++                    }
++                }
+ 
+                 if (action.status == LuaMod::DelayedActionStatus::Paused || action.status == LuaMod::DelayedActionStatus::Executing)
+                 {
+@@ -4435,7 +4487,87 @@
+ 
+         process_simple_actions(LuaMod::m_game_thread_actions);
+         process_delayed_actions<GameThreadExecutionMethod::ProcessEvent>(LuaMod::m_delayed_game_thread_actions);
++
++        process_pending_notify_on_new_object_callbacks();
++
++        {
++            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            LuaMod::m_is_processing_actions = false;
++            if (!LuaMod::m_pending_game_thread_actions.empty())
++            {
++                LuaMod::m_game_thread_actions.insert(
++                    LuaMod::m_game_thread_actions.end(),
++                    std::make_move_iterator(LuaMod::m_pending_game_thread_actions.begin()),
++                    std::make_move_iterator(LuaMod::m_pending_game_thread_actions.end()));
++                LuaMod::m_pending_game_thread_actions.clear();
++            }
++            if (!LuaMod::m_pending_delayed_game_thread_actions.empty())
++            {
++                LuaMod::m_delayed_game_thread_actions.insert(
++                    LuaMod::m_delayed_game_thread_actions.end(),
++                    std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.begin()),
++                    std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.end()));
++                LuaMod::m_pending_delayed_game_thread_actions.clear();
++            }
++        }
++    }
++
++    // =====================================================================================
++    // [R3] The FuncPtr-marshal drain body (DIFF 1; R3D 4.1/4.3). Registered as a
++    // POST-hook on the carrier: the original function has already executed unmodified;
++    // this body never touches parms or RESULT_DECL and never alters control flow.
++    // The PROSPERO prologue is process_event_hook's; the drain block is
++    // process_event_hook's with the delayed-action executor tagged FuncPtrMarshal.
++    // Thread honesty (R3D 4.3): until the initializer bridge publishes the game-thread
++    // identity, the marshal DRAINS NOTHING except the publication step itself.
++    // =====================================================================================
++    static auto funcptr_marshal_hook([[maybe_unused]] Unreal::UnrealScriptFunctionCallableContext& Context,
++                                     [[maybe_unused]] void* CustomData) -> void
++    {
++#ifdef __PROSPERO__
++        // ORDER MATTERS (R3D 4.3): under BOTH_FAIL nothing else publishes the identity,
++        // so the marshal CANNOT gate on IsInGameThreadRaw() first - before publication
++        // that predicate is false for every thread and the pump would never start. The
++        // first accepted invocation publishes via the initializer bridge (publish_current
++        // is mutex-arbitrated: exactly one thread wins; every other thread, on this and
++        // later invocations, refuses); from then on the raw gate refuses worker threads.
++        // The publishing thread BECOMES the game thread - the same semantics as
++        // HookedEngineTick's genuine-callback publication, backed by the calibration's
++        // game-thread-stability criterion C-4 (CARRIER-CANDIDATES).
++        if (!m_funcptr_marshal_identity_published)
++        {
++            // 4.4a: the HookedEngineTick publication body, routed onto the marshal.
++            // Published/AlreadyCurrent both mean this caller IS the game thread;
++            // Unavailable/DifferentThread/StartupWait-cancelled refuse (false).
++            if (!Unreal::R3MarshalPublishGameThreadIdentity())
++            {
++                return;
++            }
++            m_funcptr_marshal_identity_published = true;
++            if (Unreal::R3MarshalPumpPending() && !m_funcptr_marshal_pump_pending_logged)
++            {
++                m_funcptr_marshal_pump_pending_logged = true;
++                Output::send(STR("[R3] marshal is the game-thread pump (initializer deferred its EngineTick registrations)\n"));
++            }
++        }
++        // The carrier may be invoked on worker threads. Do not inspect Lua action
++        // state until the published game thread is this exact caller thread.
++        if (!Unreal::IsInGameThreadRaw())
++        {
++            return;
++        }
++        NativeLuaActionDispatchScope action_dispatch;
++        if (!action_dispatch.owns_dispatch())
++            return;
++#endif
++        {
++            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            LuaMod::m_is_processing_actions = true;
++        }
+ 
++        process_simple_actions(LuaMod::m_game_thread_actions);
++        process_delayed_actions<GameThreadExecutionMethod::FuncPtrMarshal>(LuaMod::m_delayed_game_thread_actions);
++
+         process_pending_notify_on_new_object_callbacks();
+ 
+         {
+@@ -4513,6 +4645,76 @@
+         return UE4SSRuntime::IsProcessEventAvailable();
+     }
+ 
++    // =====================================================================================
++    // [R3] Identity pre-check (DIFF 1; R3D 4.3, the R3 port of VSD 2.1). Pure data reads
++    // before ANY store: non-null FuncPtr, not the script-function pointer, FUNC_Native.
++    // Refusal is loud and stores nothing. This is the same gate shape the Lua
++    // RegisterHook native branch applies (LUA:4618-4620), so the R3 tier gets the
++    // PLH-missing semantic validation for free.
++    // =====================================================================================
++    static auto r3_marshal_carrier_precheck(Unreal::UFunction* carrier) -> bool
++    {
++        if (!carrier)
++        {
++            Output::send<LogLevel::Error>(STR("[R3] marshal arm refused: carrier UFunction is null\n"));
++            return false;
++        }
++        const auto current_func_ptr = carrier->GetFuncPtr();
++        if (!current_func_ptr)
++        {
++            Output::send<LogLevel::Error>(STR("[R3] marshal arm refused: carrier {} has a null FuncPtr\n"), carrier->GetFullName());
++            return false;
++        }
++        if (current_func_ptr == Unreal::UObject::ProcessInternalInternal.get_function_address())
++        {
++            Output::send<LogLevel::Error>(STR("[R3] marshal arm refused: carrier {} is a script function (Func == ProcessInternal)\n"), carrier->GetFullName());
++            return false;
++        }
++        if (!carrier->HasAnyFunctionFlags(Unreal::EFunctionFlags::FUNC_Native))
++        {
++            Output::send<LogLevel::Error>(STR("[R3] marshal arm refused: carrier {} does not have FUNC_Native\n"), carrier->GetFullName());
++            return false;
++        }
++        return true;
++    }
++
++    // =====================================================================================
++    // [R3] Register the drain on the calibration-selected carrier (DIFF 1). Parameterized
++    // by the carrier's FName id; the calibration owner (R3D 4.2 protocol, cc1 ridealong
++    // lineage) selects and calls this. The exact hook registration per
++    // UFunction.cpp:78-89: RegisterPostHook -> GetFunctionHookData() (emplaces the map
++    // entry saving the CURRENT FuncPtr as the original, then
++    // SetFuncPtr(&Internal::UnrealScriptFunctionHook)) -> AddPostCallback. Post-hook so
++    // the original function always executes first and unmodified.
++    // =====================================================================================
++    static auto arm_funcptr_marshal_drain(Unreal::UFunction* carrier, const Unreal::FName& carrier_id) -> bool
++    {
++        if (is_funcptr_marshal_armed())
++        {
++            if (carrier_id != m_funcptr_marshal_carrier_id)
++            {
++                Output::send<LogLevel::Warning>(STR("[R3] marshal arm ignored: already armed on a different carrier\n"));
++                return false;
++            }
++            return true; // idempotent re-arm of the same carrier
++        }
++        if (!r3_marshal_carrier_precheck(carrier))
++        {
++            return false;
++        }
++        const int32_t callback_id = carrier->RegisterPostHook(&funcptr_marshal_hook, nullptr);
++        if (callback_id < 0)
++        {
++            Output::send<LogLevel::Error>(STR("[R3] marshal arm refused: RegisterPostHook returned an invalid callback id for {}\n"), carrier->GetFullName());
++            return false;
++        }
++        m_funcptr_marshal_callback_id = callback_id;
++        m_funcptr_marshal_carrier_id = carrier_id;
++        m_funcptr_marshal_armed.store(true, std::memory_order_release);
++        Output::send(STR("[R3] FuncPtr-marshal armed on carrier {} (callback id {})\n"), carrier->GetFullName(), callback_id);
++        return true;
++    }
++
+     // Helper to ensure engine tick hook is registered
+     auto LuaMod::ensure_engine_tick_hooked() -> void
+     {
+@@ -4674,6 +4876,9 @@
+             lua_setfield(L, -2, "EngineTick");
+             lua_pushinteger(L, static_cast<int>(GameThreadExecutionMethod::ProcessEvent));
+             lua_setfield(L, -2, "ProcessEvent");
++            // [R3] EGameThreadMethod.FuncPtrMarshal (DIFF 1; R3D 4.5)
++            lua_pushinteger(L, static_cast<int>(GameThreadExecutionMethod::FuncPtrMarshal));
++            lua_setfield(L, -2, "FuncPtrMarshal");
+             lua_setglobal(L, "EGameThreadMethod");
+         }
+ 
+@@ -4716,18 +4921,70 @@
+             {
+                 if (!is_engine_tick_hook_available())
+                 {
++#if defined(__PROSPERO__)
++                    // [R3] three-state ladder (DIFF 1; R3D 4.5):
++                    // EngineTick -> ProcessEvent -> FuncPtrMarshal -> throw
++                    if (is_process_event_hook_available())
++                    {
++                        LuaMod::ensure_process_event_hooked(mod);
++                        method = GameThreadExecutionMethod::ProcessEvent;
++                    }
++                    else if (is_funcptr_marshal_armed())
++                    {
++                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++                    }
++                    else
++                    {
++                        lua.throw_error("ExecuteInGameThread: EngineTick method requested but neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
++                    }
++#else
+                     lua.throw_error("ExecuteInGameThread: EngineTick method requested but EngineTick hook is not available (AOB scan failed)");
++#endif
+                 }
+-                LuaMod::ensure_engine_tick_hooked();
++                else
++                {
++                    LuaMod::ensure_engine_tick_hooked();
++                }
+             }
+             else if (method == GameThreadExecutionMethod::ProcessEvent)
+             {
+                 if (!is_process_event_hook_available())
+                 {
++#if defined(__PROSPERO__)
++                    // [R3] three-state ladder (DIFF 1; R3D 4.5):
++                    // ProcessEvent -> EngineTick -> FuncPtrMarshal -> throw
++                    if (is_engine_tick_hook_available())
++                    {
++                        LuaMod::ensure_engine_tick_hooked();
++                        method = GameThreadExecutionMethod::EngineTick;
++                    }
++                    else if (is_funcptr_marshal_armed())
++                    {
++                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++                    }
++                    else
++                    {
++                        lua.throw_error("ExecuteInGameThread: ProcessEvent method requested but neither ProcessEvent nor EngineTick hooks are available and the R3 FuncPtr-marshal carrier is not armed");
++                    }
++#else
+                     lua.throw_error("ExecuteInGameThread: ProcessEvent method requested but ProcessEvent hook is not available (AOB scan failed)");
++#endif
+                 }
+-                LuaMod::ensure_process_event_hooked(mod);
++                else
++                {
++                    LuaMod::ensure_process_event_hooked(mod);
++                }
+             }
++            else if (method == GameThreadExecutionMethod::FuncPtrMarshal)
++            {
++                // [R3] availability = carrier armed (module state), NOT an address
++                // is_ready() (R3D 3 trap / 4.5). Enqueueing before arming is safe and
++                // lazy (R3D 4.4a): the closure simply awaits the marshal drain.
++                if (!is_funcptr_marshal_armed())
++                {
++                    Output::send<LogLevel::Warning>(STR("ExecuteInGameThread: FuncPtrMarshal requested but the carrier is not armed yet; the closure will await arming\n"));
++                }
++            }
+ 
+             // Acquire mutex before ANY Lua state operations to prevent race conditions
+             // when async thread and game thread both access the same hook_lua state
+@@ -4811,9 +5068,23 @@
+ #endif
+                     if (!is_process_event_hook_available())
+                     {
++#if defined(__PROSPERO__)
++                        // [R3] third ladder rung (DIFF 1; R3D 4.5):
++                        // EngineTick -> ProcessEvent -> FuncPtrMarshal -> throw.
++                        if (!is_funcptr_marshal_armed())
++                        {
++                            lua.throw_error("ExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
++                        }
++                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++#else
+                         lua.throw_error("ExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available (AOB scans failed)");
++                        method = GameThreadExecutionMethod::ProcessEvent;
++#endif
+                     }
+-                    method = GameThreadExecutionMethod::ProcessEvent;
++                    else
++                    {
++                        method = GameThreadExecutionMethod::ProcessEvent;
++                    }
+                 }
+             }
+             else if (method == GameThreadExecutionMethod::ProcessEvent)
+@@ -4834,9 +5105,23 @@
+ #endif
+                     if (!is_engine_tick_hook_available())
+                     {
++#if defined(__PROSPERO__)
++                        // [R3] third ladder rung (DIFF 1; R3D 4.5):
++                        // EngineTick -> ProcessEvent -> FuncPtrMarshal -> throw.
++                        if (!is_funcptr_marshal_armed())
++                        {
++                            lua.throw_error("ExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
++                        }
++                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++#else
+                         lua.throw_error("ExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available (AOB scans failed)");
++                        method = GameThreadExecutionMethod::EngineTick;
++#endif
+                     }
+-                    method = GameThreadExecutionMethod::EngineTick;
++                    else
++                    {
++                        method = GameThreadExecutionMethod::EngineTick;
++                    }
+                 }
+             }
+ 
+@@ -4970,9 +5255,23 @@
+ #endif
+                     if (!is_process_event_hook_available())
+                     {
++#if defined(__PROSPERO__)
++                        // [R3] third ladder rung (DIFF 1; R3D 4.5):
++                        // EngineTick -> ProcessEvent -> FuncPtrMarshal -> throw.
++                        if (!is_funcptr_marshal_armed())
++                        {
++                            lua.throw_error("RetriggerableExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
++                        }
++                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++#else
+                         lua.throw_error("RetriggerableExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available (AOB scans failed)");
++                        method = GameThreadExecutionMethod::ProcessEvent;
++#endif
+                     }
+-                    method = GameThreadExecutionMethod::ProcessEvent;
++                    else
++                    {
++                        method = GameThreadExecutionMethod::ProcessEvent;
++                    }
+                 }
+             }
+             else if (method == GameThreadExecutionMethod::ProcessEvent)
+@@ -4993,9 +5292,23 @@
+ #endif
+                     if (!is_engine_tick_hook_available())
+                     {
++#if defined(__PROSPERO__)
++                        // [R3] third ladder rung (DIFF 1; R3D 4.5):
++                        // EngineTick -> ProcessEvent -> FuncPtrMarshal -> throw.
++                        if (!is_funcptr_marshal_armed())
++                        {
++                            lua.throw_error("RetriggerableExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
++                        }
++                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++#else
+                         lua.throw_error("RetriggerableExecuteInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available (AOB scans failed)");
++                        method = GameThreadExecutionMethod::EngineTick;
++#endif
+                     }
+-                    method = GameThreadExecutionMethod::EngineTick;
++                    else
++                    {
++                        method = GameThreadExecutionMethod::EngineTick;
++                    }
+                 }
+             }
+ 
+@@ -5157,9 +5470,23 @@
+ #endif
+                     if (!is_process_event_hook_available())
+                     {
++#if defined(__PROSPERO__)
++                        // [R3] third ladder rung (DIFF 1; R3D 4.5):
++                        // EngineTick -> ProcessEvent -> FuncPtrMarshal -> throw.
++                        if (!is_funcptr_marshal_armed())
++                        {
++                            lua.throw_error("LoopInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
++                        }
++                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++#else
+                         lua.throw_error("LoopInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available (AOB scans failed)");
++                        method = GameThreadExecutionMethod::ProcessEvent;
++#endif
+                     }
+-                    method = GameThreadExecutionMethod::ProcessEvent;
++                    else
++                    {
++                        method = GameThreadExecutionMethod::ProcessEvent;
++                    }
+                 }
+             }
+             else if (method == GameThreadExecutionMethod::ProcessEvent)
+@@ -5180,9 +5507,23 @@
+ #endif
+                     if (!is_engine_tick_hook_available())
+                     {
++#if defined(__PROSPERO__)
++                        // [R3] third ladder rung (DIFF 1; R3D 4.5):
++                        // EngineTick -> ProcessEvent -> FuncPtrMarshal -> throw.
++                        if (!is_funcptr_marshal_armed())
++                        {
++                            lua.throw_error("LoopInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
++                        }
++                        method = GameThreadExecutionMethod::FuncPtrMarshal;
++#else
+                         lua.throw_error("LoopInGameThreadWithDelay: Neither EngineTick nor ProcessEvent hooks are available (AOB scans failed)");
++                        method = GameThreadExecutionMethod::EngineTick;
++#endif
++                    }
++                    else
++                    {
++                        method = GameThreadExecutionMethod::EngineTick;
+                     }
+-                    method = GameThreadExecutionMethod::EngineTick;
+                 }
+             }
+ 

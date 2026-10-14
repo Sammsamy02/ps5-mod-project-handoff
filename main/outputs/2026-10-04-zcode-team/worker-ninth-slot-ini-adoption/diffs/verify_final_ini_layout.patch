@@ -1,0 +1,76 @@
+--- law/verify_final_ini_layout.py.asfound	2026-10-05 01:49:51
++++ law/verify_final_ini_layout.py	2026-10-05 02:18:50
+@@ -1,7 +1,18 @@
+ #!/usr/bin/env python3
+ """verify_final_ini_layout.py — FINAL-LAYOUT VERIFIER for the definitive
+-return-session ploader.ini (worker-final-ini-layout, 2026-10-04).
++return-session ploader.ini (worker-final-ini-layout, 2026-10-04; NINTH-SLOT
++revision by worker-ninth-slot-ini-adoption, 2026-10-04).
+ 
++NINTH-SLOT REVISION: pins the 9-entry law of
++worker-carrier-probe-build/STAGE-PLAN.md — the cc1 carrier probe appended
++AFTER the igf `= 0` line (next free index; no existing line edited).
++Supersedes the 8-entry law (400 B, sha bbc34c16…, 7 registered), which this
++verifier pinned until this revision — that verifier CORRECTLY printed
++FINAL-INI-FAIL on 9-entry bytes before adoption (the supersession decision
++the constants brief deferred to the layout owner chain). The 8-entry law is
++preserved as: law/ploader.ini.canonical.asfound + law/*.asfound snapshots in
++worker-ninth-slot-ini-adoption/ and this worker's prior receipts.
++
+ Usage:
+     python3 verify_final_ini_layout.py <ini-file>          # verify a file
+     python3 verify_final_ini_layout.py --selftest          # built-in cases
+@@ -15,7 +26,7 @@
+   1. byte-exact equality with ploader.ini.canonical (sha256 printed either way)
+   2. on byte-mismatch: structured diagnosis — header count, per-line set and
+      order vs canonical, duplicates, unknown lines, mode flips
+-  3. parser-law re-check with the ridealongs law (registered == 7, igf never
++  3. parser-law re-check with the ridealongs law (registered == 8, igf never
+      registered, MAX_PLUGINS headroom)
+ 
+ Exit 0 only for FINAL-INI-OK. Never edits anything; host-side verifier."""
+@@ -34,11 +45,12 @@
+     "/data/plugins/modbridge_runtime_aligned_entry.prx = 2",
+     "/data/plugins/modbridge_path_test.prx = 2",
+     "/data/plugins/modbridge_ingame_facts.prx = 0",
++    "/data/plugins/modbridge_carrier.prx = 2",
+ ]
+ CANONICAL_BYTES = (HEADER + "\n" + "".join(l + "\n" for l in CANONICAL_LINES)).encode()
+ EXPECTED_SHA = hashlib.sha256(CANONICAL_BYTES).hexdigest()
+ KNOWN_PATHS = {l.rsplit(" = ", 1)[0] for l in CANONICAL_LINES}
+-EXPECTED_REGISTERED = 7
++EXPECTED_REGISTERED = 8
+ MAX_PLUGINS = 10
+ 
+ 
+@@ -132,8 +144,9 @@
+             for p in reg_problems:
+                 print(" -", p)
+             return 1
+-        print("FINAL-INI-OK: byte-exact canonical 8-entry layout; 7 active "
+-              "entries in definitive order; igf=0 skipped; 3/10 slot headroom.")
++        print("FINAL-INI-OK: byte-exact canonical 9-entry layout; 8 active "
++              "entries in definitive order (carrier last, after igf=0); "
++              "igf=0 skipped; 2/10 slot headroom.")
+         return 0
+     print(f"FINAL-INI-FAIL: bytes differ from canonical (expected sha256 "
+           f"{EXPECTED_SHA})")
+@@ -159,6 +172,18 @@
+         "no_trailing_newline": CANONICAL_BYTES.rstrip(b"\n"),
+         "empty": b"",
+         "header_only": (HEADER + "\n").encode(),
++        # ninth-slot revision cases: the carrier line must sit EXACTLY after
++        # the igf =0 line (next free index), at mode 2, exactly once
++        "carrier_before_igf": (HEADER + "\n" + "".join(
++            l + "\n" for l in [
++                *CANONICAL_LINES[:7], CANONICAL_LINES[8],
++                CANONICAL_LINES[7]])).encode(),
++        "carrier_mode1": CANONICAL_BYTES.replace(
++            b"modbridge_carrier.prx = 2", b"modbridge_carrier.prx = 1"),
++        "duplicate_carrier": CANONICAL_BYTES
++                             + CANONICAL_LINES[8].encode() + b"\n",
++        "carrier_only_8entry": (HEADER + "\n" + "".join(
++            l + "\n" for l in CANONICAL_LINES[:8])).encode(),  # old 8-entry law
+     }
+     fd, tmp = tempfile.mkstemp()
+     os.close(fd)

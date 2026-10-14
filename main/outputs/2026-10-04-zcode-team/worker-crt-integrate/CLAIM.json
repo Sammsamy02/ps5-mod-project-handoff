@@ -1,0 +1,30 @@
+{
+  "worker": "worker-crt-integrate",
+  "session": "2026-10-04-zcode-team",
+  "written_first": true,
+  "task": "Integrate the CRT startup family into the production builder and run host + SDK validation (InitOnce/Mutex/FileIO integration pattern).",
+  "absolute_workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "owned_write_area": "outputs/2026-10-04-zcode-team/worker-crt-integrate/",
+  "inputs_read_only": [
+    "outputs/2026-10-04-zcode-team/worker-crt-startup-implement/sources/",
+    "outputs/2026-10-04-zcode-team/worker-crt-startup-implement/REPORT.md",
+    "outputs/2026-10-04-zcode-team/worker-fileio-apply/vendor/"
+  ],
+  "plan": [
+    "Copy the vendored windows-candidate/windows-services/windows-execution/windows-image/native-host tree from worker-fileio-apply/vendor into worker-crt-integrate/vendor/ (existing files elsewhere stay untouched; edits apply to my vendored copies only).",
+    "Copy the CRT startup family (mb_win_crt_startup.h/.c, mb_win_crt_startup_abi.h/.c, tests/test_win_crt_startup.c) into vendor/windows-services/ per wiring point 1.",
+    "Apply the 10-point build.py wiring: --crt-startup flag + --sync guard, MB_OWNED_CRT_STARTUP profile define, native/abi source lists, receipt source list, crtstartup-lib def (LIBRARY api-ms-win-crt-runtime-l1-1-0.dll, 7 exports) linked into the consumer DLL only, consumer fixture define + tests/worker-crtstartup.h exercise, crt_startup_profile receipt (onexit_table_bytes 24, actual_pe_imports 7), census 'mb_win_crt_startup_abi': 8, crt_startup result-key assertions iff --crt-startup.",
+    "Apply the supporting InitOnce-pattern integration the family needs to actually run: owned_runtime.c session/bind/end/report/imports-count, owned_runtime.h report field, result_report.c crt_startup key, test_entry_candidate.c and test_worker_candidate_failures.c import-count assertions, worker-fixture.c exercise hooks, new tests/worker-crtstartup.h fixture and tests/worker-crtstartup-runtime.def.",
+    "Host validation: build.py --host-only --entry --clock --workers --sync --init-once --mutex --fileio --crt-startup.",
+    "If host passes: full SDK composition with the same flags plus --report-path /data/modbridge-owned-dll-candidate.jsonl (600s timeout guard), passing absolute --sdk/--llvm-bin/--lld-link/--output pointing at the pinned tools.",
+    "Verify receipts, record artifact, write REPORT.md last."
+  ],
+  "bounds": {
+    "max_tool_calls": 60,
+    "sdk_composition_timeout_s": 600,
+    "no_nested_subagents": true,
+    "no_network": true,
+    "console": false,
+    "target_execution_claimed": false
+  }
+}

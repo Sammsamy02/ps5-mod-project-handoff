@@ -1,0 +1,38 @@
+== build ==
+build OK
+== scenarios ==
+PASS t1_channel_open_failed: module_start returned -22
+PASS t1_channel_open_failed: exactly one failover line appended to UE4SS.log
+PASS t1_channel_open_failed: line carries distinct token channel_open_failed
+PASS t1_channel_open_failed: line carries the failed open return in hex (rc=0xfffffffe for -2)
+PASS t1_channel_open_failed: no module_start_entered event reached the diagnostic channel
+SCENARIO-PASS t1_channel_open_failed checks=5 failures=0
+PASS t2_bindings_null: module_start returned -22
+PASS t2_bindings_null: exactly one failover line appended
+PASS t2_bindings_null: line carries distinct token diag_bindings_null
+PASS t2_bindings_null: line carries rc=-22 in hex
+SCENARIO-PASS t2_bindings_null checks=4 failures=0
+PASS t3_wrong_state: first module_start returns the failed start rc (-1)
+PASS t3_wrong_state: no failover line for the in-scope-only -1 path (no -20/-21/-22 hit)
+PASS t3_wrong_state: re-entry with FINISHED state returns -21
+PASS t3_wrong_state: exactly one failover line after -21
+PASS t3_wrong_state: line carries distinct token wrong_state
+PASS t3_wrong_state: line carries rc=-21 in hex
+SCENARIO-PASS t3_wrong_state checks=6 failures=0
+shim: recursive re-entry module_start returned -20
+PASS t4_guard_busy: outer module_start still completed (returned 0)
+PASS t4_guard_busy: exactly one failover line for the inner -20
+PASS t4_guard_busy: line carries distinct token entry_guard_busy
+PASS t4_guard_busy: line carries rc=-20 in hex
+SCENARIO-PASS t4_guard_busy checks=4 failures=0
+PASS t5_success_silent: first module_start returned 0
+PASS t5_success_silent: idempotent ACTIVE re-entry returned 0
+PASS t5_success_silent: zero failover lines on the success path
+PASS t5_success_silent: positive control: success path emitted module_start_entered on the diag channel
+SCENARIO-PASS t5_success_silent checks=4 failures=0
+PASS t7_failover_refused: module_start still returned -22
+PASS t7_failover_refused: no failover line could be written (graceful)
+PASS t7_failover_refused: no diagnostic events either
+SCENARIO-PASS t7_failover_refused checks=3 failures=0
+
+HOST-TEST-PASS all scenarios

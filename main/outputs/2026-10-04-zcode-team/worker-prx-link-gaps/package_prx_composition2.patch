@@ -1,0 +1,346 @@
+--- ../worker-prx-packaging/package_prx.py	2026-10-04 13:35:00
++++ package_prx.py	2026-10-04 13:50:39
+@@ -1,7 +1,7 @@
+ #!/usr/bin/env python3
+ """Controller-runnable PRX packaging build for the NEW composed UE runtime.
+ 
+-Takes the composed runtime object (checkpoint zcode_supplier_composition_1,
++Takes the composed runtime object (checkpoint zcode_supplier_composition_2,
+ NEVER rebuilt here, hash-verified against the checkpoint ledger) plus the
+ retained bootstrap packaging inputs from the frozen proven PRX lineage
+ (native-full-runtime-aligned-entry-1) and produces a NEW PRX candidate in a
+@@ -22,8 +22,9 @@
+   5. pre-check the combined object's unresolved strong set: it must equal
+      the frozen 191 contract names plus exactly the five measured extensions
+      (sceKernelDlsym, sceKernelGetModuleInfo, sceKernelLoadStartModule,
+-     sceKernelStopUnloadModule from libkernel; qsort from libSceLibcInternal)
+-     with _DYNAMIC linker-provided; anything else is a recorded gap and the
++     sceKernelStopUnloadModule from libkernel; qsort from libSceLibcInternal);
++     composition-2 no longer references _DYNAMIC, so no linker-provided
++     boundary import remains; anything else is a recorded gap and the
+      build stops BEFORE the Packager runs;
+   6. derive the extended import contract (196 strong = 191 pinned + 5
+      provider-cloned rows, provenance chain preserved) and a patched copy of
+@@ -36,8 +37,12 @@
+  10. static verification: ELF module type/flags, PT_SCE_MODULE uniqueness,
+      SDK stamp value, explicit init/fini tags, init/fini slot counts,
+      entry-alignment byte evidence at module_start, import table vs the
+-     composed object's undefined set (all imports must be SDK-library
+-     providers or linker-provided; _DYNAMIC must NOT remain an import).
++     derived extended contract. The Packager publishes every dynamic symbol
++     in the on-device long form <sce-nid>#<library>#<module> (SceNid.Compute:
++     salted SHA-1, 8-byte reversal, 11-char base64), verified byte-for-byte
++     against the console-proven frozen lineage PRX, so import-set equality
++     is checked on decoded NID identities, and module_start/module_stop are
++     located through their NID exports.
+ 
+ The frozen lineage directory and the composed run directory are read-only.
+ History is never overwritten: every run requires a fresh output directory.
+@@ -51,6 +56,7 @@
+ from __future__ import annotations
+ 
+ import argparse
++import base64
+ import datetime as _dt
+ import hashlib
+ import json
+@@ -63,17 +69,32 @@
+ from pathlib import Path
+ 
+ BASE = Path(__file__).resolve().parent
+-ROOT = BASE.parents[2]
++
++
++def _find_root() -> Path:
++    """Walk up to the workspace root (the vendored copy may sit deeper in
++    outputs/ than the controller original)."""
++    p = BASE
++    for _ in range(6):
++        if (p / ".superpowers").is_dir():
++            return p
++        p = p.parent
++    raise RuntimeError("workspace root containing .superpowers not found")
++
++
++ROOT = _find_root()
+ SPIKE = ROOT / ".superpowers/native-dependency-spike"
+ 
+ # ---------------------------------------------------------------- pinned lineage
+ PIN = {
+     "ledger": ROOT / ".superpowers/native-observations/transport-experiments-progress.json",
+-    "composition_dir": SPIKE / "ue4ss-native-tick-file-owner-1/ue4ss-native-supplier-composition-1/run-1",
++    "composition_dir": SPIKE / "ue4ss-native-tick-file-owner-1/ue4ss-native-supplier-composition-2/run-1",
+     "composition_object_name": "coherent-tick-file-witness-runtime.o",
+-    "composition_object_sha256": "fb2f4dd16a20997455b39e6857fd2bdf45842c691bd0124a448948ae5bcb775c",
+-    "composition_object_bytes": 117624920,
+-    "composition_checkpoint": "zcode_supplier_composition_1",
++    "composition_object_sha256": "6701258cbf43240701efd21b690a28608ad28a5714b3efae97d13ea7d401f169",
++    "composition_object_bytes": 117635936,
++    "composition_checkpoint": "zcode_supplier_composition_2",
++    # The composition_2 ledger entry records only a 16-hex prefix; the run
++    # receipt.json carries the full digest and is verified against it.
+     "base_receipt": SPIKE / "ue4ss-native-notify-cancel-1/build-1/receipt.json",
+     "base_receipt_sha256": "bcd23a2a4abef518d8f220786e80cb131036e351b2218a322d26aee6adca8384",
+     "lineage": SPIKE / "native-full-runtime-aligned-entry-1",
+@@ -120,11 +141,14 @@
+                "-fno-stack-protector", "-fvisibility=hidden", "-ffreestanding",
+                "-fno-builtin"]
+ 
+-# The measured strong-import extension of the composed runtime: untyped GLOBAL
+-# UND symbols of the composed object (readelf), absent from the frozen
+-# 191-import contract because the older stage27 branch satisfied them
+-# internally. Measured by the combined-object pre-check (first full link run
+-# surfaced exactly qsort beyond the four sce* names). name -> identity donor.
++# The measured strong-import extension of the composed supplier runtime
++# (identical for composition-1 and composition-2: the composition_2 ledger
++# delta records "added [sceKernelGetModuleInfo] vs frozen baseline (==
++# composition-1 set ...)"): untyped GLOBAL UND symbols of the composed object
++# (readelf), absent from the frozen 191-import contract because the older
++# stage27 branch satisfied them internally. Measured by the combined-object
++# pre-check (first full link run surfaced exactly qsort beyond the four sce*
++# names). name -> identity donor.
+ EXTENDED_IMPORTS = {
+     "sceKernelDlsym": "sceKernelOpen",
+     "sceKernelGetModuleInfo": "sceKernelOpen",
+@@ -140,13 +164,34 @@
+     "sceKernelStopUnloadModule": "sdknm-libkernel.so.stdout",
+     "qsort": "sdknm-libSceLibcInternal.so.stdout",
+ }
+-# Linker-provided names the Packager must accept as boundary symbols (the
+-# composed object references _DYNAMIC untyped; the dynamic writer provides it).
++# Linker-provided names the Packager must accept as boundary symbols. The
++# composition-1 runtime referenced _DYNAMIC untyped; composition-2 no longer
++# does (its undefined-delta.json current set drops exactly _DYNAMIC), so the
++# boundary entry is retained only as a no-op safety net.
+ BOUNDARY_ADDITIONS = ["_DYNAMIC"]
+ 
+ CANDIDATE_BASENAME = "modbridge_supplier_composition.prx"
+ 
++# ------------------------------------------------------------- sce-nid encoding
++# The Packager (SharpProspero.Link DynamicWriter) publishes every dynamic
++# symbol in the on-device long form "<nid>#<library>#<module>" where <nid> is
++# SceNid.Compute(name): first 8 bytes of SHA-1(name + 16-byte suffix), byte-
++# reversed, standard base64 truncated to 11 chars with '/' mapped to '-'. The
++# frozen console-proven lineage PRX uses exactly this form (its dynstr carries
++# e.g. tsvEmnenz48#A#B for both the frozen and the candidate build), so the
++# static import checks compare decoded NID identities, never raw dynstr text.
++NID_SUFFIX = bytes([0x51, 0x8D, 0x64, 0xA6, 0x35, 0xDE, 0xD8, 0xC1,
++                    0xE6, 0xB0, 0x39, 0xB1, 0xC3, 0xE5, 0x52, 0x30])
++NID_LONG_RE = re.compile(r"^(.{11})#(.+)#(.+)$")
+ 
++
++def sce_nid(name: str) -> str:
++    """Mirror SharpProspero.Prx SceNid.Compute (verified against the encoder's
++    own ground-truth pairs: malloc->gQX+4GDQjpM, module_start->BaOKcng8g88)."""
++    digest = hashlib.sha1(name.encode() + NID_SUFFIX).digest()
++    return base64.b64encode(digest[:8][::-1]).decode()[:11].replace("/", "-")
++
++
+ def sha256_file(path: Path) -> str:
+     h = hashlib.sha256()
+     with open(path, "rb") as fh:
+@@ -265,9 +310,15 @@
+         check("ledger_checkpoint_present", composed_ck is not None,
+               PIN["composition_checkpoint"])
+         if composed_ck:
++            full = composed_ck.get("runtime_sha256")
++            prefix = composed_ck.get("runtime_sha256_prefix")
+             check("ledger_composed_runtime_sha256",
+-                  composed_ck.get("runtime_sha256") == PIN["composition_object_sha256"],
+-                  composed_ck.get("runtime_sha256"))
++                  full == PIN["composition_object_sha256"]
++                  or (full is None and prefix is not None
++                      and PIN["composition_object_sha256"].startswith(prefix)),
++                  {"full": full, "prefix": prefix,
++                   "note": "composition_2 ledger records a 16-hex prefix only; "
++                           "the run receipt.json carries the full digest"})
+         frozen_ck = ledger.get(PIN["frozen_prx_checkpoint"])
+         check("ledger_frozen_checkpoint_present", frozen_ck is not None,
+               PIN["frozen_prx_checkpoint"])
+@@ -313,13 +364,22 @@
+     if delta_path.is_file():
+         delta = json.loads(delta_path.read_text())
+         check("undefined_delta_added_matches_checkpoint_claim",
+-              sorted(delta.get("added", [])) == sorted(["sceKernelGetModuleInfo", "_DYNAMIC"]),
++              sorted(delta.get("added", [])) == sorted(["sceKernelGetModuleInfo"]),
+               {"added": delta.get("added"),
+-               "note": "checkpoint zcode_supplier_composition_1 documents exactly "
+-                       "these two additions vs the notify-cancel composed baseline; "
++               "note": "checkpoint zcode_supplier_composition_2 documents exactly "
++                       "this one addition vs the notify-cancel composed baseline "
++                       "(== composition-1 set minus the composition-1-only "
++                       "_DYNAMIC reference, which composition-2 drops); "
+                        "dlsym/LoadStart/StopUnload predate that baseline"})
+         check("undefined_delta_removed_empty", delta.get("removed") == [],
+               delta.get("removed"))
++        check("undefined_delta_drops_dynamic",
++              "_DYNAMIC" not in set(delta.get("current", {})),
++              {"note": "composition-2 no longer references _DYNAMIC; "
++                       "composition-1's delta carried it (199 -> 198 entries)"})
++        check("undefined_delta_covers_extended_imports",
++              all(n in set(delta.get("current", {})) for n in EXTENDED_IMPORTS),
++              sorted(EXTENDED_IMPORTS))
+         ev["composed_undefined_baseline"] = {
+             "current_count": delta.get("current_count"),
+             "added": delta.get("added"), "removed": delta.get("removed")}
+@@ -373,7 +433,11 @@
+             check("extended_imports_undefined_in_composed_object",
+                   all(n in strong for n in EXTENDED_IMPORTS),
+                   ev["composed_undefined_measured"]["extended_imports_status"])
+-            check("linker_provided_dynamic_undefined", "_DYNAMIC" in strong, None)
++            check("composed_object_no_dynamic_reference", "_DYNAMIC" not in strong,
++                  {"_DYNAMIC_undefined": "_DYNAMIC" in strong,
++                   "note": "composition-2 dropped the composition-1 untyped "
++                           "_DYNAMIC reference; the linker-provided boundary "
++                           "remains accepted but must not be needed"})
+         except Exception as exc:  # noqa: BLE001
+             check("composed_undefined_readelf", False, str(exc))
+         units = {}
+@@ -463,7 +527,7 @@
+         patches.append({"old": old, "new": new, "occurrences": count, "reason": why})
+ 
+     sub(old_contract_sha, new_contract_sha, 1,
+-        "pin the derived 195-import contract instead of the frozen 191-import one")
++        "pin the derived 196-import contract instead of the frozen 191-import one")
+     sub('GetProperty("required_strong").GetInt32() != 191',
+         f'GetProperty("required_strong").GetInt32() != {191 + added}', 1,
+         "strong import count 191 -> " + str(191 + added))
+@@ -799,58 +863,114 @@
+     checks["init_fini_slots"] = {"pass": True, "detail": {
+         "init_slots": init_slots, "frozen_init_slots": PIN["frozen_init_slots"],
+         "fini_slots": fini_slots, "frozen_fini_slots": PIN["frozen_fini_slots"],
+-        "delta_note": "new slots (if any) come from the 10 fresh composed units; "
+-                      "module_start walks __init_array_start..end explicitly"}}
++        "delta_note": "new slots (if any) come from the 11 fresh composition-2 "
++                      "units; module_start walks __init_array_start..end explicitly"}}
+     check("init_fini_slots_present", init_slots > 0 and fini_slots > 0,
+           {"init_slots": init_slots, "fini_slots": fini_slots})
+     for name in (".eh_frame", ".eh_frame_hdr", ".gcc_except_table"):
+         check(f"section_{name}_present", name in named and named[name][5] > 0, None)
+ 
+-    # imports vs the composed object's undefined baseline
++    # imports vs the derived extended contract. The Packager publishes the
++    # dynsym in the on-device long form "<sce-nid>#<library>#<module>"
++    # (identical in the frozen console-proven lineage PRX), so decode NID
++    # identities instead of comparing raw dynstr text.
+     dynsyms = symbols_in(bare, named, sections, ".dynsym")
+     symtabs = symbols_in(bare, named, sections, ".symtab")
+-    imports = sorted(s["name"] for s in dynsyms
+-                     if s["shndx"] == 0 and s["bind"] in (1, 2))
+-    contract_names = {r["ImportSymbol"]["Name"] for r in json.loads(
+-        (b.out / "supplier-contract.json").read_text())["contract"]["imports"]}
+-    check("imports_equal_extended_contract", set(imports) == contract_names,
+-          {"count": len(imports), "expected": len(contract_names),
+-           "extra": sorted(set(imports) - contract_names),
+-           "missing": sorted(contract_names - set(imports))})
+-    check("linker_provided_dynamic_not_imported", "_DYNAMIC" not in imports, None)
++    und_imports = [s for s in dynsyms if s["shndx"] == 0 and s["bind"] in (1, 2)]
++    contract_rows = json.loads(
++        (b.out / "supplier-contract.json").read_text())["contract"]["imports"]
++    contract_names = {r["ImportSymbol"]["Name"] for r in contract_rows}
++    nid_to_contract = {}
++    for n in contract_names:
++        nid_to_contract.setdefault(sce_nid(n), n)
++    decoded: dict[str, str] = {}
++    malformed: list[str] = []
++    unknown_nids: list[str] = []
++    suffix_hist: dict[str, int] = {}
++    for s in und_imports:
++        m = NID_LONG_RE.match(s["name"])
++        if not m:
++            malformed.append(s["name"])
++            continue
++        head, lib, mod = m.groups()
++        suffix_hist[f"{lib}#{mod}"] = suffix_hist.get(f"{lib}#{mod}", 0) + 1
++        if head not in nid_to_contract:
++            unknown_nids.append(s["name"])
++        else:
++            decoded.setdefault(nid_to_contract[head], s["name"])
++    nid_decoded_names = set(decoded) | set(malformed)
++    check("imports_equal_extended_contract",
++          nid_decoded_names == contract_names and not unknown_nids,
++          {"count": len(nid_decoded_names), "expected": len(contract_names),
++           "encoding": "sce-nid long form <nid>#<lib>#<mod> (SceNid.Compute; "
++                       "same representation as the frozen console-proven PRX)",
++           "decoded_extra": sorted(nid_decoded_names - contract_names),
++           "missing": sorted(contract_names - nid_decoded_names),
++           "malformed_names": sorted(malformed),
++           "unknown_nid_imports": sorted(unknown_nids),
++           "suffix_histogram": dict(sorted(suffix_hist.items()))})
++    check("linker_provided_dynamic_not_imported",
++          "_DYNAMIC" not in nid_decoded_names, None)
+     baseline = json.loads(
+         (PIN["composition_dir"] / "undefined-delta.json").read_text())
+     baseline_names = set(baseline["current"].keys())
++    frozen_names = {r["ImportSymbol"]["Name"] for r in json.loads(
++        PIN["import_contract"].read_text())["contract"]["imports"]}
+     provider_map = {
+         n: (f"{'libkernel' if v == 'sceKernelOpen' else 'libSceLibcInternal'} "
+             f"(SDK stub, nm-verified in the composed run; identity donor {v})")
+         for n, v in EXTENDED_IMPORTS.items()}
++    outside_baseline = sorted(nid_decoded_names - baseline_names)
++    contract_backed = sorted(n for n in outside_baseline if n in frozen_names)
++    extensions = sorted(n for n in outside_baseline if n in EXTENDED_IMPORTS)
++    unaccounted = sorted(n for n in outside_baseline
++                         if n not in frozen_names and n not in EXTENDED_IMPORTS)
+     check("imports_resolve_to_sdk_or_linker",
+-          set(imports) - baseline_names <= set(EXTENDED_IMPORTS),
++          not unaccounted and nid_decoded_names <= baseline_names | frozen_names
++          | set(EXTENDED_IMPORTS),
+           {"composed_baseline_count": baseline.get("current_count"),
+            "extension_providers": provider_map,
+-           "imports_outside_composed_baseline":
+-               sorted(set(imports) - baseline_names)})
++           "imports_outside_composed_baseline": outside_baseline,
++           "outside_baseline_contract_backed": {
++               "names": contract_backed,
++               "note": "typed import-reference rows of the frozen 191-import "
++                       "contract; the composed object itself never references "
++                       "them, the frozen bootstrap shims do (identical in the "
++                       "console-proven lineage)"},
++           "outside_baseline_extensions": extensions,
++           "unaccounted": unaccounted})
+ 
+-    # entry alignment evidence: force_align_arg_pointer prologue at module_start
++    # entry alignment evidence: force_align_arg_pointer prologue at
++    # module_start. The Packager exports module_start/module_stop under their
++    # sce-nids (long form <nid>#<library>#<module>) -- the frozen lineage PRX
++    # carries exactly BaOKcng8g88#F#A / KpDMrPHvt3Q#F#A -- so resolve the
++    # export by NID first and only fall back to a plain symtab name.
+     def entry_evidence(symbol: str) -> dict:
+-        cands = [s for s in (symtabs or dynsyms) if s["name"] == symbol and s["shndx"] != 0]
++        want_nid = sce_nid(symbol)
++        cands = [s for s in dynsyms if s["shndx"] != 0
++                 and s["name"].split("#")[0] == want_nid]
++        by = "dynsym-nid"
+         if not cands:
+-            return {"symbol": symbol, "found": False}
++            cands = [s for s in symtabs if s["name"] == symbol and s["shndx"] != 0]
++            by = "symtab-name"
++        if not cands:
++            return {"symbol": symbol, "nid": want_nid, "found": False}
+         sym = max(cands, key=lambda s: s["size"])
++        # phdr layout: (type, flags, offset, vaddr, paddr, filesz, memsz, align)
+         load = next((p for p in phdrs if p[0] == 1
+-                     and p[2] <= sym["value"] < p[2] + p[4]), None)
++                     and p[3] <= sym["value"] < p[3] + p[5]), None)
+         if load is None:
+-            return {"symbol": symbol, "found": True, "mapped": False}
+-        off = sym["value"] - load[2] + load[3]  # vaddr -> file offset
++            return {"symbol": symbol, "nid": want_nid, "found": True,
++                    "mapped": False, "value": hex(sym["value"])}
++        off = sym["value"] - load[3] + load[2]  # vaddr -> file offset
+         window = bare[off:off + 96]
+         patterns = {"and_rsp_imm8_-16": bytes.fromhex("4883e4f0"),
+                     "and_rsp_imm32_-16": bytes.fromhex("4881e4f0ffffffff")}
+         hits = {k: window.find(v) for k, v in patterns.items()}
+-        return {"symbol": symbol, "found": True, "mapped": True,
++        return {"symbol": symbol, "nid": want_nid, "found": True, "mapped": True,
++                "resolved_by": by,
++                "export_long_name": sym["name"] if by == "dynsym-nid" else None,
+                 "value": hex(sym["value"]), "file_offset": off, "size": sym["size"],
+-                "exported_in_dynsym": any(s["name"] == symbol and s["shndx"] != 0
+-                                          for s in dynsyms),
+                 "first_bytes": window[:32].hex(),
+                 "realignment_pattern_offsets": hits,
+                 "prologue_source_attribute":

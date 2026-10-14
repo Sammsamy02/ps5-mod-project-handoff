@@ -1,0 +1,59 @@
+--- .superpowers/native-dependency-spike/ue4ss-native-program-status-1/src/UE4SSProgram.cpp
++++ src/UE4SSProgram.cpp
+@@ -13,6 +13,7 @@
+ #include <cstdio>
+ #ifdef __PROSPERO__
+ #include <Input/PlatformInputSource.hpp>
++#include <NativeLayoutBinding.hpp>
+ #include <Helpers/Utf16Utf8.hpp>
+ #endif
+ #include <format>
+@@ -774,6 +775,10 @@
+ 
+     auto UE4SSProgram::load_unreal_offsets_from_file() -> void
+     {
++#ifdef __PROSPERO__
++        Platform::NativeLayouts::StageNativeLayoutFiles(m_working_directory);
++        m_custom_member_variable_layout_loaded = true;
++#else
+         std::filesystem::path file_path = m_working_directory / "MemberVariableLayout.ini";
+         if (std::filesystem::exists(file_path))
+         {
+@@ -790,6 +795,7 @@
+                 m_custom_member_variable_layout_loaded = true;
+             }
+         }
++#endif
+     }
+ 
+     auto UE4SSProgram::setup_unreal() -> void
+@@ -802,8 +808,12 @@
+ 
+         if (m_custom_member_variable_layout_loaded)
+         {
++#ifdef __PROSPERO__
++            Output::send(STR("Native member and vtable layout pair staged; engine facts still required\n"));
++#else
+             Output::send(STR("MemberVariableLayout.ini loaded\n"));
+             output_all_member_offsets(IsCoalesced::No);
++#endif
+         }
+ 
+         Unreal::UnrealInitializer::Config config;
+@@ -872,6 +882,7 @@
+         // If any Lua scripts are found, add overrides so that the Lua script can perform the aob scan instead of the Unreal API itself
+         setup_lua_scan_overrides(m_working_directory, config);
+ 
++#ifndef __PROSPERO__
+         // Virtual function offset overrides
+         TRY([&]() {
+             ProfilerScopeNamed("loading virtual function offset overrides");
+@@ -1071,6 +1082,8 @@
+                 file.close();
+             }
+         });
++
++#endif
+ 
+         config.bHookProcessInternal = settings_manager.Hooks.HookProcessInternal;
+         config.bHookProcessLocalScriptFunction = settings_manager.Hooks.HookProcessLocalScriptFunction;

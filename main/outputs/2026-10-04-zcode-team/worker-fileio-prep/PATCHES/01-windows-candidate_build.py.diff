@@ -1,0 +1,119 @@
+--- a/windows-candidate/build.py
++++ b/windows-candidate/build.py
+@@ -25,6 +25,8 @@
+  p.add_argument('--sync',action='store_true',help='With --workers, exercise critical sections, SRW/condition variables and address waits through actual PE imports.')
+  p.add_argument('--init-once',action='store_true',help='With --sync, exercise one-time initialization (InitOnceBeginInitialize/InitOnceComplete) through actual PE imports.')
+  p.add_argument('--mutex',action='store_true',help='With --sync, exercise the KERNEL32 mutex family (create/open/release/waits) through actual PE imports.')
++ p.add_argument('--fileio',action='store_true',help='With --workers, exercise the KERNEL32 file I/O family (10 census names) through actual PE imports under a dedicated namespace root; file handles retire through the native delegation service.')
++ p.add_argument('--fileio-root',default='/data/modbridge',help='Production namespace root dedicated to the file I/O owner (payload sandbox) compiled into the native ELF; host driver controls always use a per-build dedicated directory override.')
+  p.add_argument('--reject-worker-start',action='store_true',help='Host control with --sync: internal worker receives an invalid parameter and must retire without hanging readiness.')
+  p.add_argument('--reject-attach',action='store_true',help='With --entry, compile consumer DllMain to return FALSE after initialization.')
+  p.add_argument('--report-path',default='/tmp/modbridge-owned-dll-candidate.jsonl',help='Target-side profile file path; empty disables file output. Build never opens it.')
+@@ -39,11 +41,13 @@
+  if a.sync and not a.workers:p.error('--sync requires --workers')
+  if a.init_once and not a.sync:p.error('--init-once requires --sync')
+  if a.mutex and not a.sync:p.error('--mutex requires --sync')
++ if a.fileio and not a.workers:p.error('--fileio requires --workers')
++ if a.fileio and (not a.fileio_root.isascii() or '\0' in a.fileio_root or not a.fileio_root.startswith('/') or len(a.fileio_root)>256):p.error('--fileio-root must be an absolute ASCII path of at most 256 characters with no NUL')
+  if a.reject_worker_start and (not a.sync or not a.host_only or a.reject_attach):p.error('--reject-worker-start requires --sync --host-only and successful attach')
+  if a.reject_attach and not a.entry:p.error('--reject-attach requires --entry')
+  if not a.report_path.isascii() or '\0' in a.report_path or len(a.report_path)>512:p.error('report path must be at most 512 ASCII characters with no NUL')
+  if not a.report_path and a.no_stdout:p.error('at least one result destination must be configured')
+- profile=out/'owned_profile.h';profile.write_text('#define MB_OWNED_REPORT_PATH '+json.dumps(a.report_path)+'\n#define MB_OWNED_BUILD_ID '+json.dumps(out.name)+'\n#define MB_OWNED_STDOUT '+str(int(not a.no_stdout))+'\n#define MB_OWNED_ENTRY '+str(int(a.entry))+'\n#define MB_OWNED_CLOCK '+str(int(a.clock))+'\n#define MB_OWNED_WORKERS '+str(int(a.workers))+'\n#define MB_OWNED_SYNC '+str(int(a.sync))+'\n#define MB_OWNED_INIT_ONCE '+str(int(a.init_once))+'\n#define MB_OWNED_MUTEX '+str(int(a.mutex))+'\n#define MB_OWNED_REJECT_WORKER_START '+str(int(a.reject_worker_start))+'\n#define MB_OWNED_REJECT_ATTACH '+str(int(a.reject_attach))+'\n')
++ profile=out/'owned_profile.h';profile.write_text('#define MB_OWNED_REPORT_PATH '+json.dumps(a.report_path)+'\n#define MB_OWNED_BUILD_ID '+json.dumps(out.name)+'\n#define MB_OWNED_STDOUT '+str(int(not a.no_stdout))+'\n#define MB_OWNED_ENTRY '+str(int(a.entry))+'\n#define MB_OWNED_CLOCK '+str(int(a.clock))+'\n#define MB_OWNED_WORKERS '+str(int(a.workers))+'\n#define MB_OWNED_SYNC '+str(int(a.sync))+'\n#define MB_OWNED_INIT_ONCE '+str(int(a.init_once))+'\n#define MB_OWNED_MUTEX '+str(int(a.mutex))+'\n#define MB_OWNED_FILEIO '+str(int(a.fileio))+'\n#define MB_OWNED_FILEIO_ROOT '+json.dumps(a.fileio_root)+'\n#define MB_OWNED_REJECT_WORKER_START '+str(int(a.reject_worker_start))+'\n#define MB_OWNED_REJECT_ATTACH '+str(int(a.reject_attach))+'\n')
+  native_c=[EXEC/'pe_module.c',EXEC/'pe_dependencies.c',EXEC/'pe_loader.c',EXEC.parent/'windows-image/pe_image.c',SERV/'mb_win_heap.c',SERV/'mb_win_threads.c',HERE/'owned_runtime.c',HERE/'result_report.c',HERE/'result_sink.c']
+  abi_c=[SERV/'mb_win_crt.c',SERV/'mb_win_heap_bridge.c',SERV/'mb_win_tls_bridge.c',SERV/'mb_win_loader_bridge.c',HERE/'call_exports.c']
+  if a.entry:abi_c.append(SERV/'mb_win_entry.c')
+@@ -58,6 +62,8 @@
+   native_c.append(SERV/'mb_win_init_once.c');abi_c.append(SERV/'mb_win_init_once_abi.c')
+  if a.mutex:
+   native_c.append(SERV/'mb_win_mutex.c');abi_c.append(SERV/'mb_win_mutex_abi.c')
++ if a.fileio:
++  native_c.append(SERV/'mb_win_fileio.c');abi_c.append(SERV/'mb_win_fileio_abi.c')
+  sources=[*native_c,*abi_c,HERE/'owned_runtime.h',HERE/'call_exports.h',HERE/'sdk_driver.c',HERE/'test_owned_runtime.c',Path(__file__).resolve(),
+   EXEC/'pe_ps5_memory.c',EXEC/'pe_ps5_memory.h',EXEC/'pe_loader.h',EXEC/'pe_dependencies.h',EXEC/'pe_module.h',EXEC.parent/'windows-image/pe_image.h']
+  sources += [HERE/x for x in ['README.md','result_report.h','result_sink.h','sdk_driver.h','test_result_report.c','test_result_sink.c','test_result_close.c','test_sdk_driver.c']]
+@@ -69,6 +75,7 @@
+   sources += [HERE/'tests'/name for name in ['worker-sync.h','worker-sync-kernel.def','worker-sync-address.def']]
+  if a.init_once:sources += [SERV/'mb_win_init_once.h',SERV/'mb_win_init_once_abi.h',HERE/'tests/worker-initonce.h',HERE/'tests/worker-initonce-kernel.def']
+  if a.mutex:sources += [SERV/'mb_win_mutex.h',SERV/'mb_win_mutex_abi.h',HERE/'tests/worker-mutex.h',HERE/'tests/worker-mutex-kernel.def']
++ if a.fileio:sources += [SERV/'mb_win_fileio.h',SERV/'mb_win_fileio_abi.h',HERE/'tests/worker-fileio.h',HERE/'tests/worker-fileio-kernel.def']
+  sources += [HERE/'test_entry_candidate.c',HERE/'fixtures/entry_state.h',HERE/'fixtures/entry_consumer.c',HERE/'fixtures/entry_helper.c',SERV/'mb_win_entry.h']
+  sources += [SERV/x for x in ['mb_win_crt.h','mb_win_crt_bind.h','mb_win_heap.h','mb_win_threads.h','mb_win_heap_bridge.h','mb_win_tls_bridge.h','mb_win_loader_bridge.h','tests/loader_bridge_layout.c']]
+  sources += [EXEC/'tests'/x for x in ['loader_helper.c','loader_consumer.c','loader_helper.def','kernel_loader.def','crt_heap.def','kernel_tls.def']]
+@@ -82,6 +89,7 @@
+  receipt['synchronization_profile']={'enabled':a.sync,'critical_section_bytes':40 if a.sync else None,'srw_condition_bytes':8 if a.sync else None,'actual_pe_imports':21 if a.sync else 0,'target_execution':False}
+  receipt['init_once_profile']={'enabled':a.init_once,'init_once_bytes':8 if a.init_once else None,'actual_pe_imports':2 if a.init_once else 0,'target_execution':False}
+  receipt['mutex_profile']={'enabled':a.mutex,'handle_bytes':8 if a.mutex else None,'actual_pe_imports':5 if a.mutex else 0,'target_execution':False}
++ receipt['fileio_profile']={'enabled':a.fileio,'win64cc_defs':20 if a.fileio else 0,'actual_pe_imports':10 if a.fileio else 0,'namespace_root':a.fileio_root if a.fileio else None,'handle_close':'native mb_win_fileio_close_handle delegation','target_execution':False}
+  receipt['worker_parameter_control']={'enabled':a.reject_worker_start,'host_only':True,'bounded_readiness':True}
+  def save():(out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
+  def run(label,cmd,env=None):
+@@ -101,12 +109,13 @@
+     run('sync-'+name+'-lib',[a.lld_link,'/lib','/def:'+str(HERE/'tests'/('worker-sync-'+name+'.def')),'/machine:x64','/out:'+str(out/('sync-'+name+'.lib'))])
+   if a.init_once:run('initonce-lib',[a.lld_link,'/lib','/def:'+str(HERE/'tests/worker-initonce-kernel.def'),'/machine:x64','/out:'+str(out/'initonce.lib')])
+   if a.mutex:run('mutex-lib',[a.lld_link,'/lib','/def:'+str(HERE/'tests/worker-mutex-kernel.def'),'/machine:x64','/out:'+str(out/'mutex.lib')])
++  if a.fileio:run('fileio-lib',[a.lld_link,'/lib','/def:'+str(HERE/'tests/worker-fileio-kernel.def'),'/machine:x64','/out:'+str(out/'fileio.lib')])
+   arrays=['#ifndef MB_OWNED_FIXTURES_H','#define MB_OWNED_FIXTURES_H']
+   receipt['fixture_entry_rva']={}
+   for kind in ['helper','consumer']:
+    fixture=HERE/'fixtures'/('entry_'+kind+'.c') if a.entry else EXEC/'tests'/('loader_'+kind+'.c')
+    reject=['-DMB_FIXTURE_REJECT_ATTACH=1'] if a.reject_attach and kind=='consumer' else []
+-   run(kind+'-compile',[a.llvm_bin/'clang','--target=x86_64-pc-windows-msvc',*flags,*reject,'-DMB_OWNED_CLOCK='+str(int(a.clock)),'-DMB_OWNED_WORKERS='+str(int(a.workers)),'-DMB_OWNED_SYNC='+str(int(a.sync)),'-DMB_OWNED_INIT_ONCE='+str(int(a.init_once)),'-DMB_OWNED_MUTEX='+str(int(a.mutex)),'-DMB_OWNED_REJECT_WORKER_START='+str(int(a.reject_worker_start)),'-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-c',fixture,'-o',out/(kind+'.obj')])
++   run(kind+'-compile',[a.llvm_bin/'clang','--target=x86_64-pc-windows-msvc',*flags,*reject,'-DMB_OWNED_CLOCK='+str(int(a.clock)),'-DMB_OWNED_WORKERS='+str(int(a.workers)),'-DMB_OWNED_SYNC='+str(int(a.sync)),'-DMB_OWNED_INIT_ONCE='+str(int(a.init_once)),'-DMB_OWNED_MUTEX='+str(int(a.mutex)),'-DMB_OWNED_FILEIO='+str(int(a.fileio)),'-DMB_OWNED_REJECT_WORKER_START='+str(int(a.reject_worker_start)),'-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-c',fixture,'-o',out/(kind+'.obj')])
+    extra=['/def:'+str(EXEC/'tests/loader_helper.def'),out/'heap.lib',out/'tls.lib'] if kind=='helper' else [out/'loader.lib']
+    if a.entry:extra += [out/'loader.lib'] if kind=='helper' else [out/'heap.lib',out/'tls.lib']
+    if a.clock:extra += [out/'clock.lib']
+@@ -114,6 +123,7 @@
+    if a.sync and kind=='consumer':extra += [out/'sync-kernel.lib',out/'sync-address.lib']
+    if a.init_once and kind=='consumer':extra += [out/'initonce.lib']
+    if a.mutex and kind=='consumer':extra += [out/'mutex.lib']
++   if a.fileio and kind=='consumer':extra += [out/'fileio.lib']
+    dll=out/('owned_'+kind+'.dll')
+    run(kind+'-link',[a.lld_link,'/dll','/entry:DllMain' if a.entry else '/noentry','/nodefaultlib','/align:16384','/dynamicbase','/nxcompat','/timestamp:0','/out:'+str(dll),out/(kind+'.obj'),*extra])
+    run(kind+'-metadata',[a.llvm_bin/'llvm-readobj','--file-headers','--coff-imports','--coff-exports','--coff-basereloc',dll])
+@@ -140,12 +150,15 @@
+    run('host-close-fault-compile',['clang','-arch','x86_64',*flags,'-Dclose=mb_test_report_close','-c',HERE/'result_sink.c','-o',out/'host-sink-close.o'])
+    run('host-result-close-compile',['clang','-arch','x86_64',*flags,HERE/'result_report.c',out/'host-sink-close.o',HERE/'test_result_close.c','-o',out/'test-result-close'])
+    receipt['host_result_close']=run('host-result-close',['/usr/bin/arch','-x86_64',out/'test-result-close']).strip()
++  fileio_host=[]
++  if a.fileio:
++   fileio_root_directory=out/'fileio-root';fileio_root_directory.mkdir();fileio_host=['-DMB_OWNED_FILEIO_ROOT_OVERRIDE='+json.dumps(str(fileio_root_directory))]
+   run('host-sdk-driver-compile',['clang','-arch','x86_64',*flags,'-I',out,'-DMB_OWNED_DRIVER_TEST','-Dsleep=mb_test_sleep','-c',HERE/'sdk_driver.c','-o',out/'host-sdk-driver.o'])
+   host_native=list(native_c)
+   if a.workers:
+-   run('host-runtime-worker-fault-calls',['clang','-arch','x86_64',*flags,'-pthread','-I',out,'-Dmb_win_workers_leave_call=mb_test_worker_leave','-c',HERE/'owned_runtime.c','-o',out/'host-worker-runtime.o'])
++   run('host-runtime-worker-fault-calls',['clang','-arch','x86_64',*flags,'-pthread','-I',out,'-Dmb_win_workers_leave_call=mb_test_worker_leave',*fileio_host,'-c',HERE/'owned_runtime.c','-o',out/'host-worker-runtime.o'])
+    host_native=[x for x in native_c if x.name!='owned_runtime.c']+[out/'host-worker-runtime.o']
+-  run('host-sdk-controls-compile',['clang','-arch','x86_64',*flags,'-I',out,'-DMB_PE_PS5_MEMORY_TEST','-pthread',*host_native,*abi_c,EXEC/'pe_ps5_memory.c',out/'host-sdk-driver.o',HERE/('test_entry_candidate.c' if a.entry else 'test_sdk_driver.c'),'-o',out/'test-sdk-driver'])
++  run('host-sdk-controls-compile',['clang','-arch','x86_64',*flags,'-I',out,'-DMB_PE_PS5_MEMORY_TEST','-pthread',*fileio_host,*host_native,*abi_c,EXEC/'pe_ps5_memory.c',out/'host-sdk-driver.o',HERE/('test_entry_candidate.c' if a.entry else 'test_sdk_driver.c'),'-o',out/'test-sdk-driver'])
+   receipt['host_result_records']={}
+   for mode in (['reject','reject-release'] if a.reject_attach else ['normal','release'] if a.entry else ['normal','deny','release']):
+    path=out/('host-'+mode+'.jsonl')
+@@ -168,7 +181,7 @@
+     if final['entry']['attach_result']!=([0,0] if a.reject_attach else [7,7]):raise RuntimeError('DllMain BOOL was not preserved')
+    if a.clock and final.get('clock')!={'enabled':1,'session_begins':expected_calls,'session_ends':expected_calls}:raise RuntimeError('Clock sessions did not retire with module lifecycle')
+    if a.workers:
+-    worker=final.get('worker',{});expected_worker_calls=0 if a.reject_attach else 1 if a.reject_worker_start else 2
++    worker=final.get('worker',{});expected_worker_calls=0 if a.reject_attach else 1 if a.reject_worker_start else 2+(2 if a.fileio else 0)
+     if worker.get('enabled')!=1 or worker.get('calls_started')!=expected_worker_calls or worker.get('calls_returned')!=expected_worker_calls:raise RuntimeError('Owned worker export calls did not complete')
+     if not a.reject_attach and not a.reject_worker_start and (worker.get('begin',[0,0,0,0])[2:]!=[258,259] or worker.get('result',[0])[0]!=0x81234567 or worker.get('result',[0,0,0,1])[3]!=0):raise RuntimeError('Actual DLL worker timeout/result proof absent')
+    elif 'worker' in final:raise RuntimeError('Default result unexpectedly advertises worker')
+@@ -178,6 +191,8 @@
+    if not a.init_once and 'init_once' in final:raise RuntimeError('Default result unexpectedly advertises init_once')
+    if a.mutex and final.get('mutex')!={'enabled':1}:raise RuntimeError('Mutex profile missing')
+    if not a.mutex and 'mutex' in final:raise RuntimeError('Default result unexpectedly advertises mutex')
++   if a.fileio and final.get('fileio')!={'enabled':1}:raise RuntimeError('File I/O profile missing')
++   if not a.fileio and 'fileio' in final:raise RuntimeError('Default result unexpectedly advertises fileio')
+    if not a.clock and 'clock' in final:raise RuntimeError('Default result unexpectedly advertises clock')
+    receipt['host_result_records'][mode]={'path':str(path),'sha256':sha(path),'records':len(records),'final':final}
+   if a.workers and not a.reject_attach and not a.reject_worker_start:
+@@ -216,7 +231,7 @@
+    for source in [*native_c,EXEC/'pe_ps5_memory.c',HERE/'sdk_driver.c']:
+     obj=out/(source.stem+'.o');dep=out/(source.stem+'.d');objects.append(obj);deps.append(dep)
+     run('native-'+source.stem,[cc,*nflags,'-MD','-MF',dep,'-c',source,'-o',obj],env)
+-   expected={'mb_win_crt':14,'mb_win_heap_bridge':5,'mb_win_tls_bridge':6,'mb_win_loader_bridge':8,'call_exports':0,'mb_win_entry':0,'mb_win_clock':2,'mb_win_workers_abi':5,'call_workers':0,'mb_win_critical_abi':7,'mb_win_address_wait_abi':3,'mb_win_srw_abi':11,'mb_win_init_once_abi':2,'mb_win_mutex_abi':6}
++   expected={'mb_win_crt':14,'mb_win_heap_bridge':5,'mb_win_tls_bridge':6,'mb_win_loader_bridge':8,'call_exports':0,'mb_win_entry':0,'mb_win_clock':2,'mb_win_workers_abi':5,'call_workers':0,'mb_win_critical_abi':7,'mb_win_address_wait_abi':3,'mb_win_srw_abi':11,'mb_win_init_once_abi':2,'mb_win_mutex_abi':6,'mb_win_fileio_abi':20}
+    for source in abi_c:
+     ir=out/(source.stem+'.ll');obj=out/(source.stem+'.o');dep=out/(source.stem+'.d');objects.append(obj);deps.append(dep)
+     run('ir-'+source.stem,[cc,*bflags,'-MD','-MF',dep,'-S','-emit-llvm',source,'-o',ir],env)

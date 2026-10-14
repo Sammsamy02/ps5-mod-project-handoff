@@ -1,0 +1,99 @@
+{
+ "marker": "modbridge.findings",
+ "schema": 1,
+ "worker": "worker-mutex-fix-review",
+ "generated": "2026-10-04",
+ "reviewed_files": {
+  "applied_fixture": "outputs/ps5-mod-bridge/windows-candidate/tests/worker-mutex.h",
+  "applied_fixture_c": "outputs/ps5-mod-bridge/windows-candidate/tests/worker-fixture.c",
+  "applied_runtime": "outputs/ps5-mod-bridge/windows-candidate/owned_runtime.c",
+  "proposal": "outputs/2026-10-04-zcode-team/worker-mutex-deadlock/{worker-mutex.h.diff,proposed_worker-mutex.h,owned_runtime.c.diff,REPORT.md}"
+ },
+ "findings": [
+  {
+   "id": "MFR-1",
+   "severity": "high",
+   "status": "OPEN",
+   "title": "Fixture never keeps or retires abandon_open: 6/7 tokens retired, the original BUSY deadlock persists for the mutex profile",
+   "evidence": [
+    "tests/worker-mutex.h:82 opens abandon_open with no mb_worker_mutex_keep: 'mb_worker_mutex_state.abandon_open=OpenMutexW(0,0,mb_worker_mutex_abandon_folded);' — the only created/opened token without a keep (all others at lines 51,56,58,60,64,76).",
+    "The retirement loop tests/worker-mutex.h:91-92 closes only tokens[0..token_count-1] = 6 entries; abandon_open is never passed to CloseHandle anywhere in the fixture.",
+    "worker-mutex-deadlock/repro_fixedflow.c:181 keeps it in the validated fix: 'uint64_t ao=mb_win_mutex_open_named(&mutex_owner,abandon_folded);keep(ao);' and ff_1.log proves 'retired 7/7 mutex handle tokens' -> 'mutex close -> 0 (OK)' -> 'REPRO COMPLETED clean'.",
+    "REPORT.md (worker-mutex-deadlock):23 enumerates the seven tokens incl. abandon_open; :43 says retire 'all of them'; :46 says the green 3/3 runs retired all seven. The proposed header/diff (applied verbatim) contradicts the worker's own validated composition.",
+    "mb_win_mutex.c:229-231: mb_win_mutex_close returns MB_WIN_MUTEX_BUSY while s->handles is non-empty; abandon_open's handle_entry stays forever, so close BUSYs forever.",
+    "owned_runtime.c:401-402: cleanup stage 40 calls mb_win_mutex_close and fail(40) on non-OK; REPORT.md:26 documents sdk_driver's unbounded 'while(mb_owned_ps5_cleanup()) sleep(1)' retry — the exact recorded hang."
+   ],
+   "prediction": "The running rebuild with --mutex will pass the fixture itself, then wedge in teardown at stage 40 with an infinite driver retry loop; expect the 15-minute watchdog to kill it. Not a green receipt.",
+   "minimal_fix": "In tests/worker-mutex.h finish(), after line 82 add mb_worker_mutex_keep(mb_worker_mutex_state.abandon_open); the existing loop then retires 7/7 exactly like the validated harness. (Cap 8 still holds: 7 tokens per run.)"
+  },
+  {
+   "id": "MFR-2",
+   "severity": "medium",
+   "status": "OPEN",
+   "title": "Token retirement only runs on the fully-successful collect path; any fixture failure leaks all kept mutex tokens",
+   "evidence": [
+    "tests/worker-fixture.c:110-113: on mb_worker_mutex_prepare failure the cleanup calls mb_worker_mutex_finish(), but finish's first step (worker-mutex.h:82-83) is OpenMutexW of the not-yet-existing Abandon name -> returns -72 before reaching the retirement loop (worker-mutex.h:91-92); prepared tokens leak.",
+    "tests/worker-fixture.c:158-164: collect failures -12..-16 return before the mutex finish at :174-175, leaking kept tokens; same for Begin failures -3..-8 via mb_worker_fixture_fail (:85-94).",
+    "Consequence: any failure run again ends in stage-40 BUSY + infinite driver retry (same liveness hazard as MFR-1), and the -78 diagnostic never fires."
+   ],
+   "note": "Pre-existing shape for -12..-16 (retirement is new), but the deadlock-fix comment (worker-mutex.h:40-45 'every public handle token ... must be retired before the creator-side finish returns') overpromises: it holds only on success."
+  },
+  {
+   "id": "MFR-3",
+   "severity": "info",
+   "status": "VERIFIED_OK",
+   "title": "combined_close_handle is correct: guard, ABI, dispatch order, singleton types, BOOL semantics, last-error hygiene",
+   "evidence": [
+    "owned_runtime.c:72-81: definition guarded '#if MB_OWNED_WORKERS && MB_OWNED_MUTEX' (same guard as the bind interception at :160), so no unused-symbol or dangling reference in other profiles.",
+    ":77 '__attribute__((ms_abi)) static int32_t combined_close_handle(void *)' — win64 ABI for a direct IAT target; int32_t return matches the fixture's 'mb_worker_i32 CloseHandle(void *)' declarations (worker-fixture.c:25, worker-mutex.h:46, compatible duplicate declarations, no new import name -> IMPORT_CAPACITY at :27 unchanged).",
+    ":78 workers-first returns 1 only when mb_win_workers_close_handle accepts; mb_win_workers.c:168-172 returns 0 for a non-worker token — so thread-handle behavior is byte-identical to the pre-fix workers-only bind.",
+    ":79 mutex fallback passes (uint64_t)(uintptr_t)handle — lossless round-trip of the pointer-sized token the mutex shim handed out.",
+    "mb_win_mutex.c:435-450: close_handle returns 1 on success / 0 with INVALID_HANDLE(6) otherwise, and restores the saved last error on success — the spurious error-6 written by the workers probe on a mutex token cannot leak into the success path.",
+    "Types check: owned.workers is mb_win_workers (:52), owned.mutex_owner is mb_win_mutex (:62); both match the called signatures."
+   ]
+  },
+  {
+   "id": "MFR-4",
+   "severity": "info",
+   "status": "VERIFIED_OK",
+   "title": "CloseHandle bind interception: name compare sound; placement before workers bind preserves workers-only and no-mutex profiles",
+   "evidence": [
+    "owned_runtime.c:161-164: requires name.size==11, !by_ordinal, name.data non-null, then a full byte-exact compare against 'CloseHandle' (11 chars) — no prefix or case-insensitive looseness; any mismatch falls through.",
+    "Placement: interception block :160-166 sits BEFORE mb_win_workers_bind (:167-170) and mb_win_mutex_bind (:171-176), matching the proposal's intent; when both families are on, CloseHandle reaches combined first and never double-binds.",
+    "Workers-only profile (MB_OWNED_MUTEX=0): guard :160 compiles the interception out; CloseHandle binds via mb_win_workers_bind exactly as before the fix. No-mutex profiles: identical, and combined_close_handle is also compiled out (:72).",
+    "Mutex-without-workers is not a supported composition (service_bind itself is '#if MB_OWNED_CLOCK || MB_OWNED_WORKERS', :149; the fixture requires CreateThread), and the dual guard leaves nothing dangling there."
+   ]
+  },
+  {
+   "id": "MFR-5",
+   "severity": "info",
+   "status": "VERIFIED_OK",
+   "title": "Controller deviations from the proposal are necessary corrections, not drift",
+   "evidence": [
+    "owned_runtime.c.diff:30 proposed '*out=(uint64_t)(uintptr_t)&combined_close_handle', but the actual bind callback signature is 'service_bind(void *context,const mb_pe_import *import,uint64_t *address)' (owned_runtime.c:150) — there is no 'out' parameter; the proposal as written would not compile. Applied code binds '*address' (:164): correct.",
+    "Proposal's 's->module->state!=MB_PE_MODULE_EMPTY' guard was dropped and a name.data null-check added (:161). Residual risk is minimal: combined is a behavioral superset of the workers dispatch (workers probe first), so even a bind in an unexpected module state cannot change thread-handle semantics; the null-check hardens the one pointer the byte loop dereferences.",
+    "Proposal's redundant 'int is_close=import->name.size==11' was simplified into 'unsigned equal=1' + loop (:162-163): same semantics."
+   ]
+  },
+  {
+   "id": "MFR-6",
+   "severity": "low",
+   "status": "OPEN",
+   "title": "Stale/misleading comments left by the applied fix",
+   "evidence": [
+    "tests/worker-mutex.h:14-15 still asserts 'No CloseHandle on mutex tokens in this fixture (workers family owns that import today)' — contradicted by the CloseHandle declaration at :46 and the retirement calls at :91-92 (the stale sentence was also inherited by proposed_worker-mutex.h:14-15, i.e. it is proposal-original, not controller damage).",
+    "owned_runtime.c:172-174 still says 'A combined is_handle dispatch remains a documented future composition, not guessed here' — still literally true for is_handle (mb_win_mutex_is_handle remains unbound, mb_win_mutex.c:452-458), but a reader can mistake it for 'no combined dispatch exists'; recommend rewording to name the combined CloseHandle explicitly.",
+    "worker-mutex.h:93 resets token_count without zeroing tokens[]; safe today (keep() appends from 0 after reset, <=7 tokens/run vs cap 8 at :47-48) — noted only to pin the invariant the cap relies on."
+   ]
+  }
+ ],
+ "hang_risk_prediction_for_running_rebuild": [
+  "Mutex profile: HIGH confidence re-hang at teardown — 6/7 retirement leaves abandon_open in mb_win_mutex state; stage 40 (owned_runtime.c:401-402) BUSYs forever; sdk_driver unbounded retry (REPORT.md:26) until the 15-min watchdog fires. The fixture itself and all wait/abandon semantics should still pass; the wedge is after 'REPOS... collect', in cleanup.",
+  "Any fail-stop abort in this Rosetta flow can wedge as unkillable UE state (worker-mutex-deadlock REPORT.md:27,29) — relevant if the watchdog or harness aborts mid-teardown.",
+  "Workers-only / no-mutex profiles: no new risk; the fix compiles out entirely (MFR-4).",
+  "After applying the MFR-1 one-liner, remaining exposure is the failure-path leak (MFR-2) and the driver's unbounded retry loop (worker-mutex-deadlock REPORT.md:51)."
+ ],
+ "verdict": "NOT_ALL_CLEAR",
+ "blocks": ["mutex host validation receipt", "mutex compose + target run (handoff integration queue item 3)"],
+ "does_not_block": ["workers-only profiles", "no-mutex profiles", "v3 probe path", "game-path work (non-blocking per handoff)"]
+}

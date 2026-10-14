@@ -1,0 +1,177 @@
+lua-as-cpp host test v2 -- 2026-10-12T13:00:24Z -- Mac-only (Darwin arm64; Apple clang version 17.0.0 (clang-1700.6.4.2))
+memcheck_strict: fields=2 free=5.44GB min=2GB -> OK
+[c] compiled 33 Lua objects, 0 warnings
+[c] lapi.o plain C lua_* exports: 81
+[c] lapi.o C++-mangled lua_* exports: 0
+[c] ldo.o refs: _longjmp _setjmp 
+[c] lua_as_cpp_host_test: rc=0 checks=17
+Lua build under test: C (lua_error = longjmp)
+  PASS  B2 NEW wrapper: every caught exception object is destroyed (both builds)
+  PASS  B2 NEW wrapper: real exception text kept (both builds)
+       OLD wrapper: ctor=1000 dtor=0 (never released: 1000)
+  PASS  B2 OLD wrapper: leaks 1000/1000 with Lua as C (overnight defect reproduced)
+  PASS  B2: '%s' in a message is passed literally (both builds)
+  PASS  B2: formatting failure raises the raw text (both builds)
+       frames: guard ctor=1000 dtor=0; heap blocks leaked=2000 (string+vector per error); 0.72 us per error
+  PASS  error text reaches lua_pcall (both builds)
+  PASS  C build: destructors skipped (0/1000 run, 2000 blocks leaked) = the PS5 memory-growth mechanism
+       caller-frame temporary: blocks leaked=1000
+  PASS  C build: caller-frame std::string leaks once per error even with the B2 wrapper
+  PASS  C build: a std::lock_guard held when the error is raised stays locked forever
+  PASS  Lua's global lock balanced after 4,000+ errors (both builds)
+  PASS  TRY catch(std::exception&) lets a Lua error pass unchanged (both builds)
+  PASS  Lua lock balanced after the TRY case (both builds)
+  PASS  catch(...) + rethrow keeps the Lua error and the lock intact (both builds)
+  PASS  C build: catch(...) cleanup code never runs for Lua errors
+       bare throw child: exception escaped past lua_pcall
+  PASS  C build: a non-std exception escaping a binding flies past lua_pcall (Lua state left corrupt)
+       noexcept child: exited normally
+  PASS  C build: a Lua error silently jumps over a noexcept function
+       swallow: caught=0 pcall status=2 message='bad argument #1 to '?' (number expected, got string)' lock depth=0 other-thread-can-lock=1
+  PASS  C build: catch(...) never sees Lua errors
+PASS lua-as-cpp host test, C build (0 failures)
+[c] replicas_test: rc=0 checks=11
+Lua build under test: C (lua_error = longjmp)
+       A current: status==LUA_ERRRUN 1000/1000, message kept 1000/1000, last_status=2 last='UFunction expected 2 parameters, received 1'; swallowed=0 dtors=1001; Lua-side pcall err='UFunction expected 2 parameters, received 1'
+  PASS  A current, C build: Lua error keeps status 2 and its message
+  PASS  A current: Lua lock balanced afterwards (all builds)
+       A fixed:   status==LUA_ERRRUN 1000/1000, message kept 1000/1000, last_status=2; swallowed=0 dtors=1001; Lua-side pcall err='UFunction expected 2 parameters, received 1'
+  PASS  A fixed: Lua error keeps status 2 and its message, owner destructor runs every time (all builds)
+  PASS  A fixed: Lua lock balanced afterwards (all builds)
+       A fixed, std::exception: status==LUA_ERRRUN 1000/1000, message kept 1000/1000; stored=1001 dtors=1001
+  PASS  A fixed: a C++ std::exception is still stored by catch(...), rethrown after the inner pcall and turned into a Lua error by TRY (all builds)
+  PASS  A fixed, std::exception: Lua lock balanced afterwards (all builds)
+       B current: pcall status=4 (2=ERRRUN 4=ERRMEM) msg='not enough memory' swallowed=0 lock depth after=0 other-thread-can-lock=1
+  PASS  B current, C build: LUA_ERRMEM propagates, lock released
+       B fixed  : pcall status=4 (2=ERRRUN 4=ERRMEM) msg='not enough memory' swallowed=0 lock depth after=0 other-thread-can-lock=1
+  PASS  B fixed: out-of-memory inside the error formatter propagates as LUA_ERRMEM, Lua lock released (all builds)
+       coroutine: rc=0 last=100000, 100000 yields: 0.547 us per yield
+  PASS  coroutine.yield/resume: 100000 round trips return the right values (all builds)
+       C-function yield: resume status=1 (1=LUA_YIELD), frame destructor ran 0 time(s)
+  PASS  C build: a yield from a C function longjmps; that frame's destructor is skipped
+  PASS  after coroutines: Lua lock balanced (all builds)
+checks run: 11
+PASS replicas test, C build (0 failures)
+[c] c_caller: linked; rc=0 checks=2
+  PASS  C caller: status=0 (expected 0)
+  PASS  C caller: status=2 (expected 2)
+checks run: 2
+PASS C caller test (0 failures)
+[cpp] compiled 33 Lua objects, 0 warnings
+[cpp] lapi.o plain C lua_* exports: 0
+[cpp] lapi.o C++-mangled lua_* exports: 81
+[cpp] ldo.o refs: ___cxa_throw ___gxx_personality_v0 
+[cpp] lua_as_cpp_host_test: rc=0 checks=17
+Lua build under test: C++ (lua_error = throw)
+  PASS  B2 NEW wrapper: every caught exception object is destroyed (both builds)
+  PASS  B2 NEW wrapper: real exception text kept (both builds)
+       OLD wrapper: ctor=1000 dtor=1000 (never released: 0)
+  PASS  B2 OLD wrapper: no exception object leaks once Lua is C++
+  PASS  B2: '%s' in a message is passed literally (both builds)
+  PASS  B2: formatting failure raises the raw text (both builds)
+       frames: guard ctor=1000 dtor=1000; heap blocks leaked=0 (string+vector per error); 7.00 us per error
+  PASS  error text reaches lua_pcall (both builds)
+  PASS  C++ build: destructors run in every frame a Lua error crosses (1000/1000, 0 blocks leaked)
+       caller-frame temporary: blocks leaked=0
+  PASS  C++ build: caller-frame std::string freed (B2 alone cannot fix this one)
+  PASS  C++ build: a std::lock_guard held when the error is raised is released
+  PASS  Lua's global lock balanced after 4,000+ errors (both builds)
+  PASS  TRY catch(std::exception&) lets a Lua error pass unchanged (both builds)
+  PASS  Lua lock balanced after the TRY case (both builds)
+  PASS  catch(...) + rethrow keeps the Lua error and the lock intact (both builds)
+  PASS  C++ build: catch(...) cleanup code now runs for Lua errors
+luauser stub: lua_unlock of a lock this thread does not hold -> abort()
+       bare throw child: SIGABRT
+  PASS  C++ build HAZARD: a non-std exception escaping a binding (no TRY) aborts: Lua's catch(...) takes it, then lua_pcall unlocks a lock nobody re-took (platform_locks.c abort())
+libc++abi: terminating due to uncaught exception of type lua_longjmp*
+       noexcept child: killed by SIGABRT (std::terminate)
+  PASS  C++ build HAZARD: a Lua error crossing a noexcept function calls std::terminate
+       swallow: caught=1 pcall status=2 message='<non-string error object>' lock depth=1 other-thread-can-lock=0
+  PASS  C++ build HAZARD: catch(...) swallowing a Lua error leaves Lua's lock held (other threads would block)
+PASS lua-as-cpp host test, C++ build (0 failures)
+[cpp] replicas_test: rc=0 checks=11
+Lua build under test: C++ (lua_error = throw)
+       A current: status==LUA_ERRRUN 0/1000, message kept 0/1000, last_status=-1 last='<non-string error object>'; swallowed=1001 dtors=1001; Lua-side pcall err='function: 0x102ced6ac'
+  PASS  A current, C++ build: BUG reproduced -- every Lua error in a UFunction call is swallowed (status -1, message lost)
+  PASS  A current: Lua lock balanced afterwards (all builds)
+       A fixed:   status==LUA_ERRRUN 1000/1000, message kept 1000/1000, last_status=2; swallowed=0 dtors=1001; Lua-side pcall err='UFunction expected 2 parameters, received 1'
+  PASS  A fixed: Lua error keeps status 2 and its message, owner destructor runs every time (all builds)
+  PASS  A fixed: Lua lock balanced afterwards (all builds)
+       A fixed, std::exception: status==LUA_ERRRUN 1000/1000, message kept 1000/1000; stored=1001 dtors=1001
+  PASS  A fixed: a C++ std::exception is still stored by catch(...), rethrown after the inner pcall and turned into a Lua error by TRY (all builds)
+  PASS  A fixed, std::exception: Lua lock balanced afterwards (all builds)
+       B current: pcall status=2 (2=ERRRUN 4=ERRMEM) msg='raw error text' swallowed=1 lock depth after=1 other-thread-can-lock=0
+  PASS  B current, C++ build: BUG reproduced -- LUA_ERRMEM swallowed, Lua's global lock left held (other threads would hang)
+       B fixed  : pcall status=4 (2=ERRRUN 4=ERRMEM) msg='not enough memory' swallowed=0 lock depth after=0 other-thread-can-lock=1
+  PASS  B fixed: out-of-memory inside the error formatter propagates as LUA_ERRMEM, Lua lock released (all builds)
+       coroutine: rc=0 last=100000, 100000 yields: 4.715 us per yield
+  PASS  coroutine.yield/resume: 100000 round trips return the right values (all builds)
+       C-function yield: resume status=1 (1=LUA_YIELD), frame destructor ran 1 time(s)
+  PASS  C++ build: a yield from a C function is a throw; that frame's destructor runs
+  PASS  after coroutines: Lua lock balanced (all builds)
+checks run: 11
+PASS replicas test, C++ build (0 failures)
+[cpp] c_caller: LINK FAILED (8 undefined-symbol lines mentioning _lua*): "_lua_close" "_lua_isinteger" "_lua_pcallk" "_lua_tointegerx" "_lua_tolstring" "_lua_type" "_luaL_loadbufferx" "_luaL_newstate" 
+  PASS  cpp build: a plain-C Lua caller cannot link (expected: this is why the staged design keeps C linkage)
+[cppcabi] compiled 33 Lua objects, 0 warnings
+[cppcabi] lapi.o plain C lua_* exports: 81
+[cppcabi] lapi.o C++-mangled lua_* exports: 0
+[cppcabi] ldo.o refs: ___cxa_throw ___gxx_personality_v0 
+[cppcabi] lua_as_cpp_host_test: rc=0 checks=17
+Lua build under test: C++ (lua_error = throw)
+  PASS  B2 NEW wrapper: every caught exception object is destroyed (both builds)
+  PASS  B2 NEW wrapper: real exception text kept (both builds)
+       OLD wrapper: ctor=1000 dtor=1000 (never released: 0)
+  PASS  B2 OLD wrapper: no exception object leaks once Lua is C++
+  PASS  B2: '%s' in a message is passed literally (both builds)
+  PASS  B2: formatting failure raises the raw text (both builds)
+       frames: guard ctor=1000 dtor=1000; heap blocks leaked=0 (string+vector per error); 7.99 us per error
+  PASS  error text reaches lua_pcall (both builds)
+  PASS  C++ build: destructors run in every frame a Lua error crosses (1000/1000, 0 blocks leaked)
+       caller-frame temporary: blocks leaked=0
+  PASS  C++ build: caller-frame std::string freed (B2 alone cannot fix this one)
+  PASS  C++ build: a std::lock_guard held when the error is raised is released
+  PASS  Lua's global lock balanced after 4,000+ errors (both builds)
+  PASS  TRY catch(std::exception&) lets a Lua error pass unchanged (both builds)
+  PASS  Lua lock balanced after the TRY case (both builds)
+  PASS  catch(...) + rethrow keeps the Lua error and the lock intact (both builds)
+  PASS  C++ build: catch(...) cleanup code now runs for Lua errors
+luauser stub: lua_unlock of a lock this thread does not hold -> abort()
+       bare throw child: SIGABRT
+  PASS  C++ build HAZARD: a non-std exception escaping a binding (no TRY) aborts: Lua's catch(...) takes it, then lua_pcall unlocks a lock nobody re-took (platform_locks.c abort())
+libc++abi: terminating due to uncaught exception of type lua_longjmp*
+       noexcept child: killed by SIGABRT (std::terminate)
+  PASS  C++ build HAZARD: a Lua error crossing a noexcept function calls std::terminate
+       swallow: caught=1 pcall status=2 message='<non-string error object>' lock depth=1 other-thread-can-lock=0
+  PASS  C++ build HAZARD: catch(...) swallowing a Lua error leaves Lua's lock held (other threads would block)
+PASS lua-as-cpp host test, C++ build (0 failures)
+[cppcabi] replicas_test: rc=0 checks=11
+Lua build under test: C++ (lua_error = throw)
+       A current: status==LUA_ERRRUN 0/1000, message kept 0/1000, last_status=-1 last='<non-string error object>'; swallowed=1001 dtors=1001; Lua-side pcall err='function: 0x1002116ac'
+  PASS  A current, C++ build: BUG reproduced -- every Lua error in a UFunction call is swallowed (status -1, message lost)
+  PASS  A current: Lua lock balanced afterwards (all builds)
+       A fixed:   status==LUA_ERRRUN 1000/1000, message kept 1000/1000, last_status=2; swallowed=0 dtors=1001; Lua-side pcall err='UFunction expected 2 parameters, received 1'
+  PASS  A fixed: Lua error keeps status 2 and its message, owner destructor runs every time (all builds)
+  PASS  A fixed: Lua lock balanced afterwards (all builds)
+       A fixed, std::exception: status==LUA_ERRRUN 1000/1000, message kept 1000/1000; stored=1001 dtors=1001
+  PASS  A fixed: a C++ std::exception is still stored by catch(...), rethrown after the inner pcall and turned into a Lua error by TRY (all builds)
+  PASS  A fixed, std::exception: Lua lock balanced afterwards (all builds)
+       B current: pcall status=2 (2=ERRRUN 4=ERRMEM) msg='raw error text' swallowed=1 lock depth after=1 other-thread-can-lock=0
+  PASS  B current, C++ build: BUG reproduced -- LUA_ERRMEM swallowed, Lua's global lock left held (other threads would hang)
+       B fixed  : pcall status=4 (2=ERRRUN 4=ERRMEM) msg='not enough memory' swallowed=0 lock depth after=0 other-thread-can-lock=1
+  PASS  B fixed: out-of-memory inside the error formatter propagates as LUA_ERRMEM, Lua lock released (all builds)
+       coroutine: rc=0 last=100000, 100000 yields: 4.593 us per yield
+  PASS  coroutine.yield/resume: 100000 round trips return the right values (all builds)
+       C-function yield: resume status=1 (1=LUA_YIELD), frame destructor ran 1 time(s)
+  PASS  C++ build: a yield from a C function is a throw; that frame's destructor runs
+  PASS  after coroutines: Lua lock balanced (all builds)
+checks run: 11
+PASS replicas test, C++ build (0 failures)
+[cppcabi] c_caller: linked; rc=0 checks=2
+  PASS  C caller: status=0 (expected 0)
+  PASS  C caller: status=2 (expected 2)
+checks run: 2
+PASS C caller test (0 failures)
+  PASS  cppcabi exports exactly the C build's 159 public Lua names (lua_*/luaL_*/luaopen_*/LuaLock*)
+TOTAL checks=90 failed_programs_or_checks=0
+PASS run_v2 (all three builds)

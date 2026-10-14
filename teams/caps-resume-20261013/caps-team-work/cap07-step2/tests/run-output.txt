@@ -1,0 +1,54 @@
+=== cap07-step2 run 2026-10-13T03:15:31Z ===
+
+--- 1. pin verifier (verify_pins.py) ---
+image sha256 = 3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc
+  [PASS] image-sha matches pinned  3b6cfad47dd1
+  [PASS] P5 ctor anchor is unique  1 hit(s)
+  [PASS] P5 FPakPlatformFile vtable found via ctor anchor  0x7fee8c0
+  [PASS] P5 dtor pair present  0x17652f0/0x17656a0
+  [PASS] P5 Initialize slot self-identifies via assert string  init=0x1769ee0
+  [PASS] P6 GetLowerLevel slot +0x68 reads [rdi+8] (mov rax,[rdi+8])  0xb3500:554889e5488b47085dc3cccc
+  [PASS] P7 HandleMountPakDelegate found via 'Mounting pak file' string  ['0x176b900', '0x1770360']
+  [PASS] P1 MountPak static binds exactly P7 functor  0x934faa8 -> 0x176b900
+  [PASS] P2 Execute slot +0x60 is the raw-method dispatch thunk  0x34400
+  [PASS] P3 Get() movzx-guard accessor  0fb6056115270984
+  [PASS] P4 GetPlatformFile() loads [rdi] then rets (lazy on null)  488b074885c07401c3554889
+  [PASS] P8 .utoc utf16 string present (IoStore mount tail)  ['0x782c7b0', '0x78d15a8', '0x7974c24']
+
+checked 12 assertions across 8 pins; 12/12 PASS
+GATE PASS: all pins re-derived and match pins.json
+
+--- 2. no-hardcode / no-detour gate (gate_no_hardcode.py) ---
+scanned 3 files, 327 lines
+GATE PASS: no game/mod names, no container-name decision constants, no detour/code-write patterns in the staged runtime unit
+
+--- 3. host unit tests (clang++ -std=c++20) ---
+cap07-step2 host mount tests
+  [PASS] happy path mounts
+  [PASS] mounted count grew by one
+  [PASS] engine Execute called exactly once
+  [PASS] path passed through verbatim (data-only)
+  [PASS] FString freed after the call (no leak)
+  [PASS] census found the pak layer
+  [PASS] is_pak_layer accepts exact vptr match
+  [PASS] is_pak_layer rejects mismatch
+  [PASS] is_pak_layer rejects null vptr
+  [PASS] sha mismatch refuses
+  [PASS] no engine call on sha mismatch
+  [PASS] signature mismatch refuses
+  [PASS] no engine call on signature mismatch
+  [PASS] unbound delegate refuses
+  [PASS] no engine call when delegate unbound
+  [PASS] missing pak layer refuses
+  [PASS] no engine call without a pak layer
+  [PASS] off game-thread refuses
+  [PASS] no engine call off game thread
+  [PASS] engine rejection refuses cleanly
+  [PASS] FString freed even on failed mount
+  [PASS] empty path refuses
+  [PASS] incomplete pins refuse
+
+checked 23 assertions; 23 PASS, 0 FAIL
+GATE PASS
+
+=== ALL GATES PASS ===

@@ -1,0 +1,416 @@
+--- a/loader/include/pe_loader.h
++++ b/loader/include/pe_loader.h
+@@ -62,6 +62,10 @@
+     // Resolve the public PE ordinal (ExportDirectory.Base + EAT index).
+     // Refuses holes, forwarders, and non-executable targets.
+     void* find_export_ordinal(uint64_t ordinal) const;
++    // Read a PE forwarder target only when the selected EAT entry points to
++    // a complete string inside the export directory. No target is executed.
++    bool find_export_forwarder(const char* name, uint64_t ordinal,
++                               std::string& target) const;
+ 
+     // Export/bookkeeping state; defined in pe_loader.cpp. Owned by the
+     // LoadResult and intentionally never freed: the image is retained for
+--- a/loader/src/pe_loader.cpp
++++ b/loader/src/pe_loader.cpp
+@@ -575,6 +575,43 @@
+     return true;
+ }
+ 
++bool export_index(const LoadResult& result, const ExportView& view,
++                  const char* name, uint64_t ordinal, uint32_t& index)
++{
++    const auto& ex = view.directory;
++    if (!name)
++    {
++        if (ordinal > UINT16_MAX || ordinal < ex.Base) return false;
++        const uint64_t slot = ordinal - ex.Base;
++        if (slot >= ex.NumberOfFunctions) return false;
++        index = static_cast<uint32_t>(slot);
++        return true;
++    }
++    const auto inside = [&](uint64_t rva, uint64_t bytes) {
++        return rva <= result.impl->image_size &&
++               bytes <= result.impl->image_size - rva;
++    };
++    if (!inside(ex.AddressOfNames, uint64_t(ex.NumberOfNames) * sizeof(uint32_t)) ||
++        !inside(ex.AddressOfNameOrdinals,
++                uint64_t(ex.NumberOfNames) * sizeof(uint16_t))) return false;
++    const uint32_t* names = reinterpret_cast<const uint32_t*>(
++        result.image + ex.AddressOfNames);
++    const uint16_t* ords = reinterpret_cast<const uint16_t*>(
++        result.image + ex.AddressOfNameOrdinals);
++    for (uint32_t i = 0; i < ex.NumberOfNames; ++i)
++    {
++        const uint32_t name_rva = names[i];
++        if (!inside(name_rva, 1)) return false;
++        const char* found = reinterpret_cast<const char*>(result.image + name_rva);
++        if (!std::memchr(found, '\0', result.impl->image_size - name_rva)) return false;
++        if (std::strcmp(found, name) != 0) continue;
++        if (ords[i] >= ex.NumberOfFunctions) return false;
++        index = ords[i];
++        return true;
++    }
++    return false;
++}
++
+ void* export_target(const LoadResult& result, const ExportView& view,
+                     uint32_t index)
+ {
+@@ -597,35 +634,39 @@
+ {
+     ExportView view;
+     if (!name || !export_view(*this, view)) return nullptr;
+-    const auto& ex = view.directory;
+-    const auto inside = [&](uint64_t rva, uint64_t bytes) {
+-        return rva <= impl->image_size && bytes <= impl->image_size - rva;
+-    };
+-    if (!inside(ex.AddressOfNames, uint64_t(ex.NumberOfNames) * sizeof(uint32_t)) ||
+-        !inside(ex.AddressOfNameOrdinals,
+-                uint64_t(ex.NumberOfNames) * sizeof(uint16_t))) return nullptr;
+-    const uint32_t* names = reinterpret_cast<const uint32_t*>(image + ex.AddressOfNames);
+-    const uint16_t* ords = reinterpret_cast<const uint16_t*>(image + ex.AddressOfNameOrdinals);
+-    for (uint32_t i = 0; i < ex.NumberOfNames; ++i)
+-    {
+-        const uint32_t name_rva = names[i];
+-        if (!inside(name_rva, 1)) return nullptr;
+-        const char* n = reinterpret_cast<const char*>(image + name_rva);
+-        if (!std::memchr(n, '\0', impl->image_size - name_rva)) return nullptr;
+-        if (std::strcmp(n, name) != 0) continue;
+-        return export_target(*this, view, ords[i]);
+-    }
+-    return nullptr;
++    uint32_t index = 0;
++    if (!export_index(*this, view, name, 0, index)) return nullptr;
++    return export_target(*this, view, index);
+ }
+ 
+ void* LoadResult::find_export_ordinal(uint64_t ordinal) const
+ {
+     ExportView view;
+-    if (ordinal > UINT16_MAX || !export_view(*this, view)) return nullptr;
+-    if (ordinal < view.directory.Base) return nullptr;
+-    const uint64_t index = ordinal - view.directory.Base;
+-    if (index >= view.directory.NumberOfFunctions) return nullptr;
+-    return export_target(*this, view, static_cast<uint32_t>(index));
++    if (!export_view(*this, view)) return nullptr;
++    uint32_t index = 0;
++    if (!export_index(*this, view, nullptr, ordinal, index)) return nullptr;
++    return export_target(*this, view, index);
++}
++
++bool LoadResult::find_export_forwarder(const char* name, uint64_t ordinal,
++                                       std::string& target) const
++{
++    target.clear();
++    ExportView view;
++    if (!export_view(*this, view)) return false;
++    uint32_t index = 0;
++    if (!export_index(*this, view, name, ordinal, index)) return false;
++    const uint32_t rva = view.functions[index];
++    const uint64_t begin = impl->export_dir_rva;
++    const uint64_t end = begin + impl->export_dir_size;
++    if (rva < begin || rva >= end) return false;
++    const size_t available = static_cast<size_t>(end - rva);
++    const size_t cap = available < 4096 ? available : 4096;
++    const char* text = reinterpret_cast<const char*>(image + rva);
++    const void* nul = std::memchr(text, '\0', cap);
++    if (!nul || nul == text) return false;
++    target.assign(text, static_cast<const char*>(nul) - text);
++    return true;
+ }
+ 
+ namespace {
+--- a/loader/include/guest_pe_loader.h
++++ b/loader/include/guest_pe_loader.h
+@@ -59,7 +59,8 @@
+                   bool has_static_tls);
+     static bool disable_thread_notifications(void* user);
+     static bool lookup_export(void* owner, const char* symbol,
+-                              uint64_t ordinal, void** out);
++                              uint64_t ordinal, void** out,
++                              std::string* forwarder);
+ 
+     LoadResult load_;
+     StaticTlsBank& bank_;
+--- a/loader/src/guest_pe_loader.cpp
++++ b/loader/src/guest_pe_loader.cpp
+@@ -142,15 +142,16 @@
+ }
+ 
+ bool GuestPeModule::lookup_export(void* owner, const char* symbol,
+-                                   uint64_t ordinal, void** out)
++                                   uint64_t ordinal, void** out,
++                                   std::string* forwarder)
+ {
+     auto* module = static_cast<GuestPeModule*>(owner);
+-    if (!module || !module->attached_ || !out || (symbol && !*symbol)) return false;
++    if (!module || !module->attached_ || !out || !forwarder ||
++        (symbol && !*symbol)) return false;
+     void* address = symbol ? module->load_.find_export(symbol) :
+                              module->load_.find_export_ordinal(ordinal);
+-    if (!address) return false;
+-    *out = address;
+-    return true;
++    if (address) { *out = address; return true; }
++    return module->load_.find_export_forwarder(symbol, ordinal, *forwarder);
+ }
+ 
+ GuestNotifyStatus GuestPeModule::process_attach(GuestTebView& teb)
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -75,7 +75,8 @@
+     // The lookup receives its owner context and must refuse until that PE
+     // has completed process attachment. A null symbol selects a PE ordinal.
+     using MappedLookup = bool (*)(void* owner, const char* symbol,
+-                                  uint64_t ordinal, void** out);
++                                  uint64_t ordinal, void** out,
++                                  std::string* forwarder);
+     bool register_mapped_module(const char* source_path, WinModule handle,
+                                 MappedLookup lookup, void* owner);
+     // Caller must quiesce guest users of the module before removing it.
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -27,6 +27,7 @@
+ #include <new>
+ #include <shared_mutex>
+ #include <thread>
++#include <utility>
+ #include <vector>
+ 
+ #if defined(__APPLE__) || defined(__unix__) || defined(__PROSPERO__)
+@@ -836,6 +837,21 @@
+ {
+     const std::string dll = ascii_module_key(dll_name);
+     if (dll.empty()) return nullptr;
++    // Forwarded exports may form chains. A per-thread bound also covers
++    // accidental recursive calls from a registry callback.
++    using ResolveFrame = std::pair<const WinApiShim*, std::string>;
++    static thread_local std::vector<ResolveFrame> active;
++    std::string key = dll + "!" + (symbol ? std::string(symbol) :
++                                    "#" + std::to_string(ordinal));
++    if (active.size() >= 16) return nullptr;
++    for (const auto& frame : active)
++        if (frame.first == this && frame.second == key) return nullptr;
++    active.emplace_back(this, std::move(key));
++    struct PopFrame
++    {
++        std::vector<ResolveFrame>& frames;
++        ~PopFrame() { frames.pop_back(); }
++    } pop{active};
+ 
+     // 1) registered modules first (UE4SS.dll surface, mapped PE mods)
+     Impl::ModuleEntry selected{};
+@@ -854,9 +870,40 @@
+     if (registered)
+     {
+         void* out = nullptr;
++        std::string forwarder;
+         if (selected.mapped_lookup &&
+-            selected.mapped_lookup(selected.owner, symbol, ordinal, &out) && out)
+-            return out;
++            selected.mapped_lookup(selected.owner, symbol, ordinal,
++                                   &out, &forwarder))
++        {
++            if (out) return out;
++            if (!forwarder.empty())
++            {
++                const size_t dot = forwarder.rfind('.');
++                if (dot == std::string::npos || dot == 0 ||
++                    dot + 1 >= forwarder.size()) return nullptr;
++                std::string module = forwarder.substr(0, dot);
++                const std::string export_name = forwarder.substr(dot + 1);
++                if (module.find_first_of("/\\:") != std::string::npos) return nullptr;
++                const std::string normalized = ascii_module_key(module.c_str());
++                if (normalized.size() < 4 ||
++                    normalized.compare(normalized.size() - 4, 4, ".dll") != 0)
++                    module += ".dll";
++                if (export_name[0] == '#')
++                {
++                    if (export_name.size() == 1) return nullptr;
++                    uint64_t next_ordinal = 0;
++                    for (size_t i = 1; i < export_name.size(); ++i)
++                    {
++                        const char digit = export_name[i];
++                        if (digit < '0' || digit > '9') return nullptr;
++                        next_ordinal = next_ordinal * 10 + unsigned(digit - '0');
++                        if (next_ordinal > UINT16_MAX) return nullptr;
++                    }
++                    return resolve(module.c_str(), nullptr, next_ordinal);
++                }
++                return resolve(module.c_str(), export_name.c_str(), 0);
++            }
++        }
+         if (symbol && selected.lookup &&
+             selected.lookup(selected.handle, symbol, &out) && out)
+             return out;
+--- a/loader/tests/mapped_module_registry_test.cpp
++++ b/loader/tests/mapped_module_registry_test.cpp
+@@ -284,6 +284,167 @@
+         check(rebased.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
+               "rebased export fixture detaches cleanly");
+ 
++    // Relocate copied EAT entries into an enlarged export directory and
++    // place standard forwarder strings in otherwise-unused fixture bytes.
++    auto forward_bytes = bytes;
++    const auto* dos = reinterpret_cast<const cap13::PeDosHeader*>(forward_bytes.data());
++    auto* opt = reinterpret_cast<cap13::PeOptionalHeader64*>(
++        forward_bytes.data() + dos->e_lfanew + 4 + sizeof(cap13::PeFileHeader));
++    opt->DataDirectory[cap13::PE_DIR_EXPORT].Size = 0x180;
++    const uint32_t named_forward_rva = 0x2170;
++    const uint32_t ordinal_forward_rva = 0x2190;
++    std::memcpy(forward_bytes.data() + 0x678, &named_forward_rva, 4);
++    std::memcpy(forward_bytes.data() + 0x67c, &ordinal_forward_rva, 4);
++    std::memcpy(forward_bytes.data() + 0x770, "forward-target.start_mod",
++                sizeof("forward-target.start_mod"));
++    std::memcpy(forward_bytes.data() + 0x790, "forward-target.#1",
++                sizeof("forward-target.#1"));
++
++    RecordingSwitch target_segment;
++    auto target = cap13::pe_prepare_guest_with_shim(
++        bytes.data(), bytes.size(), shim, options, bank, target_segment,
++        "/mods/forward-target.dll");
++    const bool target_attached = target.ok && target.module &&
++        target.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok;
++    check(target_attached, "forwarder target attaches");
++    RecordingSwitch proxy_segment;
++    auto proxy = cap13::pe_prepare_guest_with_shim(
++        forward_bytes.data(), forward_bytes.size(), shim, options, bank,
++        proxy_segment, "/mods/forward-proxy.dll");
++    const bool proxy_attached = proxy.ok && proxy.module &&
++        proxy.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok;
++    check(proxy_attached, "forwarder proxy attaches");
++    if (target_attached && proxy_attached)
++    {
++        void* expected = shim.resolve("forward-target.dll", "start_mod", 0);
++        check(expected &&
++              shim.resolve("forward-proxy.dll", "start_mod", 0) == expected &&
++              shim.resolve("forward-proxy.dll", nullptr, 1) == expected &&
++              shim.resolve("forward-proxy.dll", "stop_mod", 0) == expected &&
++              shim.resolve("forward-proxy.dll", nullptr, 2) == expected,
++              "named and ordinal forwarders resolve through attached provider");
++
++        auto forwarded_consumer_bytes = consumer_bytes;
++        std::memcpy(forwarded_consumer_bytes.data() + 0x900,
++                    "forward-proxy.dll", sizeof("forward-proxy.dll"));
++        RecordingSwitch forwarded_consumer_segment;
++        auto forwarded_consumer = cap13::pe_prepare_guest_with_shim(
++            forwarded_consumer_bytes.data(), forwarded_consumer_bytes.size(),
++            shim, options, bank, forwarded_consumer_segment,
++            "/mods/forwarded-consumer.dll");
++        check(forwarded_consumer.ok && forwarded_consumer.module,
++              "dependent PE import resolves through mapped forwarder");
++        if (forwarded_consumer.ok)
++        {
++            const int before_forwarded_call = ue4ss_calls;
++            check(forwarded_consumer.module->process_attach(teb) ==
++                      cap13::GuestNotifyStatus::Ok &&
++                  ue4ss_calls == before_forwarded_call + 1,
++                  "dependent DllMain calls forwarded provider through its IAT");
++            check(forwarded_consumer.module->process_detach(teb) ==
++                      cap13::GuestNotifyStatus::Ok,
++                  "forwarded dependent detaches before proxy");
++        }
++
++        auto chain_bytes = forward_bytes;
++        std::memcpy(chain_bytes.data() + 0x770, "forward-proxy.start_mod",
++                    sizeof("forward-proxy.start_mod"));
++        RecordingSwitch chain_segment;
++        auto chain = cap13::pe_prepare_guest_with_shim(
++            chain_bytes.data(), chain_bytes.size(), shim, options, bank,
++            chain_segment, "/mods/forward-chain.dll");
++        const bool chain_attached = chain.ok && chain.module &&
++            chain.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok;
++        check(chain_attached &&
++              shim.resolve("forward-chain.dll", "start_mod", 0) == expected,
++              "two-hop mapped forwarder chain reaches attached provider");
++        if (chain_attached)
++            check(chain.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
++                  "forwarder chain detaches before proxy");
++
++        const struct { const char* text; const char* path; const char* label; }
++            refused_forwarders[] = {
++                {"forward-target.#65536", "/mods/large-ordinal.dll",
++                 "out-of-range forwarded ordinal refuses"},
++                {"missing.start_mod", "/mods/missing-forward.dll",
++                 "missing forwarded module refuses"},
++                {"malformed", "/mods/malformed-forward.dll",
++                 "forwarder without module separator refuses"},
++            };
++        for (const auto& bad : refused_forwarders)
++        {
++            auto bad_bytes = forward_bytes;
++            std::memcpy(bad_bytes.data() + 0x770, bad.text,
++                        std::strlen(bad.text) + 1);
++            RecordingSwitch bad_segment;
++            auto bad_module = cap13::pe_prepare_guest_with_shim(
++                bad_bytes.data(), bad_bytes.size(), shim, options, bank,
++                bad_segment, bad.path);
++            const bool attached = bad_module.ok && bad_module.module &&
++                bad_module.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok;
++            check(attached && shim.resolve(bad.path, "start_mod", 0) == nullptr,
++                  bad.label);
++            if (attached)
++                check(bad_module.module->process_detach(teb) ==
++                          cap13::GuestNotifyStatus::Ok,
++                      "refused-forwarder fixture detaches cleanly");
++        }
++
++        auto unterminated = forward_bytes;
++        const uint32_t last_forward_rva = 0x21b0;
++        std::memcpy(unterminated.data() + 0x678, &last_forward_rva, 4);
++        std::memset(unterminated.data() + 0x7b0, 'x', 16);
++        RecordingSwitch unterminated_segment;
++        auto unterminated_module = cap13::pe_prepare_guest_with_shim(
++            unterminated.data(), unterminated.size(), shim, options, bank,
++            unterminated_segment, "/mods/unterminated.dll");
++        const bool unterminated_attached = unterminated_module.ok &&
++            unterminated_module.module &&
++            unterminated_module.module->process_attach(teb) ==
++                cap13::GuestNotifyStatus::Ok;
++        check(unterminated_attached &&
++              shim.resolve("unterminated.dll", "start_mod", 0) == nullptr,
++              "unterminated forwarder refuses at export-directory boundary");
++        if (unterminated_attached)
++            check(unterminated_module.module->process_detach(teb) ==
++                      cap13::GuestNotifyStatus::Ok,
++                  "unterminated-forwarder fixture detaches cleanly");
++    }
++    if (proxy_attached)
++        check(proxy.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
++              "forwarder proxy detaches cleanly");
++    if (target_attached)
++        check(target.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
++              "forwarder target detaches cleanly");
++
++    auto cycle_a_bytes = forward_bytes;
++    auto cycle_b_bytes = forward_bytes;
++    std::memcpy(cycle_a_bytes.data() + 0x770, "cycle-b.start_mod",
++                sizeof("cycle-b.start_mod"));
++    std::memcpy(cycle_b_bytes.data() + 0x770, "cycle-a.start_mod",
++                sizeof("cycle-a.start_mod"));
++    RecordingSwitch cycle_a_segment;
++    RecordingSwitch cycle_b_segment;
++    auto cycle_a = cap13::pe_prepare_guest_with_shim(
++        cycle_a_bytes.data(), cycle_a_bytes.size(), shim, options, bank,
++        cycle_a_segment, "/mods/cycle-a.dll");
++    auto cycle_b = cap13::pe_prepare_guest_with_shim(
++        cycle_b_bytes.data(), cycle_b_bytes.size(), shim, options, bank,
++        cycle_b_segment, "/mods/cycle-b.dll");
++    const bool cycle_attached = cycle_a.ok && cycle_b.ok &&
++        cycle_a.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok &&
++        cycle_b.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok;
++    check(cycle_attached &&
++          shim.resolve("cycle-a.dll", "start_mod", 0) == nullptr,
++          "forwarder cycle refuses without recursion or a raw pointer");
++    if (cycle_attached)
++    {
++        check(cycle_b.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
++              "cycle second module detaches cleanly");
++        check(cycle_a.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
++              "cycle first module detaches cleanly");
++    }
++
+     shim.register_module("manual.dll", reinterpret_cast<void*>(0x200), lookup_ue4ss);
+     RecordingSwitch collision_segment;
+     auto collision = cap13::pe_prepare_guest_with_shim(

@@ -1,0 +1,47 @@
+# PROPOSED OPTIONAL (apply on top of proposed-B5-raise-after-unlock.diff): bounded Warning line for refused RegisterHook calls (first 32 per process).
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp	2026-10-12 07:40:54
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp	2026-10-12 07:40:54
+@@ -5941,6 +5941,27 @@
+ #endif
+     }
+ 
++    // [B5-opt] A refused RegisterHook is silent when the mod pcall()s it (the
++    // usual way PC mods probe for optional functions). Log the first 32 refusals
++    // per process (bounded: some mods retry every tick) so a refused hook is
++    // visible in UE4SS.log. Observational only.
++    static auto log_register_hook_refusal(const StringType& function_name, bool not_found) -> void
++    {
++        static std::atomic<int> s_refusals_logged{0};
++        if (s_refusals_logged.fetch_add(1, std::memory_order_relaxed) >= 32)
++        {
++            return;
++        }
++        if (not_found)
++        {
++            Output::send<LogLevel::Warning>(STR("[RegisterHook] refused: no UFunction named {}\n"), function_name);
++        }
++        else
++        {
++            Output::send<LogLevel::Warning>(STR("[RegisterHook] refused: {} is neither native nor hookable as a script function on this build\n"), function_name);
++        }
++    }
++
+     auto LuaMod::setup_lua_global_functions_main_state_only() const -> void
+     {
+         m_lua.register_function("RegisterHook", [](const LuaMadeSimple::Lua& lua) -> int {
+@@ -5991,6 +6012,7 @@
+             Unreal::UFunction* unreal_function = Unreal::UObjectGlobals::StaticFindObject<Unreal::UFunction*>(nullptr, nullptr, function_name_no_prefix);
+             if (!unreal_function)
+             {
++                log_register_hook_refusal(function_name_no_prefix, true);
+                 throw std::runtime_error(std::format(
+                         "Tried to register a hook with Lua function 'RegisterHook' but no UFunction with the specified name was found.\nFunction Name: {}",
+                         to_string(function_name_no_prefix)));
+@@ -6040,6 +6062,7 @@
+                 error_message.append(fmt::format("ProcessInternal: {}\n", Unreal::UObject::ProcessInternalInternal.get_function_address()));
+                 error_message.append(
+                         fmt::format("FUNC_Native: {}\n", static_cast<uint32_t>(unreal_function->HasAnyFunctionFlags(Unreal::EFunctionFlags::FUNC_Native))));
++                log_register_hook_refusal(function_name_no_prefix, false);
+                 throw std::runtime_error(error_message);
+             }
+ 

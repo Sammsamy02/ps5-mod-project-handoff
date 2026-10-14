@@ -1,0 +1,137 @@
+{
+  "worker": "worker-verdict-first-real",
+  "date": "2026-10-05",
+  "task": "Classify the FIRST REAL launch-10 evidence with the real pipeline (evidence.sh --from-dir) against ORACLE.md (incl. merged supplement); write the results record",
+  "scope": "LOCAL ONLY. No console contact; evidence.sh run in host fixture mode only; classifier executed unmodified.",
+  "inputs": {
+    "evidence_dir": "outputs/2026-10-04-zcode-controller/launch10-evidence/",
+    "classifier": "outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/evidence.sh",
+    "oracle": "outputs/2026-10-04-zcode-team/worker-launch10-acceptance-criteria/ORACLE.md",
+    "baseline_dir": "outputs/2026-10-04-zcode-controller/launch10-prep/",
+    "baseline_pins_verified": {
+      "ue4ss": "edf404a5/7591B",
+      "entry": "4b33b985/2343756B",
+      "status": "57c40d4c/169B",
+      "xwp": "20cff601/4362B"
+    },
+    "input_sha256_16": {
+      "run1-ue4ss.log": "4a4e0cf7280b66ff",
+      "run1-sdiag.jsonl": "d5ad9fa05e9bf4f7",
+      "run2-ue4ss.log": "e40bf151b3a921ad",
+      "run3-ue4ss.log": "9aeeceeb709f9f04",
+      "run3-sdiag.jsonl": "264ba150325dbe28",
+      "run3-runtime-status.txt": "f5ba12265b77c918",
+      "PS5Pad-sanitized.ini": "6ab119b3e8aef1d8",
+      "loadlist-sizefixed.txt": "54e3c2a0d3ba94f4"
+    },
+    "append_only_contract": "first 7591B of every run log sha-matches the baseline head; windows incremental (+141B/+620B/+926B); zero classifier WARN/CONFIG-DRIFT"
+  },
+  "method": "per-run constructed --from-dir fixture dirs (documented placement: runN-sdiag.jsonl renamed to modbridge-supplier-diag.jsonl; run3 status copied as runtime-status.txt); evidence.sh --from-dir <dir> --baseline-dir <launch10-prep> --out <summary> --json-tail; one invocation per run, exit 0 each; fixtures and full/summary/stderr outputs preserved",
+  "boot_facts": {
+    "single_console_boot": true,
+    "monotonic_t_ms_first_events": {"run1": 60003456, "run2": 60249173, "run3": 60899781},
+    "pids": {"run1": 317, "run2": 341, "run3": 355},
+    "cross_sink_timestamp_agreement": "each sdiag failure t_ms equals the r4 [t=..ms pid=..] prefix of the matching UE4SS.log line",
+    "entry_to_refusal_ms": {"run1": 810, "run2": 704, "run3": 800}
+  },
+  "runs": [
+    {
+      "run": 1,
+      "pid": 317,
+      "fix_applied_before": null,
+      "stage_reached": "E2_START_post_conversion",
+      "refusal_line": "[t=60004266ms pid=317] modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad.ini must be ASCII text without control bytes",
+      "oracle_class": "E2 EXPECTED-REFUSAL (prepare/start threw: pad profile ASCII gate)",
+      "classifier_verdict": "FAILED_code3",
+      "oracle_ladder": "conversion clauses D1-D5 met in sdiag (extent exact, anchor_count=7, intervals=1, cfg 1/1, spans=6/6); E4 activated NOT captured (no run1 status fetch) => conversion pass diag-proven, rung claim reserved",
+      "liveness": "entry returned 0; game survived (same boot carried runs 2-3); buffered-Lua harness green (sdiag seq 540-548)",
+      "sdiag_events": 548,
+      "sdiag_summary": "events=548 pid_first=317 start_failed=1 lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1 vmentry=22761 cfg_gamedir=1"
+    },
+    {
+      "run": 2,
+      "pid": 341,
+      "fix_applied_before": "PS5Pad-sanitized.ini staged (2958B ASCII)",
+      "stage_reached": "B7_MFA_ACTIVATION",
+      "refusal_line": "[t=60249877ms pid=341] modbridge module_start failed: mfa_activate_failed code=-8 detail=size file is shorter than the load list says ue4ss/PS5Pad.ini",
+      "oracle_class": "B7 EXPECTED-REFUSAL (loadlist/activation mismatch; named offending file)",
+      "classifier_verdict": "FAILED_code-8",
+      "oracle_ladder": "FAIL-class refusal position: nothing bridge-side ran (no bridge tags) — per B7; but the runtime module itself STARTED: module_start_entered, constructor_count=235 with all 235 ctor pairs return 0, probe_lifecycle_result=0 (B4 dead-rebuild NOT fired), runtime_wiring_begin present, module_start_return=0, buffered-Lua green (sdiag seq 487-495)",
+      "liveness": "game continued UNMODDED",
+      "sdiag_events_note": "no run2 sdiag fetch exists; run2 records (pid 341, 495 events) survive inside the run3 cumulative set"
+    },
+    {
+      "run": 3,
+      "pid": 355,
+      "fix_applied_before": "loadlist-sizefixed.txt staged (declares ue4ss/PS5Pad.ini 2958)",
+      "stage_reached": "E2_START_post_conversion",
+      "refusal_line": "[t=60900581ms pid=355] modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad input unavailable: phase=6, error=-2137915388",
+      "refusal_error_hex": "0x80920004 (0x8092xxxx pad error domain; exact symbolic name not pinned in the oracle)",
+      "oracle_class": "E2 EXPECTED-REFUSAL (pad provider init failed) — explicitly allowed to hold MINIMAL-ACCEPT",
+      "classifier_verdict": "FAILED_code3",
+      "status_facts": "session 355 ms=60900572 fresh=yes; states=1 (terminal write truncated earlier acks per oracle two-openers note); last=failed code=1; detail matches the log line",
+      "sdiag_events": 1591,
+      "sdiag_summary": "events=1591 pid_first=317 start_ok=0 start_failed=2 lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1 vmentry=10028 cfg_gamedir=1"
+    }
+  ],
+  "predicted_pair_verification": {
+    "prediction": "lmf_intervals_found=1 next to bridge_lease_reg_spans=6, with lmf_anchor_count=7; extent [0x400000, 0xc0602c8)",
+    "confirmed": true,
+    "confirmed_twice": true,
+    "run3_lines": {
+      "bridge_lease_reg_spans": "seq 502 value=6",
+      "bridge_lease_reg": "seq 503 value=6",
+      "bridge_cfg_gamedir": "seq 530 value=1",
+      "bridge_cfg_workdir": "seq 531 value=1",
+      "lmf_extent_base_low": "seq 532 value=4194304 (0x00400000)",
+      "lmf_extent_base_high": "seq 533 value=0",
+      "lmf_extent_end_low": "seq 534 value=201720520 (0x0c0602c8)",
+      "lmf_extent_end_high": "seq 535 value=0",
+      "lmf_anchor_count": "seq 536 value=7",
+      "lmf_intervals_found": "seq 537 value=1"
+    },
+    "sdiagsum_surfaces_pair": true,
+    "sdiagsum_verbatim_run3": "supplier-diag jsonl: events=1591 pid_first=317 start_ok=0 start_failed=2 lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1 vmentry=10028 cfg_gamedir=1 (single-writer t_ms sequence above)",
+    "emission_order_note": "live order: lease_reg -> spanpub -> second capture walk -> anchors -> cfg -> lmf; oracle S2.2 lists anchors (step 4) before lease_reg (step 5); first-seen order preserved, values match"
+  },
+  "run3_verdict": {
+    "controller_assertion": "MINIMAL-ACCEPT achieved (conversion pass + intervals>0 + diag events)",
+    "declaration": "CONFIRMED",
+    "oracle_clauses": {
+      "D1_D2_extent_events": "MET (exact predicted values, seq 532-535)",
+      "D3_anchor_count_gt0": "MET (7, seq 536)",
+      "D4_intervals_gt0": "MET (1 — predicted coalesced value, seq 537)",
+      "D5_cfg_events": "MET (1/1, seq 530-531)",
+      "E4_activated_present": "MET BY EVIDENCE-EQUIVALENCE with caveat: literal 'state 1 activated 0' ABSENT (terminal write_status_failed O_TRUNC-replaced same-launch acks — oracle-documented two-openers behavior); activation proven by mfa_activated_low=36564/mfa_activated_high=0 (seq 484-485) + START-stage code=3 reachability (stage 3 only entered after activation, conversion (1) and context (2) completed)",
+      "no_D6_geometry_refusal": "MET (no 'no observed mapping interval' line; intervals=1; refusal fan-out tags absent)",
+      "no_crash": "MET (module_start_return=0; PATH_TEST stamped after refusal; status carries caught throw; one boot carried all three runs; LoadMap-tail 0)"
+    },
+    "bonus": "no C12/C13 (no lease-coverage gap, no 'Owned read range...' — launch-9 killer dormant, r14 held); no B4/Shape-A/GMalloc/DIAG/xwp drift markers; no W1-W7 walkguard strings (Phase F unreached)",
+    "launch11_capture_note": "fetch runtime-status.txt before/absent a terminal write so 'activated' is literally visible",
+    "run1_note": "run1's sdiag independently met the same conversion clauses (identical 7/1/6/extent) — the geometry claim reproduced on two real boots"
+  },
+  "next_run_prediction_pad_deferred": {
+    "expected": "Phases B-D replay run3 exactly; then E3 runtime_start_ok + E4 'state 1 activated 0' survives (no terminal write); Phase F new territory: F1 armed marker, F6 slot0 bound, F14 pool validated (v2 published-span format per S2.3), F9 GMalloc V1+V2 match, F18 slot2 behavioral, F21 slot4 bound, F24-F28 ladder",
+    "pinned_terminal": "at 'Finding GameEngine::LoadMap' (INI-F:1819, first guarded walk): W1 '[WalkRxGuard] REFUSED: NO read attempted; ...' in UE4SS.log + W2 status failed '[WalkRxGuard] refused: guard_off_no_rx_verdict ...' — fold-0 refusal, no read, zero syscalls, game survives",
+    "expected_verdict": "GOOD (per oracle S1.2: named later-stage refusal after the seed gates); BEST unreachable in this pass (F29->F34/F35 blocked by W2)",
+    "regression_triggers": "any actual walk READ at that site (crash => FAIL, unguarded unit shipped); reasons anomaly_latched_earlier_restore_failed / rx_transition_denied / page_range_invalid / guard_depth_exceeded => REGRESSION (folded-ON object shipped)"
+  },
+  "classifier_gaps_real_data": [
+    {"id": "G1", "gap": "no E2/START-stage or B7/MFA names in the verdict alphabet; pad refusals and loadlist-size text fall through map_detail => FAILED_code3 / FAILED_code-8, understating the ladder position (oracle: E2 => >= MINIMAL-ACCEPT)"},
+    {"id": "G2", "gap": "classify_sdiag has no baseline cut / per-pid split: cumulative 1591-event file aggregates three sessions; pid_first=317 stale; start_failed=2 mixes sessions; STIME deltas cross session boundaries (+239,970ms jumps) contradicting the 'single-writer' framing; last-write-wins key values correct only because run1/run3 shared 7/1/6"},
+    {"id": "G3", "gap": "JSON tail counts UE4SS.log-text markers only (stage_tags/bridge_cfg/observer all 0 despite 1591 sdiag events) and carries no anchor_count/intervals/lease_spans fields — JSON-only consumers see 'no staged markers' on the MINIMAL-ACCEPT run"},
+    {"id": "G4", "gap": "module_start_return=0 maps to S11_STOP in the stage chain; on these runs it means 'entry returned 0 after a loud refusal (game continues UNMODDED)', not a stop/unload"},
+    {"id": "G5", "gap": "--from-dir only recognizes the sdiag under the exact name modbridge-supplier-diag.jsonl (evidence files are runN-sdiag.jsonl) — operator trap; placement documented"},
+    {"id": "G6", "gap": "cumulative UE4SS.log windows include prior runs' refusals and unattributable PATH_TEST stamps (no r4 prefix on non-failure lines); verdict precedence keyed on the LAST failure line, correct here, but dependent on append-only ordering"},
+    {"id": "G7", "gap": "run1 bridge_vmentry_entries=22761 exceeds the pinned kBridgeVmmapEntries=16384 with bridge_vm_walk_stop=0 (S3 predicts stop=2 for vm_total>16384); capacity-or-counter reconciliation needed; run3 (10028) unaffected"},
+    {"id": "G8", "gap": "oracle C7 nuance: bridge_exepath_source=0 with the r10 fork RESOLVING via stat_ownmod=1/stat_ownmod_ec=0 and conversion proceeding — C7's 'then refusal -1' only applies when the fork fails; wording update for the next oracle revision"},
+    {"id": "G9", "gap": "bridge_spanpub_env_low/high is a 64-bit low/high split (run3: 4259840/17; run1: 1084030976/16), not a lone 'max record end'; spanpub_cap=1 on both boots (16 of 119/127 published — kMaxPublishedSpans=16 saturation) worth an oracle note"}
+  ],
+  "honest_bounds": "All evidence is from the controller's real console fetches; the classifier ran locally, unmodified, in host fixture mode. No verdict beyond MINIMAL-ACCEPT is claimed; Phase F seed lines do not exist in any run window; no claim is upgraded by re-reading unchanged evidence. Gaps are reported, not fixed (evidence.sh untouched).",
+  "artifacts": {
+    "results": "LAUNCH10-RESULTS.md",
+    "report": "REPORT.md",
+    "fixtures": "fixtures/run1/ fixtures/run2/ fixtures/run3/",
+    "classifier_outputs": "classifier-outputs/run{1,2,3}-full.txt, run{1,2,3}-summary.txt, run{1,2,3}-stderr.txt"
+  }
+}

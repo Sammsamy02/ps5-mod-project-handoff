@@ -1,0 +1,25 @@
+# Automatic retargeting verification proposal
+
+Mac-only analysis, 2026-10-13. No console contact or new console evidence. Source IDs resolve to absolute paths and complete SHA256s in SOURCE-PINS.json. Original artifacts are unchanged. The handoff supplied context; it did not authorize console actions, kernel changes, external dispatch, or publication.
+
+Design proposal only; no implementation or runtime policy changes. Intended outcome: unchanged gameplay DLLs for their intended game/build produce their intended behavior. Sound stays deferred. Engine differences belong in adapters; image-specific facts belong in generated profiles.
+
+Three approaches were considered: direct name/pattern substitution (small but does not establish ABI or patch semantics); a general binary translator (broad but unsupported by the available runtime/evidence); and **typed engine-adapter mediation with three independent admission gates** (recommended, reuses existing services and refuses unsupported direct patches). The last approach gives verifiable incremental behavior without claiming arbitrary machine-code compatibility.
+
+| Gate | Input and output | Existing grounding | Admission proof still required |
+|---|---|---|---|
+| 1 Named target | DLL import/reflection request → canonical semantic target and typed signature | S7’s import census; S8 reflection/service table; S16 hook path lookup | Exact symbol/ordinal with library version; encoding/overload/type validation; name absence/ambiguity fails. Matching a framework export does not locate an engine function |
+| 2 Cross-build correspondence | Canonical target + PC/PS5 build identities → unique PS5 binding with evidence | S15:1352-1369 authenticates cached code identity/prefix and binds the generated SCO seed; S14:28-33 stores that binding | Prove same semantic operation using independent structure/call-site/signature evidence for the specific images. A PC byte pattern/name/RVA is not presumed portable. Multiple/no candidates refuse |
+| 3 Instruction and call compatibility | Typed binding + guest/compiler/layout facts + requested operation → admitted adapter/callback/patch plan | S14 version-dispatched construction wrappers and limited integer bridge S9 | Guest ABI/STL/context/struct layout, native engine signature, ownership, threading and exceptions; for direct patches, instruction decoding, relocatability, relative addressing, preserved state, branch reach, quiescence and restoration. Address resolution alone never passes this gate |
+
+The examined generator S17 is a pinned layout overlay generator with image/hash/two-source checks, not a demonstrated general PC→PS5 function matcher. Reuse the generator’s provenance and fail-closed policy; do not label universal correspondence as already implemented. Likewise the SCO call-site actually examined is generated-seed + authenticated cached-prefix admission, not proof of portable blind scanning.
+
+Each request carries a generic descriptor: operation kind (read/call/hook/replace), engine/version, guest signature and type-layout fingerprint, source/target image digests, profile/schema digest, correspondence evidence IDs, native signature, route requirements, lifetime/rollback contract. Engine adapter translates semantics; generated profile supplies image-specific facts. No hand-entered game addresses or mod-name branches belong in shared runtime.
+
+After all three gates, admit the least invasive route that preserves the requested semantics. Existing data-only UFunction hooks can cover mediated engine events; they do not preserve every native-entry hook’s timing or arbitrary replacement instructions. A mod using hardcoded PC addresses, foreign prologues, unsupported GS/TLS/EH or incompatible assembly gets a named refusal. In-memory relocation/IAT binding is ordinary loading; do not rewrite original DLL files or disguise changed mod logic as retargeting.
+
+Runtime receipts must separately retain LOADING (input hash, mapping/relocations, per-import result, entry/CRT); TARGET RESOLUTION (three gate results and provenance, without execution implications); and WORKING PATCH BEHAVIOR (expected observable event, before/after state, callback execution, restoration and restart evidence where applicable). A denied gate records why and performs no dependent mutation.
+
+Validation obligations: absent/ambiguous names; wrong image/profile; changed prefix; multiple correspondence candidates; low-level ABI mismatch; parameter-layout changes/direct writes; callback ownership and unload; unsupported instruction relocation; concurrent mutation; dirty restore refusal; genuine upstream behavior. Fixtures validate mechanism; they cannot certify an upstream mod or a PS5 run.
+
+Current status across the three reporting axes: **Loading** partial Mac fixture/sample evidence; **Target resolution** source-backed native service binding but no demonstrated automatic cross-build pipeline; **Working patch behavior** no unchanged upstream gameplay DLL proof. C2’s construction row is one dependency, not full acceptance.

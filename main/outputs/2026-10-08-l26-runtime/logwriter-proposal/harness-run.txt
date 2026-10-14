@@ -1,0 +1,14 @@
+out dir: .
+1-baseline-deployed          corruption=124  first bad: 
+2-conversion-only            corruption=75  first bad: lback returned state=0x8801db3e8 ref=12
+calling <GetItemIDFromDeprecatedEnum> but the UFunction is a nullptr: in method 
+3-lock-atomic-only           corruption=0
+4-full-fix                   corruption=0
+
+VERDICT: baseline reproduces (124), conversion-only still interleaves (75), lock+atomic eliminates (0), full fix eliminates (0). PASS
+
+--- baseline sample (console pattern: wide prefix cut by full [l22] line, tail displaced) ---
+b'\n[Lua] [\x00T\x00o\x00w\x00n\x00f\x00a\x00l\x00l\x00I\x00t\x00e\x00m\x00S\x00p\x00a\x00w\x00n\x00e\x00r\x00]\x00 \x00S\x00c\x00a\x00n\x00 \x00f\x00a\x00i\x00l\x00e\x00d\x00:\x00 \x00u\x00e\x004\x00s\x00s\x00/\x00M\x00o\x00d\x00s\x00/\x00T\x00o\x00w\x00n\x00f\x00a\x00l\x00l\x00I\x00t\x00e\x00m\x00S\x00p\x00a\x00w\x00n\x00e\x00r\x00/\x00S\x00c\x00r\x00i\x00p\x00t\x00s\x00/\x00m\x00a\x00i\x00[l22] ExecuteInGameThread callback returned state=0x8801db3e8 ref=12\n[l22] ExecuteInGameThread callback returned state=0x8801db3e8 ref=12\n[l22] ExecuteInGameThread callback returned state=0x8801db3e8 ref=12\n[l22] ExecuteInGameThread callba'
+
+--- full-fix sample (every message contiguous, conversion clean) ---
+b"[Lua] [TownfallItemSpawner] Scan failed: ue4ss/Mods/TownfallItemSpawner/Scripts/main.lua: Tried calling <GetItemIDFromDeprecatedEnum> but the UFunction is a nullptr: in method 'GetItemIDFromDeprecated"

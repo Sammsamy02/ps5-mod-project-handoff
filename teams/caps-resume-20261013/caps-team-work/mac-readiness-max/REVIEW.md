@@ -1,0 +1,15 @@
+# Final Mac review — #7 step 2 / #10
+
+Verdict: accepted for Claude's integration phase. All available isolated Mac component work and review in the current scope are complete. This is not target acceptance or a claim of universal DLL compatibility.
+
+Root independently rehashed all 136 #7, 96 native PAL, 113 signal, 91 integration and 34 executable-memory selected files. All match. Root reviewed the native GetLine/configuration fixes, signal owner/runtime pair, genuine dispatch cases and tracer/callsite correlation. A separate read-only integration review found no concrete blocker in link ordering, exact-input archive extraction, source/asset pins, typed providers, constructor sums or twin gates. The worker's frozen 'pending root review' labels are superseded by this acceptance without rewriting historical receipts.
+
+Root refreshed the strict ordinary shared link with the final accepted signal owner object and v2 runtime. It passes with no PIE/TEXTREL or dynamic Mono dependency, local runtime/rooting/registration symbols, 290 strong SDK-backed imports and six unprovided weak hooks. Only sigismember is newly imported versus the earlier pair; exact captured libkernel identity was independently resolved. The output SHA256 is 0fb0be21e2342f6cdbeec10f847fec06ac499f120ea3dc497406d32922bf118c. No ELF was executed or packaged.
+
+The current nine main source originals still match the combined stage's expected hashes at final read-only audit. The combined patch carries 55 text files; four binary inputs are explicitly copied and pinned separately. Existing 19 integration tests and exact apply/reverse proof are inspected, not gratuitously repeated. All six #7 native compilation receipts use genuine target inputs and the matching kMaxPins=16 header across all five consumers.
+
+The memory observation uses unchanged final production owner source, real fixed Mono, genuine static corlib and actual managed calls. Positive controls prove tracing and are reset before measurement. The single observed executable request is Mono's Darwin-only 4096-byte WRITE|EXEC permission probe; compiled callsite and source conditions agree. No executable mprotect or other executable request was observed. This is not a PS5 memory-permission or generic C# workload proof.
+
+Remaining dependencies belong to Claude's combined/target phase: seven exact SceNet identities if they survive actual combined linkage; full current game rebuild and independent packaging twins; engine mount, target GC/TLS/stack/AOT/exception/signal/lifecycle behavior; loader/provider permissions. Native PAL is genuine preparation for broader C# calls, not yet integrated into the admitted Probe path. Six weak SDK hooks remain unprovided, and an executable-memory branch must not be assumed functional. Mono's affected process signal actions need exclusive ownership during the lifecycle; entry-thread mask cleanup must run on that same thread. Fatal or partial runtime initialization is not claimed recoverable.
+
+No console was contacted. No main/candidate/frozen build was edited. #1/#3 remain ZCode's responsibility; #13 remains its separate documented assignment.

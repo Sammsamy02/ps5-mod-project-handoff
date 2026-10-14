@@ -1,0 +1,3428 @@
+[
+  {
+    "type": "RemoteObjectBase",
+    "metatable_name": "RemoteObjectBase",
+    "cpp_class": "RC::LuaType::ObjectBase (template root)",
+    "parent_type": null,
+    "category": "other",
+    "source_file": "include/LuaType/LuaUObject.hpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185"
+      },
+      {
+        "name": "type",
+        "lua_signature": "obj:type() -> string",
+        "implementation": "include/LuaType/LuaUObject.hpp:209",
+        "notes": "Returns \"RemoteObjectBase\" for a bare final ObjectBase; overridden by every concrete type."
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": false,
+    "notes": "Template base of ALL Lua-exposed UE4SS types (RemoteObjectBase/LocalObjectBase aliases). Not directly constructible from Lua; method table is inherited by every type below. Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "UObject",
+    "metatable_name": "UObject",
+    "cpp_class": "RC::LuaType::UObject (UObjectBase<Unreal::UObject>)",
+    "parent_type": "RemoteObjectBase",
+    "category": "reflection",
+    "source_file": "include/LuaType/LuaUObject.hpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "obj:GetFullName() -> string|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:532"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "obj:GetFName() -> FName",
+        "implementation": "include/LuaType/LuaUObject.hpp:552"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "obj:GetClass() -> UClass",
+        "implementation": "include/LuaType/LuaUObject.hpp:557"
+      },
+      {
+        "name": "GetOuter",
+        "lua_signature": "obj:GetOuter() -> UObject",
+        "implementation": "include/LuaType/LuaUObject.hpp:562"
+      },
+      {
+        "name": "IsAnyClass",
+        "lua_signature": "obj:IsAnyClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:570"
+      },
+      {
+        "name": "Reflection",
+        "lua_signature": "obj:Reflection() -> table (ReflectionTable, has :GetProperty)",
+        "implementation": "include/LuaType/LuaUObject.hpp:578",
+        "notes": "Returns table with ReflectedObject + GetProperty(string PropertyName) -> XProperty (sub-function at hpp:587)."
+      },
+      {
+        "name": "GetPropertyValue",
+        "lua_signature": "obj:GetPropertyValue(string PropertyName) -> any",
+        "implementation": "include/LuaType/LuaUObject.hpp:620"
+      },
+      {
+        "name": "SetPropertyValue",
+        "lua_signature": "obj:SetPropertyValue(string PropertyName, any Value)",
+        "implementation": "include/LuaType/LuaUObject.hpp:625"
+      },
+      {
+        "name": "IsClass",
+        "lua_signature": "obj:IsClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:630"
+      },
+      {
+        "name": "GetWorld",
+        "lua_signature": "obj:GetWorld() -> UWorld|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:640"
+      },
+      {
+        "name": "CallFunction",
+        "lua_signature": "obj:CallFunction(... ) -> function return values",
+        "implementation": "include/LuaType/LuaUObject.hpp:647",
+        "notes": "Delegates to call_ufunction_from_lua (src/LuaType/LuaUObject.cpp:153; Prospero protected-call wrapper at :97)."
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "obj:IsA(UClass Class | string ObjectFullName) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:651",
+        "notes": "Implementation: src/LuaType/LuaUObject.cpp:2247 (overloads: UClass userdata or full class name string)."
+      },
+      {
+        "name": "HasAllFlags",
+        "lua_signature": "obj:HasAllFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:655",
+        "notes": "Integer EObjectFlags from global EObjectFlags table."
+      },
+      {
+        "name": "HasAnyFlags",
+        "lua_signature": "obj:HasAnyFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:679"
+      },
+      {
+        "name": "HasAnyInternalFlags",
+        "lua_signature": "obj:HasAnyInternalFlags(EInternalObjectFlags InternalObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:703"
+      },
+      {
+        "name": "ProcessConsoleExec",
+        "lua_signature": "obj:ProcessConsoleExec(string Cmd, nil Reserved, UObject Executor) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:727"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:761",
+        "notes": "UObject-family override: checks pointer, special_invalid_ptr, global-unreal-objects map, and IsUnreachable."
+      }
+    ],
+    "metamethods": [
+      {
+        "name": "__index",
+        "behavior": "property/function lookup via custom property list then reflected FProperty/UFunction; returns invalid UObject for safe chaining",
+        "implementation": "include/LuaType/LuaUObject.hpp:502"
+      },
+      {
+        "name": "__newindex",
+        "behavior": "property write via property pushers",
+        "implementation": "include/LuaType/LuaUObject.hpp:507"
+      },
+      {
+        "name": "__call",
+        "behavior": "error if instance is nullptr",
+        "implementation": "include/LuaType/LuaUObject.hpp:512"
+      },
+      {
+        "name": "__eq",
+        "behavior": "pointer equality (uobject_equal_implementation, src/LuaType/LuaUObject.cpp:2273)",
+        "implementation": "include/LuaType/LuaUObject.hpp:522"
+      }
+    ],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Root of all engine-object wrappers. Also exposes dynamic members (properties and UFunctions) via __index on live instances. Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "UStruct",
+    "metatable_name": "UClass",
+    "cpp_class": "RC::LuaType::UStruct",
+    "parent_type": "UObject",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaUStruct.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "obj:GetFullName() -> string|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:532",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "obj:GetFName() -> FName",
+        "implementation": "include/LuaType/LuaUObject.hpp:552",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "obj:GetClass() -> UClass",
+        "implementation": "include/LuaType/LuaUObject.hpp:557",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetOuter",
+        "lua_signature": "obj:GetOuter() -> UObject",
+        "implementation": "include/LuaType/LuaUObject.hpp:562",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsAnyClass",
+        "lua_signature": "obj:IsAnyClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:570",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "Reflection",
+        "lua_signature": "obj:Reflection() -> table (ReflectionTable, has :GetProperty)",
+        "implementation": "include/LuaType/LuaUObject.hpp:578",
+        "notes": "Returns table with ReflectedObject + GetProperty(string PropertyName) -> XProperty (sub-function at hpp:587).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetPropertyValue",
+        "lua_signature": "obj:GetPropertyValue(string PropertyName) -> any",
+        "implementation": "include/LuaType/LuaUObject.hpp:620",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "SetPropertyValue",
+        "lua_signature": "obj:SetPropertyValue(string PropertyName, any Value)",
+        "implementation": "include/LuaType/LuaUObject.hpp:625",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsClass",
+        "lua_signature": "obj:IsClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:630",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetWorld",
+        "lua_signature": "obj:GetWorld() -> UWorld|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:640",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "CallFunction",
+        "lua_signature": "obj:CallFunction(... ) -> function return values",
+        "implementation": "include/LuaType/LuaUObject.hpp:647",
+        "notes": "Delegates to call_ufunction_from_lua (src/LuaType/LuaUObject.cpp:153; Prospero protected-call wrapper at :97).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "obj:IsA(UClass Class | string ObjectFullName) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:651",
+        "notes": "Implementation: src/LuaType/LuaUObject.cpp:2247 (overloads: UClass userdata or full class name string).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAllFlags",
+        "lua_signature": "obj:HasAllFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:655",
+        "notes": "Integer EObjectFlags from global EObjectFlags table.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyFlags",
+        "lua_signature": "obj:HasAnyFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:679",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyInternalFlags",
+        "lua_signature": "obj:HasAnyInternalFlags(EInternalObjectFlags InternalObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:703",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "ProcessConsoleExec",
+        "lua_signature": "obj:ProcessConsoleExec(string Cmd, nil Reserved, UObject Executor) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:727",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:761",
+        "notes": "UObject-family override: checks pointer, special_invalid_ptr, global-unreal-objects map, and IsUnreachable.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetSuperStruct",
+        "lua_signature": "s:GetSuperStruct() -> UStruct",
+        "implementation": "src/LuaType/LuaUStruct.cpp:57"
+      },
+      {
+        "name": "ForEachFunction",
+        "lua_signature": "s:ForEachFunction(function(UFunction Function) -> boolean|nil) -> nil",
+        "implementation": "src/LuaType/LuaUStruct.cpp:65",
+        "notes": "Return true from callback to break."
+      },
+      {
+        "name": "ForEachProperty",
+        "lua_signature": "s:ForEachProperty(function(XProperty Property) -> boolean|nil) -> nil",
+        "implementation": "src/LuaType/LuaUStruct.cpp:96",
+        "notes": "Return true from callback to break."
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "metatable_name is literally \"UClass\" (UStructName::ToString returns \"UClass\" \u2014 historical upstream quirk, shared with UClass). Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "UClass",
+    "metatable_name": "UClass",
+    "cpp_class": "RC::LuaType::UClass",
+    "parent_type": "UStruct",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaUClass.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "obj:GetFullName() -> string|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:532",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "obj:GetFName() -> FName",
+        "implementation": "include/LuaType/LuaUObject.hpp:552",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "obj:GetClass() -> UClass",
+        "implementation": "include/LuaType/LuaUObject.hpp:557",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetOuter",
+        "lua_signature": "obj:GetOuter() -> UObject",
+        "implementation": "include/LuaType/LuaUObject.hpp:562",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsAnyClass",
+        "lua_signature": "obj:IsAnyClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:570",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "Reflection",
+        "lua_signature": "obj:Reflection() -> table (ReflectionTable, has :GetProperty)",
+        "implementation": "include/LuaType/LuaUObject.hpp:578",
+        "notes": "Returns table with ReflectedObject + GetProperty(string PropertyName) -> XProperty (sub-function at hpp:587).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetPropertyValue",
+        "lua_signature": "obj:GetPropertyValue(string PropertyName) -> any",
+        "implementation": "include/LuaType/LuaUObject.hpp:620",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "SetPropertyValue",
+        "lua_signature": "obj:SetPropertyValue(string PropertyName, any Value)",
+        "implementation": "include/LuaType/LuaUObject.hpp:625",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsClass",
+        "lua_signature": "obj:IsClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:630",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetWorld",
+        "lua_signature": "obj:GetWorld() -> UWorld|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:640",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "CallFunction",
+        "lua_signature": "obj:CallFunction(... ) -> function return values",
+        "implementation": "include/LuaType/LuaUObject.hpp:647",
+        "notes": "Delegates to call_ufunction_from_lua (src/LuaType/LuaUObject.cpp:153; Prospero protected-call wrapper at :97).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "obj:IsA(UClass Class | string ObjectFullName) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:651",
+        "notes": "Implementation: src/LuaType/LuaUObject.cpp:2247 (overloads: UClass userdata or full class name string).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAllFlags",
+        "lua_signature": "obj:HasAllFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:655",
+        "notes": "Integer EObjectFlags from global EObjectFlags table.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyFlags",
+        "lua_signature": "obj:HasAnyFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:679",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyInternalFlags",
+        "lua_signature": "obj:HasAnyInternalFlags(EInternalObjectFlags InternalObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:703",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "ProcessConsoleExec",
+        "lua_signature": "obj:ProcessConsoleExec(string Cmd, nil Reserved, UObject Executor) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:727",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:761",
+        "notes": "UObject-family override: checks pointer, special_invalid_ptr, global-unreal-objects map, and IsUnreachable.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetSuperStruct",
+        "lua_signature": "c:GetSuperStruct() -> UStruct",
+        "implementation": "src/LuaType/LuaUStruct.cpp:57",
+        "inherited_from": "UStruct"
+      },
+      {
+        "name": "ForEachFunction",
+        "lua_signature": "c:ForEachFunction(function(UFunction) -> boolean|nil)",
+        "implementation": "src/LuaType/LuaUStruct.cpp:65",
+        "inherited_from": "UStruct"
+      },
+      {
+        "name": "ForEachProperty",
+        "lua_signature": "c:ForEachProperty(function(XProperty) -> boolean|nil)",
+        "implementation": "src/LuaType/LuaUStruct.cpp:96",
+        "inherited_from": "UStruct"
+      },
+      {
+        "name": "GetCDO",
+        "lua_signature": "c:GetCDO() -> UObject",
+        "implementation": "src/LuaType/LuaUClass.cpp:56",
+        "notes": "ClassDefaultObject; invalid UObject if instance is nullptr."
+      },
+      {
+        "name": "IsChildOf",
+        "lua_signature": "c:IsChildOf(UClass Other) -> boolean",
+        "implementation": "src/LuaType/LuaUClass.cpp:72"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Shares metatable name \"UClass\" with UStruct (both register into the same metatable registry key). Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "UInterface",
+    "metatable_name": "UInterface",
+    "cpp_class": "RC::LuaType::UInterface",
+    "parent_type": "UClass",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaUInterface.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "obj:GetFullName() -> string|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:532",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "obj:GetFName() -> FName",
+        "implementation": "include/LuaType/LuaUObject.hpp:552",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "obj:GetClass() -> UClass",
+        "implementation": "include/LuaType/LuaUObject.hpp:557",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetOuter",
+        "lua_signature": "obj:GetOuter() -> UObject",
+        "implementation": "include/LuaType/LuaUObject.hpp:562",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsAnyClass",
+        "lua_signature": "obj:IsAnyClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:570",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "Reflection",
+        "lua_signature": "obj:Reflection() -> table (ReflectionTable, has :GetProperty)",
+        "implementation": "include/LuaType/LuaUObject.hpp:578",
+        "notes": "Returns table with ReflectedObject + GetProperty(string PropertyName) -> XProperty (sub-function at hpp:587).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetPropertyValue",
+        "lua_signature": "obj:GetPropertyValue(string PropertyName) -> any",
+        "implementation": "include/LuaType/LuaUObject.hpp:620",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "SetPropertyValue",
+        "lua_signature": "obj:SetPropertyValue(string PropertyName, any Value)",
+        "implementation": "include/LuaType/LuaUObject.hpp:625",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsClass",
+        "lua_signature": "obj:IsClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:630",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetWorld",
+        "lua_signature": "obj:GetWorld() -> UWorld|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:640",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "CallFunction",
+        "lua_signature": "obj:CallFunction(... ) -> function return values",
+        "implementation": "include/LuaType/LuaUObject.hpp:647",
+        "notes": "Delegates to call_ufunction_from_lua (src/LuaType/LuaUObject.cpp:153; Prospero protected-call wrapper at :97).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "obj:IsA(UClass Class | string ObjectFullName) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:651",
+        "notes": "Implementation: src/LuaType/LuaUObject.cpp:2247 (overloads: UClass userdata or full class name string).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAllFlags",
+        "lua_signature": "obj:HasAllFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:655",
+        "notes": "Integer EObjectFlags from global EObjectFlags table.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyFlags",
+        "lua_signature": "obj:HasAnyFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:679",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyInternalFlags",
+        "lua_signature": "obj:HasAnyInternalFlags(EInternalObjectFlags InternalObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:703",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "ProcessConsoleExec",
+        "lua_signature": "obj:ProcessConsoleExec(string Cmd, nil Reserved, UObject Executor) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:727",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:761",
+        "notes": "UObject-family override: checks pointer, special_invalid_ptr, global-unreal-objects map, and IsUnreachable.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetSuperStruct",
+        "lua_signature": "i:GetSuperStruct() -> UStruct",
+        "implementation": "src/LuaType/LuaUStruct.cpp:57",
+        "inherited_from": "UStruct"
+      },
+      {
+        "name": "ForEachFunction",
+        "lua_signature": "i:ForEachFunction(function(UFunction) -> boolean|nil)",
+        "implementation": "src/LuaType/LuaUStruct.cpp:65",
+        "inherited_from": "UStruct"
+      },
+      {
+        "name": "ForEachProperty",
+        "lua_signature": "i:ForEachProperty(function(XProperty) -> boolean|nil)",
+        "implementation": "src/LuaType/LuaUStruct.cpp:96",
+        "inherited_from": "UStruct"
+      },
+      {
+        "name": "GetCDO",
+        "lua_signature": "i:GetCDO() -> UObject",
+        "implementation": "src/LuaType/LuaUClass.cpp:56",
+        "inherited_from": "UClass"
+      },
+      {
+        "name": "IsChildOf",
+        "lua_signature": "i:IsChildOf(UClass Other) -> boolean",
+        "implementation": "src/LuaType/LuaUClass.cpp:72",
+        "inherited_from": "UClass"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Adds no new methods; only the type() string differs. Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "UFunction",
+    "metatable_name": "UFunction",
+    "cpp_class": "RC::LuaType::UFunction",
+    "parent_type": "UStruct",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaUFunction.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "obj:GetFullName() -> string|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:532",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "obj:GetFName() -> FName",
+        "implementation": "include/LuaType/LuaUObject.hpp:552",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "obj:GetClass() -> UClass",
+        "implementation": "include/LuaType/LuaUObject.hpp:557",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetOuter",
+        "lua_signature": "obj:GetOuter() -> UObject",
+        "implementation": "include/LuaType/LuaUObject.hpp:562",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsAnyClass",
+        "lua_signature": "obj:IsAnyClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:570",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "Reflection",
+        "lua_signature": "obj:Reflection() -> table (ReflectionTable, has :GetProperty)",
+        "implementation": "include/LuaType/LuaUObject.hpp:578",
+        "notes": "Returns table with ReflectedObject + GetProperty(string PropertyName) -> XProperty (sub-function at hpp:587).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetPropertyValue",
+        "lua_signature": "obj:GetPropertyValue(string PropertyName) -> any",
+        "implementation": "include/LuaType/LuaUObject.hpp:620",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "SetPropertyValue",
+        "lua_signature": "obj:SetPropertyValue(string PropertyName, any Value)",
+        "implementation": "include/LuaType/LuaUObject.hpp:625",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsClass",
+        "lua_signature": "obj:IsClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:630",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetWorld",
+        "lua_signature": "obj:GetWorld() -> UWorld|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:640",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "CallFunction",
+        "lua_signature": "obj:CallFunction(... ) -> function return values",
+        "implementation": "include/LuaType/LuaUObject.hpp:647",
+        "notes": "Delegates to call_ufunction_from_lua (src/LuaType/LuaUObject.cpp:153; Prospero protected-call wrapper at :97).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "obj:IsA(UClass Class | string ObjectFullName) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:651",
+        "notes": "Implementation: src/LuaType/LuaUObject.cpp:2247 (overloads: UClass userdata or full class name string).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAllFlags",
+        "lua_signature": "obj:HasAllFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:655",
+        "notes": "Integer EObjectFlags from global EObjectFlags table.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyFlags",
+        "lua_signature": "obj:HasAnyFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:679",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyInternalFlags",
+        "lua_signature": "obj:HasAnyInternalFlags(EInternalObjectFlags InternalObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:703",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "ProcessConsoleExec",
+        "lua_signature": "obj:ProcessConsoleExec(string Cmd, nil Reserved, UObject Executor) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:727",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:761",
+        "notes": "UObject-family override: checks pointer, special_invalid_ptr, global-unreal-objects map, and IsUnreachable.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetSuperStruct",
+        "lua_signature": "f:GetSuperStruct() -> UStruct",
+        "implementation": "src/LuaType/LuaUStruct.cpp:57",
+        "inherited_from": "UStruct"
+      },
+      {
+        "name": "ForEachFunction",
+        "lua_signature": "f:ForEachFunction(function(UFunction) -> boolean|nil)",
+        "implementation": "src/LuaType/LuaUStruct.cpp:65",
+        "inherited_from": "UStruct"
+      },
+      {
+        "name": "ForEachProperty",
+        "lua_signature": "f:ForEachProperty(function(XProperty) -> boolean|nil)",
+        "implementation": "src/LuaType/LuaUStruct.cpp:96",
+        "inherited_from": "UStruct"
+      },
+      {
+        "name": "GetFunctionFlags",
+        "lua_signature": "f:GetFunctionFlags() -> integer (EFunctionFlags)",
+        "implementation": "src/LuaType/LuaUFunction.cpp:78"
+      },
+      {
+        "name": "SetFunctionFlags",
+        "lua_signature": "f:SetFunctionFlags(integer NewFlags) -> nil",
+        "implementation": "src/LuaType/LuaUFunction.cpp:84"
+      }
+    ],
+    "metamethods": [
+      {
+        "name": "__call",
+        "behavior": "invoke the UFunction with a params table; out-params written back, return value(s) returned (call_ufunction_from_lua, src/LuaType/LuaUObject.cpp:153; Prospero protected C frame wrapper at :97-154)",
+        "implementation": "src/LuaType/LuaUFunction.cpp:70"
+      }
+    ],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Callable: obj:FuncName{ParamA=..., ...} resolves to a bound UFunction userdata whose __call executes it. Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "UEnum",
+    "metatable_name": "UEnum",
+    "cpp_class": "RC::LuaType::UEnum",
+    "parent_type": "UObject",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaUEnum.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "obj:GetFullName() -> string|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:532",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "obj:GetFName() -> FName",
+        "implementation": "include/LuaType/LuaUObject.hpp:552",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "obj:GetClass() -> UClass",
+        "implementation": "include/LuaType/LuaUObject.hpp:557",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetOuter",
+        "lua_signature": "obj:GetOuter() -> UObject",
+        "implementation": "include/LuaType/LuaUObject.hpp:562",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsAnyClass",
+        "lua_signature": "obj:IsAnyClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:570",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "Reflection",
+        "lua_signature": "obj:Reflection() -> table (ReflectionTable, has :GetProperty)",
+        "implementation": "include/LuaType/LuaUObject.hpp:578",
+        "notes": "Returns table with ReflectedObject + GetProperty(string PropertyName) -> XProperty (sub-function at hpp:587).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetPropertyValue",
+        "lua_signature": "obj:GetPropertyValue(string PropertyName) -> any",
+        "implementation": "include/LuaType/LuaUObject.hpp:620",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "SetPropertyValue",
+        "lua_signature": "obj:SetPropertyValue(string PropertyName, any Value)",
+        "implementation": "include/LuaType/LuaUObject.hpp:625",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsClass",
+        "lua_signature": "obj:IsClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:630",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetWorld",
+        "lua_signature": "obj:GetWorld() -> UWorld|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:640",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "CallFunction",
+        "lua_signature": "obj:CallFunction(... ) -> function return values",
+        "implementation": "include/LuaType/LuaUObject.hpp:647",
+        "notes": "Delegates to call_ufunction_from_lua (src/LuaType/LuaUObject.cpp:153; Prospero protected-call wrapper at :97).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "obj:IsA(UClass Class | string ObjectFullName) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:651",
+        "notes": "Implementation: src/LuaType/LuaUObject.cpp:2247 (overloads: UClass userdata or full class name string).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAllFlags",
+        "lua_signature": "obj:HasAllFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:655",
+        "notes": "Integer EObjectFlags from global EObjectFlags table.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyFlags",
+        "lua_signature": "obj:HasAnyFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:679",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyInternalFlags",
+        "lua_signature": "obj:HasAnyInternalFlags(EInternalObjectFlags InternalObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:703",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "ProcessConsoleExec",
+        "lua_signature": "obj:ProcessConsoleExec(string Cmd, nil Reserved, UObject Executor) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:727",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:761",
+        "notes": "UObject-family override: checks pointer, special_invalid_ptr, global-unreal-objects map, and IsUnreachable.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetNameByValue",
+        "lua_signature": "e:GetNameByValue(integer Value) -> FName",
+        "implementation": "src/LuaType/LuaUEnum.cpp:54"
+      },
+      {
+        "name": "ForEachName",
+        "lua_signature": "e:ForEachName(function(FName Name, integer Value) -> boolean|nil) -> nil",
+        "implementation": "src/LuaType/LuaUEnum.cpp:72"
+      },
+      {
+        "name": "GetEnumNameByIndex",
+        "lua_signature": "e:GetEnumNameByIndex(integer Index) -> FName, integer",
+        "implementation": "src/LuaType/LuaUEnum.cpp:111",
+        "notes": "Two return values."
+      },
+      {
+        "name": "InsertIntoNames",
+        "lua_signature": "e:InsertIntoNames(string Name, integer Value, integer Index [, boolean ShiftValues]) -> nil",
+        "implementation": "src/LuaType/LuaUEnum.cpp:133"
+      },
+      {
+        "name": "EditNameAt",
+        "lua_signature": "e:EditNameAt(integer Index, string NewName) -> nil",
+        "implementation": "src/LuaType/LuaUEnum.cpp:202"
+      },
+      {
+        "name": "EditValueAt",
+        "lua_signature": "e:EditValueAt(integer Index, integer NewValue) -> nil",
+        "implementation": "src/LuaType/LuaUEnum.cpp:249"
+      },
+      {
+        "name": "RemoveFromNamesAt",
+        "lua_signature": "e:RemoveFromNamesAt(integer Index [, integer Count [, boolean AllowShrinking]]) -> nil",
+        "implementation": "src/LuaType/LuaUEnum.cpp:294"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "UScriptStruct",
+    "metatable_name": "UScriptStruct",
+    "cpp_class": "RC::LuaType::UScriptStruct (LocalObjectBase)",
+    "parent_type": "UObject (manual merge)",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaUScriptStruct.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "obj:GetFullName() -> string|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:532",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "obj:GetFName() -> FName",
+        "implementation": "include/LuaType/LuaUObject.hpp:552",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "obj:GetClass() -> UClass",
+        "implementation": "include/LuaType/LuaUObject.hpp:557",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetOuter",
+        "lua_signature": "obj:GetOuter() -> UObject",
+        "implementation": "include/LuaType/LuaUObject.hpp:562",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsAnyClass",
+        "lua_signature": "obj:IsAnyClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:570",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "Reflection",
+        "lua_signature": "obj:Reflection() -> table (ReflectionTable, has :GetProperty)",
+        "implementation": "include/LuaType/LuaUObject.hpp:578",
+        "notes": "Returns table with ReflectedObject + GetProperty(string PropertyName) -> XProperty (sub-function at hpp:587).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetPropertyValue",
+        "lua_signature": "obj:GetPropertyValue(string PropertyName) -> any",
+        "implementation": "include/LuaType/LuaUObject.hpp:620",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "SetPropertyValue",
+        "lua_signature": "obj:SetPropertyValue(string PropertyName, any Value)",
+        "implementation": "include/LuaType/LuaUObject.hpp:625",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsClass",
+        "lua_signature": "obj:IsClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:630",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetWorld",
+        "lua_signature": "obj:GetWorld() -> UWorld|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:640",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "CallFunction",
+        "lua_signature": "obj:CallFunction(... ) -> function return values",
+        "implementation": "include/LuaType/LuaUObject.hpp:647",
+        "notes": "Delegates to call_ufunction_from_lua (src/LuaType/LuaUObject.cpp:153; Prospero protected-call wrapper at :97).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "obj:IsA(UClass Class | string ObjectFullName) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:651",
+        "notes": "Implementation: src/LuaType/LuaUObject.cpp:2247 (overloads: UClass userdata or full class name string).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAllFlags",
+        "lua_signature": "obj:HasAllFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:655",
+        "notes": "Integer EObjectFlags from global EObjectFlags table.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyFlags",
+        "lua_signature": "obj:HasAnyFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:679",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyInternalFlags",
+        "lua_signature": "obj:HasAnyInternalFlags(EInternalObjectFlags InternalObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:703",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "ProcessConsoleExec",
+        "lua_signature": "obj:ProcessConsoleExec(string Cmd, nil Reserved, UObject Executor) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:727",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:761",
+        "notes": "UObject-family override: checks pointer, special_invalid_ptr, global-unreal-objects map, and IsUnreachable.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetSuperStruct",
+        "lua_signature": "ss:GetSuperStruct() -> UStruct",
+        "implementation": "src/LuaType/LuaUStruct.cpp:57",
+        "inherited_from": "UStruct"
+      },
+      {
+        "name": "ForEachFunction",
+        "lua_signature": "ss:ForEachFunction(function(UFunction) -> boolean|nil)",
+        "implementation": "src/LuaType/LuaUStruct.cpp:65",
+        "inherited_from": "UStruct"
+      },
+      {
+        "name": "ForEachProperty",
+        "lua_signature": "ss:ForEachProperty(function(XProperty) -> boolean|nil)",
+        "implementation": "src/LuaType/LuaUStruct.cpp:96",
+        "inherited_from": "UStruct"
+      },
+      {
+        "name": "GetBaseAddress",
+        "lua_signature": "ss:GetBaseAddress() -> error",
+        "implementation": "src/LuaType/LuaUScriptStruct.cpp:80",
+        "notes": "Deprecated & removed: always throws."
+      },
+      {
+        "name": "GetStructAddress",
+        "lua_signature": "ss:GetStructAddress() -> integer",
+        "implementation": "src/LuaType/LuaUScriptStruct.cpp:86"
+      },
+      {
+        "name": "GetPropertyAddress",
+        "lua_signature": "ss:GetPropertyAddress() -> integer",
+        "implementation": "src/LuaType/LuaUScriptStruct.cpp:95"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "ss:IsValid() -> boolean",
+        "implementation": "src/LuaType/LuaUScriptStruct.cpp:103",
+        "notes": "Override: struct mapped, in global map, not unreachable."
+      },
+      {
+        "name": "IsMappedToObject",
+        "lua_signature": "ss:IsMappedToObject() -> boolean",
+        "implementation": "src/LuaType/LuaUScriptStruct.cpp:119"
+      },
+      {
+        "name": "IsMappedToProperty",
+        "lua_signature": "ss:IsMappedToProperty() -> boolean",
+        "implementation": "src/LuaType/LuaUScriptStruct.cpp:134"
+      },
+      {
+        "name": "GetProperty",
+        "lua_signature": "ss:GetProperty() -> XStructProperty",
+        "implementation": "src/LuaType/LuaUScriptStruct.cpp:149"
+      }
+    ],
+    "metamethods": [
+      {
+        "name": "__index",
+        "behavior": "struct data member read (custom properties then reflected FProperty)",
+        "implementation": "src/LuaType/LuaUScriptStruct.cpp:58"
+      },
+      {
+        "name": "__newindex",
+        "behavior": "struct data member write",
+        "implementation": "src/LuaType/LuaUScriptStruct.cpp:63"
+      }
+    ],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Local object wrapper (ScriptStructWrapper); cannot use the normal UObject construct chain, so inheritance is merged manually (UStruct + UObject setup_member_functions at :77-78). Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "UWorld",
+    "metatable_name": "UWorld",
+    "cpp_class": "RC::LuaType::UWorld",
+    "parent_type": "UObject",
+    "category": "other",
+    "source_file": "src/LuaType/LuaUWorld.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "obj:GetFullName() -> string|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:532",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "obj:GetFName() -> FName",
+        "implementation": "include/LuaType/LuaUObject.hpp:552",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "obj:GetClass() -> UClass",
+        "implementation": "include/LuaType/LuaUObject.hpp:557",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetOuter",
+        "lua_signature": "obj:GetOuter() -> UObject",
+        "implementation": "include/LuaType/LuaUObject.hpp:562",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsAnyClass",
+        "lua_signature": "obj:IsAnyClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:570",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "Reflection",
+        "lua_signature": "obj:Reflection() -> table (ReflectionTable, has :GetProperty)",
+        "implementation": "include/LuaType/LuaUObject.hpp:578",
+        "notes": "Returns table with ReflectedObject + GetProperty(string PropertyName) -> XProperty (sub-function at hpp:587).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetPropertyValue",
+        "lua_signature": "obj:GetPropertyValue(string PropertyName) -> any",
+        "implementation": "include/LuaType/LuaUObject.hpp:620",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "SetPropertyValue",
+        "lua_signature": "obj:SetPropertyValue(string PropertyName, any Value)",
+        "implementation": "include/LuaType/LuaUObject.hpp:625",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsClass",
+        "lua_signature": "obj:IsClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:630",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetWorld",
+        "lua_signature": "obj:GetWorld() -> UWorld|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:640",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "CallFunction",
+        "lua_signature": "obj:CallFunction(... ) -> function return values",
+        "implementation": "include/LuaType/LuaUObject.hpp:647",
+        "notes": "Delegates to call_ufunction_from_lua (src/LuaType/LuaUObject.cpp:153; Prospero protected-call wrapper at :97).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "obj:IsA(UClass Class | string ObjectFullName) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:651",
+        "notes": "Implementation: src/LuaType/LuaUObject.cpp:2247 (overloads: UClass userdata or full class name string).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAllFlags",
+        "lua_signature": "obj:HasAllFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:655",
+        "notes": "Integer EObjectFlags from global EObjectFlags table.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyFlags",
+        "lua_signature": "obj:HasAnyFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:679",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyInternalFlags",
+        "lua_signature": "obj:HasAnyInternalFlags(EInternalObjectFlags InternalObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:703",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "ProcessConsoleExec",
+        "lua_signature": "obj:ProcessConsoleExec(string Cmd, nil Reserved, UObject Executor) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:727",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:761",
+        "notes": "UObject-family override: checks pointer, special_invalid_ptr, global-unreal-objects map, and IsUnreachable.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "SpawnActor",
+        "lua_signature": "w:SpawnActor(UClass Class, table Location {X,Y,Z}, table Rotation {Pitch,Yaw,Roll}) -> AActor",
+        "implementation": "src/LuaType/LuaUWorld.cpp:62",
+        "notes": "Location/Rotation must be plain tables; userdata FVector/FRotator args are rejected (throws overload error)."
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "AActor",
+    "metatable_name": "AActor",
+    "cpp_class": "RC::LuaType::AActor",
+    "parent_type": "UObject",
+    "category": "other",
+    "source_file": "src/LuaType/LuaAActor.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "obj:GetFullName() -> string|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:532",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "obj:GetFName() -> FName",
+        "implementation": "include/LuaType/LuaUObject.hpp:552",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "obj:GetClass() -> UClass",
+        "implementation": "include/LuaType/LuaUObject.hpp:557",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetOuter",
+        "lua_signature": "obj:GetOuter() -> UObject",
+        "implementation": "include/LuaType/LuaUObject.hpp:562",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsAnyClass",
+        "lua_signature": "obj:IsAnyClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:570",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "Reflection",
+        "lua_signature": "obj:Reflection() -> table (ReflectionTable, has :GetProperty)",
+        "implementation": "include/LuaType/LuaUObject.hpp:578",
+        "notes": "Returns table with ReflectedObject + GetProperty(string PropertyName) -> XProperty (sub-function at hpp:587).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetPropertyValue",
+        "lua_signature": "obj:GetPropertyValue(string PropertyName) -> any",
+        "implementation": "include/LuaType/LuaUObject.hpp:620",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "SetPropertyValue",
+        "lua_signature": "obj:SetPropertyValue(string PropertyName, any Value)",
+        "implementation": "include/LuaType/LuaUObject.hpp:625",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsClass",
+        "lua_signature": "obj:IsClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:630",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetWorld",
+        "lua_signature": "obj:GetWorld() -> UWorld|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:640",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "CallFunction",
+        "lua_signature": "obj:CallFunction(... ) -> function return values",
+        "implementation": "include/LuaType/LuaUObject.hpp:647",
+        "notes": "Delegates to call_ufunction_from_lua (src/LuaType/LuaUObject.cpp:153; Prospero protected-call wrapper at :97).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "obj:IsA(UClass Class | string ObjectFullName) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:651",
+        "notes": "Implementation: src/LuaType/LuaUObject.cpp:2247 (overloads: UClass userdata or full class name string).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAllFlags",
+        "lua_signature": "obj:HasAllFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:655",
+        "notes": "Integer EObjectFlags from global EObjectFlags table.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyFlags",
+        "lua_signature": "obj:HasAnyFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:679",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyInternalFlags",
+        "lua_signature": "obj:HasAnyInternalFlags(EInternalObjectFlags InternalObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:703",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "ProcessConsoleExec",
+        "lua_signature": "obj:ProcessConsoleExec(string Cmd, nil Reserved, UObject Executor) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:727",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:761",
+        "notes": "UObject-family override: checks pointer, special_invalid_ptr, global-unreal-objects map, and IsUnreachable.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetWorld",
+        "lua_signature": "a:GetWorld() -> UWorld|nil",
+        "implementation": "src/LuaType/LuaAActor.cpp:54",
+        "notes": "Overrides UObject:GetWorld with actor-specific path."
+      },
+      {
+        "name": "GetLevel",
+        "lua_signature": "a:GetLevel() -> UObject",
+        "implementation": "src/LuaType/LuaAActor.cpp:61"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "UDataTable",
+    "metatable_name": "UDataTable",
+    "cpp_class": "RC::LuaType::UDataTable",
+    "parent_type": "UObject",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaUDataTable.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "obj:GetFullName() -> string|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:532",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "obj:GetFName() -> FName",
+        "implementation": "include/LuaType/LuaUObject.hpp:552",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "obj:GetClass() -> UClass",
+        "implementation": "include/LuaType/LuaUObject.hpp:557",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetOuter",
+        "lua_signature": "obj:GetOuter() -> UObject",
+        "implementation": "include/LuaType/LuaUObject.hpp:562",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsAnyClass",
+        "lua_signature": "obj:IsAnyClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:570",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "Reflection",
+        "lua_signature": "obj:Reflection() -> table (ReflectionTable, has :GetProperty)",
+        "implementation": "include/LuaType/LuaUObject.hpp:578",
+        "notes": "Returns table with ReflectedObject + GetProperty(string PropertyName) -> XProperty (sub-function at hpp:587).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetPropertyValue",
+        "lua_signature": "obj:GetPropertyValue(string PropertyName) -> any",
+        "implementation": "include/LuaType/LuaUObject.hpp:620",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "SetPropertyValue",
+        "lua_signature": "obj:SetPropertyValue(string PropertyName, any Value)",
+        "implementation": "include/LuaType/LuaUObject.hpp:625",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsClass",
+        "lua_signature": "obj:IsClass() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:630",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetWorld",
+        "lua_signature": "obj:GetWorld() -> UWorld|nil",
+        "implementation": "include/LuaType/LuaUObject.hpp:640",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "CallFunction",
+        "lua_signature": "obj:CallFunction(... ) -> function return values",
+        "implementation": "include/LuaType/LuaUObject.hpp:647",
+        "notes": "Delegates to call_ufunction_from_lua (src/LuaType/LuaUObject.cpp:153; Prospero protected-call wrapper at :97).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "obj:IsA(UClass Class | string ObjectFullName) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:651",
+        "notes": "Implementation: src/LuaType/LuaUObject.cpp:2247 (overloads: UClass userdata or full class name string).",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAllFlags",
+        "lua_signature": "obj:HasAllFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:655",
+        "notes": "Integer EObjectFlags from global EObjectFlags table.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyFlags",
+        "lua_signature": "obj:HasAnyFlags(EObjectFlags ObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:679",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "HasAnyInternalFlags",
+        "lua_signature": "obj:HasAnyInternalFlags(EInternalObjectFlags InternalObjectFlags) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:703",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "ProcessConsoleExec",
+        "lua_signature": "obj:ProcessConsoleExec(string Cmd, nil Reserved, UObject Executor) -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:727",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:761",
+        "notes": "UObject-family override: checks pointer, special_invalid_ptr, global-unreal-objects map, and IsUnreachable.",
+        "inherited_from": "UObject"
+      },
+      {
+        "name": "GetRowStruct",
+        "lua_signature": "dt:GetRowStruct() -> UObject|nil",
+        "implementation": "src/LuaType/LuaUDataTable.cpp:62"
+      },
+      {
+        "name": "GetRowMap",
+        "lua_signature": "dt:GetRowMap() -> table[rowName] = UScriptStruct(row reference)",
+        "implementation": "src/LuaType/LuaUDataTable.cpp:84"
+      },
+      {
+        "name": "FindRow",
+        "lua_signature": "dt:FindRow(string RowName) -> UScriptStruct|nil",
+        "implementation": "src/LuaType/LuaUDataTable.cpp:128",
+        "notes": "Reference-based row access (FindRowUnchecked)."
+      },
+      {
+        "name": "AddRow",
+        "lua_signature": "dt:AddRow(string RowName, UScriptStruct|table RowData)",
+        "implementation": "src/LuaType/LuaUDataTable.cpp:134",
+        "notes": "Table input converted via pushers/convert_lua_table_to_struct."
+      },
+      {
+        "name": "RemoveRow",
+        "lua_signature": "dt:RemoveRow(string RowName)",
+        "implementation": "src/LuaType/LuaUDataTable.cpp:140"
+      },
+      {
+        "name": "EmptyTable",
+        "lua_signature": "dt:EmptyTable()",
+        "implementation": "src/LuaType/LuaUDataTable.cpp:146"
+      },
+      {
+        "name": "GetRowNames",
+        "lua_signature": "dt:GetRowNames() -> table[string]",
+        "implementation": "src/LuaType/LuaUDataTable.cpp:152"
+      },
+      {
+        "name": "GetAllRows",
+        "lua_signature": "dt:GetAllRows() -> table[{Name=string, Data=UScriptStruct}]",
+        "implementation": "src/LuaType/LuaUDataTable.cpp:158"
+      },
+      {
+        "name": "ForEachRow",
+        "lua_signature": "dt:ForEachRow(function(string RowName, UScriptStruct RowData) -> boolean|nil)",
+        "implementation": "src/LuaType/LuaUDataTable.cpp:164"
+      }
+    ],
+    "metamethods": [
+      {
+        "name": "__len",
+        "behavior": "#dt returns row map Num()",
+        "implementation": "src/LuaType/LuaUDataTable.cpp:50"
+      }
+    ],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "FName",
+    "metatable_name": "FNameUserdata",
+    "cpp_class": "RC::LuaType::FName (LocalObjectBase)",
+    "parent_type": "ObjectBase (LocalObjectBase)",
+    "category": "string",
+    "source_file": "src/LuaType/LuaFName.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote: true iff pointer non-null. Local: always true. Overridden by UObject-family (hpp:761) and UScriptStruct/TArray/TMap/TSet."
+      },
+      {
+        "name": "ToString",
+        "lua_signature": "n:ToString() -> string",
+        "implementation": "src/LuaType/LuaFName.cpp:119"
+      },
+      {
+        "name": "GetComparisonIndex",
+        "lua_signature": "n:GetComparisonIndex() -> integer",
+        "implementation": "src/LuaType/LuaFName.cpp:127"
+      },
+      {
+        "name": "Equals",
+        "lua_signature": "n:Equals(FName Other) -> boolean",
+        "implementation": "src/LuaType/LuaFName.cpp:135",
+        "notes": "Must be called with ':' not '.'."
+      }
+    ],
+    "metamethods": [
+      {
+        "name": "__call",
+        "behavior": "constructor: FName(string Name [, EFindName FindType]) or FName(integer ComparisonIndex [, EFindName])",
+        "implementation": "src/LuaType/LuaFName.cpp:48"
+      },
+      {
+        "name": "__eq",
+        "behavior": "FName equality",
+        "implementation": "src/LuaType/LuaFName.cpp:103"
+      }
+    ],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "global_constructor": "Pre-loaded global FName table + NAME_None (src/Mod/LuaMod.cpp:6190-6193).",
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "FString",
+    "metatable_name": "FString",
+    "cpp_class": "RC::LuaType::FString (TLuaStringBase<Unreal::FString>)",
+    "parent_type": "ObjectBase (LocalObjectBase)",
+    "category": "string",
+    "source_file": "include/LuaType/LuaUnrealString.hpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote: true iff pointer non-null. Local: always true. Overridden by UObject-family (hpp:761) and UScriptStruct/TArray/TMap/TSet."
+      },
+      {
+        "name": "ToString",
+        "lua_signature": "s:ToString() -> string",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:68"
+      },
+      {
+        "name": "Empty",
+        "lua_signature": "s:Empty()",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:74"
+      },
+      {
+        "name": "Clear",
+        "lua_signature": "s:Clear()",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:80",
+        "notes": "Alias of Empty."
+      },
+      {
+        "name": "Len",
+        "lua_signature": "s:Len() -> integer",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:86"
+      },
+      {
+        "name": "IsEmpty",
+        "lua_signature": "s:IsEmpty() -> boolean",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:92"
+      },
+      {
+        "name": "Append",
+        "lua_signature": "s:Append(string|FString Other)",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:98"
+      },
+      {
+        "name": "Find",
+        "lua_signature": "s:Find(string SubStr) -> integer|nil",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:119",
+        "notes": "1-based index; nil when not found."
+      },
+      {
+        "name": "StartsWith",
+        "lua_signature": "s:StartsWith(string Prefix) -> boolean",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:142"
+      },
+      {
+        "name": "EndsWith",
+        "lua_signature": "s:EndsWith(string Suffix) -> boolean",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:157"
+      },
+      {
+        "name": "ToUpper",
+        "lua_signature": "s:ToUpper() -> FString",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:172"
+      },
+      {
+        "name": "ToLower",
+        "lua_signature": "s:ToLower() -> FString",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:179"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": false,
+    "notes": "Template-shared method set with FUtf8String/FAnsiString (TLuaStringBase). Local container; host-testable without a game. Source attribution: verified against port; upstream reference: TBD.",
+    "global_constructor": "Global constructor function FString(string) (src/Mod/LuaMod.cpp:6205)."
+  },
+  {
+    "type": "FUtf8String",
+    "metatable_name": "FUtf8String",
+    "cpp_class": "RC::LuaType::FUtf8String (TLuaStringBase<Unreal::FUtf8String>)",
+    "parent_type": "ObjectBase (LocalObjectBase)",
+    "category": "string",
+    "source_file": "include/LuaType/LuaUnrealString.hpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote: true iff pointer non-null. Local: always true. Overridden by UObject-family (hpp:761) and UScriptStruct/TArray/TMap/TSet."
+      },
+      {
+        "name": "ToString",
+        "lua_signature": "s:ToString() -> string",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:68"
+      },
+      {
+        "name": "Empty",
+        "lua_signature": "s:Empty()",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:74"
+      },
+      {
+        "name": "Clear",
+        "lua_signature": "s:Clear()",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:80"
+      },
+      {
+        "name": "Len",
+        "lua_signature": "s:Len() -> integer",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:86"
+      },
+      {
+        "name": "IsEmpty",
+        "lua_signature": "s:IsEmpty() -> boolean",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:92"
+      },
+      {
+        "name": "Append",
+        "lua_signature": "s:Append(string|FUtf8String Other)",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:98"
+      },
+      {
+        "name": "Find",
+        "lua_signature": "s:Find(string SubStr) -> integer|nil",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:119"
+      },
+      {
+        "name": "StartsWith",
+        "lua_signature": "s:StartsWith(string Prefix) -> boolean",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:142"
+      },
+      {
+        "name": "EndsWith",
+        "lua_signature": "s:EndsWith(string Suffix) -> boolean",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:157"
+      },
+      {
+        "name": "ToUpper",
+        "lua_signature": "s:ToUpper() -> FUtf8String",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:172"
+      },
+      {
+        "name": "ToLower",
+        "lua_signature": "s:ToLower() -> FUtf8String",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:179"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": false,
+    "global_constructor": "Global constructor function FUtf8String(string) (src/Mod/LuaMod.cpp:6220).",
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "FAnsiString",
+    "metatable_name": "FAnsiString",
+    "cpp_class": "RC::LuaType::FAnsiString (TLuaStringBase<Unreal::FAnsiString>)",
+    "parent_type": "ObjectBase (LocalObjectBase)",
+    "category": "string",
+    "source_file": "include/LuaType/LuaUnrealString.hpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote: true iff pointer non-null. Local: always true. Overridden by UObject-family (hpp:761) and UScriptStruct/TArray/TMap/TSet."
+      },
+      {
+        "name": "ToString",
+        "lua_signature": "s:ToString() -> string",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:68"
+      },
+      {
+        "name": "Empty",
+        "lua_signature": "s:Empty()",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:74"
+      },
+      {
+        "name": "Clear",
+        "lua_signature": "s:Clear()",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:80"
+      },
+      {
+        "name": "Len",
+        "lua_signature": "s:Len() -> integer",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:86"
+      },
+      {
+        "name": "IsEmpty",
+        "lua_signature": "s:IsEmpty() -> boolean",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:92"
+      },
+      {
+        "name": "Append",
+        "lua_signature": "s:Append(string|FAnsiString Other)",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:98"
+      },
+      {
+        "name": "Find",
+        "lua_signature": "s:Find(string SubStr) -> integer|nil",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:119"
+      },
+      {
+        "name": "StartsWith",
+        "lua_signature": "s:StartsWith(string Prefix) -> boolean",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:142"
+      },
+      {
+        "name": "EndsWith",
+        "lua_signature": "s:EndsWith(string Suffix) -> boolean",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:157"
+      },
+      {
+        "name": "ToUpper",
+        "lua_signature": "s:ToUpper() -> FAnsiString",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:172"
+      },
+      {
+        "name": "ToLower",
+        "lua_signature": "s:ToLower() -> FAnsiString",
+        "implementation": "include/LuaType/LuaUnrealString.hpp:179"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": false,
+    "global_constructor": "Global constructor function FAnsiString(string) (src/Mod/LuaMod.cpp:6235).",
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "FText",
+    "metatable_name": "FText",
+    "cpp_class": "RC::LuaType::FText (LocalObjectBase)",
+    "parent_type": "ObjectBase (LocalObjectBase)",
+    "category": "string",
+    "source_file": "src/LuaType/LuaFText.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote: true iff pointer non-null. Local: always true. Overridden by UObject-family (hpp:761) and UScriptStruct/TArray/TMap/TSet."
+      },
+      {
+        "name": "ToString",
+        "lua_signature": "t:ToString() -> string",
+        "implementation": "src/LuaType/LuaFText.cpp:92"
+      }
+    ],
+    "metamethods": [
+      {
+        "name": "__call",
+        "behavior": "constructor: FText(string Text)",
+        "implementation": "src/LuaType/LuaFText.cpp:47"
+      },
+      {
+        "name": "__eq",
+        "behavior": "equality of string representations",
+        "implementation": "src/LuaType/LuaFText.cpp:76"
+      }
+    ],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "global_constructor": "Pre-loaded global FText table (src/Mod/LuaMod.cpp:6199).",
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "TArray",
+    "metatable_name": "TArray",
+    "cpp_class": "RC::LuaType::TArray (RemoteObjectBase<FScriptArray>)",
+    "parent_type": "ObjectBase (RemoteObjectBase)",
+    "category": "container",
+    "source_file": "src/LuaType/LuaTArray.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "GetArrayAddress",
+        "lua_signature": "a:GetArrayAddress() -> integer",
+        "implementation": "src/LuaType/LuaTArray.cpp:79"
+      },
+      {
+        "name": "GetArrayNum",
+        "lua_signature": "a:GetArrayNum() -> integer",
+        "implementation": "src/LuaType/LuaTArray.cpp:87"
+      },
+      {
+        "name": "GetArrayMax",
+        "lua_signature": "a:GetArrayMax() -> integer",
+        "implementation": "src/LuaType/LuaTArray.cpp:95"
+      },
+      {
+        "name": "GetArrayDataAddress",
+        "lua_signature": "a:GetArrayDataAddress() -> integer",
+        "implementation": "src/LuaType/LuaTArray.cpp:103"
+      },
+      {
+        "name": "Empty",
+        "lua_signature": "a:Empty()",
+        "implementation": "src/LuaType/LuaTArray.cpp:111"
+      },
+      {
+        "name": "ForEach",
+        "lua_signature": "a:ForEach(function(integer Index, any Element) -> boolean|nil)",
+        "implementation": "src/LuaType/LuaTArray.cpp:121",
+        "notes": "Elements read-only for trivial inner types, writable for UObject. Known large-array stack-corruption TODO in source."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "a:IsValid() -> boolean",
+        "implementation": "src/LuaType/LuaTArray.cpp:182",
+        "notes": "Override: remote pointer truthiness."
+      }
+    ],
+    "metamethods": [
+      {
+        "name": "__index",
+        "behavior": "a[i] element read (1-based; auto-grows with AddZeroed on OOB)",
+        "implementation": "src/LuaType/LuaTArray.cpp:59"
+      },
+      {
+        "name": "__newindex",
+        "behavior": "a[i] = v element write (1-based; auto-grows)",
+        "implementation": "src/LuaType/LuaTArray.cpp:64"
+      },
+      {
+        "name": "__len",
+        "behavior": "#a returns Num()",
+        "implementation": "src/LuaType/LuaTArray.cpp:69"
+      }
+    ],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "TMap",
+    "metatable_name": "TMap",
+    "cpp_class": "RC::LuaType::TMap (RemoteObjectBase<FScriptMap>)",
+    "parent_type": "ObjectBase (RemoteObjectBase)",
+    "category": "container",
+    "source_file": "src/LuaType/LuaTMap.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "mp:IsValid() -> boolean",
+        "implementation": "src/LuaType/LuaTMap.cpp:74"
+      },
+      {
+        "name": "Find",
+        "lua_signature": "mp:Find(key) -> value",
+        "implementation": "src/LuaType/LuaTMap.cpp:83",
+        "notes": "Throws 'Map key not found.' when absent."
+      },
+      {
+        "name": "Add",
+        "lua_signature": "mp:Add(key, value)",
+        "implementation": "src/LuaType/LuaTMap.cpp:89"
+      },
+      {
+        "name": "Contains",
+        "lua_signature": "mp:Contains(key) -> boolean",
+        "implementation": "src/LuaType/LuaTMap.cpp:95"
+      },
+      {
+        "name": "Remove",
+        "lua_signature": "mp:Remove(key)",
+        "implementation": "src/LuaType/LuaTMap.cpp:101"
+      },
+      {
+        "name": "Empty",
+        "lua_signature": "mp:Empty()",
+        "implementation": "src/LuaType/LuaTMap.cpp:107"
+      },
+      {
+        "name": "ForEach",
+        "lua_signature": "mp:ForEach(function(key Key, value Value) -> boolean|nil)",
+        "implementation": "src/LuaType/LuaTMap.cpp:113"
+      }
+    ],
+    "metamethods": [
+      {
+        "name": "__len",
+        "behavior": "#mp returns Num()",
+        "implementation": "src/LuaType/LuaTMap.cpp:62"
+      }
+    ],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "TSet",
+    "metatable_name": "TSet",
+    "cpp_class": "RC::LuaType::TSet (RemoteObjectBase<FScriptSet>)",
+    "parent_type": "ObjectBase (RemoteObjectBase)",
+    "category": "container",
+    "source_file": "src/LuaType/LuaTSet.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "st:IsValid() -> boolean",
+        "implementation": "src/LuaType/LuaTSet.cpp:68"
+      },
+      {
+        "name": "Add",
+        "lua_signature": "st:Add(element)",
+        "implementation": "src/LuaType/LuaTSet.cpp:77"
+      },
+      {
+        "name": "Contains",
+        "lua_signature": "st:Contains(element) -> boolean",
+        "implementation": "src/LuaType/LuaTSet.cpp:83"
+      },
+      {
+        "name": "Remove",
+        "lua_signature": "st:Remove(element)",
+        "implementation": "src/LuaType/LuaTSet.cpp:89"
+      },
+      {
+        "name": "Empty",
+        "lua_signature": "st:Empty()",
+        "implementation": "src/LuaType/LuaTSet.cpp:95"
+      },
+      {
+        "name": "ForEach",
+        "lua_signature": "st:ForEach(function(element) -> boolean|nil)",
+        "implementation": "src/LuaType/LuaTSet.cpp:101"
+      }
+    ],
+    "metamethods": [
+      {
+        "name": "__len",
+        "behavior": "#st returns Num()",
+        "implementation": "src/LuaType/LuaTSet.cpp:56"
+      }
+    ],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "FWeakObjectPtr",
+    "metatable_name": "FWeakObjectPtr",
+    "cpp_class": "RC::LuaType::FWeakObjectPtr (LocalObjectBase)",
+    "parent_type": "ObjectBase (LocalObjectBase)",
+    "category": "object-lifecycle",
+    "source_file": "src/LuaType/LuaFWeakObjectPtr.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote: true iff pointer non-null. Local: always true. Overridden by UObject-family (hpp:761) and UScriptStruct/TArray/TMap/TSet."
+      },
+      {
+        "name": "Get",
+        "lua_signature": "w:Get() -> UObject",
+        "implementation": "src/LuaType/LuaFWeakObjectPtr.cpp:52",
+        "notes": "auto_construct_object of resolved pointer."
+      },
+      {
+        "name": "get",
+        "lua_signature": "w:get() -> UObject",
+        "implementation": "src/LuaType/LuaFWeakObjectPtr.cpp:58",
+        "notes": "lowercase alias"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "FSoftObjectPath",
+    "metatable_name": "FSoftObjectPathUserdata",
+    "cpp_class": "RC::LuaType::FSoftObjectPath (LocalObjectBase)",
+    "parent_type": "ObjectBase (LocalObjectBase)",
+    "category": "object-lifecycle",
+    "source_file": "src/LuaType/LuaFSoftObjectPath.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote: true iff pointer non-null. Local: always true. Overridden by UObject-family (hpp:761) and UScriptStruct/TArray/TMap/TSet."
+      },
+      {
+        "name": "GetAssetPathName",
+        "lua_signature": "p:GetAssetPathName() -> FName",
+        "implementation": "src/LuaType/LuaFSoftObjectPath.cpp:54"
+      },
+      {
+        "name": "GetSubPathString",
+        "lua_signature": "p:GetSubPathString() -> FString",
+        "implementation": "src/LuaType/LuaFSoftObjectPath.cpp:60"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "TSoftObjectPtr",
+    "metatable_name": "TSoftObjectPtrUserdata",
+    "cpp_class": "RC::LuaType::TSoftObjectPtr (LocalObjectBase)",
+    "parent_type": "ObjectBase (LocalObjectBase)",
+    "category": "object-lifecycle",
+    "source_file": "src/LuaType/LuaTSoftObjectPtr.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote: true iff pointer non-null. Local: always true. Overridden by UObject-family (hpp:761) and UScriptStruct/TArray/TMap/TSet."
+      },
+      {
+        "name": "GetWeakPtr",
+        "lua_signature": "sp:GetWeakPtr() -> FWeakObjectPtr",
+        "implementation": "src/LuaType/LuaTSoftObjectPtr.cpp:55"
+      },
+      {
+        "name": "GetTagAtLastTest",
+        "lua_signature": "sp:GetTagAtLastTest() -> integer",
+        "implementation": "src/LuaType/LuaTSoftObjectPtr.cpp:61"
+      },
+      {
+        "name": "GetObjectID",
+        "lua_signature": "sp:GetObjectID() -> FSoftObjectPath",
+        "implementation": "src/LuaType/LuaTSoftObjectPtr.cpp:67"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "FOutputDevice",
+    "metatable_name": "FOutputDevice",
+    "cpp_class": "RC::LuaType::FOutputDevice (RemoteObjectBase)",
+    "parent_type": "ObjectBase (RemoteObjectBase)",
+    "category": "other",
+    "source_file": "src/LuaType/LuaFOutputDevice.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote: true iff pointer non-null. Local: always true. Overridden by UObject-family (hpp:761) and UScriptStruct/TArray/TMap/TSet."
+      },
+      {
+        "name": "Log",
+        "lua_signature": "d:Log(string Message)",
+        "implementation": "src/LuaType/LuaFOutputDevice.cpp:54"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "FURL",
+    "metatable_name": "FURLUserdata",
+    "cpp_class": "RC::LuaType::FURL (LocalObjectBase)",
+    "parent_type": "ObjectBase (LocalObjectBase)",
+    "category": "other",
+    "source_file": "src/LuaType/LuaFURL.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote: true iff pointer non-null. Local: always true. Overridden by UObject-family (hpp:761) and UScriptStruct/TArray/TMap/TSet."
+      }
+    ],
+    "metamethods": [
+      {
+        "name": "__call",
+        "behavior": "stub (todo in source)",
+        "implementation": "src/LuaType/LuaFURL.cpp:44"
+      }
+    ],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "No member functions bound yet ('todo: setup member functions' in source). Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "ThreadId",
+    "metatable_name": "ThreadIdUserdata",
+    "cpp_class": "RC::LuaType::ThreadId (LocalObjectBase)",
+    "parent_type": "ObjectBase (LocalObjectBase)",
+    "category": "other",
+    "source_file": "src/LuaType/LuaThreadId.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote: true iff pointer non-null. Local: always true. Overridden by UObject-family (hpp:761) and UScriptStruct/TArray/TMap/TSet."
+      },
+      {
+        "name": "ToString",
+        "lua_signature": "tid:ToString() -> string",
+        "implementation": "src/LuaType/LuaThreadId.cpp:65"
+      }
+    ],
+    "metamethods": [
+      {
+        "name": "__eq",
+        "behavior": "std::thread::id equality",
+        "implementation": "src/LuaType/LuaThreadId.cpp:49"
+      }
+    ],
+    "pc_only_behavior_notes": "std::thread::id formatted via fmt; host threading, no Windows dependency.",
+    "ps5_runtime_status": "",
+    "needs_live_game": false,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "XProperty",
+    "metatable_name": "Property",
+    "cpp_class": "RC::LuaType::XProperty (RemoteObjectBase<FProperty>)",
+    "parent_type": "ObjectBase (RemoteObjectBase)",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaXProperty.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "p:GetClass() -> XFieldClass",
+        "implementation": "src/LuaType/LuaXProperty.cpp:97"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "p:GetFullName() -> string|nil",
+        "implementation": "src/LuaType/LuaXProperty.cpp:104"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "p:GetFName() -> FName",
+        "implementation": "src/LuaType/LuaXProperty.cpp:124"
+      },
+      {
+        "name": "GetOffset_Internal",
+        "lua_signature": "p:GetOffset_Internal() -> integer",
+        "implementation": "src/LuaType/LuaXProperty.cpp:130"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "p:IsA(PropertyTypes PropertyType) -> boolean",
+        "implementation": "src/LuaType/LuaXProperty.cpp:136",
+        "notes": "Takes the global PropertyTypes entry table; reads FFieldClassPointer member."
+      },
+      {
+        "name": "ContainerPtrToValuePtr",
+        "lua_signature": "p:ContainerPtrToValuePtr(UObjectDerivative Container [, integer ArrayIndex]) -> lightuserdata",
+        "implementation": "src/LuaType/LuaXProperty.cpp:186"
+      },
+      {
+        "name": "ImportText",
+        "lua_signature": "p:ImportText(string Buffer, lightuserdata Data, integer PortFlags, UObject OwnerObject)",
+        "implementation": "src/LuaType/LuaXProperty.cpp:215"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "metatable_name is literally \"Property\" (FPropertyName::ToString, historical quirk). Auto-construct dispatcher auto_construct_property at src/LuaType/LuaXProperty.cpp:17. Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "XArrayProperty",
+    "metatable_name": "ArrayProperty",
+    "cpp_class": "RC::LuaType::XArrayProperty",
+    "parent_type": "XProperty",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaXArrayProperty.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "p:GetClass() -> XFieldClass",
+        "implementation": "src/LuaType/LuaXProperty.cpp:97",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "p:GetFullName() -> string|nil",
+        "implementation": "src/LuaType/LuaXProperty.cpp:104",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "p:GetFName() -> FName",
+        "implementation": "src/LuaType/LuaXProperty.cpp:124",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetOffset_Internal",
+        "lua_signature": "p:GetOffset_Internal() -> integer",
+        "implementation": "src/LuaType/LuaXProperty.cpp:130",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "p:IsA(PropertyTypes PropertyType) -> boolean",
+        "implementation": "src/LuaType/LuaXProperty.cpp:136",
+        "notes": "Takes the global PropertyTypes entry table; reads FFieldClassPointer member.",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ContainerPtrToValuePtr",
+        "lua_signature": "p:ContainerPtrToValuePtr(UObjectDerivative Container [, integer ArrayIndex]) -> lightuserdata",
+        "implementation": "src/LuaType/LuaXProperty.cpp:186",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ImportText",
+        "lua_signature": "p:ImportText(string Buffer, lightuserdata Data, integer PortFlags, UObject OwnerObject)",
+        "implementation": "src/LuaType/LuaXProperty.cpp:215",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetInner",
+        "lua_signature": "p:GetInner() -> XProperty (inner element property)",
+        "implementation": "src/LuaType/LuaXArrayProperty.cpp:55"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "XBoolProperty",
+    "metatable_name": "ObjectProperty",
+    "cpp_class": "RC::LuaType::XBoolProperty",
+    "parent_type": "XProperty",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaXBoolProperty.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "p:GetClass() -> XFieldClass",
+        "implementation": "src/LuaType/LuaXProperty.cpp:97",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "p:GetFullName() -> string|nil",
+        "implementation": "src/LuaType/LuaXProperty.cpp:104",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "p:GetFName() -> FName",
+        "implementation": "src/LuaType/LuaXProperty.cpp:124",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetOffset_Internal",
+        "lua_signature": "p:GetOffset_Internal() -> integer",
+        "implementation": "src/LuaType/LuaXProperty.cpp:130",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "p:IsA(PropertyTypes PropertyType) -> boolean",
+        "implementation": "src/LuaType/LuaXProperty.cpp:136",
+        "notes": "Takes the global PropertyTypes entry table; reads FFieldClassPointer member.",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ContainerPtrToValuePtr",
+        "lua_signature": "p:ContainerPtrToValuePtr(UObjectDerivative Container [, integer ArrayIndex]) -> lightuserdata",
+        "implementation": "src/LuaType/LuaXProperty.cpp:186",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ImportText",
+        "lua_signature": "p:ImportText(string Buffer, lightuserdata Data, integer PortFlags, UObject OwnerObject)",
+        "implementation": "src/LuaType/LuaXProperty.cpp:215",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetByteMask",
+        "lua_signature": "p:GetByteMask() -> integer",
+        "implementation": "src/LuaType/LuaXBoolProperty.cpp:57"
+      },
+      {
+        "name": "GetByteOffset",
+        "lua_signature": "p:GetByteOffset() -> integer",
+        "implementation": "src/LuaType/LuaXBoolProperty.cpp:63"
+      },
+      {
+        "name": "GetFieldMask",
+        "lua_signature": "p:GetFieldMask() -> integer",
+        "implementation": "src/LuaType/LuaXBoolProperty.cpp:69"
+      },
+      {
+        "name": "GetFieldSize",
+        "lua_signature": "p:GetFieldSize() -> integer",
+        "implementation": "src/LuaType/LuaXBoolProperty.cpp:75"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "metatable_name is literally \"ObjectProperty\" (FBoolPropertyName::ToString quirk \u2014 collides by name with XObjectProperty). Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "XEnumProperty",
+    "metatable_name": "EnumProperty",
+    "cpp_class": "RC::LuaType::XEnumProperty",
+    "parent_type": "XProperty",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaXEnumProperty.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "p:GetClass() -> XFieldClass",
+        "implementation": "src/LuaType/LuaXProperty.cpp:97",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "p:GetFullName() -> string|nil",
+        "implementation": "src/LuaType/LuaXProperty.cpp:104",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "p:GetFName() -> FName",
+        "implementation": "src/LuaType/LuaXProperty.cpp:124",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetOffset_Internal",
+        "lua_signature": "p:GetOffset_Internal() -> integer",
+        "implementation": "src/LuaType/LuaXProperty.cpp:130",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "p:IsA(PropertyTypes PropertyType) -> boolean",
+        "implementation": "src/LuaType/LuaXProperty.cpp:136",
+        "notes": "Takes the global PropertyTypes entry table; reads FFieldClassPointer member.",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ContainerPtrToValuePtr",
+        "lua_signature": "p:ContainerPtrToValuePtr(UObjectDerivative Container [, integer ArrayIndex]) -> lightuserdata",
+        "implementation": "src/LuaType/LuaXProperty.cpp:186",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ImportText",
+        "lua_signature": "p:ImportText(string Buffer, lightuserdata Data, integer PortFlags, UObject OwnerObject)",
+        "implementation": "src/LuaType/LuaXProperty.cpp:215",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetEnum",
+        "lua_signature": "p:GetEnum() -> UEnum",
+        "implementation": "src/LuaType/LuaXEnumProperty.cpp:55"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "XInterfaceProperty",
+    "metatable_name": "InterfaceProperty",
+    "cpp_class": "RC::LuaType::XInterfaceProperty",
+    "parent_type": "XProperty",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaXInterfaceProperty.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "p:GetClass() -> XFieldClass",
+        "implementation": "src/LuaType/LuaXProperty.cpp:97",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "p:GetFullName() -> string|nil",
+        "implementation": "src/LuaType/LuaXProperty.cpp:104",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "p:GetFName() -> FName",
+        "implementation": "src/LuaType/LuaXProperty.cpp:124",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetOffset_Internal",
+        "lua_signature": "p:GetOffset_Internal() -> integer",
+        "implementation": "src/LuaType/LuaXProperty.cpp:130",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "p:IsA(PropertyTypes PropertyType) -> boolean",
+        "implementation": "src/LuaType/LuaXProperty.cpp:136",
+        "notes": "Takes the global PropertyTypes entry table; reads FFieldClassPointer member.",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ContainerPtrToValuePtr",
+        "lua_signature": "p:ContainerPtrToValuePtr(UObjectDerivative Container [, integer ArrayIndex]) -> lightuserdata",
+        "implementation": "src/LuaType/LuaXProperty.cpp:186",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ImportText",
+        "lua_signature": "p:ImportText(string Buffer, lightuserdata Data, integer PortFlags, UObject OwnerObject)",
+        "implementation": "src/LuaType/LuaXProperty.cpp:215",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetInterfaceClass",
+        "lua_signature": "p:GetInterfaceClass() -> UClass",
+        "implementation": "src/LuaType/LuaXInterfaceProperty.cpp:57"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "XObjectProperty",
+    "metatable_name": "ObjectProperty",
+    "cpp_class": "RC::LuaType::XObjectProperty",
+    "parent_type": "XProperty",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaXObjectProperty.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "p:GetClass() -> XFieldClass",
+        "implementation": "src/LuaType/LuaXProperty.cpp:97",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "p:GetFullName() -> string|nil",
+        "implementation": "src/LuaType/LuaXProperty.cpp:104",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "p:GetFName() -> FName",
+        "implementation": "src/LuaType/LuaXProperty.cpp:124",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetOffset_Internal",
+        "lua_signature": "p:GetOffset_Internal() -> integer",
+        "implementation": "src/LuaType/LuaXProperty.cpp:130",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "p:IsA(PropertyTypes PropertyType) -> boolean",
+        "implementation": "src/LuaType/LuaXProperty.cpp:136",
+        "notes": "Takes the global PropertyTypes entry table; reads FFieldClassPointer member.",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ContainerPtrToValuePtr",
+        "lua_signature": "p:ContainerPtrToValuePtr(UObjectDerivative Container [, integer ArrayIndex]) -> lightuserdata",
+        "implementation": "src/LuaType/LuaXProperty.cpp:186",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ImportText",
+        "lua_signature": "p:ImportText(string Buffer, lightuserdata Data, integer PortFlags, UObject OwnerObject)",
+        "implementation": "src/LuaType/LuaXProperty.cpp:215",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetPropertyClass",
+        "lua_signature": "p:GetPropertyClass() -> UClass",
+        "implementation": "src/LuaType/LuaXObjectProperty.cpp:57"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "metatable_name is literally \"ObjectProperty\" (FObjectPropertyName::ToString quirk \u2014 same string as XBoolProperty). Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "XStructProperty",
+    "metatable_name": "StructProperty",
+    "cpp_class": "RC::LuaType::XStructProperty",
+    "parent_type": "XProperty",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaXStructProperty.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "p:GetClass() -> XFieldClass",
+        "implementation": "src/LuaType/LuaXProperty.cpp:97",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "p:GetFullName() -> string|nil",
+        "implementation": "src/LuaType/LuaXProperty.cpp:104",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "p:GetFName() -> FName",
+        "implementation": "src/LuaType/LuaXProperty.cpp:124",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetOffset_Internal",
+        "lua_signature": "p:GetOffset_Internal() -> integer",
+        "implementation": "src/LuaType/LuaXProperty.cpp:130",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "p:IsA(PropertyTypes PropertyType) -> boolean",
+        "implementation": "src/LuaType/LuaXProperty.cpp:136",
+        "notes": "Takes the global PropertyTypes entry table; reads FFieldClassPointer member.",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ContainerPtrToValuePtr",
+        "lua_signature": "p:ContainerPtrToValuePtr(UObjectDerivative Container [, integer ArrayIndex]) -> lightuserdata",
+        "implementation": "src/LuaType/LuaXProperty.cpp:186",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ImportText",
+        "lua_signature": "p:ImportText(string Buffer, lightuserdata Data, integer PortFlags, UObject OwnerObject)",
+        "implementation": "src/LuaType/LuaXProperty.cpp:215",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetStruct",
+        "lua_signature": "p:GetStruct() -> UScriptStruct",
+        "implementation": "src/LuaType/LuaXStructProperty.cpp:57",
+        "notes": "Wraps struct in ScriptStructWrapper with property mapping."
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "XFieldClass",
+    "metatable_name": "FieldClass",
+    "cpp_class": "RC::LuaType::XFieldClass (LocalObjectBase<FFieldClassVariant>)",
+    "parent_type": "ObjectBase (LocalObjectBase)",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaXFieldClass.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote: true iff pointer non-null. Local: always true. Overridden by UObject-family (hpp:761) and UScriptStruct/TArray/TMap/TSet."
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "fc:GetFName() -> FName",
+        "implementation": "src/LuaType/LuaXFieldClass.cpp:51"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Wraps FFieldClassVariant (UE>=4.25 FFieldClass / older UClass). Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "XDelegateProperty",
+    "metatable_name": "DelegateProperty",
+    "cpp_class": "RC::LuaType::XDelegateProperty",
+    "parent_type": "XProperty",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaXDelegateProperty.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "p:GetClass() -> XFieldClass",
+        "implementation": "src/LuaType/LuaXProperty.cpp:97",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "p:GetFullName() -> string|nil",
+        "implementation": "src/LuaType/LuaXProperty.cpp:104",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "p:GetFName() -> FName",
+        "implementation": "src/LuaType/LuaXProperty.cpp:124",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetOffset_Internal",
+        "lua_signature": "p:GetOffset_Internal() -> integer",
+        "implementation": "src/LuaType/LuaXProperty.cpp:130",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "p:IsA(PropertyTypes PropertyType) -> boolean",
+        "implementation": "src/LuaType/LuaXProperty.cpp:136",
+        "notes": "Takes the global PropertyTypes entry table; reads FFieldClassPointer member.",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ContainerPtrToValuePtr",
+        "lua_signature": "p:ContainerPtrToValuePtr(UObjectDerivative Container [, integer ArrayIndex]) -> lightuserdata",
+        "implementation": "src/LuaType/LuaXProperty.cpp:186",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ImportText",
+        "lua_signature": "p:ImportText(string Buffer, lightuserdata Data, integer PortFlags, UObject OwnerObject)",
+        "implementation": "src/LuaType/LuaXProperty.cpp:215",
+        "inherited_from": "XProperty"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Single-cast delegate property; inherits XProperty methods, adds none of its own (single-cast bind/call not yet exposed). Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "XMulticastDelegateProperty",
+    "metatable_name": "MulticastDelegateProperty",
+    "cpp_class": "RC::LuaType::XMulticastDelegateProperty",
+    "parent_type": "XProperty",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaXDelegateProperty.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "p:GetClass() -> XFieldClass",
+        "implementation": "src/LuaType/LuaXProperty.cpp:97",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "p:GetFullName() -> string|nil",
+        "implementation": "src/LuaType/LuaXProperty.cpp:104",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "p:GetFName() -> FName",
+        "implementation": "src/LuaType/LuaXProperty.cpp:124",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetOffset_Internal",
+        "lua_signature": "p:GetOffset_Internal() -> integer",
+        "implementation": "src/LuaType/LuaXProperty.cpp:130",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "p:IsA(PropertyTypes PropertyType) -> boolean",
+        "implementation": "src/LuaType/LuaXProperty.cpp:136",
+        "notes": "Takes the global PropertyTypes entry table; reads FFieldClassPointer member.",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ContainerPtrToValuePtr",
+        "lua_signature": "p:ContainerPtrToValuePtr(UObjectDerivative Container [, integer ArrayIndex]) -> lightuserdata",
+        "implementation": "src/LuaType/LuaXProperty.cpp:186",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ImportText",
+        "lua_signature": "p:ImportText(string Buffer, lightuserdata Data, integer PortFlags, UObject OwnerObject)",
+        "implementation": "src/LuaType/LuaXProperty.cpp:215",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "Add",
+        "lua_signature": "d:Add(UObject TargetObject, string|FName FunctionName)",
+        "implementation": "src/LuaType/LuaXDelegateProperty.cpp:155"
+      },
+      {
+        "name": "Remove",
+        "lua_signature": "d:Remove(UObject TargetObject, string|FName FunctionName)",
+        "implementation": "src/LuaType/LuaXDelegateProperty.cpp:186"
+      },
+      {
+        "name": "Broadcast",
+        "lua_signature": "d:Broadcast(... signature params ...)",
+        "implementation": "src/LuaType/LuaXDelegateProperty.cpp:217",
+        "notes": "Params marshalled per signature function pushers; ProcessMulticastDelegate."
+      },
+      {
+        "name": "GetBindings",
+        "lua_signature": "d:GetBindings() -> table[{Object=UObject, FunctionName=FName}] | nil",
+        "implementation": "src/LuaType/LuaXDelegateProperty.cpp:279"
+      },
+      {
+        "name": "Clear",
+        "lua_signature": "d:Clear()",
+        "implementation": "src/LuaType/LuaXDelegateProperty.cpp:320"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Multicast inline delegate; constructed bound to base+property (PusherParams ctor at :80). Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "XMulticastSparseDelegateProperty",
+    "metatable_name": "MulticastSparseDelegateProperty",
+    "cpp_class": "RC::LuaType::XMulticastSparseDelegateProperty",
+    "parent_type": "XProperty",
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaXDelegateProperty.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "IsValid",
+        "lua_signature": "obj:IsValid() -> boolean",
+        "implementation": "include/LuaType/LuaUObject.hpp:185",
+        "inherited_from": "ObjectBase"
+      },
+      {
+        "name": "GetClass",
+        "lua_signature": "p:GetClass() -> XFieldClass",
+        "implementation": "src/LuaType/LuaXProperty.cpp:97",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFullName",
+        "lua_signature": "p:GetFullName() -> string|nil",
+        "implementation": "src/LuaType/LuaXProperty.cpp:104",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetFName",
+        "lua_signature": "p:GetFName() -> FName",
+        "implementation": "src/LuaType/LuaXProperty.cpp:124",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "GetOffset_Internal",
+        "lua_signature": "p:GetOffset_Internal() -> integer",
+        "implementation": "src/LuaType/LuaXProperty.cpp:130",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "IsA",
+        "lua_signature": "p:IsA(PropertyTypes PropertyType) -> boolean",
+        "implementation": "src/LuaType/LuaXProperty.cpp:136",
+        "notes": "Takes the global PropertyTypes entry table; reads FFieldClassPointer member.",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ContainerPtrToValuePtr",
+        "lua_signature": "p:ContainerPtrToValuePtr(UObjectDerivative Container [, integer ArrayIndex]) -> lightuserdata",
+        "implementation": "src/LuaType/LuaXProperty.cpp:186",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "ImportText",
+        "lua_signature": "p:ImportText(string Buffer, lightuserdata Data, integer PortFlags, UObject OwnerObject)",
+        "implementation": "src/LuaType/LuaXProperty.cpp:215",
+        "inherited_from": "XProperty"
+      },
+      {
+        "name": "Add",
+        "lua_signature": "d:Add(UObject TargetObject, string|FName FunctionName)",
+        "implementation": "src/LuaType/LuaXDelegateProperty.cpp:430"
+      },
+      {
+        "name": "Remove",
+        "lua_signature": "d:Remove(UObject TargetObject, string|FName FunctionName)",
+        "implementation": "src/LuaType/LuaXDelegateProperty.cpp:461"
+      },
+      {
+        "name": "Broadcast",
+        "lua_signature": "d:Broadcast(... signature params ...)",
+        "implementation": "src/LuaType/LuaXDelegateProperty.cpp:492",
+        "notes": "Params marshalled per signature function pushers; ProcessMulticastDelegate."
+      },
+      {
+        "name": "GetBindings",
+        "lua_signature": "d:GetBindings() -> table[{Object=UObject, FunctionName=FName}] | nil",
+        "implementation": "src/LuaType/LuaXDelegateProperty.cpp:554"
+      },
+      {
+        "name": "Clear",
+        "lua_signature": "d:Clear()",
+        "implementation": "src/LuaType/LuaXDelegateProperty.cpp:595"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Multicast sparse delegate; same method set as XMulticastDelegateProperty. Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "RemoteUnrealParam",
+    "metatable_name": "RemoteUnrealParam",
+    "cpp_class": "RC::LuaType::RemoteUnrealParam (LuaMadeSimple::RemoteObject<void>)",
+    "parent_type": null,
+    "category": "reflection",
+    "source_file": "src/LuaType/LuaUObject.cpp",
+    "methods": [
+      {
+        "name": "Get",
+        "lua_signature": "param:Get() -> any",
+        "implementation": "src/LuaType/LuaUObject.cpp:2432"
+      },
+      {
+        "name": "get",
+        "lua_signature": "param:get() -> any",
+        "implementation": "src/LuaType/LuaUObject.cpp:2437"
+      },
+      {
+        "name": "set",
+        "lua_signature": "param:set(any Value)",
+        "implementation": "src/LuaType/LuaUObject.cpp:2442"
+      },
+      {
+        "name": "Set",
+        "lua_signature": "param:Set(any Value)",
+        "implementation": "src/LuaType/LuaUObject.cpp:2447"
+      },
+      {
+        "name": "type",
+        "lua_signature": "param:type() -> string",
+        "implementation": "src/LuaType/LuaUObject.cpp:2453"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Wraps raw out-param data for UFunction calls; routed through m_property_value_pushers. Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "LocalUnrealParam",
+    "metatable_name": "LocalUnrealParam",
+    "cpp_class": "RC::LuaType::LocalUnrealParam<ParamType> (LuaMadeSimple::LocalObject)",
+    "parent_type": null,
+    "category": "reflection",
+    "source_file": "include/LuaType/LuaUObject.hpp",
+    "methods": [
+      {
+        "name": "Get",
+        "lua_signature": "param:Get() -> any",
+        "implementation": "include/LuaType/LuaUObject.hpp:886"
+      },
+      {
+        "name": "get",
+        "lua_signature": "param:get() -> any",
+        "implementation": "include/LuaType/LuaUObject.hpp:891"
+      },
+      {
+        "name": "Set",
+        "lua_signature": "param:Set(any Value)",
+        "implementation": "include/LuaType/LuaUObject.hpp:896"
+      },
+      {
+        "name": "set",
+        "lua_signature": "param:set(any Value)",
+        "implementation": "include/LuaType/LuaUObject.hpp:901"
+      },
+      {
+        "name": "type",
+        "lua_signature": "param:type() -> string",
+        "implementation": "include/LuaType/LuaUObject.hpp:907"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Local by-value param wrapper used by trivial-type pushers. Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "ModRef",
+    "metatable_name": "ModRef",
+    "cpp_class": "RC::LuaType::LuaModRef (RemoteObjectBase<RC::LuaMod>)",
+    "parent_type": "ObjectBase (RemoteObjectBase)",
+    "category": "other",
+    "source_file": "src/LuaType/LuaModRef.cpp",
+    "methods": [
+      {
+        "name": "GetAddress",
+        "lua_signature": "obj:GetAddress() -> integer",
+        "implementation": "include/LuaType/LuaUObject.hpp:172",
+        "inherited_from": "ObjectBase (RemoteObjectBase/LocalObjectBase template)",
+        "notes": "Remote types return the remote C++ pointer; local types return address of the owned copy."
+      },
+      {
+        "name": "SetSharedVariable",
+        "lua_signature": "mod:SetSharedVariable(string VariableName, any Value)",
+        "implementation": "src/LuaType/LuaModRef.cpp:61",
+        "notes": "nil/bool/lightuserdata/number/string/UObject-family userdata accepted; table/function/thread rejected."
+      },
+      {
+        "name": "GetSharedVariable",
+        "lua_signature": "mod:GetSharedVariable(string VariableName) -> any|nil",
+        "implementation": "src/LuaType/LuaModRef.cpp:170"
+      }
+    ],
+    "metamethods": [
+      {
+        "name": "__newindex",
+        "behavior": "mod.OnUnload = function() ... end registers unload callback (string field, function or nil)",
+        "implementation": "src/LuaType/LuaModRef.cpp:36"
+      }
+    ],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Instance per Lua mod (RegisterMod returns it); global name in scripts is chosen by the mod. Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "UE4SS",
+    "metatable_name": "UE4SS (global table)",
+    "cpp_class": "LuaMod::setup_lua_classes_internal",
+    "parent_type": null,
+    "category": "other",
+    "source_file": "src/Mod/LuaMod.cpp",
+    "methods": [
+      {
+        "name": "GetVersion",
+        "lua_signature": "UE4SS.GetVersion() -> integer Major, integer Minor, integer Hotfix",
+        "implementation": "src/Mod/LuaMod.cpp:6107"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "Compile-time library version constants; platform-neutral.",
+    "ps5_runtime_status": "",
+    "needs_live_game": false,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "UnrealVersion",
+    "metatable_name": "UnrealVersion (global table)",
+    "cpp_class": "LuaMod::setup_lua_classes_internal",
+    "parent_type": null,
+    "category": "other",
+    "source_file": "src/Mod/LuaMod.cpp",
+    "methods": [
+      {
+        "name": "GetMajor",
+        "lua_signature": "UnrealVersion.GetMajor() -> integer",
+        "implementation": "src/Mod/LuaMod.cpp:6120"
+      },
+      {
+        "name": "GetMinor",
+        "lua_signature": "UnrealVersion.GetMinor() -> integer",
+        "implementation": "src/Mod/LuaMod.cpp:6125"
+      },
+      {
+        "name": "IsEqual",
+        "lua_signature": "UnrealVersion.IsEqual(number Major, number Minor) -> boolean",
+        "implementation": "src/Mod/LuaMod.cpp:6130"
+      },
+      {
+        "name": "IsAtLeast",
+        "lua_signature": "UnrealVersion.IsAtLeast(number Major, number Minor) -> boolean",
+        "implementation": "src/Mod/LuaMod.cpp:6141"
+      },
+      {
+        "name": "IsAtMost",
+        "lua_signature": "UnrealVersion.IsAtMost(number Major, number Minor) -> boolean",
+        "implementation": "src/Mod/LuaMod.cpp:6152"
+      },
+      {
+        "name": "IsBelow",
+        "lua_signature": "UnrealVersion.IsBelow(number Major, number Minor) -> boolean",
+        "implementation": "src/Mod/LuaMod.cpp:6163"
+      },
+      {
+        "name": "IsAbove",
+        "lua_signature": "UnrealVersion.IsAbove(number Major, number Minor) -> boolean",
+        "implementation": "src/Mod/LuaMod.cpp:6174"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "",
+    "ps5_runtime_status": "",
+    "needs_live_game": true,
+    "notes": "Reads the engine version detected from the running game. Source attribution: verified against port; upstream reference: TBD."
+  },
+  {
+    "type": "FPackageName",
+    "metatable_name": "FPackageName (global table)",
+    "cpp_class": "LuaMod::setup_lua_classes_internal",
+    "parent_type": null,
+    "category": "other",
+    "source_file": "src/Mod/LuaMod.cpp",
+    "methods": [
+      {
+        "name": "IsShortPackageName",
+        "lua_signature": "FPackageName.IsShortPackageName(string PossiblyLongName) -> boolean",
+        "implementation": "src/Mod/LuaMod.cpp:6252"
+      },
+      {
+        "name": "IsValidLongPackageName",
+        "lua_signature": "FPackageName.IsValidLongPackageName(string InLongPackageName) -> boolean",
+        "implementation": "src/Mod/LuaMod.cpp:6269"
+      }
+    ],
+    "metamethods": [],
+    "pc_only_behavior_notes": "Pure string validation; no Win32 paths involved.",
+    "ps5_runtime_status": "",
+    "needs_live_game": false,
+    "notes": "Source attribution: verified against port; upstream reference: TBD."
+  }
+]

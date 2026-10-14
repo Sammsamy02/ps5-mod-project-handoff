@@ -1,0 +1,659 @@
+{
+  "format": 1,
+  "scope": "local-static-only",
+  "image": {
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+    "bytes": 194241424,
+    "sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+    "segments": [
+      {
+        "type": 1,
+        "flags": 1,
+        "file_offset": 16384,
+        "elf_image_vaddr": 0,
+        "file_size": 122133276,
+        "memory_size": 122133276
+      },
+      {
+        "type": 1,
+        "flags": 4,
+        "file_offset": 122159104,
+        "elf_image_vaddr": 122142720,
+        "file_size": 10742040,
+        "memory_size": 10742040
+      },
+      {
+        "type": 1,
+        "flags": 6,
+        "file_offset": 132907008,
+        "elf_image_vaddr": 132890624,
+        "file_size": 19391720,
+        "memory_size": 19398656
+      },
+      {
+        "type": 1,
+        "flags": 6,
+        "file_offset": 152305664,
+        "elf_image_vaddr": 152289280,
+        "file_size": 1885682,
+        "memory_size": 5207064
+      },
+      {
+        "type": 1,
+        "flags": 0,
+        "file_offset": 154203168,
+        "elf_image_vaddr": 157496352,
+        "file_size": 40029864,
+        "memory_size": 40029864
+      }
+    ]
+  },
+  "address_model": "elf_image_vaddr, translated throughPT_LOAD to file_byte_offset; disassembly leading address adds historicalbase400000 and is only candidate mapped address, no new runtime validation",
+  "facts": [
+    {
+      "key": "FUObjectItem.UEP_TotalSize",
+      "value": "0x18",
+      "width_bytes": null,
+      "status": "validated-static",
+      "confidence": "high",
+      "evidence_keys": [
+        "item_index_low16",
+        "item_index_times3",
+        "item_index_times8",
+        "item_index_base",
+        "chunk_allocation",
+        "chunk_payload_bytes",
+        "chunk_header_count",
+        "chunk_skip_header",
+        "free_times3",
+        "free_times8",
+        "free_item_clear16",
+        "free_item_clear8"
+      ],
+      "inference": "Both index allocation and free compute chunk[high16]+low16*3*8; payload allocation is 65536*24=0x180000, after a separate8B array header. Free clears exactly24B. Item array stride/size24 is unique for these routines.",
+      "live_validation": false
+    },
+    {
+      "key": "FUObjectItem.Object",
+      "value": "0x0",
+      "width_bytes": 8,
+      "status": "validated-static",
+      "confidence": "high",
+      "evidence_keys": [
+        "item_object_store",
+        "free_object_read",
+        "free_object_compare"
+      ],
+      "inference": "Allocation stores the original UObject* at item+0; free reads it and compares with its original UObject* argument. Direct qword pointer, no encoded-pointer transform in this path.",
+      "live_validation": false
+    },
+    {
+      "key": "FUObjectItem.Flags",
+      "value": "0x8",
+      "width_bytes": 4,
+      "status": "validated-static",
+      "confidence": "high",
+      "evidence_keys": [
+        "item_flags_init",
+        "item_flags_atomic"
+      ],
+      "inference": "Allocation initializes and atomically updates the item flags as a dword at+8, after the direct qword object pointer.",
+      "live_validation": false
+    },
+    {
+      "key": "UObjectBase.ObjectFlags",
+      "value": "0x8",
+      "width_bytes": 4,
+      "status": "validated-static",
+      "confidence": "high",
+      "evidence_keys": [
+        "ctor_flags",
+        "object_flags_guard",
+        "object_flags_bit"
+      ],
+      "inference": "Object base constructor stores flags argument at+8; ProcessEvent independently tests the32B flag word at that displacement (4 bytes, not32 bytes).",
+      "live_validation": false
+    },
+    {
+      "key": "UObjectBase.InternalIndex_Private",
+      "value": "0xc",
+      "width_bytes": 4,
+      "status": "validated-static",
+      "confidence": "high",
+      "evidence_keys": [
+        "ctor_index",
+        "object_index_store",
+        "free_index_read"
+      ],
+      "inference": "Constructor initializes-1; array allocation stores its chosen index; free reads that index and roundtrips to the original object.",
+      "live_validation": false
+    },
+    {
+      "key": "UObjectBase.ClassPrivate",
+      "value": "0x10",
+      "width_bytes": 8,
+      "status": "validated-static",
+      "confidence": "high",
+      "evidence_keys": [
+        "ctor_class"
+      ],
+      "inference": "StaticConstructObject/Internal allocation passes its requested class asRSI to constructor485430; constructor stores it at+10. The allocation path also reads [object+10] as the class and tests UClass properties.",
+      "live_validation": false
+    },
+    {
+      "key": "UObjectBase.NamePrivate",
+      "value": "0x18",
+      "width_bytes": 8,
+      "status": "validated-static",
+      "confidence": "high",
+      "evidence_keys": [
+        "ctor_name",
+        "name_ctor_call",
+        "name_ctor_output",
+        "name_ctor_store"
+      ],
+      "inference": "The static constructor stores its8B name argument at+18. Independently, object registration calls authenticated native FName constructor23d590, loads its8B output and stores that value atobject+18. No Windows layout assumption is needed.",
+      "live_validation": false
+    },
+    {
+      "key": "UObjectBase.OuterPrivate",
+      "value": "0x20",
+      "width_bytes": 8,
+      "status": "validated-static",
+      "confidence": "high",
+      "evidence_keys": [
+        "ctor_outer",
+        "event_graph_outer_read"
+      ],
+      "inference": "Constructor stores its outer argument at+20. ProcessEvent and Invoke read the function owner at+20 as an object and call the owner vtable/type checks.",
+      "live_validation": false
+    },
+    {
+      "key": "UFunction.Func",
+      "value": "0xd8",
+      "width_bytes": 8,
+      "status": "validated-static",
+      "confidence": "high",
+      "evidence_keys": [
+        "invoke_call",
+        "invoke_self_save",
+        "invoke_args_context",
+        "invoke_args_frame",
+        "invoke_args_result",
+        "native_func_call"
+      ],
+      "inference": "ProcessEvent calls UFunction Invoke326ac0 with function self inRDI. Invoke saves self inR15 and performs one qword indirect call atself+D8 with Context,Frame,result inSysV RDI,RSI,RDX. This uniquely establishes the native call slot and consumed8B representation.",
+      "live_validation": false
+    },
+    {
+      "key": "UFunction.EventGraphFunction",
+      "value": "0xc8",
+      "width_bytes": 8,
+      "status": "validated-static",
+      "confidence": "high",
+      "evidence_keys": [
+        "event_graph_load",
+        "event_graph_flags_read",
+        "event_graph_outer_read"
+      ],
+      "inference": "Loaded pointer is subsequently used as a UFunction object: reads+ B1 flags and+20 owner; null selects originalRSI function. It is not an executable callback. Matching field name is semantic interpretation of this graph substitution path; prior Func=C8 claim is refuted.",
+      "live_validation": false
+    },
+    {
+      "key": "UFunction.EventGraphCallOffset",
+      "value": "0xd0",
+      "width_bytes": 4,
+      "status": "validated-static",
+      "confidence": "high",
+      "evidence_keys": [
+        "event_graph_load",
+        "event_graph_call_offset"
+      ],
+      "inference": "For nonnull event-graph target, a dword from originalfunction+D0 becomes local call parameter. Field name follows that dataflow; numeric offset and4B access are direct evidence.",
+      "live_validation": false
+    },
+    {
+      "key": "UFunction.ParmsSize",
+      "value": "0xb6",
+      "width_bytes": 2,
+      "status": "validated-static",
+      "confidence": "high",
+      "evidence_keys": [
+        "parms_size_read"
+      ],
+      "inference": "ProcessEvent reads this word to bound the function parameter copy/zero regions against struct storage;2B instruction width is direct evidence.",
+      "live_validation": false
+    },
+    {
+      "key": "UFunction.ReturnValueOffset",
+      "value": "0xb8",
+      "width_bytes": 2,
+      "status": "validated-static",
+      "confidence": "high",
+      "evidence_keys": [
+        "return_value_offset_read",
+        "invoke_call"
+      ],
+      "inference": "ProcessEvent adds this word to the caller parameter base;0xffff selectsnull; otherwise passes resulting result pointer to Invoke.",
+      "live_validation": false
+    }
+  ],
+  "unresolved": [
+    {
+      "key": "UObjectBase.UEP_TotalSize",
+      "status": "unresolved",
+      "lower_bound": "0x28",
+      "candidate": "0x28",
+      "reason": "Highest established member isOuter+20 width8, proving28B envelope only. Bounded constructor/allocator paths did not independently establish exact sizeof/base-class tail. Template total28 not promoted."
+    },
+    {
+      "key": "UFunction.UEP_TotalSize",
+      "status": "unresolved",
+      "lower_bound": "0xe0",
+      "candidate": "0xe0",
+      "reason": "Native Func+D8 qword provesE0B envelope only. No independently identified sizeof/allocation or class-registration total was recovered; template totalE0 not promoted."
+    },
+    {
+      "key": "UFunction.NumParms",
+      "status": "unresolved",
+      "candidate": "0xb4",
+      "reason": "No exact byte read/store atthis field identified in bounded pass; retained template is not target evidence."
+    },
+    {
+      "key": "UFunction.FunctionFlags",
+      "status": "partial-static",
+      "candidate": "0xb0",
+      "observed_byte": "0xb1",
+      "reason": "ProcessEvent directly tests byteB1. Flag-word baseB0/4B matches known semantics and selected getter but this bounded pass has no directfull dword target operand proving base/width; do not substitute byte test for complete field proof."
+    },
+    {
+      "key": "UE_ENABLE_FUOBJECT_ITEM_PACKING",
+      "status": "unresolved-as-build-macro",
+      "reason": "Observed item path uses directqword Object0/dword Flags8/stride18. This proves effective layout of these routines, not globalmacro spelling/value."
+    },
+    {
+      "key": "EObjectFlags.complete_valid_mask",
+      "status": "unresolved",
+      "observed_test": "0x40000000",
+      "reason": "ProcessEvent tests this bit in ObjectFlags at+8. Retained RF_AllFlags0x0FFFFFFF predicate would reject it when set; no complete acceptedflagmask is recovered by this pass."
+    }
+  ],
+  "evidence": {
+    "ctor_flags": {
+      "elf_image_vaddr": "0x48545b",
+      "file_byte_offset": "0x48945b",
+      "instruction_bytes": "895708",
+      "instruction": "mov dword ptr [rdi+8], edx",
+      "disassembly_artifact": "UObjectBaseConstructor.asm"
+    },
+    "ctor_index": {
+      "elf_image_vaddr": "0x48545e",
+      "file_byte_offset": "0x48945e",
+      "instruction_bytes": "c7470cffffffff",
+      "instruction": "mov dword ptr [rdi+0xc], 0xffffffff",
+      "disassembly_artifact": "UObjectBaseConstructor.asm"
+    },
+    "ctor_class": {
+      "elf_image_vaddr": "0x485465",
+      "file_byte_offset": "0x489465",
+      "instruction_bytes": "48897710",
+      "instruction": "mov qword ptr [rdi+0x10], rsi",
+      "disassembly_artifact": "UObjectBaseConstructor.asm"
+    },
+    "ctor_name": {
+      "elf_image_vaddr": "0x4854af",
+      "file_byte_offset": "0x4894af",
+      "instruction_bytes": "4c897b18",
+      "instruction": "mov qword ptr [rbx+0x18], r15",
+      "disassembly_artifact": "UObjectBaseConstructor.asm"
+    },
+    "ctor_outer": {
+      "elf_image_vaddr": "0x485492",
+      "file_byte_offset": "0x489492",
+      "instruction_bytes": "4c896320",
+      "instruction": "mov qword ptr [rbx+0x20], r12",
+      "disassembly_artifact": "UObjectBaseConstructor.asm"
+    },
+    "name_ctor_call": {
+      "elf_image_vaddr": "0x4855b4",
+      "file_byte_offset": "0x4895b4",
+      "instruction_bytes": "e8d77fdbff",
+      "instruction": "call image 0x23d590 (authenticated native FName constructor)",
+      "disassembly_artifact": "UObjectBaseRegister-confirmed.asm"
+    },
+    "name_ctor_output": {
+      "elf_image_vaddr": "0x4855b9",
+      "file_byte_offset": "0x4895b9",
+      "instruction_bytes": "488b45c8",
+      "instruction": "mov rax, qword ptr [rbp-0x38]",
+      "disassembly_artifact": "UObjectBaseRegister-confirmed.asm"
+    },
+    "name_ctor_store": {
+      "elf_image_vaddr": "0x4855bd",
+      "file_byte_offset": "0x4895bd",
+      "instruction_bytes": "48894318",
+      "instruction": "mov qword ptr [rbx+0x18], rax",
+      "disassembly_artifact": "UObjectBaseRegister-confirmed.asm"
+    },
+    "item_index_low16": {
+      "elf_image_vaddr": "0x483b98",
+      "file_byte_offset": "0x487b98",
+      "instruction_bytes": "410fb7cf",
+      "instruction": "movzx ecx, r15w",
+      "disassembly_artifact": "AllocateUObjectIndex.asm"
+    },
+    "item_index_times3": {
+      "elf_image_vaddr": "0x483b9f",
+      "file_byte_offset": "0x487b9f",
+      "instruction_bytes": "4c8d2449",
+      "instruction": "lea r12, [rcx+rcx*2]",
+      "disassembly_artifact": "AllocateUObjectIndex.asm"
+    },
+    "item_index_high16": {
+      "elf_image_vaddr": "0x483ba3",
+      "file_byte_offset": "0x487ba3",
+      "instruction_bytes": "c1e810",
+      "instruction": "shr eax, 0x10",
+      "disassembly_artifact": "AllocateUObjectIndex.asm"
+    },
+    "item_index_times8": {
+      "elf_image_vaddr": "0x483ba6",
+      "file_byte_offset": "0x487ba6",
+      "instruction_bytes": "41c1e403",
+      "instruction": "shl r12d, 3",
+      "disassembly_artifact": "AllocateUObjectIndex.asm"
+    },
+    "item_index_base": {
+      "elf_image_vaddr": "0x483baa",
+      "file_byte_offset": "0x487baa",
+      "instruction_bytes": "4c0324c2",
+      "instruction": "add r12, qword ptr [rdx+rax*8]",
+      "disassembly_artifact": "AllocateUObjectIndex.asm"
+    },
+    "chunk_allocation": {
+      "elf_image_vaddr": "0x483c79",
+      "file_byte_offset": "0x487c79",
+      "instruction_bytes": "bf08001800",
+      "instruction": "mov edi, 0x180008",
+      "disassembly_artifact": "AllocateUObjectIndex.asm"
+    },
+    "chunk_header_count": {
+      "elf_image_vaddr": "0x483c92",
+      "file_byte_offset": "0x487c92",
+      "instruction_bytes": "48c70000000100",
+      "instruction": "mov qword ptr [rax], 0x10000",
+      "disassembly_artifact": "AllocateUObjectIndex.asm"
+    },
+    "chunk_payload_bytes": {
+      "elf_image_vaddr": "0x483c8d",
+      "file_byte_offset": "0x487c8d",
+      "instruction_bytes": "ba00001800",
+      "instruction": "mov edx, 0x180000",
+      "disassembly_artifact": "AllocateUObjectIndex.asm"
+    },
+    "chunk_skip_header": {
+      "elf_image_vaddr": "0x483c9b",
+      "file_byte_offset": "0x487c9b",
+      "instruction_bytes": "4983c408",
+      "instruction": "add r12, 8",
+      "disassembly_artifact": "AllocateUObjectIndex.asm"
+    },
+    "item_flags_init": {
+      "elf_image_vaddr": "0x483d14",
+      "file_byte_offset": "0x487d14",
+      "instruction_bytes": "41c744240800000080",
+      "instruction": "mov dword ptr [r12+8], 0x80000000",
+      "disassembly_artifact": "AllocateUObjectIndex.asm"
+    },
+    "item_flags_atomic": {
+      "elf_image_vaddr": "0x483d84",
+      "file_byte_offset": "0x487d84",
+      "instruction_bytes": "f0410fb14c2408",
+      "instruction": "lock cmpxchg dword ptr [r12+8], ecx",
+      "disassembly_artifact": "AllocateUObjectIndex.asm"
+    },
+    "item_object_store": {
+      "elf_image_vaddr": "0x483d40",
+      "file_byte_offset": "0x487d40",
+      "instruction_bytes": "49891c24",
+      "instruction": "mov qword ptr [r12], rbx",
+      "disassembly_artifact": "AllocateUObjectIndex.asm"
+    },
+    "object_index_store": {
+      "elf_image_vaddr": "0x483d5e",
+      "file_byte_offset": "0x487d5e",
+      "instruction_bytes": "44897b0c",
+      "instruction": "mov dword ptr [rbx+0xc], r15d",
+      "disassembly_artifact": "AllocateUObjectIndex.asm"
+    },
+    "free_index_read": {
+      "elf_image_vaddr": "0x4840bb",
+      "file_byte_offset": "0x4880bb",
+      "instruction_bytes": "8b5e0c",
+      "instruction": "mov ebx, dword ptr [rsi+0xc]",
+      "disassembly_artifact": "FreeUObjectIndex.asm"
+    },
+    "free_times3": {
+      "elf_image_vaddr": "0x4840d2",
+      "file_byte_offset": "0x4880d2",
+      "instruction_bytes": "4c8d2449",
+      "instruction": "lea r12, [rcx+rcx*2]",
+      "disassembly_artifact": "FreeUObjectIndex.asm"
+    },
+    "free_times8": {
+      "elf_image_vaddr": "0x4840d9",
+      "file_byte_offset": "0x4880d9",
+      "instruction_bytes": "41c1e403",
+      "instruction": "shl r12d, 3",
+      "disassembly_artifact": "FreeUObjectIndex.asm"
+    },
+    "free_object_read": {
+      "elf_image_vaddr": "0x4840e1",
+      "file_byte_offset": "0x4880e1",
+      "instruction_bytes": "4d8b0c24",
+      "instruction": "mov r9, qword ptr [r12]",
+      "disassembly_artifact": "FreeUObjectIndex.asm"
+    },
+    "free_object_compare": {
+      "elf_image_vaddr": "0x4840e5",
+      "file_byte_offset": "0x4880e5",
+      "instruction_bytes": "4d39f9",
+      "instruction": "cmp r9, r15 (original object)",
+      "disassembly_artifact": "FreeUObjectIndex.asm"
+    },
+    "free_item_clear16": {
+      "elf_image_vaddr": "0x484136",
+      "file_byte_offset": "0x488136",
+      "instruction_bytes": "c4c178110424",
+      "instruction": "vmovups xmmword ptr [r12], xmm0",
+      "disassembly_artifact": "FreeUObjectIndex.asm"
+    },
+    "free_item_clear8": {
+      "elf_image_vaddr": "0x48413c",
+      "file_byte_offset": "0x48813c",
+      "instruction_bytes": "49c744241000000000",
+      "instruction": "mov qword ptr [r12+0x10], 0",
+      "disassembly_artifact": "FreeUObjectIndex.asm"
+    },
+    "object_flags_guard": {
+      "elf_image_vaddr": "0x45985c",
+      "file_byte_offset": "0x45d85c",
+      "instruction_bytes": "8b4708",
+      "instruction": "mov eax, dword ptr [rdi+8]",
+      "disassembly_artifact": "ProcessEvent.asm"
+    },
+    "object_flags_bit": {
+      "elf_image_vaddr": "0x45985f",
+      "file_byte_offset": "0x45d85f",
+      "instruction_bytes": "a900000040",
+      "instruction": "test eax, 0x40000000",
+      "disassembly_artifact": "ProcessEvent.asm"
+    },
+    "function_native_bit": {
+      "elf_image_vaddr": "0x45986a",
+      "file_byte_offset": "0x45d86a",
+      "instruction_bytes": "f686b100000004",
+      "instruction": "test byte ptr [rsi+0xb1], 4",
+      "disassembly_artifact": "ProcessEvent.asm"
+    },
+    "event_graph_load": {
+      "elf_image_vaddr": "0x4598cc",
+      "file_byte_offset": "0x45d8cc",
+      "instruction_bytes": "4c8bbec8000000",
+      "instruction": "mov r15, qword ptr [rsi+0xc8]",
+      "disassembly_artifact": "ProcessEvent.asm"
+    },
+    "event_graph_call_offset": {
+      "elf_image_vaddr": "0x4598d8",
+      "file_byte_offset": "0x45d8d8",
+      "instruction_bytes": "8b86d0000000",
+      "instruction": "mov eax, dword ptr [rsi+0xd0]",
+      "disassembly_artifact": "ProcessEvent.asm"
+    },
+    "event_graph_flags_read": {
+      "elf_image_vaddr": "0x4598e5",
+      "file_byte_offset": "0x45d8e5",
+      "instruction_bytes": "41f687b100000080",
+      "instruction": "test byte ptr [r15+0xb1], 0x80",
+      "disassembly_artifact": "ProcessEvent.asm"
+    },
+    "event_graph_outer_read": {
+      "elf_image_vaddr": "0x45990c",
+      "file_byte_offset": "0x45d90c",
+      "instruction_bytes": "498b7f20",
+      "instruction": "mov rdi, qword ptr [r15+0x20]",
+      "disassembly_artifact": "ProcessEvent.asm"
+    },
+    "parms_size_read": {
+      "elf_image_vaddr": "0x459970",
+      "file_byte_offset": "0x45d970",
+      "instruction_bytes": "410fb787b6000000",
+      "instruction": "movzx eax, word ptr [r15+0xb6]",
+      "disassembly_artifact": "ProcessEvent.asm"
+    },
+    "return_value_offset_read": {
+      "elf_image_vaddr": "0x459b4d",
+      "file_byte_offset": "0x45db4d",
+      "instruction_bytes": "410fb787b8000000",
+      "instruction": "movzx eax, word ptr [r15+0xb8]",
+      "disassembly_artifact": "ProcessEvent.asm"
+    },
+    "invoke_call": {
+      "elf_image_vaddr": "0x459b6f",
+      "file_byte_offset": "0x45db6f",
+      "instruction_bytes": "e84ccfecff",
+      "instruction": "call image 0x326ac0",
+      "disassembly_artifact": "ProcessEvent.asm"
+    },
+    "invoke_self_save": {
+      "elf_image_vaddr": "0x326adb",
+      "file_byte_offset": "0x32aadb",
+      "instruction_bytes": "4989ff",
+      "instruction": "mov r15, rdi (UFunction self)",
+      "disassembly_artifact": "UFunctionInvoke.asm"
+    },
+    "invoke_args_context": {
+      "elf_image_vaddr": "0x326b15",
+      "file_byte_offset": "0x32ab15",
+      "instruction_bytes": "4c89e7",
+      "instruction": "mov rdi, r12 (Context)",
+      "disassembly_artifact": "UFunctionInvoke.asm"
+    },
+    "invoke_args_frame": {
+      "elf_image_vaddr": "0x326b18",
+      "file_byte_offset": "0x32ab18",
+      "instruction_bytes": "4889de",
+      "instruction": "mov rsi, rbx (FFrame)",
+      "disassembly_artifact": "UFunctionInvoke.asm"
+    },
+    "invoke_args_result": {
+      "elf_image_vaddr": "0x326b1b",
+      "file_byte_offset": "0x32ab1b",
+      "instruction_bytes": "4c89f2",
+      "instruction": "mov rdx, r14 (result storage)",
+      "disassembly_artifact": "UFunctionInvoke.asm"
+    },
+    "native_func_call": {
+      "elf_image_vaddr": "0x326b25",
+      "file_byte_offset": "0x32ab25",
+      "instruction_bytes": "41ff97d8000000",
+      "instruction": "call qword ptr [r15+0xd8]",
+      "disassembly_artifact": "UFunctionInvoke.asm"
+    }
+  },
+  "sources": [
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+      "bytes": 194241424,
+      "sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-re-fname-pool/tools/rdis.py",
+      "bytes": 2880,
+      "sha256": "df9b97ee71b278060f41346edae1d8fa54c5190e48029cbbef90010a16f0d326"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-re-fname-pool/tools/vmap.py",
+      "bytes": 1016,
+      "sha256": "8513c4095f59236ab38460d796ecdde8b3a2c3156e90f31f913f5cfc7358e850"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-gap-l2a/REPORT.md",
+      "bytes": 5865,
+      "sha256": "ba311b0d3b8532d7a12d7bfb78d502ad195115f42dc4483b8feff8e2b4802e92"
+    },
+    {
+      "path": "/tmp/wrfp_gap_l2a/vt2.txt",
+      "bytes": 9578,
+      "sha256": "39ad18fe5b77fb9422212f780b2117bb2584cb94bb1abb7f93f57d7889510056"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/include/Unreal/CoreUObject/UObject/Class.hpp",
+      "bytes": 34354,
+      "sha256": "0f5f4f9d595ded18a70cb6481e48be2bd2be00ff873e7c6554cf37518b8cbbb5"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/generated_include/MemberVariableLayout_SrcWrapper_UFunction.hpp",
+      "bytes": 12411,
+      "sha256": "47c8b6a43ae59d3805d1579e328a8384b619c403b70f4e69ef73608daf9a5696"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/UFunction.cpp",
+      "bytes": 4780,
+      "sha256": "84a718db6f21d6884b8465eacf0e4523bc6fd226ae616f6c77c6a620c1a80823"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-layout-widths-2/coverage-delta.json",
+      "bytes": 379,
+      "sha256": "c49f487407daae26cf27666db3bcb0773b20bcd5873c679d45f877b67510cec9"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/include/Unreal/UnrealFlags.hpp",
+      "bytes": 30605,
+      "sha256": "f25d3dcf070d3da8627d2e95b24a29ca8a4bdd0f49d17284324f52520121efa8"
+    }
+  ],
+  "selected_accessor": {
+    "native_width_bytes": 8,
+    "read_write_width_bytes": 8,
+    "source_chain": [
+      "Class.hpp356:GetFunc=>GetFunc419",
+      "SrcWrapper_UFunction.hpp195:GetFunc419 returns std::function<...>*&",
+      "UFunction.cpp28-35:GetFuncPtr/SetFuncPtr useGetFunc;bit_cast pointer value"
+    ],
+    "conservative_width_authority": 16,
+    "conservative_authority_reason": "Maximum ofGetFuncBase alternative16 andGetFunc419 alternative8; distinct from actual selectedGetFunc path",
+    "publication_policy": "Source review supports actualselected8B access; modify widthauthority only throughexplicitselected-accessor evidence, not overwriting historical16Bfixture result"
+  },
+  "validation": {
+    "instruction_windows_checked": 43,
+    "all_instruction_bytes_exact": true,
+    "source_mutations": 0,
+    "console_network_account_actions": 0,
+    "runtime_tests": 0
+  },
+  "diagnostic_limits": [
+    "rdis.py final calls footer accidentally addsDELTA twice tocallsite; useindividual instructionrecords only.",
+    "UObjectBaseRegister.asm was exploratory decode from485590 insideinstruction48558f; retain it as rejected/non-evidence. Correctfunction485530 dumpisUObjectBaseRegister-confirmed.asm."
+  ]
+}

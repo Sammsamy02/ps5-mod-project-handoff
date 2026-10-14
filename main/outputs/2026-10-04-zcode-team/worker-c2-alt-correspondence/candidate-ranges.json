@@ -1,0 +1,40 @@
+{
+  "worker": "worker-c2-alt-correspondence",
+  "purpose": "C2(b) alternative correspondence check - candidate data ranges (file bytes from retained capture vs live bytes at computed runtime addresses)",
+  "retained_capture": {
+    "path": ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+    "sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+    "size": 194241424
+  },
+  "base_expected": "0x400000",
+  "base_rule": "re-derive in same invocation as lowest prot&4 span start; must equal 0x400000",
+  "relocation_audit": {
+    "DT_RELA": {"vaddr": "0x9653430", "file": "0x932f430", "size": 39878376, "entries": 1661599},
+    "DT_JMPREL": {"vaddr": "0x96478f8", "file": "0x93238f8", "size": 47928, "entries": 1997},
+    "r_offset_segments": {"phdr3_RELRO_0x7ebc000_0x913a4e8": 1661610, "phdr7_data_0x913c000_0x93085f2": 1986, "phdr1_rodata": 0, "phdr8_aux": 0},
+    "types": {"R_X86_64_RELATIVE": 1649556, "R_X86_64_64": 12022, "R_X86_64_JUMP_SLOT": 1997, "R_X86_64_GLOB_DAT": 21}
+  },
+  "candidates": [
+    {"id": "A", "what": "NT_GNU_BUILD_ID note record", "file_offset": "0xb93b250", "vaddr": "0xbc5f250", "rt_base_0x400000": "0xc05f250", "len": 36, "expected_hex": "040000001400000003000000474e550004bb4330a7d71dcefe1cc2c4d19769d500000000", "phdr": 8, "file_delta": "vaddr-0x324000", "unique_in_file": 1, "required_for_pass": true, "read_order": 5},
+    {"id": "B", "what": "branch name L\"UE5\"", "file_offset": "0x782a782", "vaddr": "0x7826782", "rt_base_0x400000": "0x7c26782", "len": 8, "expected_hex": "5500450035000000", "phdr": 1, "file_delta": "vaddr+0x4000", "unique_in_file": 1, "required_for_pass": true, "read_order": 1},
+    {"id": "C", "what": "UTF-16 BuildIdOverride+NUL+2B", "file_offset": "0x75d3fda", "vaddr": "0x75cffda", "rt_base_0x400000": "0x79cffda", "len": 32, "expected_hex": "4200750069006c006400490064004f0076006500720072006900640065000000", "phdr": 1, "file_delta": "vaddr+0x4000", "unique_in_file": 2, "second_occurrence_file": "0x76cce58", "required_for_pass": false, "read_order": 2},
+    {"id": "D", "what": "ASCII Current Changelist+NUL", "file_offset": "0x7b8c45d", "vaddr": "0x7b8845d", "rt_base_0x400000": "0x7f8845d", "len": 19, "expected_hex": "43757272656e74204368616e67656c69737400", "phdr": 1, "file_delta": "vaddr+0x4000", "unique_in_file": 1, "required_for_pass": false, "read_order": 3},
+    {"id": "E", "what": "AES S-box first 64 bytes", "file_offset": "0x7dd6a40", "vaddr": "0x7dd2a40", "rt_base_0x400000": "0x81d2a40", "len": 64, "expected_hex": "637c777bf26b6fc53001672bfed7ab76ca82c97dfa5947f0add4a2af9ca472c0b7fd9326363ff7cc34a5e5f171d8311504c723c31896059a071280e2eb27b275", "phdr": 1, "file_delta": "vaddr+0x4000", "unique_in_file": 1, "required_for_pass": false, "read_order": 4}
+  ],
+  "excluded": {
+    "exec_phdr0": "rt 0x400000-0x787c000 prot 0x4 - reads crash (igf6 record 4 never arrived)",
+    "relocation_targets": "phdr3 + phdr7 file part - 1663596 relocs, live != file by design",
+    "runtime_modified": "phdr7 BSS 0x93085f2-0x9633418 (incl GUA 0x93ba110; igf4 96B live dump is here, non-file-backed), TLS phdr5, PT_DYNAMIC",
+    "loader_metadata_phdr8": "DT_RELA/JMPREL/SYMTAB/STRTAB/DYNAMIC arrays",
+    "probe_self_copies": "probe must not embed expected bytes; on-console byte_match forbidden; offline comparison only"
+  },
+  "evaluation_from_existing_data": {
+    "possible": false,
+    "reason": "only successful live byte dump is igf4 gua_read 96B at rt 0x97ba110 in phdr7 BSS (prot 0x3) - not file-backed; igf6 records contain no byte dumps and its 8685-span readable list was not persisted",
+    "requires": "one new probe launch per C2-ALTERNATIVE-SPEC.md section 7",
+    "reads_required": [["B", "0x7c26782", 8], ["C", "0x79cffda", 32], ["D", "0x7f8845d", 19], ["E", "0x81d2a40", 64], ["A", "0xc05f250", 36]]
+  },
+  "pass_rule": "5/5 match, base 0x400000, all spans prot&1 in same invocation; bounded pass if refusals: A and B match + >=2 of C/D/E match + zero mismatches",
+  "fail_rule": "any byte mismatch, or recorded base != 0x400000, or probe dies at first data read (new fact class)",
+  "tick_sco_status": "UNRESOLVED - never read; image-level correspondence only; C2(b) acceptance is the controller's explicit act"
+}

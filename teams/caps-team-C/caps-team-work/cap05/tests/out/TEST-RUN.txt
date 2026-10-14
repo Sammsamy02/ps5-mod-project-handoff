@@ -1,0 +1,59 @@
+== 1/6 python suite ==
+----------------------------------------------------------------------
+Ran 24 tests in 11.143s
+
+OK
+python: ran 24 tests rc=0
+== 2/6 C++ crash-test core (extracted from the patched LuaMod.cpp) ==
+extracted 2231 bytes between the markers
+host arch: arm64 ('trap' = SIGTRAP 5 on arm64; on the PS5 (x86-64) it is ud2 = SIGILL 4; the test accepts both; the launch uses only 'segv')
+[-O0]
+wrong-token-refused      PASS exit=0 out=RET ModBridgeCrashTest refused: wrong or missing confirmation token (nothing happened)
+empty-token-refused      PASS exit=0 out=RET ModBridgeCrashTest refused: wrong or missing confirmation token (nothing happened)
+bad-kind-refused         PASS exit=0 out=RET ModBridgeCrashTest refused: kind must be "segv" or "trap" (nothing happened)
+segv-faults-at-0xc08     PASS exit=111 out=SIG 11 ADDR 0xc08
+trap-fires               PASS exit=105 out=SIG 5 ADDR 0x100dfc614
+crashtest_core_host: checked 5 cases, 0 failed
+[-O2]
+wrong-token-refused      PASS exit=0 out=RET ModBridgeCrashTest refused: wrong or missing confirmation token (nothing happened)
+empty-token-refused      PASS exit=0 out=RET ModBridgeCrashTest refused: wrong or missing confirmation token (nothing happened)
+bad-kind-refused         PASS exit=0 out=RET ModBridgeCrashTest refused: kind must be "segv" or "trap" (nothing happened)
+segv-faults-at-0xc08     PASS exit=111 out=SIG 11 ADDR 0xc08
+trap-fires               PASS exit=105 out=SIG 5 ADDR 0x104c785b0
+crashtest_core_host: checked 5 cases, 0 failed
+c++: checked 10 cases
+== 3/6 zzcrashtest Lua mod under stubs ==
+missing-function: no loop scheduled      PASS 
+missing-function: message printed        PASS 
+gate-check PASS printed                  PASS 
+one loop at 5000 ms                      PASS 
+exactly 3 calls (2 refusals + 1 crash)   PASS calls=3
+call 1 = wrong token                     PASS 
+call 2 = bad kind                        PASS 
+call 3 = segv + token                    PASS 
+crash after 30 ticks (~150 s)            PASS ticks=30
+CRASHING NOW marker printed              PASS 
+bad-gate: no loop scheduled              PASS 
+bad-gate: GATE-CHECK FAIL printed        PASS 
+lua_mod_host_test: checked 12, failed 0
+== 4/6 stage script: re-apply onto the patched file must refuse ==
+apply_cap05: REFUSED: cap05 insertion already present - refusing to double-apply
+double-apply refused: PASS (1 check)
+== 5/6 post-harvest wrapper on a copy of the launch-3 evidence ==
+crashcap: scanned 6950 klog lines in 1 file(s); crash blocks=1; addresses=45 (exact function 18); call-edges checked=18 consistent=18; logs tailed=1
+wrapper: PASS (1 check)
+wrapper with no klog -> exit 3: PASS (1 check)
+== 6/6 build step 8b (final symbols) is non-fatal ==
+extracted step 8b: 1205 bytes
+[04:39:55Z] 8b/9 final symbols: WARN: final_symbols rc=2 (layout not reproduced; crash reports for this build would be unsymbolized; build result unaffected)
+REACHED-STEP-9
+8b bad inputs -> WARN, build continues: PASS
+[04:39:55Z] 8b/9 final symbols: WARN: existing /WORKSPACE/.codex/worktrees/translation-core/caps-team-C/caps-team-work/cap05/tests/out/step8b/pkg-exist/modbridge_supplier_composition.prx.final-symbols.json left untouched (never overwritten); step skipped
+REACHED-STEP-9
+8b existing output -> WARN, file untouched, build continues: PASS
+final_symbols: PASS sections_verified=77993 bytes_compared=18977850 bytes_masked=4575818 symbols=79142 build_id=7423ffe671bfefbc444e887935731e9700000000 packaged=bfd95db6
+[04:39:58Z] 8b/9 final symbols: PASS
+REACHED-STEP-9
+8b real R11 inputs (located by sha) -> PASS: PASS
+step 8b: checked 3 cases
+== summary: 6 steps run; overall PASS ==

@@ -1,0 +1,224 @@
+--- a/typescan-r4/include/Platform/NativeGuiHost.hpp
++++ b/typescan-r4/include/Platform/NativeGuiHost.hpp
+@@ -17,7 +17,11 @@
+ //   * output: ImDrawData -> clipped textured triangle batches (CanvasBatcher)
+ //     handed to a Backend, which on the console draws them into a canvas render
+ //     target shown by one UMG image (NativeGuiEngineBackend.inc); the font
+-//     atlas is uploaded once as untextured runs (ImGuiAtlasRuns).
++//     atlas is uploaded once as untextured runs (ImGuiAtlasRuns);
++//   * screen density [FU-DPI]: ImGui lays out in units (the backend's panel
++//     size) and renders at DisplayFramebufferScale = Backend::pixel_scale(),
++//     with the default font baked at exactly its drawn size and density, so
++//     one font texel is one screen pixel at any DPI.
+ // Engine-free: the Backend interface is the only engine contact; host tests
+ // implement it with a software rasteriser.
+ #pragma once
+@@ -61,6 +65,10 @@
+         size_t max_tabs_total = 64;
+         size_t max_tabs_per_mod = 16;
+         size_t max_name_bytes = 128;
++        // [FU-DPI review #2] bounds of the sharp-font bake and of the atlas upload (fail closed above them)
++        size_t max_bake_codepoints = 1024;           // all font sources of the atlas; the stock font has 224
++        int64_t max_bake_texels = int64_t{4} << 20;  // codepoints x (size x density)^2 estimate
++        int64_t max_atlas_texels = int64_t{4096} * 4096;
+     };
+ 
+     class Backend
+@@ -68,22 +76,32 @@
+       public:
+         virtual ~Backend() = default;
+         virtual void log(int32_t level, std::string_view text) = 0;
+-        // Game thread. Ensure overlay surfaces exist; report the target size.
+-        // false = not ready this frame (the frame is skipped, GUI stays open).
++        // Game thread. Ensure overlay surfaces exist; report the panel size in
++        // LAYOUT units (ImGui DisplaySize; the render target has
++        // width x pixel_scale() by height x pixel_scale() pixels).
++        // false = not ready this frame (the frame is skipped, GUI stays open,
++        // gameplay input is released until it is ready again [FU1]).
+         // *rebuilt = true when the surfaces were (re)built in this call (first
+         // build, or after a map change destroyed the old ones): every engine
+         // object the host handed out before (the atlas texture, the player
+         // the input block was applied to) is gone and must be redone. [FIX F2]
+         virtual auto prepare(int* width, int* height, bool* rebuilt) -> bool = 0;
++        // [FU-DPI] Render-target pixels per layout unit (the viewport DPI scale,
++        // e.g. 2.0 on a 4K screen), valid after a successful prepare(). The host
++        // renders ImGui at this density (DisplayFramebufferScale) and bakes the
++        // font for it, so the image is shown 1:1 and text is sharp. 1.0 =
++        // pixels are units (host tests, fallback).
++        virtual auto pixel_scale() -> float { return 1.0f; }
+         // Game thread, once: upload the atlas; return its texture id (0 = failed).
+         virtual auto create_atlas(const std::vector<Run>& runs, int width, int height) -> ImTextureID = 0;
+         // Game thread: draw this frame's batches (texture ids are atlas or 0).
+         virtual void submit(const std::vector<Batch>& batches) = 0;
+         virtual void set_visible(bool visible) = 0;
+-        // Game thread, only after a successful prepare(). blocked=true: apply
++        // Game thread. blocked=true only after a successful prepare(): apply
+         // the block to the current player; returns true only if it was really
+-        // applied (or already is for this player). blocked=false: undo exactly
+-        // what was applied (nothing if nothing was). [FIX F1]
++        // applied (or already is for this player). blocked=false at any time
++        // (also after a failed prepare() [FU1]): undo exactly what was applied
++        // (nothing if nothing was). [FIX F1]
+         virtual auto set_gameplay_input_blocked(bool blocked) -> bool = 0;
+     };
+ 
+@@ -255,7 +273,23 @@
+             if (!m_open.load()) return;
+             int w{}, h{};
+             bool rebuilt{};
+-            if (!m_backend.prepare(&w, &h, &rebuilt) || w <= 0 || h <= 0) return;
++            if (!m_backend.prepare(&w, &h, &rebuilt) || w <= 0 || h <= 0)
++            {
++                // [FU1] nothing is shown this frame (no player yet, or a surface
++                // build that failed part-way): gameplay input must not stay
++                // blocked behind an invisible window. Undo our block now; it is
++                // applied again on the first frame the surfaces are back.
++                if (m_input_blocked)
++                {
++                    m_backend.set_gameplay_input_blocked(false);
++                    m_input_blocked = false;
++                    m_backend.log(MBM_LOG_NORMAL, "[GUI] window not shown (surfaces not ready): gameplay input released until it is back");
++                }
++                return;
++            }
++            // [FU-DPI] render-target pixels per layout unit (1.0 if implausible)
++            float px_scale = m_backend.pixel_scale();
++            if (!(px_scale >= 0.25f && px_scale <= 8.0f)) px_scale = 1.0f;
+             if (rebuilt)
+             {
+                 // [FIX F2] new surfaces (first open or after a map change): the old
+@@ -281,6 +315,23 @@
+             }
+             ImGui::SetCurrentContext(m_ctx);
+             ImGuiIO& io = ImGui::GetIO();
++            if (px_scale != m_font_density)
++            {
++                // [FU-DPI] first frame, or the screen density changed: bake the
++                // font for it (between frames: the atlas is unlocked), then the
++                // atlas is uploaded again below.
++                bake_font(px_scale);       // logs one warning itself when it skips
++                m_font_density = px_scale; // one attempt per density, never every frame
++            }
++            if (!m_atlas_tex && static_cast<int64_t>(m_atlas_w) * m_atlas_h > m_cfg.max_atlas_texels)
++            {
++                // [FU-DPI review #2] never build runs / RGBA / PNG for a huge atlas on the game thread
++                m_failed = true;
++                m_backend.log(MBM_LOG_ERROR, "[GUI] refused: font atlas " + std::to_string(m_atlas_w) + "x" + std::to_string(m_atlas_h) +
++                                                     " is too large to upload; GUI disabled for this session");
++                set_open(false);
++                return;
++            }
+             if (!m_atlas_tex)
+             {
+                 const auto runs = atlas_runs(m_atlas_alpha.data(), m_atlas_w, m_atlas_h, m_cfg.atlas_levels);
+@@ -295,7 +346,10 @@
+                 io.Fonts->SetTexID(m_atlas_tex);
+                 m_backend.log(MBM_LOG_NORMAL, "[GUI] atlas uploaded runs=" + std::to_string(runs.size()));
+             }
++            // [FU-DPI] ImGui lays out in units (the same layout at any DPI); the
++            // draw data is scaled to render-target pixels by the batcher.
+             io.DisplaySize = ImVec2(static_cast<float>(w), static_cast<float>(h));
++            io.DisplayFramebufferScale = ImVec2(px_scale, px_scale);
+             io.DeltaTime = dt > 0.0001f && dt < 0.5f ? dt : 1.0f / 60.0f;
+             for (ImGuiKey k : m_release_next) io.AddKeyEvent(k, false);
+             m_release_next.clear();
+@@ -310,7 +364,9 @@
+             draw_main_window();
+             ImGui::Render();
+             BatchStats bs{};
+-            auto batches = convert(ImGui::GetDrawData(), &bs);
++            BatchOptions opt{};
++            opt.scale_x = opt.scale_y = px_scale; // [FU-DPI] clip in units, emit render-target pixels
++            auto batches = convert(ImGui::GetDrawData(), &bs, opt);
+             uint64_t tris = 0, unknown = 0;
+             std::vector<Batch> drawable;
+             drawable.reserve(batches.size());
+@@ -476,6 +532,80 @@
+             return false;
+         }
+ 
++        // [FU-DPI] Sharp text at any screen density. This backend is a legacy
++        // ImGui renderer (no ImGuiBackendFlags_RendererHasTextures), so the font
++        // atlas only holds the sizes baked into it; any other size is a scaled
++        // bitmap (before: the 13 px default font drawn at 20 units x 2.0 on a 4K
++        // screen = 3x blow-up). Bake the default font at exactly the size it is
++        // drawn at (style FontSizeBase x FontScaleMain x FontScaleDpi, rounded
++        // the way ImGui rounds it) and at `density` texels per unit, so each
++        // glyph texel is one screen pixel. Public 1.92.1 API only; the font
++        // object, its LegacySize and any font a mod added stay untouched (the
++        // bake is added, nothing is cleared). Game thread, between frames (the
++        // atlas is unlocked outside NewFrame..Render). Refreshes the CPU copy of
++        // the atlas and drops the uploaded texture so frame() uploads it again.
++        auto bake_font(float density) -> bool
++        {
++            auto skip = [&](const std::string& why) {
++                m_backend.log(MBM_LOG_WARNING, "[GUI] sharp-font bake for density " + std::to_string(density) + " skipped (" + why +
++                                                       "); text is drawn from the existing bake (softer)");
++                return false;
++            };
++            ImGuiIO& io = ImGui::GetIO();
++            ImFontAtlas* atlas = io.Fonts;
++            if (!atlas || atlas->Locked || atlas->Fonts.Size == 0) return skip("no unlocked font atlas");
++            ImFont* font = io.FontDefault ? io.FontDefault : atlas->Fonts[0];
++            const ImGuiStyle& st = ImGui::GetStyle();
++            const float base = st.FontSizeBase > 0.0f ? st.FontSizeBase : (font->LegacySize > 0.0f ? font->LegacySize : 13.0f);
++            const float size = ImGui::GetRoundedFontSize(base * st.FontScaleMain * st.FontScaleDpi);
++            if (!(size >= 1.0f && size <= 256.0f)) return skip("font size " + std::to_string(size) + " out of range");
++            // [review #2] Bound the work: count every codepoint of every font
++            // source in the atlas (a rebuild after a grow preloads all fonts),
++            // and estimate the texels this bake adds. Above either bound the
++            // extra bake is skipped (one warning, the old scaled text stays).
++            size_t codepoints = 0;
++            for (const ImFontConfig& src : atlas->Sources)
++                for (const ImWchar* r = src.GlyphRanges ? src.GlyphRanges : atlas->GetGlyphRangesDefault(); r[0]; r += 2)
++                    codepoints += r[1] >= r[0] ? static_cast<size_t>(r[1] - r[0]) + 1 : 0;
++            const double px = static_cast<double>(size) * density;
++            const double texels = static_cast<double>(codepoints) * px * px;
++            if (codepoints > m_cfg.max_bake_codepoints || texels > static_cast<double>(m_cfg.max_bake_texels))
++                return skip(std::to_string(codepoints) + " codepoints at " + std::to_string(static_cast<int>(px)) + " px exceed the bound");
++            ImFontBaked* baked = font->GetFontBaked(size, density); // density explicit: CurrentRasterizerDensity is set after the rebuild below
++            if (!baked) return skip("GetFontBaked returned nothing");
++            // Same preload ImGui does for legacy renderers at build time
++            // (ImFontAtlasBuildLegacyPreloadAllGlyphRanges), for this one size.
++            if (font->FallbackChar != 0) baked->FindGlyph(font->FallbackChar);
++            if (font->EllipsisChar != 0) baked->FindGlyph(font->EllipsisChar);
++            for (ImFontConfig* src : font->Sources)
++                for (const ImWchar* r = src->GlyphRanges ? src->GlyphRanges : atlas->GetGlyphRangesDefault(); r[0]; r += 2)
++                    for (unsigned int c = r[0]; c <= r[1] && c <= IM_UNICODE_CODEPOINT_MAX; ++c) baked->FindGlyph(static_cast<ImWchar>(c));
++            unsigned char* pixels{};
++            int w{}, h{};
++            // Rebuilt ("built" again) if the new glyphs grew the texture. Its legacy
++            // preload re-bakes LegacySize at the font's CURRENT density, which is
++            // still the previous one here (already baked: nothing extra) [review #3].
++            atlas->GetTexDataAsAlpha8(&pixels, &w, &h);
++            if (!pixels || w <= 0 || h <= 0) return skip("atlas pixels unavailable");
++            // In a legacy atlas the in-frame lookup uses the font's current
++            // density (ImGui only updates it for RendererHasTextures backends):
++            // from now on the default size hits the new bake exactly.
++            font->CurrentRasterizerDensity = density;
++            // A grown atlas leaves the old texture queued for destruction; it
++            // carries our old texture id, so ImGui would keep it forever
++            // (a legacy renderer never confirms a destroy). Clear the id: ImGui
++            // frees that CPU copy at the next NewFrame.
++            for (ImTextureData* t : atlas->TexList)
++                if (t != atlas->TexData && t->WantDestroyNextFrame) t->SetTexID(ImTextureID_Invalid);
++            m_atlas_alpha.assign(pixels, pixels + static_cast<size_t>(w) * h);
++            m_atlas_w = w;
++            m_atlas_h = h;
++            m_atlas_tex = 0; // upload the new atlas (frame() does it next)
++            m_backend.log(MBM_LOG_NORMAL, "[GUI] font baked size=" + std::to_string(static_cast<int>(size)) + " density=" + std::to_string(density) +
++                                                  " atlas=" + std::to_string(w) + "x" + std::to_string(h));
++            return true;
++        }
++
+         void revoke_mod(uint64_t token)
+         {
+             std::lock_guard g{m_mutex};
+@@ -569,6 +699,7 @@
+         bool m_failed{};
+         bool m_input_blocked{};  // a block was really applied to the current player [F1]
+         bool m_block_refused{};  // tried after this open/rebuild and it was unavailable [F1]
++        float m_font_density{};  // density the default font was last baked for (0 = not yet) [FU-DPI]
+         uint64_t m_next_id{};
+         Stats m_stats{};
+     };

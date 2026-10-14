@@ -1,0 +1,56 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/NativeLayoutBinding.cpp
++++ outputs/2026-10-07-l19-local-profile/units/NativeLayoutBinding.cpp
+@@ -1,4 +1,4 @@
+-#include <NativeLayoutBinding.hpp>
++#include "NativeLayoutBinding.hpp"
+ #include <NativeLayoutEngineIncludes.hpp>
+ #include <NativeLayoutWidths.hpp>
+ #include <array>
+@@ -28,6 +28,7 @@
+     std::unordered_map<File::StringType, uint32_t> widths; };
+ struct Prepared {
+     Identity identity;
++    std::vector<StagedLayoutFact> member_facts,virtual_facts;
+     std::map<std::string, MemberStage> members;
+     std::map<std::string, VirtualTarget> virtual_targets;
+     std::map<VirtualMap*, VirtualMap> virtual_maps;
+@@ -76,6 +77,8 @@
+         // tuple would invoke undefined behavior even though it fits storage.
+         if (entry.bitfield && entry.bitfield->length == 64)
+             throw std::invalid_argument("Native 64-bit bitfield proxy is unavailable");
++        const auto fact_name=std::string(schema->target)+"::"+schema->canonical;
++        uint32_t fact_width=0;
+         auto& stage = result->members.at(schema->target);
+         const auto key = Wide(schema->canonical);
+         if (!stage.offsets.emplace(key, static_cast<int32_t>(entry.offset)).second)
+@@ -84,14 +87,18 @@
+             const auto& bits = *entry.bitfield;
+             stage.bits.emplace(key, Unreal::BitfieldInfo{bits.position, bits.length, bits.storage_bytes});
+             stage.widths.emplace(key, bits.storage_bytes);
++            fact_width=bits.storage_bytes;
+         } else if (key != STR("UEP_TotalSize")) {
+             const auto width = GetAccessorWidth(schema->target, schema->canonical);
+             if (!width || *width == 0)
+                 throw std::invalid_argument("Native accessor width unavailable: " + entry.section + "::" + entry.key);
+             stage.widths.emplace(key, *width);
++            fact_width=*width;
+         }
++        result->member_facts.push_back({fact_name,entry.offset,fact_width});
+     }
+     for (const auto& entry : bundle.vtables) {
++        result->virtual_facts.push_back({entry.section+"::"+entry.key,entry.offset});
+         auto found = result->virtual_targets.find(entry.section);
+         if (found == result->virtual_targets.end()) throw std::invalid_argument("Unknown native vtable class: " + entry.section);
+         // Some wrappers inherit one physical map (for example viewport/UObject).
+@@ -161,6 +168,11 @@
+     if (Published || Staged) throw std::logic_error("Native layout bundle is already staged for this loaded lifetime");
+     CheckEmpty(*prepared);
+     Staged = std::move(prepared);
++}
++auto GetStagedNativeLayoutFacts() -> std::optional<StagedFacts> {
++    std::lock_guard lock{BindingMutex};
++    if (!Staged) return std::nullopt;
++    return StagedFacts{Staged->identity,Staged->member_facts,Staged->virtual_facts};
+ }
+ void SetResolvedNativeLayoutAxes(std::optional<bool> non_shipping, std::optional<bool> stats) {
+     std::lock_guard lock{BindingMutex};

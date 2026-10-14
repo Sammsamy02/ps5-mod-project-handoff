@@ -1,0 +1,374 @@
+--- a/worker-initializer-integration/staging/UnrealInitializer.cpp
++++ b/worker-no-exec-mode-gate/UnrealInitializer.gated.cpp
+@@ -69,6 +69,19 @@
+ #include <vector>
+ #endif
+ 
++// =====================================================================================
++// [NoExec] U-SWAP-5 compile-time no-exec-mode switch (worker-no-exec-mode-gate,
++// 2026-10-04; LAUNCH10-MATRIX U-SWAP-5/R5/R9). Preferred sourcing: the build
++// define (-DUE4SS_NO_EXEC_MODE=1) recorded in the run manifest; the in-file
++// fallback default 0 keeps THIS file's behavior identical to the frozen merged
++// unit until a controller arms it. Rationale for compile-time over a settings
++// key: SETTINGS-V3-DECISION section 1 trap 2 (missing/invalid key silently
++// keeps the true default = a typo would silently re-enable exec) and the
++// FATAL-row console-fragility rule; the v3 ini keys stay complementary.
++#ifndef UE4SS_NO_EXEC_MODE
++#define UE4SS_NO_EXEC_MODE 0
++#endif
++
+ namespace RC::Unreal::UnrealInitializer
+ {
+     namespace
+@@ -110,6 +123,51 @@
+     std::atomic_bool StaticStorage::FNameVerificationStatus{false};
+     std::atomic_bool StaticStorage::FNameVerificationStartedUnhooking{false};
+     std::atomic_bool StaticStorage::bUObjectArrayCacheRetired{false};
++
++    // =====================================================================================
++    // [NoExec] gate core. kNoExecMode=false (the staged default) constant-folds
++    // every gate site below away: the compiled unit is behavior-identical to the
++    // frozen merged initializer. kNoExecMode=true compiles OUT every exec-page
++    // READ/WRITE site in this unit (LAUNCH9-PREDICTION I6/I7/I8/I12 classes) and
++    // refuses each one LOUDLY; only the data-side seed path binds addresses.
++    // There is no runtime re-arm path: no ini key, Lua call, or probe file can
++    // make a no-exec build touch an exec page.
++    //
++    // Refusal policy (never silently half-armed):
++    //  - exec features whose absence would strand a caller get a named
++    //    "[NoExec] refused:" line that also names the consequence
++    //    (game-thread identity, ExecuteInGameThread drain, QueryHarness tick
++    //    dispatch, ProcessEvent cross-fallback, RegisterLoadMapPreHook);
++    //  - address sources that are ONLY exec-class (legacy ps_scan / Lua AOB;
++    //    the FName ctor detour verifier) THROW: with no seeds there is no
++    //    data-side fallback, so startup refuses instead of degrading to nothing;
++    //  - one post-PostInitialize summary line makes the refused-site count
++    //    machine-checkable by the launch log parser (matrix box-2/3 consumers).
++    // =====================================================================================
++    namespace NoExecGate
++    {
++        static constexpr bool kNoExecMode = UE4SS_NO_EXEC_MODE != 0;
++
++        // All refusals run on the serialized startup thread (ScanGame ->
++        // Initialize -> PostInitialize are single-threaded init, I1-I13);
++        // no atomics needed.
++        [[maybe_unused]] static unsigned refused_site_count{0};
++
++        // One named line per refused exec site. write_class=true for detour
++        // installs (FLAG-1: disasm read + protect + jmp write, x64Detour.cpp
++        // :322-397), false for vtable jmp-probe resolves (FLAG-2,
++        // UnrealVirtualBaseVC.hpp:115,133 -> ASMHelper.cpp:57-69, no PROSPERO
++        // branch) and Zydis derivations (FLAG-3).
++        [[maybe_unused]] static auto refuse_exec_site(const CharType* site, bool write_class) -> void
++        {
++            ++refused_site_count;
++            Output::send<LogLevel::Warning>(
++                STR("[NoExec] refused: {} (exec-page {} - {} class); not armed this launch\n"),
++                site,
++                write_class ? STR("write") : STR("read"),
++                write_class ? STR("FLAG-1") : STR("FLAG-2/FLAG-3"));
++        }
++    }
+ 
+     auto IsInitialized() -> std::atomic_bool&
+     {
+@@ -223,7 +281,7 @@
+ #ifdef __PROSPERO__
+     // Per-tick entry for RC::Platform::QueryHarness: noexcept, no
+     // allocation, no I/O; all refusals are counted internally.
+-    static auto QueryHarnessEngineTickDispatch([[maybe_unused]] Hook::TCallbackIterationData<void>& CallbackIterationData, [[maybe_unused]] UEngine*, [[maybe_unused]] float, [[maybe_unused]] bool) -> void
++    [[maybe_unused]] static auto QueryHarnessEngineTickDispatch([[maybe_unused]] Hook::TCallbackIterationData<void>& CallbackIterationData, [[maybe_unused]] UEngine*, [[maybe_unused]] float, [[maybe_unused]] bool) -> void
+     {
+         RC::Platform::QueryHarness::Global().OnEngineTickDispatch();
+     }
+@@ -476,6 +534,21 @@
+         Hook::StartCallbackGarbageCollector();
+     #endif
+ 
++        if constexpr (NoExecGate::kNoExecMode)
++        {
++            // [NoExec] I12: this registration arms a PLH detour (disasm read +
++            // protect + jmp WRITE) at the slot-4 seed constant — code whose
++            // identity is UNVERIFIED by design (data-side validation for slot 4
++            // does not exist), the one site where even a writability pass would
++            // not make it safe (LAUNCH9-PREDICTION I12 "wrong-constant detour"
++            // hazard). Compiled out; the slot-4 address stays bound (data-side,
++            // inert). Post-init constructions reach the searcher pools only via
++            // the GUObjectArray create/delete listeners added above.
++            NoExecGate::refuse_exec_site(STR("StaticConstructObject searcher hook (detour at the identity-unverified slot-4 constant)"), true);
++            Output::send(STR("[NoExec] consequence: post-init constructions join searcher pools via GUObjectArray listeners only\n"));
++        }
++        else
++        {
+         Output::send(STR("Hooking StaticConstructObject for searcher pools\n"));
+         Hook::RegisterStaticConstructObjectPostCallback([](auto& data, auto& params) {
+             // Self removal is the only safe way out of a callback, so drop out on the first construction after retirement.
+@@ -505,6 +578,7 @@
+                 }
+             }
+         }, {false, true, STR("UE4SS"), STR("ObjectSearcherPoolHook")});
++        }
+ 
+         if (Version::IsAtLeast(4, 17))
+         {
+@@ -906,6 +980,20 @@
+                 (slot.present ? present_slots : missing_slots) += std::string{slot.name} + " ";
+             }
+             throw std::runtime_error{fmt::format("[Seeds] Required-slot seed table incomplete: present [{}] missing [{}]. Arming requires all four REQUIRED slots (SHAPE A safe default, LAUNCH9-PREDICTION): a partial table would walk into the LoadMap vtable-walk text read (igf6 crash class) before the honest PostInitialize GMalloc throw. Derive the missing seeds against the sha-pinned image (SEED-TABLE-FORMAT.md) and rebuild. Startup blocked; nothing bound, nothing exec-side touched.", present_slots, missing_slots)};
++        }
++        // [NoExec] Gate precondition. The partial-table throw above kept its
++        // unchanged [Seeds] signature (matrix box-2 D1 lookup, row R8); reaching
++        // here with !bSeedsArmed means the table is ABSENT, i.e. the legacy path
++        // would run ps_scan over text — an exec-page read class this build
++        // forbids. With no data-side fallback available the gate THROWS (never a
++        // silent degrade-to-nothing).
++        if constexpr (NoExecGate::kNoExecMode)
++        {
++            if (!bSeedsArmed)
++            {
++                throw std::runtime_error{"[NoExec] REFUSED: no-exec mode forbids the legacy exec-page scan path (ps_scan / Lua AOB); a complete REQUIRED-slot seed table is the only data-side address source. Derive and ship the seed table (SEED-TABLE-FORMAT.md) or build without UE4SS_NO_EXEC_MODE. Startup blocked; nothing bound, nothing exec-side touched."};
++            }
++            Output::send(STR("[NoExec] mode ON (UE4SS_NO_EXEC_MODE=1): exec-page reads/writes compiled out; the data-side seed path owns every binding\n"));
+         }
+         if (bSeedsArmed)
+         {
+@@ -1300,6 +1388,16 @@
+ 
+     auto VerifyFNameConstructor(void* AddressOverride) -> void
+     {
++        if constexpr (NoExecGate::kNoExecMode)
++        {
++            // [NoExec] The detour-based verifier is code READ+WRITE (FLAG-1,
++            // FNAME-VERDICT section 2). Unreachable when seeds are armed (the
++            // call site in Initialize() checks bSeedBoundFNameCtor) and the
++            // seedless path already refused at the arming guard; kept as a named
++            // invariant so a future call-site change cannot silently arm a
++            // detour in a no-exec build.
++            throw std::runtime_error{"[NoExec] REFUSED: FName constructor detour verification requires a code detour (FLAG-1); the seed-bound behavioral ByteProperty probe is the only legal ctor source in no-exec mode."};
++        }
+         if (StaticStorage::GlobalConfig.bIsForcedPreScan)
+         {
+             // We aren't able to verify the FName constructor during a pre-scan because that scan happens while the game thread is locked.
+@@ -1689,15 +1787,41 @@
+ 
+         if (UnrealConfig.bHookLoadMap)
+         {
++            if constexpr (NoExecGate::kNoExecMode)
++            {
++                // [NoExec] I6: the OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL walk
++                // ends in a jmp-probe exec-page READ (UnrealVirtualBaseVC.hpp
++                // :115,:133 -> ASMHelper.cpp:57-69, no PROSPERO branch) — the
++                // igf6 crash class. The resolve itself is the read; skipping the
++                // whole block leaves LoadMapInternal unbound and nothing touches
++                // the text page.
++                NoExecGate::refuse_exec_site(STR("GameEngine::LoadMap virtual resolve (vtable jmp-probe read)"), false);
++                Output::send(STR("[NoExec] consequence: RegisterLoadMapPreHook cannot arm this launch (Lua callers pcall-guard it)\n"));
++            }
++            else
++            {
+             Output::send(STR("Finding GameEngine::LoadMap\n"));
+             if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UEngine, LoadMap, GameEngine); func_address)
+             {
+                 Output::send(STR("GameEngine::LoadMap address {}\n"), func_address);
+                 UEngine::LoadMapInternal.assign_address(func_address);
+             }
++            }
+         }
+         if (UnrealConfig.bHookEngineTick)
+         {
++            if constexpr (NoExecGate::kNoExecMode)
++            {
++                // [NoExec] I7: the Tick vtable walk is a FLAG-2 exec-page READ
++                // and BOTH RegisterEngineTickPreCallback installs are FLAG-1
++                // writes (PLH x64Detour: 100-byte disasm read + RWX protect +
++                // jmp write). The whole block is compiled out: no walk, no
++                // TickInternal assign, no detour, no vtable display walk.
++                NoExecGate::refuse_exec_site(STR("GameEngine::Tick hook (vtable jmp-probe read + x64Detour install, initializer and QueryHarness callbacks)"), true);
++                Output::send(STR("[NoExec] consequence: game-thread identity never publishes (IsInGameThread/GetGameThreadId unavailable), ExecuteInGameThread closures never drain, QueryHarness tick dispatch never fires\n"));
++            }
++            else
++            {
+             Output::send(STR("Finding GameEngine::Tick\n"));
+             auto vtable_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UEngine, Tick, GameEngine);
+             auto scan_address = UEngine::TickInternal.get_function_address();
+@@ -1803,78 +1927,144 @@
+ #else
+             Hook::RegisterEngineTickPreCallback(HookedEngineTick, {true, false, STR("UE4SS"), STR("GameThreadInitializer")});
+ #endif
++            }
+         }
+         if (UnrealConfig.bHookInitGameState)
+         {
++            if constexpr (NoExecGate::kNoExecMode)
++            {
++                // [NoExec] I8-class: vtable jmp-probe exec-page READ.
++                NoExecGate::refuse_exec_site(STR("AGameModeBase::InitGameState virtual resolve (vtable jmp-probe read)"), false);
++            }
++            else
++            {
+             Output::send(STR("Finding GameModeBase::InitGameState\n"));
+             if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(AGameModeBase, InitGameState, GameMode); func_address)
+             {
+                 Output::send(STR("GameModeBase::InitGameState address {}\n"), func_address);
+                 AGameModeBase::InitGameStateInternal.assign_address(func_address);
+             }
++            }
+         }
+         if (UnrealConfig.bHookBeginPlay)
+         {
++            if constexpr (NoExecGate::kNoExecMode)
++            {
++                // [NoExec] I8-class: vtable jmp-probe exec-page READ.
++                NoExecGate::refuse_exec_site(STR("AActor::BeginPlay virtual resolve (vtable jmp-probe read)"), false);
++            }
++            else
++            {
+             Output::send(STR("Finding AActor::BeginPlay\n"));
+             if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(AActor, BeginPlay, Actor); func_address)
+             {
+                 Output::send(STR("AActor::BeginPlay address {}\n"), func_address);
+                 AActor::BeginPlayInternal.assign_address(func_address);
+             }
++            }
+         }
+         if (UnrealConfig.bHookEndPlay)
+         {
++            if constexpr (NoExecGate::kNoExecMode)
++            {
++                // [NoExec] I8-class: vtable jmp-probe exec-page READ.
++                NoExecGate::refuse_exec_site(STR("AActor::EndPlay virtual resolve (vtable jmp-probe read)"), false);
++            }
++            else
++            {
+             Output::send(STR("Finding AActor::EndPlay\n"));
+             if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(AActor, EndPlay, Actor); func_address)
+             {
+                 Output::send(STR("AActor::EndPlay address {}\n"), func_address);
+                 AActor::EndPlayInternal.assign_address(func_address);
+             }
++            }
+         }
+         if (UnrealConfig.bHookAActorTick)
+         {
++            if constexpr (NoExecGate::kNoExecMode)
++            {
++                // [NoExec] I8-class: vtable jmp-probe exec-page READ.
++                NoExecGate::refuse_exec_site(STR("AActor::Tick virtual resolve (vtable jmp-probe read)"), false);
++            }
++            else
++            {
+             Output::send(STR("Finding AActor::Tick\n"));
+             if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(AActor, Tick, Actor); func_address)
+             {
+                 Output::send(STR("AActor::Tick address {}\n"), func_address);
+                 AActor::TickInternal.assign_address(func_address);
+             }
++            }
+         }
+         if (UnrealConfig.bHookGameViewportClientTick)
+         {
++            if constexpr (NoExecGate::kNoExecMode)
++            {
++                // [NoExec] I8-class: vtable jmp-probe exec-page READ.
++                NoExecGate::refuse_exec_site(STR("UGameViewportClient::Tick virtual resolve (vtable jmp-probe read)"), false);
++            }
++            else
++            {
+             Output::send(STR("Finding GameViewportClient::Tick\n"));
+             if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UGameViewportClient, Tick, GameViewportClient); func_address)
+             {
+                 Output::send(STR("GameViewportClient::Tick address {}\n"), func_address);
+                 UGameViewportClient::TickInternal.assign_address(func_address);
+             }
++            }
+         }
+         if (UnrealConfig.bHookUObjectProcessEvent)
+         {
++            if constexpr (NoExecGate::kNoExecMode)
++            {
++                // [NoExec] I8-class: vtable jmp-probe exec-page READ.
++                NoExecGate::refuse_exec_site(STR("UObject::ProcessEvent virtual resolve (vtable jmp-probe read)"), false);
++                Output::send(STR("[NoExec] consequence: the ExecuteInGameThread ProcessEvent-mode cross-fallback cannot arm\n"));
++            }
++            else
++            {
+             Output::send(STR("Finding ProcessEvent\n"));
+             if (auto func_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UObject, ProcessEvent, Object); func_address)
+             {
+                 Output::send(STR("ProcessEvent address {}\n"), func_address);
+                 UObject::ProcessEventInternal.assign_address(func_address);
+             }
++            }
+         }
+         if (UnrealConfig.bHookProcessConsoleExec)
+         {
++            if constexpr (NoExecGate::kNoExecMode)
++            {
++                // [NoExec] I8-class: vtable jmp-probe exec-page READ.
++                NoExecGate::refuse_exec_site(STR("UObject::ProcessConsoleExec virtual resolve (vtable jmp-probe read)"), false);
++            }
++            else
++            {
+             Output::send(STR("Finding ProcessConsoleExec\n"));
+             if (auto func_address = GET_ADDRESS_OF_UNREAL_VIRTUAL(UObject, ProcessConsoleExec, Object); func_address)
+             {
+                 Output::send(STR("ProcessConsoleExec address {}\n"), func_address);
+                 UObject::ProcessConsoleExecInternal.assign_address(func_address);
+             }
++            }
+         }
+         if (UnrealConfig.bHookUStructLink)
+         {
++            if constexpr (NoExecGate::kNoExecMode)
++            {
++                // [NoExec] I8-class: vtable jmp-probe exec-page READ.
++                NoExecGate::refuse_exec_site(STR("UStruct::Link virtual resolve (vtable jmp-probe read)"), false);
++            }
++            else
++            {
+             Output::send(STR("Finding UStruct::Link\n"));
+             if (auto func_address = GET_ADDRESS_OF_UNREAL_VIRTUAL(UStruct, Link, Struct); func_address)
+             {
+                 Output::send(STR("UStruct::Link address {}\n"), func_address);
+                 UStruct::LinkInternal.assign_address(func_address);
+             }
++            }
+         }
+ 
+         Output::send(STR("Initializing global FName variables\n"));
+@@ -1911,8 +2101,19 @@
+         //   -> the condition below. The ini keys decision is owned by
+         //      worker-settings-v3-package; when its package sets the keys,
+         //      this derivation and both 16-byte probes are skipped.
+-        if (UnrealConfig.bHookProcessInternal || UnrealConfig.bHookProcessLocalScriptFunction)
++        if constexpr (NoExecGate::kNoExecMode)
+         {
++            if (UnrealConfig.bHookProcessInternal || UnrealConfig.bHookProcessLocalScriptFunction)
++            {
++                // [NoExec] FLAG-3: GetFuncPtr + jmp-probe + the 164-byte Zydis
++                // decode are code reads. Settings v3 already ships both keys = 0
++                // (SETTINGS-V3-DECISION); this gate makes the skip unconditional
++                // regardless of the ini and names the refusal if it still asked.
++                NoExecGate::refuse_exec_site(STR("ProcessInternal/ProcessLocalScriptFunction derivation (GetFuncPtr jmp-probe + Zydis code read)"), false);
++            }
++        }
++        else if (UnrealConfig.bHookProcessInternal || UnrealConfig.bHookProcessLocalScriptFunction)
++        {
+             Output::send(STR("Finding ProcessInternal\n"));
+             auto ExecuteUbergraphFunction = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, STR("/Script/CoreUObject.Object:ExecuteUbergraph"));
+             if (!ExecuteUbergraphFunction)
+@@ -1988,6 +2189,14 @@
+         }
+ #endif
+         PostInitialize(UnrealConfig);
++        if constexpr (NoExecGate::kNoExecMode)
++        {
++            // [NoExec] Machine-checkable end-of-startup marker for the launch
++            // log parser (matrix section 4 boxes 2-3). Only reached by a healthy
++            // degraded run; any guard throw above surfaces as the usual loud
++            // failed(1,<msg>) ack instead.
++            Output::send(STR("[NoExec] summary: mode=on exec_sites_refused={} engine_ready_data_side=1\n"), NoExecGate::refused_site_count);
++        }
+     }
+ }
+ 

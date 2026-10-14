@@ -1,0 +1,41 @@
+{
+  "worker": "worker-1-live-supplier",
+  "slot": "2 of ZCode team (Codex handoff 2026-10-04)",
+  "task": "Typed retained live-module facts supplier contract + real implementation on pinned PS5 SDK APIs only",
+  "created": "2026-10-04",
+  "owned_output_files": [
+    "CLAIM.json",
+    "src/live_module_facts.hpp",
+    "src/live_module_os_ops.hpp",
+    "src/sce_module_abi.hpp",
+    "src/live_module_facts.cpp",
+    "src/live_module_os_ops_sce.cpp",
+    "host_tests/test_live_supplier_host.cpp",
+    "verify.py",
+    "REPORT.md",
+    "build-receipts/ (generated verification outputs)"
+  ],
+  "inputs_depend_on_read_only": [
+    "outputs/ZCODE-HANDOFF-2026-10-04/START_HERE.txt",
+    "outputs/ZCODE-HANDOFF-2026-10-04/RUNTIME_MAP.txt",
+    "outputs/ZCODE-HANDOFF-2026-10-04/NEXT_ACTIONS.txt (item 2)",
+    "outputs/2026-10-04-tick-file-owner/README.md",
+    "outputs/ps5-mod-bridge/native-module-metadata/{README.md,module_metadata.h,prosperodev_abi.h,upstream/libkernel.h}",
+    ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/include/NativeLoaderContext.hpp",
+    ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/include/OwnedMappedScanSource.hpp",
+    ".superpowers/native-dependency-spike/native-module-list-abi-observation-1/REPORT.md",
+    "outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/ (headers + libkernel.so exports, read-only)",
+    "outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/ (pinned LLVM tools)"
+  ],
+  "writes_outside_output_area": [],
+  "proposed_interface": {
+    "idea": "Host-injectable OS ops table + generic retained-supplier core. The SCE ops TU binds ONLY APIs whose exact signature is pinned in this workspace (dlopen/dlclose/RTLD_NOLOAD from SDK dlfcn.h; _DYNAMIC -> DT_DEBUG -> r_debug.r_map link-map walk from sys/elf64.h + sys/elf_common.h + sys/link_elf.h, because dlinfo is declared but exported by NO pinned library; sysctl KERN_PROC_PATHNAME/KERN_PROC_VMMAP from sys/sysctl.h + sys/user.h; getpid; prosperodev-pinned sceKernelGetModuleInfo + 352-byte SceKernelModuleInfo ABI; sceKernelGetModuleList declared but enumeration stays gated by the pinned unresolved byte-vs-element ABI observation). Image identity anchor = link-map walk + profile-supplied name matcher; retention = dlopen(name, RTLD_NOLOAD) loader reference released by dlclose; authoritative segments = sceKernelGetModuleInfo on a bridged handle. Exports with no pinned signature (sceKernelGetExecutableModuleHandle, FromAddr, IsModuleLoaded, GetProcessName, sceKernelVirtualQuery struct, get_module_info_list) are NOT called; they are optional ops slots plus explicit unresolved facts with designed target experiments in REPORT.md.",
+    "integration_points": [
+      "Controller converts LiveModuleFactsSnapshot into RC::Platform::NativeLoaderFacts (game_executable_path, OwnedMappedImageFacts.image_base/text_base, ModuleInput) per .superpowers/.../NativeLoaderContext.hpp; supplier exposes typed fields but never fabricates paths/offsets it did not observe."
+    ]
+  },
+  "toolchain": {
+    "native_compile": "SDK bin/prospero-clang++ (v0.43 pinned), -fPIC -c relocatable objects only; no link, no PRX, no target contact",
+    "host_test": "host clang++ (Apple clang) running injected-fake ops tests"
+  }
+}

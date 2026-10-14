@@ -1,0 +1,60 @@
+{
+  "worker": "worker-stray-root-hardening",
+  "date": "2026-10-05",
+  "task": "Deliver a NEW VERSIONED hardened root resolver (find_root_v2) replacing the frozen package_prx.py::_find_root() marker-walk contract; unit-test it against the stray-root bug class; write the adoption note and a PROPOSED ledger addendum. The frozen packaging file stays byte-identical.",
+  "mode": "LOCAL-ONLY. Writes confined to outputs/2026-10-04-zcode-team/worker-stray-root-hardening/. Everywhere else read-only. Frozen file NOT modified (sha verified unchanged before and after all work).",
+  "delivers": {
+    "find_root_v2": "outputs/2026-10-04-zcode-team/worker-stray-root-hardening/find_root_v2.py",
+    "v2_sha256_at_receipt": "5590f8bdc87593c3500efffe71e1b57a1575bcef5caf3a74d030a9bd26425bc2",
+    "host_tests": "outputs/2026-10-04-zcode-team/worker-stray-root-hardening/host-test/ (run_host_tests.py, PASS-receipt.json, console.log)",
+    "adoption_note": "outputs/2026-10-04-zcode-team/worker-stray-root-hardening/ADOPTION.md",
+    "ledger_addendum": "outputs/2026-10-04-zcode-team/worker-stray-root-hardening/LEDGER-ADDENDUM.md (PROPOSED TEXT ONLY — not appended; controller appends verbatim if accepted)"
+  },
+  "v2_design": {
+    "strong_marker": ".superpowers/native-observations (dir) AND >=1 corroborating marker: .superpowers/native-observations/transport-experiments-progress.json (file) | README-RETURN.md (file) | .superpowers/sdd (dir)",
+    "marker_enumeration_basis": "true root .superpowers/ contents enumerated 2026-10-05: native-dependency-spike, native-observations (+ledger file), native-read-at-review-scratch, native-read-at-spike, native-sdk-build-check, sdd, plus root README-RETURN.md; the 05:42 stray had ONLY native-dependency-spike",
+    "walk_bound": "start + up to 8 ancestors (frozen checked 6 nodes); strictly dominates frozen reach",
+    "ambiguity": "FAILS LOUD (RootResolutionError, a RuntimeError subclass) listing candidates: multiple strong candidates; any weak-marker-only match (bare .superpowers, or native-observations without corroboration) on the walked path; --root override honored (verified; --allow-weak-override as explicit escape hatch)",
+    "contract_match": "no-arg call -> resolved Path; failure raises RuntimeError (subclass); default start = loading file's dir (frozen BASE mechanism); exact frozen-parity call documented: find_root(start=PKG_FIXED.parent)",
+    "policy_knob": "weak_markers=fail|warn|ignore (default fail — the stray condition must not resolve silently)"
+  },
+  "host_test_results": {
+    "status": "PASS",
+    "passed": 9,
+    "failed": 0,
+    "cases": [
+      "T1 clean tree resolves (root/team/worker)",
+      "T2 bare .superpowers decoy between team and root (the 05:42 stray shape) fails LOUD",
+      "T3 native-observations-without-corroboration decoy fails LOUD",
+      "T4 deep nesting beyond 6 ancestors (7 and 8 hops) still resolves",
+      "T5 --root override rescues ambiguity; bad override rejected; CLI --root honored (subprocess)",
+      "T6 multiple strong candidates fail LOUD",
+      "T7 beyond 8 ancestors fails LOUD (bounded walk)",
+      "T8 frozen drop-in contract (RuntimeError subclass, resolved Path, warn policy, bad policy rejected)",
+      "T9 REAL tree: v2(start=frozen dir) == frozen module ROOT == workspace root; quarantined stray name classifies as None (inert); frozen sha e6fbe6c5... unchanged before/after"
+    ],
+    "bug_found_and_fixed_during_testing": "initial _marker_missing() inverted the dir-kind check (returned is_dir() instead of not is_dir()), awarding phantom '.superpowers/sdd' corroboration to any .superpowers dir — caught by T3, fixed, re-run 9/9 PASS. T3 exists precisely to catch this class."
+  },
+  "frozen_file_integrity": {
+    "path": "outputs/2026-10-04-zcode-team/worker-prx-link-gaps/package_prx.py",
+    "sha256_expected": "e6fbe6c5011b498e0c26ee88bdc6c84aacab204b6ccad5696a78353afef5c313",
+    "sha256_after_all_work": "e6fbe6c5011b498e0c26ee88bdc6c84aacab204b6ccad5696a78353afef5c313",
+    "modified": false
+  },
+  "adoption_scope": {
+    "drivers_loading_frozen_file": 12,
+    "patterns_found": {
+      "P1_checksha_spec": "9 drivers: PKG_FIXED + PKG_FIXED_SHA + check_sha(...) + importlib spec_from_file_location('package_prx_fixed', PKG_FIXED) — worker-comp6-driver, worker-comp6-drybuild, worker-d1-determinism-diagnosis, worker-launch11-vtable-prebuild, worker-launch11-dry-compose, worker-launch10-prebuild, worker-launch10-walkguard-prep, worker-launch10-r3-armed, worker-composition-5-rebuild",
+      "P2_fixed_assert_spec": "3 older drivers: FIXED + EXPECTED_SHA assert + same spec pattern — worker-composition-3/package_composition3.py, worker-composition-4-fix/package_composition4.py, worker-composition-5-minimal/build_comp5_minimal.py",
+      "P3_walkguard_E4": "walkguard driver additionally re-points m.ROOT/m.SPIKE/m.PIN in memory (WGP E4) — becomes verified no-op post-quarantine; keep armed",
+      "P4_r3_E3": "r3-armed driver re-anchors via virtual m.__file__ (L10R3 E3) with hard-pinned ROOT — remains valid; v2 guard complements it"
+    },
+    "exact_one_line_import_and_guard": "see ADOPTION.md (per-pattern lines using the drivers' existing ROOT/TEAM/PKG_FIXED names)",
+    "gate_check_scripts": "worker-composition5-gate/gate_check_composition5.py and worker-gate-evolution/gate_check_composition5_v2.py only MENTION package_prx.py in comments; they do NOT load it — no change needed"
+  },
+  "honesty": {
+    "verified": "frozen _find_root read at lines 71-86; all 12 loading drivers grepped for their exact load lines; ledger entry shape read from transport-experiments-progress.json; walkguard run-a build-receipt utc 2026-10-05T07:00:29.111910 with 12 gaps; quarantine dir present and inert under exact-name matching; v2 tested 9/9 incl. real-tree equivalence against the imported frozen module",
+    "not_done": "no driver was modified (adoption is a controller/next-run decision — drivers are other workers' deliverables); ledger NOT appended (proposed text only); no engine/console/provider contact; no deletion or rename anywhere",
+    "limits": "v2 is host-tested only; no packaging run has executed with v2 adopted yet; the corroborating-marker set is enumerated from today's tree — if the true root's markers are restructured (ledger renamed, README-RETURN.md moved), v2 must be re-pinned; weak_markers=warn/ignore policies exist for operator convenience but default fail is the safe path"
+  }
+}

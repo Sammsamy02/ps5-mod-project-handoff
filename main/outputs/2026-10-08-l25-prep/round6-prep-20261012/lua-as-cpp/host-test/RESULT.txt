@@ -1,0 +1,58 @@
+lua-as-cpp host test — 2026-10-12T12:23:36Z — Mac-only (Darwin arm64; Apple clang version 17.0.0 (clang-1700.6.4.2))
+C   build: rc=0 checks=17  (ldo.o imports: _longjmp _setjmp )
+C++ build: rc=0 checks=17  (ldo.o imports: ___cxa_throw ___gxx_personality_v0 )
+lapi.o exported lua_* names: C build 81 plain C names; C++ build 81 C++-mangled names
+--- C build ---
+Lua build under test: C (lua_error = longjmp)
+  PASS  B2 NEW wrapper: every caught exception object is destroyed (both builds)
+  PASS  B2 NEW wrapper: real exception text kept (both builds)
+       OLD wrapper: ctor=1000 dtor=0 (never released: 1000)
+  PASS  B2 OLD wrapper: leaks 1000/1000 with Lua as C (overnight defect reproduced)
+  PASS  B2: '%s' in a message is passed literally (both builds)
+  PASS  B2: formatting failure raises the raw text (both builds)
+       frames: guard ctor=1000 dtor=0; heap blocks leaked=2000 (string+vector per error); 0.73 us per error
+  PASS  error text reaches lua_pcall (both builds)
+  PASS  C build: destructors skipped (0/1000 run, 2000 blocks leaked) = the PS5 memory-growth mechanism
+       caller-frame temporary: blocks leaked=1000
+  PASS  C build: caller-frame std::string leaks once per error even with the B2 wrapper
+  PASS  C build: a std::lock_guard held when the error is raised stays locked forever
+  PASS  Lua's global lock balanced after 4,000+ errors (both builds)
+  PASS  TRY catch(std::exception&) lets a Lua error pass unchanged (both builds)
+  PASS  Lua lock balanced after the TRY case (both builds)
+  PASS  catch(...) + rethrow keeps the Lua error and the lock intact (both builds)
+  PASS  C build: catch(...) cleanup code never runs for Lua errors
+       bare throw child: exception escaped past lua_pcall
+  PASS  C build: a non-std exception escaping a binding flies past lua_pcall (Lua state left corrupt)
+       noexcept child: exited normally
+  PASS  C build: a Lua error silently jumps over a noexcept function
+       swallow: caught=0 pcall status=2 message='bad argument #1 to '?' (number expected, got string)' lock depth=0 other-thread-can-lock=1
+  PASS  C build: catch(...) never sees Lua errors
+PASS lua-as-cpp host test, C build (0 failures)
+--- C++ build ---
+Lua build under test: C++ (lua_error = throw)
+  PASS  B2 NEW wrapper: every caught exception object is destroyed (both builds)
+  PASS  B2 NEW wrapper: real exception text kept (both builds)
+       OLD wrapper: ctor=1000 dtor=1000 (never released: 0)
+  PASS  B2 OLD wrapper: no exception object leaks once Lua is C++
+  PASS  B2: '%s' in a message is passed literally (both builds)
+  PASS  B2: formatting failure raises the raw text (both builds)
+       frames: guard ctor=1000 dtor=1000; heap blocks leaked=0 (string+vector per error); 6.87 us per error
+  PASS  error text reaches lua_pcall (both builds)
+  PASS  C++ build: destructors run in every frame a Lua error crosses (1000/1000, 0 blocks leaked)
+       caller-frame temporary: blocks leaked=0
+  PASS  C++ build: caller-frame std::string freed (B2 alone cannot fix this one)
+  PASS  C++ build: a std::lock_guard held when the error is raised is released
+  PASS  Lua's global lock balanced after 4,000+ errors (both builds)
+  PASS  TRY catch(std::exception&) lets a Lua error pass unchanged (both builds)
+  PASS  Lua lock balanced after the TRY case (both builds)
+  PASS  catch(...) + rethrow keeps the Lua error and the lock intact (both builds)
+  PASS  C++ build: catch(...) cleanup code now runs for Lua errors
+luauser stub: lua_unlock of a lock this thread does not hold -> abort()
+       bare throw child: SIGABRT
+  PASS  C++ build HAZARD: a non-std exception escaping a binding (no TRY) aborts: Lua's catch(...) takes it, then lua_pcall unlocks a lock nobody re-took (platform_locks.c abort())
+libc++abi: terminating due to uncaught exception of type lua_longjmp*
+       noexcept child: killed by SIGABRT (std::terminate)
+  PASS  C++ build HAZARD: a Lua error crossing a noexcept function calls std::terminate
+       swallow: caught=1 pcall status=2 message='<non-string error object>' lock depth=1 other-thread-can-lock=0
+  PASS  C++ build HAZARD: catch(...) swallowing a Lua error leaves Lua's lock held (other threads would block)
+PASS lua-as-cpp host test, C++ build (0 failures)

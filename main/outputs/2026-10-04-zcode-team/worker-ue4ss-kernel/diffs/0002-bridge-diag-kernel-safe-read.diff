@@ -1,0 +1,164 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-build/final-units/runtime_start_bridge_r14_diag_spanpub.cpp	2026-10-06 00:23:23
++++ patched/runtime_start_bridge_r15_ksrv.cpp	2026-10-06 14:54:03
+@@ -157,6 +157,17 @@
+ #include <fcntl.h> // v5.2 worker-copyin-unit: open() flag constants (header-only)
+ #include <unistd.h>
+ #include <errno.h>
++// [kernel services r15] (worker-ue4ss-kernel, 2026-10-06): kekcall nr=7
++// safe_read facade (ABI: worker-kernel-saferead safe_read_client.h). ENOSYS
++// (-78, old resident kstuff) latches in the facade and every kernel-first
++// path below falls through to the v5.3 Sony-native copyin body byte-for-byte
++// — the staged deployment order (UE4SS first, kernel rebuild at next boot)
++// is safe by construction. Same-dir quoted include; ships with the unit's
++// replace-receipt set.
++#include "KekcallServices.hpp"
++#ifdef __PROSPERO__
++#include "KekcallConsoleShim.hpp"
++#endif
+ 
+ // Bootstrap-unit channel (diagnostic.c, linked into the same PRX): used for
+ // post-failure capability visibility; no new imports (same TU set).
+@@ -1005,6 +1016,80 @@
+ {
+     static constexpr uint64_t kPage = 0x1000;
+     static constexpr uint64_t kMaxProbeBytes = 0x1000000; // 16 MiB class budget cap
++    // [kernel services r15] KERNEL-FIRST PATH (assignment item 2a/2d): when
++    // the rebuilt kstuff module (kekcall nr=7) is resident, the owned read is
++    // a DIRECT page-table-validated kernel read — no sink file, no write
++    // route, no read-back. The classification, telemetry tags and the R-4
++    // capture-slot law are preserved exactly (code 1/0/2, first-page capture
++    // registered on success). ENOSYS/NOCHANNEL (old module / no gadget)
++    // fall through to the v5.3 Sony-native body below UNCHANGED — that body
++    // then emits its own pool_copyin_probe_* tags, so exactly one tag set is
++    // produced per call on every boot class.
++    if (len != 0 && len <= kMaxProbeBytes && ksrv::maybe_available()) {
++        // FULL-RANGE law (the copyin probe's write-return accounting
++        // equivalent): every chunk of [addr, addr+len) is read through
++        // page-table-validated kekcalls before Readable is claimed —
++        // authorization AND execution over the whole range. Only the first
++        // page is RETAINED (the R-4 capture law); later chunks land in the
++        // same 64 KiB scratch and are simply accounted.
++        static uint8_t kchunk_buf[0x10000]; // 64 KiB chunk scratch (KSR_MAX_LEN)
++        const uint64_t cap_len64 = (len < kPage) ? len : kPage;
++        uint64_t done = 0;
++        int64_t rc = 0;
++        while (done < len) {
++            const uint64_t chunk = (len - done) < 0x10000ull ? (len - done) : 0x10000ull;
++            rc = ksrv::safe_read(addr + done, kchunk_buf, chunk);
++            if (rc < 0 || static_cast<uint64_t>(rc) != chunk) { break; }
++            done += chunk;
++        }
++        const bool full = (done == len);
++        const ksrv::GapClass gcls = full ? ksrv::GapClass::Readable
++                                         : ksrv::gap_class_from_read_rc(rc);
++        if (gcls == ksrv::GapClass::Readable) {
++            const uint32_t slot = g_write_copyin_capture_next;
++            for (uint32_t i = 0; i < static_cast<uint32_t>(cap_len64); ++i) {
++                g_write_copyin_capture[slot][i] = kchunk_buf[i];
++            }
++            g_write_copyin_capture_addr[slot] = addr;
++            g_write_copyin_capture_len[slot] = static_cast<uint32_t>(cap_len64);
++            g_write_copyin_capture_valid[slot] = true;
++            g_write_copyin_capture_next = (g_write_copyin_capture_next + 1u) % 3u;
++            g_last_probe_telemetry = BridgeProbeTelemetry{1u, static_cast<uint32_t>(cap_len64), 0u,
++                                                           static_cast<uint32_t>(len)};
++            ::diagnostic_event("pool_copyin_probe_fresh", 1u);
++            ::diagnostic_event("pool_copyin_probe_rc", static_cast<uint32_t>(cap_len64));
++            ::diagnostic_event("pool_copyin_probe_errno", 0u);
++            ::diagnostic_event("pool_copyin_probe_sink", static_cast<uint32_t>(len));
++            ::diagnostic_event("pool_copyin_probe_route", 1u); // 1 = kernel safe-read
++            return 1;
++        }
++        if (gcls == ksrv::GapClass::Refused) {
++            g_last_probe_telemetry = BridgeProbeTelemetry{0u, 0u,
++                                                           static_cast<uint32_t>(-rc),
++                                                           static_cast<uint32_t>(done)};
++            ::diagnostic_event("pool_copyin_probe_fresh", 0u);
++            ::diagnostic_event("pool_copyin_probe_rc", 0u);
++            ::diagnostic_event("pool_copyin_probe_errno", static_cast<uint32_t>(-rc));
++            ::diagnostic_event("pool_copyin_probe_sink", static_cast<uint32_t>(done));
++            ::diagnostic_event("pool_copyin_probe_route", 1u);
++            return 0;
++        }
++        if (gcls == ksrv::GapClass::Unavailable) {
++            g_last_probe_telemetry = BridgeProbeTelemetry{2u, 0u,
++                                                           static_cast<uint32_t>(-rc),
++                                                           static_cast<uint32_t>(done)};
++            ::diagnostic_event("pool_copyin_probe_fresh", 2u);
++            ::diagnostic_event("pool_copyin_probe_rc", 0u);
++            ::diagnostic_event("pool_copyin_probe_errno", static_cast<uint32_t>(-rc));
++            ::diagnostic_event("pool_copyin_probe_sink", static_cast<uint32_t>(done));
++            ::diagnostic_event("pool_copyin_probe_route", 1u);
++            return -1;
++        }
++        // GapClass::Absent cannot happen here: maybe_available() passed and
++        // the first -78 latched Enosys (maybe_available() would now answer
++        // false and this path would not run again this boot). Fall through
++        // defensively to the v5.3 body.
++    }
+     if (len == 0 || len > kMaxProbeBytes) {
+         g_last_probe_telemetry = BridgeProbeTelemetry{3u, 0u, 0u, 0u}; // invalid request class
+         ::diagnostic_event("pool_copyin_probe_fresh", 3u);
+@@ -1164,6 +1249,13 @@
+ //      call — an unproven write route must not spend the candidate copy.
+ extern "C" void bridge_io_controls(void)
+ {
++    // [kernel services r15] idempotent transport install (first caller
++    // wins; the initializer and the pad factory call the same helper).
++#ifdef __PROSPERO__
++    ksrv::init(kekcall_console::vtable());
++#endif
++    ::diagnostic_event("ksrv_route", ksrv::maybe_available() ? 1u : 0u);
++
+     // Boot nonce: milliseconds of the process-steady clock — unique per
+     // boot at the resolution that matters, and never derived from any
+     // observable game state.
+@@ -1285,8 +1377,32 @@
+         (void)::unlink(kIoCreateTestPath);
+     }
+ 
+-    // ---- Control D: candidate-memory copy (only when B verified) ----
+-    if (b_code == 1u) {
++    // ---- Control D: candidate-memory copy ----
++    // [kernel services r15] route order: the KERNEL safe-read route runs
++    // FIRST and INDEPENDENT of Control B — it needs no sink and no write
++    // route. io_ctrl_d_route records which route produced the evidence:
++    //   1 = kernel safe-read (kekcall nr=7; io_ctrl_d_head carries the
++    //       candidate's first 16 bytes — direct address-class evidence,
++    //       page-table-validated)
++    //   0 = legacy copyin probe, still gated on Control B (the v5.3 law: an
++    //       unproven write route never spends the candidate copy)
++    if (ksrv::maybe_available()) {
++        static unsigned char kbuf[64];
++        const int64_t rc = ksrv::safe_read(kIoCtrlDCandidateAddr, kbuf, kIoCtrlDCandidateLen);
++        const ksrv::GapClass gcls = ksrv::gap_class_from_read_rc(rc);
++        const uint32_t d_code = (gcls == ksrv::GapClass::Readable) ? 1u
++                             : (gcls == ksrv::GapClass::Refused) ? 0u : 2u;
++        ::diagnostic_event("io_ctrl_d", d_code);
++        ::diagnostic_event("io_ctrl_d_rc", (rc >= 0) ? static_cast<uint32_t>(rc) : 0u);
++        ::diagnostic_event("io_ctrl_d_errno", (rc >= 0) ? 0u : static_cast<uint32_t>(-rc));
++        ::diagnostic_event("io_ctrl_d_sink", (rc >= 0) ? static_cast<uint32_t>(rc) : 0u);
++        ::diagnostic_event("io_ctrl_d_route", 1u);
++        if (gcls == ksrv::GapClass::Readable) {
++            for (int w = 0; w < 4; ++w) {
++                ::diagnostic_event("io_ctrl_d_head", bridge_io_ld32(kbuf + 4 * w));
++            }
++        }
++    } else if (b_code == 1u) {
+         // The probe emits its own pool_copyin_probe_* set; the io_ctrl_d_*
+         // mirrors make the batched evidence set self-contained.
+         (void)bridge_kernel_write_copyin_probe(kIoCtrlDCandidateAddr, kIoCtrlDCandidateLen);
+@@ -1294,9 +1410,11 @@
+         ::diagnostic_event("io_ctrl_d_rc", g_last_probe_telemetry.rc);
+         ::diagnostic_event("io_ctrl_d_errno", g_last_probe_telemetry.err);
+         ::diagnostic_event("io_ctrl_d_sink", g_last_probe_telemetry.sink);
++        ::diagnostic_event("io_ctrl_d_route", 0u);
+     }
+-    // B failed: D is deliberately SKIPPED — no io_ctrl_d* tag, no probe
+-    // call. An unproven write route never spends the candidate copy.
++    // Kernel absent AND B failed: D is deliberately SKIPPED — no io_ctrl_d*
++    // tag, no probe call. An unproven write route never spends the candidate
++    // copy.
+ }
+ 
+ // ---- HOST-TEST-EXTRACT-END -----------------------------------------------

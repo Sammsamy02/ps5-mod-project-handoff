@@ -1,0 +1,38 @@
+{
+  "worker": "worker-e2e-payload-build",
+  "team": "2026-10-04-zcode-team",
+  "date": "2026-10-04",
+  "role": "Build the ACTUAL revised console payload (config-entry revision) from worker-e2e-config-entry/CONFIG-ENTRY-DESIGN.md sec 8, using the SAME toolchain/flags/argv as the D1-fixed build (worker-d1-chain-relink/composition receipts), and enforce the sec 8 gates: 116-import census re-proof, host-test binary byte-reproduction, tuple updates, two-build determinism.",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "writes_confined_to": "outputs/2026-10-04-zcode-team/worker-e2e-payload-build/ only",
+  "inputs_read_only": [
+    "outputs/2026-10-04-zcode-team/worker-e2e-config-entry/ (CONFIG-ENTRY-DESIGN.md, owned/modinst_core.c 43ea66c1..., patch/modinst_core-config-entry.diff, host-test receipt)",
+    "outputs/2026-10-04-zcode-team/worker-d1-chain-relink/composition/ (vendored/modinst_core.c pristine 45c04d08..., build/console/* objects + elf_x86_64.dynamic-only.x, receipts/console-build.json argv, receipts/console-imports.stdout, receipts/patches.json 51 tuples)",
+    "outputs/2026-10-04-zcode-team/worker-d1-chain-relink/composition/receipts/host-build.json (host link argv for the byte-reproduction gate)",
+    "pinned toolchain: outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/bin/{prospero-clang,llvm-nm}, .superpowers/native-dependency-spike/tools/resource-root/LLVM-21.1.8-macOS-ARM64/lib/clang/21, outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin/llvm-readobj, pinned static closure libs"
+  ],
+  "planned_deliverables": [
+    "CLAIM.json (this file, first)",
+    "src/modinst_core.c - the owned patched source produced by ME applying patch/modinst_core-config-entry.diff to a pristine copy (gate 8.1), must be byte-exact 43ea66c1...",
+    "receipts/gate-8.1-patch-apply.log - sha proofs",
+    "receipts/gate-byte-repro-host/ - my rebuild of the host-test binary with the exact D1 host-build.json argv; must byte-reproduce 51b88171... (.o) and 4659c24c... (binary)",
+    "receipts/gate-console-repro/ - pristine source + exact console-build.json argv must reproduce D1's modinst_core.ps5.o dafd4214... and pristine link must reproduce payload e3489297...",
+    "build-r1/ and build-r2/ - two independent console payload builds from the patched source; ELF shas recorded, must be byte-identical to each other",
+    "receipts/console-build-config-entry.json - my build receipt (exact argv, exits, shas)",
+    "receipts/census/ - 116-dynamic-import re-proof on the new ELF vs console-imports.stdout (expect identical; any delta = STOP)",
+    "receipts/g1-tuples-block.py + patches.json.new + gate-tuples-verify.log - the g1-cmd-entry-{parse,consume,allowlist} tuples appended after r2-install-status-ok; NOTE: written INSIDE my dir (my write scope); promotion into composition/receipts/ is the controller's step",
+    "PAYLOAD-DELIVERY.md - final payload path+sha+bytes, Step P re-pin values, exact console dispatch sequence",
+    "REPORT.md (last)"
+  ],
+  "gates_no_bypass": [
+    "8.1 pristine 45c04d08... + diff -> 43ea66c1... byte-exact == owned file",
+    "8.2 console compile exit 0, only the 3 pre-existing D1 warnings, zero new",
+    "8.3 relink with UNCHANGED console-link argv, all other objects/libraries exactly the D1 set",
+    "8.4 census: exactly 116 dynamic imports, import set identical to pristine D1 payload, missing=[] ; any delta = STOP",
+    "8.5 tuples g1-cmd-entry-* appended after r2-install-status-ok with patched_sha256 43ea66c1...",
+    "8.6 NOT in my scoped gates: suite re-runs (bridge 75 / F-R2 87 / fault 186 + new config-entry cases) remain controller/staging work - reported honestly as not-run",
+    "determinism: two full builds byte-identical, both shas recorded"
+  ],
+  "bounds": "no console contact, no target execution, no nested subagents; all writes under outputs/2026-10-04-zcode-team/worker-e2e-payload-build/; everything outside read-only; no raw model API/billing/credential anything",
+  "honesty_commitments": "If any gate fails I STOP and write what failed with evidence; no bypasses, no widening the identity gate; never dispatch unverified bytes; console/[TARGET] claims are out of scope for this worker entirely."
+}

@@ -1,0 +1,82 @@
+--- a/candidate/src/LuaMod.cpp
++++ b/candidate/src/LuaMod.cpp
+@@ -1979,6 +1979,54 @@
+         }
+     }
+ 
++    // [CAP05-CRASHTEST-BEGIN]
++    // cap05 (crash capture) - deliberate, opt-in crash used ONLY by the cap05
++    // launch to prove that a crash is captured and symbolized end to end. Generic:
++    // no game, mod or engine names; no detour; no new import; no new include.
++    // Nothing happens unless the caller passes the exact confirmation token, so no
++    // downloaded mod can trip it by accident (no UE4SS mod knows this function).
++    //   "segv": 32-bit store to virtual address 0xC08. Page 0 is never mapped in a
++    //           user process, so this always faults (SIGSEGV, fault VA 0xC08) with
++    //           RIP inside modbridge_cap05_crashtest_fault.
++    //   "trap": __builtin_trap (ud2) -> SIGILL with RIP inside the same function.
++    namespace cap05_crashtest
++    {
++        inline volatile uintptr_t fault_va = 0xC08;   // volatile: the store cannot be proven away
++        inline constexpr std::string_view kToken = "CRASH-THE-GAME-NOW";
++
++        [[gnu::noinline]] [[gnu::used]] void modbridge_cap05_crashtest_fault(int kind)
++        {
++            if (kind == 1)
++            {
++                *reinterpret_cast<volatile uint32_t*>(fault_va) = 0xC0DE05u;
++            }
++            else if (kind == 2)
++            {
++                __builtin_trap();
++            }
++        }
++
++        // Returns a message when NOTHING happened (refused, or the fault did not
++        // fire). For a valid request it does not return: the process crashes.
++        inline const char* dispatch(std::string_view kind, std::string_view token)
++        {
++            if (token != kToken)
++                return "ModBridgeCrashTest refused: wrong or missing confirmation token (nothing happened)";
++            if (kind == "segv")
++            {
++                modbridge_cap05_crashtest_fault(1);
++                return "ModBridgeCrashTest: the segv store did not fault (unexpected)";
++            }
++            if (kind == "trap")
++            {
++                modbridge_cap05_crashtest_fault(2);
++                return "ModBridgeCrashTest: the trap did not fire (unexpected)";
++            }
++            return "ModBridgeCrashTest refused: kind must be \"segv\" or \"trap\" (nothing happened)";
++        }
++    } // namespace cap05_crashtest
++    // [CAP05-CRASHTEST-END]
++
+     auto static setup_lua_global_functions_internal(const LuaMadeSimple::Lua& lua, Mod::IsTrueMod is_true_mod) -> void
+     {
+         lua.register_function("print", LuaLibrary::global_print);
+@@ -2228,6 +2276,24 @@
+             // This is purely to shut the compiler up
+             lua.set_nil();
+             return 1;
++        });
++
++        // [CAP05-CRASHTEST] ModBridgeCrashTest(kind, token) -> false, message when
++        // refused (nothing happened); for a valid request the game crashes on purpose.
++        // Never throws and never raises a Lua error (no longjmp over C++ objects).
++        lua.register_function("ModBridgeCrashTest", [](const LuaMadeSimple::Lua& lua) -> int {
++            std::string kind{};
++            std::string token{};
++            if (lua.is_string()) kind = std::string{lua.get_string()};   // get_string removes index 1
++            if (lua.is_string()) token = std::string{lua.get_string()};
++            if (token == cap05_crashtest::kToken && (kind == "segv" || kind == "trap"))
++            {
++                try { Output::send<LogLevel::Warning>(STR("[CAP05-CRASHTEST] deliberate crash requested by a diagnostic mod; crashing now (opt-in crash-capture test, not a bug)\n")); } catch (...) {}
++            }
++            const char* msg = cap05_crashtest::dispatch(kind, token);
++            lua.set_bool(false);
++            lua.set_string(std::string_view{msg});
++            return 2;
+         });
+ 
+         // [IS-LUA-ALLOC] Claude round-13 item 1: expose the Lua allocator

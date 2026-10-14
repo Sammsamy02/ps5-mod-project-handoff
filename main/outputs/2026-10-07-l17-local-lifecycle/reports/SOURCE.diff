@@ -1,0 +1,333 @@
+--- outputs/2026-10-07-l16-local-handles/units/runtime_start_bridge_r14_diag_spanpub.cpp
++++ outputs/2026-10-07-l17-local-lifecycle/units/runtime_start_bridge_r14_diag_spanpub.cpp
+@@ -1,7 +1,7 @@
+-// L13 local candidate (2026-10-07): supersedes historical sink behavior below.
+-// Raw SCE errors decode before arithmetic; VirtualQuery-first admission alone
+-// invokes lazy per-probe sink creation. Startup retains only /data/plugins as a
+-// directory capability, and reads/writes stay relative after namespace restore.
++// L17 local candidate (2026-10-07): supersedes historical sink behavior below.
++// Raw SCE errors decode before arithmetic. Startup opens a bounded single-use
++// sink bank and unlinks each owned pathname; delayed probes use retained FDs.
++// The actual initializer owns probe state and retires unused FDs after checks.
+ // Control D remains an explicit diagnostic entry, not a startup probe.
+ // runtime_start_bridge.cpp — module_start -> composed-runtime wiring.
+ // Historical lease-registration and geometry provenance follows. The L13 sink
+@@ -891,12 +891,13 @@
+ static const char *kSinkPath = "/data/plugins/modbridge-copyin-sink.bin";
+ static const char *kIoCreateTestPath = "/data/plugins/modbridge-io-create-test.bin";
+ 
+-// L16: fully open bounded single-use sinks during module_start. No target
++// L17: fully open bounded single-use sinks during module_start. No target
+ // memory is read until a fresh delayed probe. Restored namespaces cannot
+ // require a late create/reopen; positional readback uses the same descriptor.
+ #include "CopyinSink.hpp"
+ #include "CopyinStartup.hpp"
+ extern "C" int64_t sceKernelPread(int, void *, size_t, int64_t);
++extern "C" int sceKernelUnlink(const char *);
+ extern "C" int sceKernelIsInSandbox(void);
+ extern "C" int sysctlbyname(const char *, void *, size_t *, const void *, size_t);
+ static const char *kProbeParent = "/data/plugins";
+@@ -910,6 +911,7 @@
+ static constexpr int kCopyinSinkFlags = O_RDWR | O_CREAT | O_TRUNC | O_NOFOLLOW | O_EXCL;
+ struct CopyinHandle { int fd = -1; char path[96]{}; };
+ static CopyinHandle g_copyin_handles[kCopyinHandleLimit]{};
++static l13_sink::InitializerOwner g_copyin_initializer_owner;
+ static void l13_format_probe_sink(char *, uint64_t, uint32_t);
+ static void bridge_copyin_directory_release();
+ 
+@@ -958,7 +960,8 @@
+ static void bridge_copyin_file_failure(uint32_t op, const char *path, int flags,
+                                        int64_t raw, int err, uint32_t phase)
+ {
+-    // op1=open, 2=copyin write, 3=positional read, 4=close. Short/zero/malformed
++    // op1=open, 2=copyin write, 3=positional read, 4=close, 5=unlink.
++    // Short/zero/malformed
+     // results use EIO, retaining raw bits and the actual source errno separately.
+     bridge_copyin_path_diagnostic(path);
+     ::diagnostic_event("copyin_file_op", op);
+@@ -971,6 +974,7 @@
+ static void bridge_copyin_directory_prepare()
+ {
+     if (g_copyin_parent_fd >= 0) return;
++    g_copyin_initializer_owner.prepare();
+     bridge_copyin_credentials(1u);
+     const auto start = std::chrono::steady_clock::now();
+     const int flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW;
+@@ -1004,6 +1008,9 @@
+         errno = 0;
+         handle.fd = sceKernelOpen(handle.path, kCopyinSinkFlags, 0600);
+         const int sink_err = l13_sink::error(handle.fd, errno);
++        ::diagnostic_event("copyin_startup_ordinal", i + 1u);
++        ::diagnostic_event("copyin_startup_open_raw", static_cast<uint32_t>(handle.fd));
++        ::diagnostic_event("copyin_startup_open_errno", static_cast<uint32_t>(sink_err));
+         ::diagnostic_event("pool_copyin_open_flags", static_cast<uint32_t>(kCopyinSinkFlags));
+         if (handle.fd < 0 || sink_err != 0) {
+             bridge_copyin_file_failure(1, handle.path, kCopyinSinkFlags, handle.fd, sink_err, 1);
+@@ -1011,6 +1018,18 @@
+             bridge_copyin_directory_release(); // no partial bank, no leaked owners
+             return;
+         }
++        ::diagnostic_event("copyin_startup_fd", static_cast<uint32_t>(handle.fd));
++        // This exact pathname was created exclusively by this startup. Unlink
++        // now while lookup is available; the open descriptor remains usable.
++        // A denied unlink is diagnostic only: retain the file, never retry it
++        // later and never delete paths from a previous session.
++        errno = 0;
++        const int unlink_raw = sceKernelUnlink(handle.path);
++        const int unlink_err = l13_sink::error(unlink_raw, errno);
++        ::diagnostic_event("copyin_unlink_raw", static_cast<uint32_t>(unlink_raw));
++        ::diagnostic_event("copyin_unlink_errno", static_cast<uint32_t>(unlink_err));
++        if (unlink_raw != 0 || unlink_err != 0)
++            bridge_copyin_file_failure(5, handle.path, kCopyinSinkFlags, unlink_raw, unlink_err, 1);
+     }
+     ::diagnostic_event("copyin_startup_handles", kCopyinHandleLimit);
+     ::diagnostic_event("copyin_startup_elapsed_ms", static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+@@ -1020,19 +1039,43 @@
+ {
+     for (auto& handle : g_copyin_handles) {
+         if (handle.fd < 0) continue;
++        const int fd = std::exchange(handle.fd, -1);
+         errno = 0;
+-        const int raw = sceKernelClose(handle.fd);
++        const int raw = sceKernelClose(fd);
+         const int err = l13_sink::error(raw, errno);
+-        handle.fd = -1;
+         if (raw != 0 || err) bridge_copyin_file_failure(4, handle.path, kCopyinSinkFlags, raw, err, 2);
+     }
+     if (g_copyin_parent_fd >= 0) {
++        const int fd = std::exchange(g_copyin_parent_fd, -1);
+         errno = 0;
+-        const int raw = sceKernelClose(g_copyin_parent_fd);
++        const int raw = sceKernelClose(fd);
+         const int err = l13_sink::error(raw, errno);
+-        g_copyin_parent_fd = -1;
+         if (raw != 0 || err) bridge_copyin_file_failure(4, kProbeParent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, raw, err, 2);
+     }
++}
++extern "C" int bridge_copyin_initializer_enter(void)
++{
++    if (!g_copyin_initializer_owner.enter()) return 0;
++    // The gate stores the actual std::thread::id. This token is only a log
++    // identity, not an OS numeric TID or evidence of descriptor headroom.
++    const uint64_t token = std::hash<std::thread::id>{}(std::this_thread::get_id());
++    ::diagnostic_event("copyin_initializer_id_hash_lo", static_cast<uint32_t>(token));
++    ::diagnostic_event("copyin_initializer_id_hash_hi", static_cast<uint32_t>(token >> 32));
++    return 1;
++}
++extern "C" void bridge_copyin_initializer_complete(void)
++{
++    if (!g_copyin_initializer_owner.allows()) return;
++    bridge_copyin_directory_release();
++    // Keep both owned captures and fault evidence for the rest of initialization.
++}
++extern "C" void bridge_copyin_initializer_leave(void)
++{
++    if (!g_copyin_initializer_owner.allows()) return;
++    // Also covers exceptions before seed-check entry. Completion and close
++    // sentinels make this an idempotent fallback on the initializer itself.
++    bridge_copyin_directory_release();
++    g_copyin_initializer_owner.leave();
+ }
+ static uint64_t bridge_copyin_now_ms()
+ {
+@@ -1081,6 +1124,7 @@
+ static uint32_t g_write_copyin_capture_next = 0;
+ extern "C" int bridge_copyin_range_faulted(uint64_t addr, uint64_t len)
+ {
++    if (!g_copyin_initializer_owner.allows()) return 1; // fail closed, no ledger read
+     return g_copyin_faults.overlaps(addr, len) ? 1 : 0;
+ }
+ extern "C" int bridge_write_copyin_capture(uint64_t addr, const uint8_t **out_bytes, uint32_t *out_len)
+@@ -1088,6 +1132,7 @@
+     if (out_bytes == nullptr || out_len == nullptr) return 0;
+     *out_bytes = nullptr;
+     *out_len = 0;
++    if (!g_copyin_initializer_owner.allows()) return 0;
+     for (uint32_t i = 0; i < 3; ++i) {
+         if (!g_write_copyin_capture_valid[i] || addr < g_write_copyin_capture_addr[i]) continue;
+         const uint64_t offset = addr - g_write_copyin_capture_addr[i];
+@@ -1116,6 +1161,9 @@
+ extern "C" int bridge_kernel_write_copyin_probe_until(uint64_t addr, uint64_t len,
+                                                        uint64_t deadline_ms)
+ {
++    // A foreign refusal must not write telemetry or touch any bank/ring/ledger
++    // state. Only the synchronized owner gate is consulted on this path.
++    if (!g_copyin_initializer_owner.allows()) return -1;
+     if (!l13_sink::valid_range(addr, len)) return bridge_copyin_result(3, 0, EINVAL, 0);
+     if (bridge_copyin_range_faulted(addr, len)) return bridge_copyin_result(0, 0, EFAULT, 0);
+     for (uint32_t i = 0; i < 3; ++i) {
+@@ -1129,8 +1177,17 @@
+     if (g_copyin_probe_nonce >= kCopyinHandleLimit) return bridge_copyin_result(2, 0, ENOSPC, 0);
+     auto& handle = g_copyin_handles[g_copyin_probe_nonce++];
+     if (handle.fd < 0) return bridge_copyin_result(2, -1, ENOENT, 0);
+-    const int fd = handle.fd;
++    const int fd = std::exchange(handle.fd, -1);
+     const char *probe_sink = handle.path;
++    int close_rc = 0;
++    int close_err = 0;
++    l13_sink::CompletionCleanup close_handle{[&]() {
++        errno = 0;
++        close_rc = sceKernelClose(fd);
++        close_err = l13_sink::error(close_rc, errno);
++        if (close_rc != 0 || close_err)
++            bridge_copyin_file_failure(4, probe_sink, kCopyinSinkFlags, close_rc, close_err, 2);
++    }};
+     bridge_copyin_path_diagnostic(probe_sink);
+     ::diagnostic_event("pool_copyin_probe_addr_lo", static_cast<uint32_t>(addr));
+     ::diagnostic_event("pool_copyin_probe_addr_hi", static_cast<uint32_t>(addr >> 32));
+@@ -1189,11 +1246,7 @@
+             bridge_copyin_file_failure(3, probe_sink, kCopyinSinkFlags, got, err, 2);
+         }
+     }
+-    errno = 0;
+-    const int close_rc = sceKernelClose(fd);
+-    const int close_err = l13_sink::error(close_rc, errno);
+-    handle.fd = -1;
+-    if (close_rc != 0 || close_err) bridge_copyin_file_failure(4, probe_sink, kCopyinSinkFlags, close_rc, close_err, 2);
++    close_handle.complete();
+     if (faulted) return bridge_copyin_result(0, raw, err, landed);
+     if (landed != len || err != 0) return bridge_copyin_result(2, raw, err, landed);
+     if (close_rc != 0 || close_err) return bridge_copyin_result(2, close_rc, close_err, landed);
+@@ -1335,7 +1388,9 @@
+     }
+ 
+     // ---- Control D: candidate-memory copy (only when B verified) ----
+-    if (b_code == 1u) {
++    // Only this D block reads initializer-owned telemetry. A/B/C retain their
++    // existing explicit diagnostic behavior; none is invoked at startup.
++    if (b_code == 1u && g_copyin_initializer_owner.allows()) {
+         // The probe emits its own pool_copyin_probe_* set; the io_ctrl_d_*
+         // mirrors make the batched evidence set self-contained.
+         (void)bridge_kernel_write_copyin_probe(kIoCtrlDCandidateAddr, kIoCtrlDCandidateLen);
+--- outputs/2026-10-07-l16-local-handles/units/UnrealInitializer.cpp
++++ outputs/2026-10-07-l17-local-lifecycle/units/UnrealInitializer.cpp
+@@ -74,6 +74,7 @@
+ #include "SeedValidation.hpp"
+ #include "NativeFNameAdapter.hpp"
+ #include "NativeFNameChecks.hpp"
++#include "CopyinStartup.hpp"
+ #include "FNameAbiProfile.hpp"
+ #include <string>
+ #include <vector>
+@@ -766,6 +767,7 @@
+         extern "C" int sceKernelVirtualQuery(const void*, int, L13VqInfo*, size_t);
+         extern "C" int bridge_kernel_write_copyin_probe_until(uint64_t, uint64_t, uint64_t);
+         extern "C" int bridge_copyin_range_faulted(uint64_t, uint64_t);
++        extern "C" void bridge_copyin_initializer_complete(void);
+ 
+         extern "C" int bridge_image_range(uint64_t,size_t,rc::imagecoverage::Hit*);
+         static const char* l14_verdict(admission::Verdict v) {
+@@ -910,6 +912,9 @@
+ 
+         static auto consume_required_slot_seeds(std::chrono::seconds validation_budget) -> void
+         {
++            // RuntimeOwner already published this initializer thread. Any
++            // refusal/exception before or during checks retires the bank once.
++            l13_sink::CompletionCleanup copyin_cleanup{bridge_copyin_initializer_complete};
+             const uint64_t base = SeedTableNS::kBaseObserved;
+ 
+             // ---- Phase 1: per-launch base check (FNAME-VERDICT section 5) ----
+@@ -1067,6 +1072,10 @@
+             FName::ConstructorInternal.assign_address(&native_fname_thunk);
+             bSeedBoundFNameCtor = true;
+             binding_log.outcome="verified-and-bound";
++            // All admission, signature, native ctor and roundtrip checks have
++            // completed. Release unused descriptors now, before Phase5 or any
++            // remaining initialization; fault/capture evidence stays available.
++            copyin_cleanup.complete();
+             Output::send(STR("[Seeds] slot 2 FName ctor bound at {} and behaviorally verified (ByteProperty probe id == pool id 0x{:X}); detour verification skipped\n"),
+                          reinterpret_cast<void*>(ctor_runtime), words.byte_property_id);
+ 
+--- outputs/2026-10-07-l16-local-handles/units/CopyinStartup.hpp
++++ outputs/2026-10-07-l17-local-lifecycle/units/CopyinStartup.hpp
+@@ -1,6 +1,57 @@
+ #pragma once
++#include <mutex>
++#include <thread>
++#include <utility>
+ 
+ namespace l13_sink {
++// Only the actual RuntimeOwner initializer publishes ownership. Startup and
++// acknowledged stop are serialized by the loader; stop joins this owner
++// before its fallback release. Foreign callers consult only this gate, never
++// the unsynchronized bank, captures, fault ledger or probe telemetry.
++class InitializerOwner {
++    std::mutex mutex_;
++    std::thread::id initializer_{};
++public:
++    void prepare() {
++        std::lock_guard<std::mutex> lock(mutex_);
++        initializer_ = {};
++    }
++    bool enter() {
++        std::lock_guard<std::mutex> lock(mutex_);
++        const auto caller = std::this_thread::get_id();
++        if (initializer_ != std::thread::id{} && initializer_ != caller) return false;
++        initializer_ = caller;
++        return true;
++    }
++    bool allows() {
++        std::lock_guard<std::mutex> lock(mutex_);
++        return initializer_ != std::thread::id{} && initializer_ == std::this_thread::get_id();
++    }
++    void leave() {
++        std::lock_guard<std::mutex> lock(mutex_);
++        if (initializer_ == std::this_thread::get_id()) initializer_ = {};
++    }
++};
++
++// Resource completion can be explicit at the final check boundary or happen
++// during exception unwinding. Consume the cleanup obligation before invoking
++// it, so destruction never retries a close after an error or reused FD.
++template <typename Release>
++class CompletionCleanup {
++    Release release_;
++    bool pending_ = true;
++public:
++    explicit CompletionCleanup(Release release) : release_(std::move(release)) {}
++    CompletionCleanup(const CompletionCleanup&) = delete;
++    CompletionCleanup& operator=(const CompletionCleanup&) = delete;
++    void complete() noexcept {
++        if (!pending_) return;
++        pending_ = false;
++        release_();
++    }
++    ~CompletionCleanup() noexcept { complete(); }
++};
++
+ // module_start failures never set runtime_active, so module_stop will not call
+ // the bridge stop function. Release here unless an owner can still use the fd.
+ template <typename Owner, typename Release, typename Start>
+--- outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-runtime-1/source/bootstrap/runtime_owner.cpp
++++ outputs/2026-10-07-l17-local-lifecycle/units/runtime_owner.cpp
+@@ -1,5 +1,10 @@
+ #include "runtime_owner.hpp"
+ #include <stdexcept>
++// Internal bridge hooks, resolved in the same composition. module_start opens
++// the bank before launching this worker; only this actual initializer publishes
++// ownership. No startup-thread ID is used as a substitute.
++extern "C" int bridge_copyin_initializer_enter(void);
++extern "C" void bridge_copyin_initializer_leave(void);
+ 
+ namespace modbridge::native
+ {
+@@ -83,12 +88,19 @@
+ }
+ void RuntimeOwner::initialize() noexcept
+ {
++    struct CopyinOwnerScope {
++        bool entered = false;
++        ~CopyinOwnerScope() noexcept { if (entered) bridge_copyin_initializer_leave(); }
++    } copyin_owner;
+     {
+         std::lock_guard lock(signals_->mutex);
+         signals_->initializer = std::this_thread::get_id();
+     }
+     try
+     {
++        if (bridge_copyin_initializer_enter() != 1)
++            throw std::runtime_error("Copyin initializer ownership refused");
++        copyin_owner.entered = true;
+         std::weak_ptr<Signals> weak = signals_;
+         backend_->initialize([weak] {
+             if (const auto signals = weak.lock())

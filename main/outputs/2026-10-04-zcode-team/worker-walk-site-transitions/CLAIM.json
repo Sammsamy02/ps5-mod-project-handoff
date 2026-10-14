@@ -1,0 +1,49 @@
+{
+  "worker": "worker-walk-site-transitions",
+  "date": "2026-10-04",
+  "task": "Design + author the per-page X->RX transition wrapper for the initializer's un-transitioned vtable-walk text reads (LAUNCH10-MATRIX key finding #2). PROPOSALS ONLY: no console contact, no nested subagents, no engine/serialized-state changes, nothing staged or launched.",
+  "claims": [
+    {
+      "id": "WST-1",
+      "claim": "The composition's ASMHelper unit compiles port/first/src/ASMHelper/ASMHelper.cpp with prospero-clang++ -std=c++23 -DOVERRIDE_PLATFORM_HEADER_NAME=Prospero -DRC_ASM_HELPER_BUILD_STATIC (coherent-full-1/asmhelper-asmhelper.command.json, 148-arg argv), and the composition does NOT recompile it per pass: the link consumes the prebuilt object .superpowers/native-dependency-spike/native-coherent-runtime-1/coherent-full-1/asmhelper-asmhelper.o (comp-4 run-3 commands.json CMD 15). A patched ASMHelper therefore requires an explicit asmhelper unit rebuild + receipt --file attestation, or the link silently keeps the stale object.",
+      "evidence": "coherent-full-1/asmhelper-asmhelper.command.json argv (SRC/OUT/DEFS quoted in REPORT section 1); comp-4 run-3 commands.json link argv; identical-bytes check across the three retained ASMHelper.cpp copies (coherent-runtime-1 source == ue4ss-unreal-native-build-1 port; the deps/first copy differs only in the operands-array refactor and is NOT the compiled one)."
+    },
+    {
+      "id": "WST-2",
+      "claim": "A PROSPERO ifdef inside ASMHelper.cpp ALONE suffices for the initializer's three walk call sites (staging UnrealInitializer.cpp :1725, :1923, :1961): every FLAG-2 text read funnels through get_first_instruction_at_address, the innermost read of resolve_absolute_address / resolve_jmp / resolve_call / resolve_function_address_from_potential_jmp. The composed tree's only other resolver callers (UnrealVirtualBaseVC.hpp:115,133 macro = the E-1/E-2/E-5 vtable walks; DetourSubclasses.hpp:95 = PLH-side resolve) funnel through the same helper, so they are covered as a side effect with zero call-site edits.",
+      "evidence": "grep of native-coherent-runtime-1/source: exactly 4 files reference the resolver family; port ASMHelper.cpp:9-69 shows all resolves call get_first_instruction_at_address; staging initializer :1725/:1923/:1961 call only resolve_function_address_from_potential_jmp."
+    },
+    {
+      "id": "WST-3",
+      "claim": "The delivered diff (ASMHELPER-WALK-GUARD.diff) adds a scoped RAII guard around exactly that innermost read: covering-page math (16-KiB pages, PAGE_SHIFT 14, 1-2 pages per <=16-byte read) -> labeled old-prot (registered current-map cover provider, else checkpoint constant 0x4) -> skip if already readable (nesting-safe) -> else single inline-syscall-74 mprotect(range, PROT_READ|PROT_EXEC = 0x5) -> read -> restore old prot; transition rc!=0 => loud throw with ZERO reads (C-7); restore rc!=0 => loud ANOMALY + permanent refusal latch (never a dtor throw, ladder-stop without UB); guard fold OFF (define absent or 0) => loud refusal + throw with the transition code preprocessor-DEAD (zero syscall text, the R9 property). Initializer call sites remain byte-identical to the frozen staging unit (sha c85c42f7...).",
+      "evidence": "ASMHELPER-WALK-GUARD.diff vs the port unit; ASMHelper.guarded.cpp; host-test/ captures the extracted pure core + ordering/refusal/page-math results; compile gate with the composition's real argv records 0 errors."
+    },
+    {
+      "id": "WST-4",
+      "claim": "Transition constants are not invented: SYS_mprotect 74 (pinned SDK v0.43 target/include/sys/syscall.h:82), PROT_READ 0x01 (sys/mman.h:53), PROT_EXEC 0x04 (sys/mman.h:55), PAGE_SHIFT 14 (machine/param.h:99, PS5 branch) were read back from the pinned SDK this session; the shim is the unmodified igcar 3-instruction inline-syscall pattern (no import identity; sceKernelMprotect stays forbidden-symbol-gated; libc mprotect() weak-resolves to 0 in composed PRX per AUDIT-RESULTS section 2.4). All numeric constants remain overridable by build defines whose defaults were SDK-verified.",
+      "evidence": "grep of the pinned SDK headers quoted in REPORT section 2; sys_mprotect_shim.h:40-51 pattern."
+    },
+    {
+      "id": "WST-5",
+      "claim": "Verdict dependency (D2 fold): the guard's build define RC_ASM_WALK_RX_GUARD=1 is admissible ONLY for rows whose IGW verdict shows seq5 rx_result.mprotect_rc==0, i.e. W_WORKS and W_FAILS_R_WORKS (matrix rows R1/R2/R3/R4 - R3/R4 explicitly need 'per-page RX for walks'). BOTH_FAIL, FATAL and ABSENT compile with the define ABSENT: the wrapper then refuses loudly at the helper layer (the no-exec gate's throw policy) with zero syscalls. Because the runtime ALSO fail-closes on rc!=0 even when folded ON, a mis-folded verdict degrades to the loud refusal, never to a silent crash.",
+      "evidence": "LAUNCH10-MATRIX section 0 D2 table + rule 4 and section 2 rows R1-R5/R9; EXEC-WRITABILITY-PROBE-DESIGN section 5 seq5 gate + C-7; NO-EXEC-GATE-DESIGN section 2.2 loud-failure policy. Full mapping table in WALK-GUARD-DESIGN.md section 4."
+    },
+    {
+      "id": "WST-6",
+      "claim": "Scope is honestly bounded: the wrapper does NOT cover the initializer's FLAG-3 164-byte Zydis decode loop (staging :1944-1972, reads text directly without ASMHelper - closed by v3 ini keys / no-exec gate E-7, not by this diff), nor PLH x64Detour's own 100-byte disasm + RWX write (U-SWAP-4's MemAccessor/MemProtector branches), nor the FName-detour verifier reads (E-8). It is a READ-tier guard: it adds PROT_READ and restores; it never requests WRITE (RWX) anywhere.",
+      "evidence": "staging UnrealInitializer.cpp :1944-1972 structure; EXEC-WRITABILITY-EVIDENCE section 5 consumer table."
+    }
+  ],
+  "non_claims": [
+    "No claim that X->RX mprotect succeeds on this kernel: the IGW probe verdict does not exist yet (launch 9 outcome). W_WORKS/W_FAILS_R_WORKS evidence is a PRECONDITION for compiling with RC_ASM_WALK_RX_GUARD=1, not something this diff provides or presumes.",
+    "No in-game execution, no staging, no composition pass, no receipt regeneration: the delivered compile gate is a host-side compile of the patched unit with the composition's real argv into a throwaway object; nothing in the spike trees or driver staging was modified.",
+    "No PLH detour viability claim, no RWX/write-tier claim, no SCO/FName verifier change, no engine-ready claim of any kind.",
+    "The host logic test runs a SOFTWARE mprotect model over synthetic arenas; it proves ordering/refusal/page-math of the shipped core bytes, not kernel behavior.",
+    "No claim that guard-OFF refusals are unreachable in every composition: they are the named backstop; their reachability depends on the no-exec gate diff (U-SWAP-5) actually being adopted in the rows that fold the guard OFF."
+  ],
+  "inputs_held_frozen": {
+    "initializer_staging": "outputs/2026-10-04-zcode-team/worker-initializer-integration/staging/UnrealInitializer.cpp",
+    "asmhelper_unit_source": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/first/src/ASMHelper/ASMHelper.cpp (identical bytes: ue4ss-unreal-native-build-1/port/first copy)",
+    "asmhelper_header": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/first/include/ASMHelper/ASMHelper.hpp"
+  }
+}

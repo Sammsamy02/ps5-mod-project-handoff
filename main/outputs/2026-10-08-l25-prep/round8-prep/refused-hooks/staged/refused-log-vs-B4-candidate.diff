@@ -1,0 +1,381 @@
+--- a/src/LuaMod.cpp
++++ b/src/LuaMod.cpp
+@@ -316,7 +316,123 @@
+         auto& lua_object = lua.get_userdata<LuaType::LuaModRef>(-1);
+         return lua_object.get_remote_cpp_object();
+     }
++
++    // =====================================================================================
++    // [REFUSED-LOG] (round8 refused-hooks track; generic, no mod/game names) ONE uniform line
++    // for every hook/registration this port refuses (the Lua call throws) or accepts but can
++    // never deliver (the call returns normally, the callback is never invoked):
++    //
++    //   [REFUSED] kind=<Lua API> target='<UFunction path|class|event|command|->' mod='<mod|*>' reason=<code> effect=<throws|accepted-undelivered|queued-pending|never-delivered>
++    //
++    // Why: the B4 launch had no log line at all for the minimap's 3 refused RegisterHook calls
++    // and for 18 self-test registrations that returned "registered"/ret=nil but never fire.
++    // Formatting uses narrow literals + one-char widening (the B6 emit_line technique), so it
++    // does not depend on ensure_str / the short-wchar codec. The helper never throws and holds
++    // no lock; it is safe to call immediately before lua.throw_error (it returns first, so no
++    // C++ object of the caller is skipped by a longjmp that it did not already skip).
++    // =====================================================================================
++    namespace
++    {
++    namespace refused_log
++    {
++        // Gate state. Written at startup / by the one-shot LoadMap arm; read at registration time.
++        inline std::atomic<bool> eager_detour_block_skipped{false}; // on_program_start: R3MarshalPumpPending() branch taken
++        inline std::atomic<int> loadmap_state{0};                   // 0 eager block ran, 1 deferred arm pending, 2 armed, 3 arm refused
++        inline std::atomic<uint32_t> total{0};                      // every refusal/undelivered registration, even past the line cap
++        constexpr uint32_t kMaxLines = 256;
+ 
++        enum class Family { EagerDetour, LoadMap, CustomEvent };
++
++        inline auto ascii_from(const StringType& s, char* out, size_t n) -> void
++        {
++            size_t i = 0;
++            for (; i + 1 < n && i < s.size(); ++i)
++            {
++                const auto c = static_cast<unsigned long>(s[i]);
++                out[i] = (c >= 0x20 && c < 0x7f && c != '\'') ? static_cast<char>(c) : '?';
++            }
++            out[i] = '\0';
++        }
++
++        inline auto emit(const char* kind, const StringType& target, const StringType& mod, const char* reason, const char* effect) -> void
++        {
++            const auto n = total.fetch_add(1, std::memory_order_relaxed) + 1;
++            if (n > kMaxLines + 1) { return; }
++            char t[300]; char m[100]; char line[640];
++            ascii_from(target, t, sizeof(t));
++            ascii_from(mod, m, sizeof(m));
++            if (n == kMaxLines + 1)
++            {
++                std::snprintf(line, sizeof(line), "[REFUSED] kind=log target='-' mod='*' reason=line-cap-%u-reached effect=suppressed", kMaxLines);
++            }
++            else
++            {
++                std::snprintf(line, sizeof(line), "[REFUSED] kind=%s target='%s' mod='%s' reason=%s effect=%s", kind, t, m, reason, effect);
++            }
++            StringType wide{};
++            for (const char* p = line; *p != '\0'; ++p)
++            {
++                wide.push_back(static_cast<StringType::value_type>(static_cast<unsigned char>(*p)));
++            }
++            L22Diagnostics::observe([&]() { Output::send(STR("{}\n"), wide); });
++        }
++
++        // Mod name of the calling Lua state, never throws, leaves the Lua stack as it found it.
++        inline auto mod_name_of(const LuaMadeSimple::Lua& lua) -> StringType
++        {
++            StringType out{STR("?")};
++            lua_State* L = lua.get_lua_state();
++            const int top = lua_gettop(L);
++            if (lua_getglobal(L, "ModRef") != LUA_TNIL)
++            {
++                auto& ref = lua.get_userdata<LuaType::LuaModRef>(-1);
++                if (auto* m = ref.get_remote_cpp_object()) { out = StringType{m->get_name()}; }
++            }
++            lua_settop(L, top);
++            return out;
++        }
++
++        // nullptr when the family can be delivered right now, else the reason code.
++        inline auto undelivered_reason(Family f) -> const char*
++        {
++            switch (f)
++            {
++            case Family::EagerDetour:
++                return eager_detour_block_skipped.load(std::memory_order_acquire) ? "detour-block-skipped-r3-marshal" : nullptr;
++            case Family::LoadMap:
++                switch (loadmap_state.load(std::memory_order_acquire))
++                {
++                case 1: return "loadmap-deferred-arm-pending";
++                case 3: return "loadmap-detour-arm-refused";
++                default: return nullptr;
++                }
++            case Family::CustomEvent:
++            {
++                const bool plsf = Unreal::UObject::ProcessLocalScriptFunctionInternal.is_ready() && Unreal::Version::IsAtLeast(4, 22);
++                const bool pi = Unreal::UObject::ProcessInternalInternal.is_ready() && Unreal::Version::IsBelow(4, 22);
++                return (plsf || pi) ? nullptr : "process-local-script-function-unavailable";
++            }
++            }
++            return nullptr;
++        }
++
++        // The Lua call is about to throw. Call this BEFORE lua.throw_error.
++        inline auto throws(const LuaMadeSimple::Lua& lua, const char* kind, const StringType& target, const char* reason) -> void
++        {
++            emit(kind, target, mod_name_of(lua), reason, "throws");
++        }
++
++        // The Lua call is about to return normally. Logs only when the callback can never (or not yet) fire.
++        inline auto accepted(const LuaMadeSimple::Lua& lua, const char* kind, const StringType& target, Family f) -> void
++        {
++            if (const char* why = undelivered_reason(f))
++            {
++                emit(kind, target, mod_name_of(lua), why, f == Family::LoadMap && loadmap_state.load() == 1 ? "queued-pending" : "accepted-undelivered");
++            }
++        }
++    }
++    }
++
+     static auto get_function_name_without_prefix(const StringType& function_full_name) -> StringType
+     {
+         static constexpr StringViewType function_prefix{STR("Function ")};
+@@ -2000,6 +2116,13 @@
+         // state to mods so the self-test can bracket every run with exact
+         // before/after numbers (gc_kb per THIS state; live/allocs/fails are
+         // process-wide across all Lua states). Read-only; never errors.
++        // [REFUSED-LOG] number of [REFUSED] events so far (refused calls + registrations that can never fire).
++        // Lets the self-test's GAPS line count real gaps. Read-only; never errors.
++        lua.register_function("GetRefusedHookCount", [](const LuaMadeSimple::Lua& lua) -> int {
++            lua.set_integer(static_cast<int64_t>(refused_log::total.load(std::memory_order_relaxed)));
++            return 1;
++        });
++
+         lua.register_function("GetLuaMemory", [](const LuaMadeSimple::Lua& lua) -> int {
+             const auto snap = LuaMadeSimple::query_lua_memory(lua.get_lua_state());
+             lua.set_string(std::format("gc_kb={} live_kb={} blocks={} allocs={} fails={} fail_o={} fail_n={} arena_cap_kb={} arena_used_kb={} arena_ext_kb={} errs={} cxx={}",
+@@ -2363,6 +2486,7 @@
+                 Unreal::UFunction* unreal_function = Unreal::UObjectGlobals::StaticFindObject<Unreal::UFunction*>(nullptr, nullptr, function_name_no_prefix);
+                 if (!unreal_function)
+                 {
++                    refused_log::throws(lua, "UnregisterHook", function_name_no_prefix, "ufunction-not-found");
+                     lua.throw_error(std::format("Tried to unregister a hook with Lua function 'UnregisterHook' but no UFunction with the specified name "
+                                                 "was found.\n>FunctionName: {}",
+                                                 to_string(function_name_no_prefix)));
+@@ -2432,6 +2556,10 @@
+                     error_message.append(fmt::format("ProcessInternal: {}\n", Unreal::UObject::ProcessInternalInternal.get_function_address()));
+                     error_message.append(
+                             fmt::format("FUNC_Native: {}\n", static_cast<uint32_t>(unreal_function->HasAnyFunctionFlags(Unreal::EFunctionFlags::FUNC_Native))));
++                    refused_log::throws(lua, "UnregisterHook", function_name_no_prefix,
++                                        !func_ptr ? "ufunction-func-null"
++                                                  : (unreal_function->HasAnyFunctionFlags(Unreal::EFunctionFlags::FUNC_Native) ? "native-func-is-processinternal"
++                                                                                                                               : "bp-script-function-needs-processinternal-hook"));
+                     lua.throw_error(error_message);
+                 }
+ 
+@@ -3056,6 +3184,7 @@
+ 
+             Output::send<LogLevel::Verbose>(STR("[NotifyOnNewObject] Registered notification for {}\n"), class_name);
+ 
++            refused_log::accepted(lua, "NotifyOnNewObject", class_name, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -3099,6 +3228,7 @@
+                         }});
+             }
+ 
++            refused_log::accepted(lua, "RegisterCustomEvent", event_name, refused_log::Family::CustomEvent);
+             return 0;
+         });
+ 
+@@ -3145,6 +3275,7 @@
+                     .instance_of_class = nullptr,
+                     .registry_indexes = {std::pair<const LuaMadeSimple::Lua*, LuaMod::LuaCallbackData::RegistryIndex>{hook_lua, lua_callback_registry_index}}});
+ 
++            refused_log::accepted(lua, "RegisterLoadMapPreHook", StringType{STR("-")}, refused_log::Family::LoadMap);
+             return 0;
+         });
+ 
+@@ -3172,6 +3303,7 @@
+                     .instance_of_class = nullptr,
+                     .registry_indexes = {std::pair<const LuaMadeSimple::Lua*, LuaMod::LuaCallbackData::RegistryIndex>{hook_lua, lua_callback_registry_index}}});
+ 
++            refused_log::accepted(lua, "RegisterLoadMapPostHook", StringType{STR("-")}, refused_log::Family::LoadMap);
+             return 0;
+         });
+ 
+@@ -3200,6 +3332,7 @@
+                     .registry_indexes = {std::pair<const LuaMadeSimple::Lua*, LuaMod::LuaCallbackData::RegistryIndex>{hook_lua, lua_callback_registry_index}},
+             });
+ 
++            refused_log::accepted(lua, "RegisterInitGameStatePreHook", StringType{STR("-")}, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -3228,6 +3361,7 @@
+                     .registry_indexes = {std::pair<const LuaMadeSimple::Lua*, LuaMod::LuaCallbackData::RegistryIndex>{hook_lua, lua_callback_registry_index}},
+             });
+ 
++            refused_log::accepted(lua, "RegisterInitGameStatePostHook", StringType{STR("-")}, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -3256,6 +3390,7 @@
+                     .registry_indexes = {std::pair<const LuaMadeSimple::Lua*, LuaMod::LuaCallbackData::RegistryIndex>{hook_lua, lua_callback_registry_index}},
+             });
+ 
++            refused_log::accepted(lua, "RegisterBeginPlayPreHook", StringType{STR("-")}, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -3284,6 +3419,7 @@
+                     .registry_indexes = {std::pair<const LuaMadeSimple::Lua*, LuaMod::LuaCallbackData::RegistryIndex>{hook_lua, lua_callback_registry_index}},
+             });
+ 
++            refused_log::accepted(lua, "RegisterBeginPlayPostHook", StringType{STR("-")}, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -3312,6 +3448,7 @@
+                     .registry_indexes = {std::pair<const LuaMadeSimple::Lua*, LuaMod::LuaCallbackData::RegistryIndex>{hook_lua, lua_callback_registry_index}},
+             });
+ 
++            refused_log::accepted(lua, "RegisterEndPlayPreHook", StringType{STR("-")}, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -3340,6 +3477,7 @@
+                     .registry_indexes = {std::pair<const LuaMadeSimple::Lua*, LuaMod::LuaCallbackData::RegistryIndex>{hook_lua, lua_callback_registry_index}},
+             });
+ 
++            refused_log::accepted(lua, "RegisterEndPlayPostHook", StringType{STR("-")}, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -3912,6 +4050,7 @@
+             lua_xmove(lua.get_lua_state(), callback->lua->get_lua_state(), 1);
+             const int32_t lua_function_ref = callback->lua->registry().make_ref();
+             callback->registry_indexes.emplace_back(hook_lua, LuaMod::LuaCallbackData::RegistryIndex{lua_function_ref});
++            refused_log::accepted(lua, "RegisterProcessConsoleExecPreHook", StringType{STR("-")}, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -3933,6 +4072,7 @@
+             lua_xmove(lua.get_lua_state(), callback->lua->get_lua_state(), 1);
+             const int32_t lua_function_ref = callback->lua->registry().make_ref();
+             callback->registry_indexes.emplace_back(hook_lua, LuaMod::LuaCallbackData::RegistryIndex{lua_function_ref});
++            refused_log::accepted(lua, "RegisterProcessConsoleExecPostHook", StringType{STR("-")}, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -3954,6 +4094,7 @@
+             lua_xmove(lua.get_lua_state(), callback->lua->get_lua_state(), 1);
+             const int32_t lua_function_ref = callback->lua->registry().make_ref();
+             callback->registry_indexes.emplace_back(hook_lua, LuaMod::LuaCallbackData::RegistryIndex{lua_function_ref});
++            refused_log::accepted(lua, "RegisterCallFunctionByNameWithArgumentsPreHook", StringType{STR("-")}, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -3975,6 +4116,7 @@
+             lua_xmove(lua.get_lua_state(), callback->lua->get_lua_state(), 1);
+             const int32_t lua_function_ref = callback->lua->registry().make_ref();
+             callback->registry_indexes.emplace_back(hook_lua, LuaMod::LuaCallbackData::RegistryIndex{lua_function_ref});
++            refused_log::accepted(lua, "RegisterCallFunctionByNameWithArgumentsPostHook", StringType{STR("-")}, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -3996,6 +4138,7 @@
+             lua_xmove(lua.get_lua_state(), callback->lua->get_lua_state(), 1);
+             const int32_t lua_function_ref = callback->lua->registry().make_ref();
+             callback->registry_indexes.emplace_back(hook_lua, LuaMod::LuaCallbackData::RegistryIndex{lua_function_ref});
++            refused_log::accepted(lua, "RegisterULocalPlayerExecPreHook", StringType{STR("-")}, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -4017,6 +4160,7 @@
+             lua_xmove(lua.get_lua_state(), callback->lua->get_lua_state(), 1);
+             const int32_t lua_function_ref = callback->lua->registry().make_ref();
+             callback->registry_indexes.emplace_back(hook_lua, LuaMod::LuaCallbackData::RegistryIndex{lua_function_ref});
++            refused_log::accepted(lua, "RegisterULocalPlayerExecPostHook", StringType{STR("-")}, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -4061,6 +4205,7 @@
+             lua_xmove(lua.get_lua_state(), callback->lua->get_lua_state(), 1);
+             const int32_t lua_function_ref = callback->lua->registry().make_ref();
+             callback->registry_indexes.emplace_back(&lua, LuaMod::LuaCallbackData::RegistryIndex{lua_function_ref});
++            refused_log::accepted(lua, "RegisterConsoleCommandGlobalHandler", command_name, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -4102,6 +4247,7 @@
+             lua_xmove(lua.get_lua_state(), callback->lua->get_lua_state(), 1);
+             const int32_t lua_function_ref = callback->lua->registry().make_ref();
+             callback->registry_indexes.emplace_back(&lua, LuaMod::LuaCallbackData::RegistryIndex{lua_function_ref});
++            refused_log::accepted(lua, "RegisterConsoleCommandHandler", command_name, refused_log::Family::EagerDetour);
+             return 0;
+         });
+ 
+@@ -5381,6 +5527,7 @@
+         if (pre_id != Unreal::Hook::ERROR_ID && post_id != Unreal::Hook::ERROR_ID)
+         {
+             Output::send(STR("[R3] LoadMap detour armed (deferred arm; marshal world proven): queued Lua RegisterLoadMapPreHook/PostHook callbacks deliver on real LoadMap events\n"));
++            refused_log::loadmap_state.store(2, std::memory_order_release);
+             return;
+         }
+         // Fail-closed: the failed side above already emitted the composed layer's loud
+@@ -5388,6 +5535,8 @@
+         // Failed to add hook, detour installation likely failed!" Error). Never a silent
+         // skip: name exactly what stays undelivered, once, for the process lifetime.
+         Output::send<LogLevel::Error>(STR("[R3] LoadMap deferred arm refused (pre id {:X}, post id {:X}): queued Lua RegisterLoadMapPreHook/PostHook callbacks stay undelivered for this process lifetime (no re-arm); mod loading and every other surface are unaffected\n"), pre_id, post_id);
++        refused_log::loadmap_state.store(3, std::memory_order_release);
++        refused_log::emit("RegisterLoadMapPre/PostHook", StringType{STR("UEngine::LoadMap")}, StringType{STR("*")}, "loadmap-detour-arm-refused", "never-delivered");
+     }
+ #endif
+ 
+@@ -5991,6 +6140,7 @@
+             Unreal::UFunction* unreal_function = Unreal::UObjectGlobals::StaticFindObject<Unreal::UFunction*>(nullptr, nullptr, function_name_no_prefix);
+             if (!unreal_function)
+             {
++                refused_log::throws(lua, "RegisterHook", function_name_no_prefix, "ufunction-not-found");
+                 lua.throw_error(std::format(
+                         "Tried to register a hook with Lua function 'RegisterHook' but no UFunction with the specified name was found.\nFunction Name: {}",
+                         to_string(function_name_no_prefix)));
+@@ -6040,6 +6190,10 @@
+                 error_message.append(fmt::format("ProcessInternal: {}\n", Unreal::UObject::ProcessInternalInternal.get_function_address()));
+                 error_message.append(
+                         fmt::format("FUNC_Native: {}\n", static_cast<uint32_t>(unreal_function->HasAnyFunctionFlags(Unreal::EFunctionFlags::FUNC_Native))));
++                refused_log::throws(lua, "RegisterHook", function_name_no_prefix,
++                                    !func_ptr ? "ufunction-func-null"
++                                              : (unreal_function->HasAnyFunctionFlags(Unreal::EFunctionFlags::FUNC_Native) ? "native-func-is-processinternal"
++                                                                                                                           : "bp-script-function-needs-processinternal-hook"));
+                 lua.throw_error(error_message);
+             }
+ 
+@@ -6781,12 +6935,14 @@
+             // of being silently stalled on a pump that can never count it.
+             if (funcptr_marshal_usable())
+             {
++                refused_log::throws(lua, "ExecuteInGameThreadAfterFrames", StringType{STR("-")}, "frame-delays-need-enginetick-pump");
+                 lua.throw_error("ExecuteInGameThreadAfterFrames: frame-based delays need an EngineTick pump; only the R3 FuncPtr-marshal pump exists in this world and its drain cannot count frames");
+             }
+ #endif
+             // Frame-based delays require EngineTick - cannot use ProcessEvent
+             if (!is_engine_tick_hook_available())
+             {
++                refused_log::throws(lua, "ExecuteInGameThreadAfterFrames", StringType{STR("-")}, "enginetick-hook-unavailable");
+                 lua.throw_error("ExecuteInGameThreadAfterFrames: EngineTick hook is not available (AOB scan failed). Frame-based delays require EngineTick.");
+             }
+ 
+@@ -7008,12 +7164,14 @@
+             // of being silently stalled on a pump that can never count it.
+             if (funcptr_marshal_usable())
+             {
++                refused_log::throws(lua, "LoopInGameThreadAfterFrames", StringType{STR("-")}, "frame-delays-need-enginetick-pump");
+                 lua.throw_error("LoopInGameThreadAfterFrames: frame-based delays need an EngineTick pump; only the R3 FuncPtr-marshal pump exists in this world and its drain cannot count frames");
+             }
+ #endif
+             // Frame-based delays require EngineTick - cannot use ProcessEvent
+             if (!is_engine_tick_hook_available())
+             {
++                refused_log::throws(lua, "LoopInGameThreadAfterFrames", StringType{STR("-")}, "enginetick-hook-unavailable");
+                 lua.throw_error("LoopInGameThreadAfterFrames: EngineTick hook is not available (AOB scan failed). Frame-based delays require EngineTick.");
+             }
+ 
+@@ -8880,6 +9038,11 @@
+             // never a silent skip. The flag is set BEFORE the marshal consumer below can
+             // arm the pump, so no drain can precede it.
+             m_loadmap_deferred_arm_pending.store(true, std::memory_order_release);
++            refused_log::eager_detour_block_skipped.store(true, std::memory_order_release);
++            refused_log::loadmap_state.store(1, std::memory_order_release);
++            // One startup line for every family below that will accept registrations and never deliver them.
++            refused_log::emit("detour-block", StringType{STR("InitGameState,BeginPlay,EndPlay,StaticConstructObject(NotifyOnNewObject),ULocalPlayerExec,CallFunctionByNameWithArguments,ProcessConsoleExec(+console handlers)")},
++                              StringType{STR("*")}, "detour-block-skipped-r3-marshal", "never-delivered");
+             Output::send<LogLevel::Warning>(STR("[R3] LoadMap detour registrations deferred: in this world the initializer deferred its own detour registrations (R3 marshal owns the game-thread pump), so these eager arms are futile by the same law (owned-memory layer soft-refuses every live game-text access; each arm would log PLH SEV + an Error line and register nothing); InitGameState/BeginPlay/EndPlay/StaticConstructObject/ULocalPlayerExec/CallFunctionByNameWithArguments/ProcessConsoleExec/custom-event script hooks stay unregistered for this process lifetime (no re-arm); LoadMap is the exception: Lua-side RegisterLoadMapPreHook/PostHook callbacks are queued and a one-shot deferred arm is attempted when the marshal world is proven live; if that arm is refused the refusal is loud and the queued callbacks stay undelivered for this process lifetime\n"));
+         }
+         else

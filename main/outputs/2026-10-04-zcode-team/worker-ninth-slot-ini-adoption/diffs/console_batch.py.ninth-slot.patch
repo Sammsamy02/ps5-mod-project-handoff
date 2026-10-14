@@ -1,0 +1,968 @@
+--- diffs/console_batch.py.asfound-b00b3a69.py	2026-10-05 01:49:51
++++ console_batch.py	2026-10-05 02:18:50
+@@ -7,9 +7,12 @@
+ worker-batch-runner-8fam-patch (ownership transferred in-place) with the
+ 8-family stage, then by worker-evidence-freshness-fixes (freshness gate +
+ CP0 fallback label), then by worker-observer-staging-extension with the
+-combined ridealong staging, and by worker-batch-final-ini-adoption with the
+-DEFINITIVE 8-entry return-session ploader.ini law (both launch probes +
+-bootstrap reconciliation + stage-settings). This tool executes, step by step
++combined ridealong staging, by worker-batch-final-ini-adoption with the
++DEFINITIVE return-session ploader.ini law (both launch probes +
++bootstrap reconciliation + stage-settings), and by
++worker-ninth-slot-ini-adoption with the NINTH-SLOT law (the cc1 carrier
++probe appended after the igf =0 line: 9 entries / 8 registered, per
++worker-carrier-probe-build/STAGE-PLAN.md). This tool executes, step by step
+ with gates, the plans frozen by:
+   * worker-8fam-console-prep/CONSOLE-STAGE-PLAN-8FAM.md (PREFERRED single DLL
+     run) + worker-dll-8fam-combined/EXPECTED-DELTA-8FAM.md
+@@ -21,10 +24,13 @@
+   * worker-game-session-ridealongs/STAGE-PLAN-COMBINED.md (§0-§9: pinned parser
+     law §0/§3/§4 + SC-0..SC-8 staging skeleton + SHT-strip readback law)
+   * worker-final-ini-layout/FINAL-INI-LAYOUT.md (+ CONSOLE-BATCH-CONSTANTS-BRIEF.md)
+-    — THE definitive return-session layout: 8 entries / 7 registered, probes
+-    first, content-anchored ensure ops, ONE sanctioned bootstrap whole-file
+-    STOR, byte-exact canonical end-state gate (supersedes the 6-entry shape
+-    FOR THE RETURN SESSION; parser law unchanged)
++    — THE definitive return-session layout, NINTH-SLOT revision (9 entries /
++    8 registered; supersedes the 8-entry shape): probes first, content-anchored
++    ensure ops, ONE sanctioned bootstrap whole-file STOR, byte-exact canonical
++    end-state gate (parser law unchanged)
++  * worker-carrier-probe-build/STAGE-PLAN.md (+ CONSOLE-BATCH-CONSTANTS-BRIEF.md)
++    — the cc1 carrier probe: 9th ini entry (after the igf =0 line), PRX +
++    SHT-strip readback constants, cc1 census evidence gates
+   * worker-settings-v3-package/SETTINGS-V3-DECISION.md + worker-engineversion-ini/
+     NEW-SETTINGS.md §3 (the settings+loadlist lockstep restage, v3 pair)
+   * worker-menu-visibility-runbook/MASTER-VERIFICATION-RUNBOOK.md (CP0-CP7)
+@@ -37,11 +43,11 @@
+   dll7             7-family DLL payload-only stage — FALLBACK attribution path only
+   e2e              E2E installer 15-dispatch stage 0..6 cycle with records baselines
+   stage-ridealongs DEFINITIVE ridealong+probe staging (game CLOSED, pre-launch):
+-                   xwp-armed + fc1pool + qdrv1 + observer PRXs under the SHT-strip
+-                   readback law, then the FINAL 8-entry ploader.ini reached via the
+-                   ONE bootstrap whole-file STOR (only when the pre-image needs the
+-                   historical line moves) + idempotent content-anchored ensure ops,
+-                   gated byte-exact against ploader.ini.canonical (7 registered) —
++                   xwp-armed + fc1pool + qdrv1 + observer + cc1-carrier PRXs under the
++                   SHT-strip readback law, then the FINAL 9-entry ploader.ini reached
++                   via the ONE bootstrap whole-file STOR (only when the pre-image needs
++                   the historical line moves) + idempotent content-anchored ensure ops,
++                   gated byte-exact against ploader.ini.canonical (8 registered) —
+                    supersedes stage-qdrv1/stage-observer inside `all`
+   stage-observer   observer ridealong ONLY (legacy partial path as delivered):
+                    PRX upload + SHT-strip readback law + idempotent ini append of
+@@ -53,7 +59,7 @@
+   rollback-ridealongs rollback per STAGE-PLAN-COMBINED §7: flip BOTH ridealong lines
+                    to = 0 (single-character edits) with .bak + byte-verified readback
+   game-evidence    post-launch evidence: post_launch_check + rung_check + CP0-CP7 checks
+-                   + the two probe verdict sinks (xwp jsonl + fc1pool jsonl)
++                   + the probe verdict sinks (xwp jsonl + fc1pool jsonl + cc1 census jsonl)
+   all              recommended session order: dll8 -> e2e -> stage-ridealongs -> 
+                    stage-settings -> game-evidence
+                    (`--dll 7` runs the dll7 fallback attribution path instead; EXACTLY ONE
+@@ -226,13 +232,52 @@
+     "log": "/data/modbridge-fc1pool-facts.jsonl",      # + one FC1POOL: UE4SS line
+ }
+ 
++# Launch probe #3 / NINTH-SLOT ini entry (definitive layout entry 9, AFTER the
++# igf =0 line): cc1 carrier census ridealong (worker-carrier-probe-build,
++# build_id cc1-0864d65c1baf, variant cc1-carrier-census-ridealong; identities
++# re-verified on disk 2026-10-04 by worker-ninth-slot-ini-adoption before
++# pinning; deterministic double-build run1==run2). Dict shape per the
++# CONSOLE-BATCH-CONSTANTS-BRIEF: "console_path"/"log_path" carry the tool's
++# historical key names target_prx/log so the shared SHT-strip machinery is
++# unchanged; ini_line/ini_predecessor pin the content-anchored ensure op.
++CC1 = {
++    "prx": f"{T}/worker-carrier-probe-build/modbridge_carrier.prx",
++    "sha": "d83410aa9069a3039bb4079892b707373ad5d993992b0ed0b55abb1f57730e52",
++    "bytes": 26845,
++    "bare": f"{T}/worker-carrier-probe-build/determinism/run1/bare-sdk/modbridge_carrier.prx",
++    "bare_sha": "e72366c497d8ffa4a76f3f2f01bb898a0d41c2434813429be1408dc2c15a7f71",
++    "bare_bytes": 73088,
++    "readback_bytes": 71528,
++    # READBACK BODY SHA — host-recomputed by worker-ninth-slot-ini-adoption under
++    # the pinned §3 recipe (sha256 of bytes 64..end of the segment-covered prefix,
++    # end = max(p_offset+p_filesz) = 71528) from the verified bare-sdk ELF
++    # (run1==run2). The brief's delivered constant 1d17a27d… is sha256 of
++    # bare[64:EOF] (bytes 64..73088, the WHOLE tail incl. the SHT region) — an
++    # unreproducible-as-readback window: the ftpsrv channel serves ONLY the
++    # 71528-byte prefix, so a real readback can never hash to it. Divergence
++    # recorded in receipts/cc1-readback-constants-check.txt; length + all other
++    # constants verified byte-identical to the brief; law NOT widened.
++    "readback_body_sha": "131ff1c20093216f708dc2d1f7c340fdd0bb894476c01166522ab1aa99045e67",
++    "readback_body_sha_as_delivered": "1d17a27db4cea8182673360aef06ac2e47dd0eb81993b2226a181b3fd6d6e868",
++    "target_prx": "/data/plugins/modbridge_carrier.prx",
++    "module_line": "/data/plugins/modbridge_carrier.prx",
++    "build_id": "cc1-0864d65c1baf",
++    "log": "/data/modbridge-carrier-facts.jsonl",     # envelope modbridge.ingamefacts
++    "ini_line": "/data/plugins/modbridge_carrier.prx = 2",
++    "ini_predecessor": "/data/plugins/modbridge_ingame_facts.prx = 0",
++    "ue4ss_line_prefix": "CC1: build=cc1-0864d65c1baf verdict=",
++}
++
+ # DEFINITIVE return-session ploader.ini (worker-final-ini-layout/FINAL-INI-LAYOUT.md
+-# §1/§3 + CONSOLE-BATCH-CONSTANTS-BRIEF.md — supersedes the 6-entry COMBINED_INI
+-# shape FOR THE RETURN SESSION). Pinned parser facts unchanged (MAX_PLUGINS=10,
+-# modes 0/1/2 only, mode 0 SKIPPED at parse — no slot, register order == file
+-# order, NO path dedupe): 8 entries, 7 registered, probes first, aligned_entry/
+-# path_test relocated AFTER observer. End-state gate = BYTE-EXACT equality with
+-# ploader.ini.canonical (400 B, sha bbc34c16…), enforced via the final verifier.
++# §1/§3 + CONSOLE-BATCH-CONSTANTS-BRIEF.md, NINTH-SLOT revision per
++# worker-carrier-probe-build/STAGE-PLAN.md — supersedes the 8-entry shape of
++# worker-batch-final-ini-adoption and the 6-entry COMBINED_INI shape FOR THE
++# RETURN SESSION). Pinned parser facts unchanged (MAX_PLUGINS=10, modes 0/1/2
++# only, mode 0 SKIPPED at parse — no slot, register order == file order, NO path
++# dedupe): 9 entries, 8 registered, probes first, aligned_entry/path_test AFTER
++# observer, cc1 carrier appended AFTER the igf =0 line (next free index — never
++# displacing an existing line). End-state gate = BYTE-EXACT equality with
++# ploader.ini.canonical (440 B, sha fd9c7393…), enforced via the final verifier.
+ FINAL_INI = {
+     "ini": "/data/plugins/ploader.ini",
+     "header": "[PPSA33286]",
+@@ -245,9 +290,11 @@
+         "/data/plugins/modbridge_runtime_aligned_entry.prx": 2,
+         "/data/plugins/modbridge_path_test.prx": 2,
+         "/data/plugins/modbridge_ingame_facts.prx": 0,
++        "/data/plugins/modbridge_carrier.prx": 2,
+     },
+-    "anchor_of": {   # content-anchored ensure (FINAL-INI-LAYOUT.md §3.3);
+-                     # NOT tail-append — converges byte-for-byte in any order
++    "anchor_of": {   # content-anchored ensure (FINAL-INI-LAYOUT.md §3.3;
++                     # NOT tail-append — converges byte-for-byte in any order;
++                     # carrier anchored to the igf =0 line per STAGE-PLAN §4)
+         "/data/plugins/modbridge_exec_write_probe_armed.prx": "[PPSA33286]",
+         "/data/plugins/modbridge_fc1pool.prx": "/data/plugins/modbridge_exec_write_probe_armed.prx",
+         "/data/plugins/modbridge_qh_driver.prx": "/data/plugins/modbridge_supplier_composition.prx",
+@@ -255,29 +302,39 @@
+         "/data/plugins/modbridge_runtime_aligned_entry.prx": "/data/plugins/modbridge_runtime_aligned_observer.prx",
+         "/data/plugins/modbridge_path_test.prx": "/data/plugins/modbridge_runtime_aligned_entry.prx",
+         "/data/plugins/modbridge_ingame_facts.prx": "/data/plugins/modbridge_path_test.prx",
++        "/data/plugins/modbridge_carrier.prx": "/data/plugins/modbridge_ingame_facts.prx",
+     },
+     # lines PRE-EXISTING on the console (historical state) — their ABSENCE is an
+-    # anomaly (reconcile per rollback-runbook §4.3), never silently re-created
++    # anomaly (reconcile per rollback-runbook §4.3), never silently re-created.
++    # The carrier line is NOT pre-existing: it is NEW this session, and the
++    # Step-0 pre-image must NOT already carry it at a diverged mode/position
++    # (ploader does NOT dedupe; a duplicate carrier line is a hard STOP).
+     "pre_existing_required": (
+         "/data/plugins/modbridge_supplier_composition.prx",
+         "/data/plugins/modbridge_runtime_aligned_entry.prx",
+         "/data/plugins/modbridge_path_test.prx",
+         "/data/plugins/modbridge_ingame_facts.prx",
+     ),
+-    # lines THIS tool stages (ensured-if-absent at their anchored position)
++    # lines THIS tool stages (ensured-if-absent at their anchored position);
++    # cc1-carrier appended by the ninth-slot revision
+     "stager_lines": (
+         "/data/plugins/modbridge_exec_write_probe_armed.prx",
+         "/data/plugins/modbridge_fc1pool.prx",
+         "/data/plugins/modbridge_qh_driver.prx",
+         "/data/plugins/modbridge_runtime_aligned_observer.prx",
++        "/data/plugins/modbridge_carrier.prx",
+     ),
+-    "registered_expected_final": 7,          # was 5 (mode-0 igf consumes no slot)
++    "registered_expected_final": 8,          # was 7 pre-ninth-slot (mode-0 igf consumes no slot)
+     "registered_expected_partial": "<n active lines present>",  # per-flow subset
+-    "canonical_sha256": "bbc34c16621ad337632d0ff29a116b0aa6e86e45ad219e8ef7539b369a5a6fe1",
+-    "canonical_bytes": 400,
++    "canonical_sha256": "fd9c73937b2b1e45d0cc22721c3e03d977cf027a7a335e5599577b2b7f7c3507",
++    "canonical_bytes": 440,
+     "canonical_template": f"{T}/worker-final-ini-layout/ploader.ini.canonical",
+     "final_verifier": f"{T}/worker-final-ini-layout/verify_final_ini_layout.py",
+     "final_simulator": f"{T}/worker-final-ini-layout/simulate_ploader_ini_final.py",
++    # superseded prior laws, retained as rollback/record anchors only:
++    #   8-entry law: 400 B, sha bbc34c16621ad337632d0ff29a116b0aa6e86e45ad219e8ef7539b369a5a6fe1,
++    #   7 registered (worker-batch-final-ini-adoption, delivered b00b3a69…)
++    "post_launch_ok_lines_expected": 8,      # EXACTLY 8 `OK (<ms>): <file>`, ZERO FAIL
+ }
+ 
+ # Settings+loadlist lockstep restage pair (worker-settings-v3-package/package-v3;
+@@ -1220,7 +1277,7 @@
+ # Content-anchored ensure ops (§3.3): insertion position is determined by a
+ # CONTENT anchor (the canonical predecessor line), never the file tail, so any
+ # execution order of the ensure ops converges BYTE-FOR-BYTE to the canonical
+-# layout (proven over all 8! = 40320 permutations by
++# layout (proven over all 9! = 362880 permutations by
+ # worker-final-ini-layout/simulate_ploader_ini_final.py, variant
+ # staging_permutations). Duplicates remain a hard STOP; the header is a
+ # PRECONDITION proven by the Step-0 RETR, never appended.
+@@ -1230,7 +1287,7 @@
+ FINAL_PREDECESSOR = dict(FINAL_INI["anchor_of"])
+ FINAL_PREDECESSOR[FINAL_INI["header"]] = None
+ # composition sits at canonical position 3 with the xwp probe as its predecessor;
+-# anchor_of pins the seven ENSURED lines' anchors (header for xwp) — the
++# anchor_of pins the eight ENSURED lines' anchors (header for xwp) — the
+ # composition line itself is pre-existing and never appended by this tool.
+ FINAL_PREDECESSOR.setdefault(
+     "/data/plugins/modbridge_supplier_composition.prx",
+@@ -1265,7 +1322,7 @@
+ 
+ def final_ini_ensure(text, path):
+     """Content-anchored idempotent ensure for ONE canonical entry (§3.3).
+-    Mirrors simulate_ploader_ini_final.ensure (the 40320-permutation-proven law):
++    Mirrors simulate_ploader_ini_final.ensure (the 362880-permutation-proven law):
+     duplicates raise; present-exactly-once is a no-op; absent inserts the line
+     immediately AFTER its canonical predecessor (recursively ensured first).
+     The header is a precondition, never appended."""
+@@ -1311,8 +1368,8 @@
+       "append":    new_text = pre-image with ONLY the missing wanted lines
+                    inserted at their CONTENT-anchored positions; appended lists
+                    the added lines (in canonical order regardless of call order)
+-      "noop":      the pre-image is ALREADY byte-exact canonical (8 entries,
+-                   7 registered) — stage nothing, store nothing
++      "noop":      the pre-image is ALREADY byte-exact canonical (9 entries,
++                   8 registered) — stage nothing, store nothing
+       "bootstrap": the ONE sanctioned whole-file rebuild is REQUIRED (the
+                    present lines are NOT in canonical relative order — the
+                    historical aligned_entry/path_test-before-composition shape,
+@@ -1341,7 +1398,7 @@
+     for p in paths:                                     # unknown-line STOP (kept)
+         if p not in FINAL_INI["expected_existing"]:
+             return "stop", ("unknown line %s — the parser would REGISTER it (slot burn, "
+-                            "nothing audited it); not in the definitive 8-entry contract; "
++                            "nothing audited it); not in the definitive 9-entry contract; "
+                             "reconcile per rollback-runbook §4.3" % p), []
+     for p in FINAL_INI["pre_existing_required"]:        # missing-expected STOP (kept)
+         if p not in present:
+@@ -1362,7 +1419,7 @@
+         return "bootstrap", canonical_text, (
+             "present lines are NOT in canonical relative order (historical "
+             "aligned_entry/path_test-before-composition shape) — ONE sanctioned "
+-            "whole-file STOR of the canonical 8-line template, gated as "
++            "whole-file STOR of the canonical 9-line template, gated as "
+             "INI-BOOTSTRAPPED with .bak + RETR byte-exact diff")
+     if [p for p in paths] == FINAL_ORDER:
+         if pre_text == final_canonical_text():
+@@ -1390,7 +1447,7 @@
+ def final_ini_verify_endstate(new_text):
+     """DEFINITIVE end-state gate: byte-exact equality with ploader.ini.canonical
+     (replacing the legacy '5 registered' count gate), plus the pinned parser law
+-    (exactly 7 registered, igf never registered, MAX_PLUGINS headroom). Returns
++    (exactly 8 registered, igf never registered, MAX_PLUGINS headroom). Returns
+     a list of problems (empty == the file IS the definitive layout)."""
+     problems = []
+     try:
+@@ -1425,7 +1482,7 @@
+     present = dict((p, m) for p, m, _r in entries)
+     for p in paths:
+         if p not in FINAL_INI["expected_existing"]:
+-            problems.append("unknown line %s — not in the definitive 8-entry contract" % p)
++            problems.append("unknown line %s — not in the definitive 9-entry contract" % p)
+     for p, pin in FINAL_INI["expected_existing"].items():
+         if p in present and present[p] != pin:
+             problems.append("line %s mode %d, pinned %d" % (p, present[p], pin))
+@@ -1439,7 +1496,7 @@
+     n_registered = sum(1 for _p, m, _r in entries if m != 0)
+     if n_registered != FINAL_INI["registered_expected_final"]:
+         problems.append("registered plugin count = %d, expected exactly %d (mode-0 igf "
+-                        "consumes no slot; 3/10 headroom)"
++                        "consumes no slot; 2/10 headroom)"
+                         % (n_registered, FINAL_INI["registered_expected_final"]))
+     return problems
+ 
+@@ -2678,8 +2735,8 @@
+     """SC-0 pre-launch baselines: UE4SS.log stat (size baseline; absence is a
+     valid fresh-console baseline), observer log must be ABSENT (it must be
+     created fresh by the module), igf jsonl baseline IF PRESENT (never delete
+-    owned evidence), plus BOTH probe verdict sinks IF PRESENT (byte baselines —
+-    the post-launch gate then demands FRESH GROWTH for this launch)."""
++    owned evidence), plus ALL THREE probe verdict sinks IF PRESENT (byte
++    baselines — the post-launch gate then demands FRESH GROWTH for this launch)."""
+     def fn(ctx):
+         ok_l, l_text = fetch_console_file(ctx, "data/plugins/UE4SS.log", "baseline-UE4SS.log")
+         if ctx.dry:
+@@ -2695,7 +2752,7 @@
+         c_note = "absent" if not ok_c or c_text == "" else \
+             "%d bytes baseline recorded (qdrv1 lines distinguishable by build_id qdrv1- prefix; never delete owned evidence)" % len(c_text)
+         probe_notes = []
+-        for d, key in ((XWP_ARMED, "xwp"), (FC1POOL, "fc1")):
++        for d, key in ((XWP_ARMED, "xwp"), (FC1POOL, "fc1"), (CC1, "cc1")):
+             ok_p, p_text = fetch_console_file(ctx, d["log"].lstrip("/"), "baseline-%s.jsonl" % key)
+             if ok_p and p_text != "":
+                 ctx.state["%s_jsonl_baseline" % key] = p_text
+@@ -2713,12 +2770,14 @@
+ RIDEALONG_HANDOFF = (
+     "1. With the game fully CLOSED, ARM ploader.elf (Payload Manager UI or loadpayload entry).\n"
+     "2. LAUNCH Townfall manually — NEVER automated.\n"
+-    "3. Read the ploader notification lines (SC-5b): expect EXACTLY 7 `OK (<ms>): <file>` lines\n"
+-    "   (the definitive 8-entry layout: 7 active entries; the mode-0 igf line consumes no slot),\n"
+-    "   ZERO FAIL lines. Any FAIL -> STOP and run: console_batch.py rollback-ridealongs\n"
++    "3. Read the ploader notification lines (SC-5b): expect EXACTLY 8 `OK (<ms>): <file>` lines\n"
++    "   (the definitive 9-entry layout: 8 active entries incl. the cc1 carrier; the mode-0 igf\n"
++    "   line consumes no slot), ZERO FAIL lines. Any FAIL -> STOP and run:\n"
++    "   console_batch.py rollback-ridealongs\n"
+     "4. Then run: console_batch.py game-evidence (probe verdicts land in\n"
+-    "   /data/modbridge-exec-write-probe.jsonl + /data/modbridge-fc1pool-facts.jsonl;\n"
+-    "   observer log/jsonl may take ~2-3 min post-launch).")
++    "   /data/modbridge-exec-write-probe.jsonl + /data/modbridge-fc1pool-facts.jsonl +\n"
++    "   /data/modbridge-carrier-facts.jsonl; observer log/jsonl and the cc1 census may take\n"
++    "   ~2-3 min post-launch — the cc1 window is 30 polls x 4 s).")
+ 
+ FINAL_INI_HANDOFF = RIDEALONG_HANDOFF
+ 
+@@ -2732,7 +2791,8 @@
+     def fn(ctx):
+         pre = ctx.state.get("pre")
+         status, new_text, note = final_ini_plan(pre, FINAL_ORDER)
+-        decision = {"flow": label, "law": "FINAL-INI-LAYOUT.md §3.3 (definitive 8-entry)",
++        decision = {"flow": label, "law": "FINAL-INI-LAYOUT.md §3.3 (definitive 9-entry, "
++                    "ninth-slot revision)",
+                     "status": status, "appended": note if status == "append" else []}
+         ctx.save("ploader-edit-decision.json", json.dumps(decision, indent=2))
+         if status == "stop":
+@@ -2743,7 +2803,7 @@
+             # .bak already written by the Step-0 pre-image step; RETR byte-exact diff
+             ctx.save("ploader.ini.new", new_text)
+             ctx.save("ini-bootstrap-verdict.txt", "INI-BOOTSTRAPPED: ONE whole-file STOR of "
+-                     "ploader.ini.canonical (400 B, sha %s); .bak + byte-exact RETR diff "
++                     "ploader.ini.canonical (440 B, sha %s); .bak + byte-exact RETR diff "
+                      "follow" % FINAL_INI["canonical_sha256"])
+             rc, _, _ = run_cmd(ctx, ["curl", "-sS", "-T",
+                                      os.path.join(ctx.run_dir, "ploader.ini.new"),
+@@ -2769,7 +2829,7 @@
+             decision["status"] = "bootstrap-applied"
+             decision["stor"] = "done"
+             ctx.save("ploader-edit-decision.json", json.dumps(decision, indent=2))
+-            return "PASS", "INI-BOOTSTRAPPED: canonical 8-line layout stored whole-file ONCE + readback byte-exact (%s)" % note
++            return "PASS", "INI-BOOTSTRAPPED: canonical 9-line layout stored whole-file ONCE + readback byte-exact (%s)" % note
+         # "append" (ensure ops needed) or "noop" (already canonical)
+         ctx.save("ploader.ini.new", new_text if status == "append" else (pre or ""))
+         decision["stor"] = "pending" if status == "append" else "none"
+@@ -2802,7 +2862,7 @@
+         if proc.returncode != 0 or "FINAL-INI-OK" not in vout:
+             return "FAIL", "final verifier rejected the local file (rc=%s): %s" % (
+                 proc.returncode, vout.strip().splitlines()[:4])
+-        return "PASS", "byte-exact canonical 8-entry layout (400 B, sha %s…); 7 registered; igf=0 skipped" % (
++        return "PASS", "byte-exact canonical 9-entry layout (440 B, sha %s…); 8 registered; igf=0 skipped; carrier last" % (
+             FINAL_INI["canonical_sha256"][:12])
+     return fn
+ 
+@@ -2844,23 +2904,26 @@
+ 
+ def build_stage_ridealongs():
+     """DEFINITIVE return-session staging (FINAL-INI-LAYOUT.md §3 + the
+-    CONSOLE-BATCH-CONSTANTS-BRIEF): BOTH launch probes (xwp-armed + fc1pool) and
+-    BOTH ridealongs (qdrv1 + observer) under the SHT-strip readback law, then the
+-    FINAL 8-entry ploader.ini via the ONE bootstrap whole-file STOR (only when
+-    the pre-image needs the historical line moves) + idempotent content-anchored
+-    ensure ops, gated BYTE-EXACT against ploader.ini.canonical (7 registered).
++    CONSOLE-BATCH-CONSTANTS-BRIEF, ninth-slot revision per
++    worker-carrier-probe-build/STAGE-PLAN.md): BOTH launch probes (xwp-armed +
++    fc1pool), BOTH ridealongs (qdrv1 + observer) AND the cc1 carrier census
++    probe under the SHT-strip readback law, then the FINAL 9-entry ploader.ini
++    via the ONE bootstrap whole-file STOR (only when the pre-image needs the
++    historical line moves) + idempotent content-anchored ensure ops, gated
++    BYTE-EXACT against ploader.ini.canonical (8 registered).
+     Supersedes the 6-entry combined staging inside `all`."""
+     fl = Flow("stage-ridealongs")
+-    fl.notes = ("DEFINITIVE return-session staging (FINAL-INI-LAYOUT §3): 4 PRXs (xwp-armed "
+-                "igd1-6ebab07f2111, fc1pool fc1pool1-78508a2e2940, qdrv1, observer) + the FINAL "
+-                "8-entry ploader.ini (7 registered; bootstrap whole-file STOR only when the "
+-                "historical line moves require it; ensure ops otherwise), byte-exact vs "
+-                "ploader.ini.canonical.")
++    fl.notes = ("DEFINITIVE return-session staging (FINAL-INI-LAYOUT §3, ninth-slot revision): "
++                "5 PRXs (xwp-armed igd1-6ebab07f2111, fc1pool fc1pool1-78508a2e2940, qdrv1, "
++                "observer, cc1-carrier cc1-0864d65c1baf) + the FINAL 9-entry ploader.ini "
++                "(8 registered; bootstrap whole-file STOR only when the historical line moves "
++                "require it; ensure ops otherwise), byte-exact vs ploader.ini.canonical.")
+ 
+     def prefix_gate_fn(ctx):
+         # host-side cross-check: the computed prefix of each pinned bare ELF must
+         # equal the pinned readback length, else the constants/artifact pair diverged
+-        for d, name in ((QDRV1, "qdrv1"), (OBS, "observer"), (XWP_ARMED, "xwp"), (FC1POOL, "fc1")):
++        for d, name in ((QDRV1, "qdrv1"), (OBS, "observer"), (XWP_ARMED, "xwp"), (FC1POOL, "fc1"),
++                        (CC1, "cc1")):
+             bare = open(d["bare"], "rb").read()
+             end = sht_prefix_end(bare)
+             if end != d["readback_bytes"]:
+@@ -2872,50 +2935,59 @@
+             final_canonical_bytes()
+         except FinalEnsureError as exc:
+             return "FAIL", str(exc)
+-        return "PASS", ("SHT-strip law constants cross-checked against all four bare-sdk "
++        return "PASS", ("SHT-strip law constants cross-checked against all five bare-sdk "
+                         "artifacts + canonical template identity")
+ 
+-    fl.step("ride.0", "SC-PREFLIGHT — local identities: all FOUR fself PRXs (qdrv1 52c32216…, "
+-                      "observer 1afa0997…, xwp-armed 48949316…, fc1pool d2431bf8…) + all FOUR "
+-                      "bare-sdk ELFs + the canonical template (verify hashes before replacing "
+-                      "any owned file)", "preflight",
++    fl.step("ride.0", "SC-PREFLIGHT — local identities: all FIVE fself PRXs (qdrv1 52c32216…, "
++                      "observer 1afa0997…, xwp-armed 48949316…, fc1pool d2431bf8…, cc1-carrier "
++                      "d83410aa…) + all FIVE bare-sdk ELFs + the canonical template (verify "
++                      "hashes before replacing any owned file)", "preflight",
+             [gate_sha(QDRV1["prx"], QDRV1["sha"], QDRV1["bytes"]),
+              gate_sha(OBS["prx"], OBS["sha"], OBS["bytes"]),
+              gate_sha(XWP_ARMED["prx"], XWP_ARMED["sha"], XWP_ARMED["bytes"]),
+              gate_sha(FC1POOL["prx"], FC1POOL["sha"], FC1POOL["bytes"]),
++             gate_sha(CC1["prx"], CC1["sha"], CC1["bytes"]),
+              gate_sha(FINAL_INI["canonical_template"], FINAL_INI["canonical_sha256"],
+                       FINAL_INI["canonical_bytes"]),
++             "cc1 bare-sdk e72366c4… / 73088 B pinned (determinism run1==run2 byte-identical)",
+              "bare-sdk refs pinned by sha + bytes (determinism run dirs)",
+              "game CLOSED — staging happens BEFORE the game session; no ploader arm yet"],
+-            ["shasum -a 256 %s %s %s %s" % (QDRV1["prx"], OBS["prx"], XWP_ARMED["prx"], FC1POOL["prx"]),
+-             "shasum -a 256 %s %s %s %s" % (QDRV1["bare"], OBS["bare"], XWP_ARMED["bare"], FC1POOL["bare"]),
++            ["shasum -a 256 %s %s %s %s %s" % (QDRV1["prx"], OBS["prx"], XWP_ARMED["prx"], FC1POOL["prx"], CC1["prx"]),
++             "shasum -a 256 %s %s %s %s %s" % (QDRV1["bare"], OBS["bare"], XWP_ARMED["bare"], FC1POOL["bare"], CC1["bare"]),
+              "shasum -a 256 %s" % FINAL_INI["canonical_template"]],
+             preflight_fn([(QDRV1["prx"], QDRV1["sha"], QDRV1["bytes"]),
+                           (OBS["prx"], OBS["sha"], OBS["bytes"]),
+                           (XWP_ARMED["prx"], XWP_ARMED["sha"], XWP_ARMED["bytes"]),
+                           (FC1POOL["prx"], FC1POOL["sha"], FC1POOL["bytes"]),
++                          (CC1["prx"], CC1["sha"], CC1["bytes"]),
+                           (QDRV1["bare"], QDRV1["bare_sha"], QDRV1["bare_bytes"]),
+                           (OBS["bare"], OBS["bare_sha"], OBS["bare_bytes"]),
+                           (XWP_ARMED["bare"], XWP_ARMED["bare_sha"], XWP_ARMED["bare_bytes"]),
+                           (FC1POOL["bare"], FC1POOL["bare_sha"], FC1POOL["bare_bytes"]),
++                          (CC1["bare"], CC1["bare_sha"], CC1["bare_bytes"]),
+                           (FINAL_INI["canonical_template"], FINAL_INI["canonical_sha256"],
+                            FINAL_INI["canonical_bytes"])], "ridealongs"))
+ 
+-    fl.step("ride.1", "SC-PREFLIGHT b — recompute the §3 readback constants from all four "
++    fl.step("ride.1", "SC-PREFLIGHT b — recompute the §3 readback constants from all five "
+                       "bare-sdk ELFs (qdrv1 87112 / 71406d3c…; observer 30143976 / 3f89a5b6…; "
+-                      "xwp 67832 / daea2ff4…; fc1 67848 / 7e2dce27…)", "preflight",
++                      "xwp 67832 / daea2ff4…; fc1 67848 / 7e2dce27…; cc1 71528 / 131ff1c2…)", "preflight",
+             ["qdrv1: readback bytes == 87112, body sha == 71406d3c…",
+              "observer: readback bytes == 30143976, body sha == 3f89a5b6…",
+              "xwp: readback bytes == 67832, body sha == daea2ff4…",
+              "fc1: readback bytes == 67848, body sha == 7e2dce27…",
+-             "canonical template == 400 B, sha bbc34c16…",
++             "cc1: readback bytes == 71528, body sha == 131ff1c2… (§3 prefix law; the brief's "
++             "1d17a27d… hashed bare[64:EOF] — see CC1 dict note + adoption receipts)",
++             "canonical template == 440 B, sha fd9c7393…",
+              "any divergence = artifact/constants mismatch = STOP, never widen the law"],
+             ["python3 - <bare-sdk>  # max(p_offset+p_filesz) + body sha (§3 snippet semantics)"],
+             prefix_gate_fn)
+ 
+     fl.step("ride.2", "SC-0 — RETR live ploader.ini pre-image + console .bak backup (rollback "
+-                      "artifact FIRST; header exactly once; NO duplicate lines; the 4 "
+-                      "pre-existing lines present at pinned modes)", "ini",
++                      "artifact FIRST; header exactly once; NO duplicate lines — a duplicate "
++                      "carrier line is a hard STOP, ploader does NOT dedupe; the 4 pre-existing "
++                      "lines present at pinned modes; a carrier line ALREADY present must be at "
++                      "its pinned mode 2 + canonical position or the law STOPs/bootstraps — "
++                      "never a second append)", "ini",
+             ["pre-image RETR + hash recorded BEFORE any edit (Gate A0 pattern)",
+              "FAIL on: no [PPSA33286], duplicate lines (ploader does NOT dedupe), "
+              "missing pre-existing lines, wrong modes, unknown lines — reconcile, never blind-edit",
+@@ -2936,12 +3008,15 @@
+              "line / unparseable — reconcile per rollback-runbook §4.3",
+              "bootstrap is gated as its own INI-BOOTSTRAPPED verdict with the .bak + "
+              "byte-exact RETR diff; ensure-only path stores nothing here",
+-             "canonical: 8 entries, 7 registered, probes first, igf=0 last"],
++             "cc1 ensure op (STAGE-PLAN §4): insert '/data/plugins/modbridge_carrier.prx = 2' "
++             "immediately AFTER the '/data/plugins/modbridge_ingame_facts.prx = 0' line "
++             "(content anchor, next free index — never displacing an existing line)",
++             "canonical: 9 entries, 8 registered, probes first, igf=0 second-to-last, carrier last"],
+             ["diff <run-dir>/ploader.ini.pre <run-dir>/ploader.ini.new  # bootstrap: whole file; ensure: the inserted line(s)"],
+             final_ini_decision_step("ridealongs"))
+ 
+     fl.step("ride.3", "§3.3 byte-exact end-state proof of the LOCAL file BEFORE any STOR "
+-                      "(in-process law: header once, 8 entries, 7 registered, igf never "
++                      "(in-process law: header once, 9 entries, 8 registered, igf never "
+                       "registered + the final verifier subprocess)", "ini",
+             ["byte-exact equality with ploader.ini.canonical replaces the legacy "
+              "'5 registered' count gate",
+@@ -2960,18 +3035,21 @@
+             final_ini_stor_fn("ridealongs"))
+ 
+     fl.step("ride.5", "SC-0 b — freshness baselines: UE4SS.log stat; observer log ABSENT; igf "
+-                      "jsonl + BOTH probe jsonl sinks baselined IF PRESENT (never delete "
++                      "jsonl + ALL THREE probe jsonl sinks baselined IF PRESENT (never delete "
+                       "owned evidence; fresh growth proves this launch's verdicts)",
+             "baseline",
+-            ["UE4SS.log size baseline (absent = valid fresh baseline)",
++            ["UE4SS.log size baseline (absent = valid fresh baseline; the ONE new CC1: line "
++             "is counted against it post-launch)",
+              "%s must be ABSENT — created fresh by the module this launch" % OBS["log"],
+-             "%s and %s: byte baselines recorded if present" % (XWP_ARMED["log"], FC1POOL["log"]),
++             "%s, %s and %s: byte baselines recorded if present"
++             % (XWP_ARMED["log"], FC1POOL["log"], CC1["log"]),
+              "igf jsonl: record size+sha if present; qdrv1 lines carry the qdrv1- build_id prefix"],
+             ["curl -sS %s/data/plugins/UE4SS.log          # size baseline" % FTP,
+              "curl -sS %s%s   # must be absent" % (FTP, OBS["log"]),
+              "curl -sS %s%s   # baseline if present" % (FTP, GAME["C2"]),
+              "curl -sS %s%s   # baseline if present" % (FTP, XWP_ARMED["log"]),
+-             "curl -sS %s%s   # baseline if present" % (FTP, FC1POOL["log"])],
++             "curl -sS %s%s   # baseline if present" % (FTP, FC1POOL["log"]),
++             "curl -sS %s%s   # baseline if present" % (FTP, CC1["log"])],
+             freshness_baseline_fn())
+ 
+     fl.step("ride.6", "SC-1/SC-2 — STOR modbridge_exec_write_probe_armed.prx (48949316… / "
+@@ -3022,14 +3100,28 @@
+              "python3 - §3 snippet vs build-1/bare-sdk/modbridge_runtime_aligned_observer.prx"],
+             prx_law_upload_fn(OBS, "observer"))
+ 
++    fl.step("ride.9b", "SC-1/SC-2 (ninth slot) — STOR modbridge_carrier.prx (d83410aa… / 26845 B) "
++                       "to its FINAL name + SHT-strip readback law (71528 B / body 131ff1c2…; ONE "
++                       "re-STOR on failure, then abort)", "upload",
++            ["local sha == d83410aa… BEFORE upload (BUILD-ID law; build cc1-0864d65c1baf)",
++             "readback: exact-length 71528 + body-hash 1d17a27d… + Ehdr exception",
++             "distinct file under its OWN name — nothing is replaced",
++             "skipped entirely when the ini decision was a no-op (readback-only verify)"],
++            ["curl -sS -T %s %s%s" % (CC1["prx"], FTP, CC1["target_prx"]),
++             "curl -sS %s%s -o <run-dir>/cc1.readback.prx" % (FTP, CC1["target_prx"]),
++             "python3 - §3 snippet vs determinism/run1/bare-sdk/modbridge_carrier.prx"],
++            prx_law_upload_fn(CC1, "cc1"))
++
+     fl.step("ride.10", "SC-6/SC-7 HANDOFF — arm ploader + USER launches Townfall (single launch "
+-                       "window; the definitive 8-entry ini: 7 registered plugins ride, igf=0 "
+-                       "stays inert)", "handoff",
+-            ["ONE game-launch window total: 7 registered plugins in the same ploader.ini",
+-             "SC-5b after launch: EXACTLY 7 `OK (<ms>): <file>` notification lines, ZERO FAIL "
++                       "window; the definitive 9-entry ini: 8 registered plugins ride incl. the "
++                       "cc1 carrier, igf=0 stays inert)", "handoff",
++            ["ONE game-launch window total: 8 registered plugins in the same ploader.ini",
++             "SC-5b after launch: EXACTLY 8 `OK (<ms>): <file>` notification lines, ZERO FAIL "
+              "lines; any FAIL -> STOP + rollback-ridealongs",
+-             "probe verdicts land in %s (build_id %s) and %s (build_id %s)"
+-             % (XWP_ARMED["log"], XWP_ARMED["build_id"], FC1POOL["log"], FC1POOL["build_id"]),
++             "probe verdicts land in %s (build_id %s), %s (build_id %s) and %s (build_id %s, "
++             "census window ~2 min: 30 polls x 4 s)"
++             % (XWP_ARMED["log"], XWP_ARMED["build_id"], FC1POOL["log"], FC1POOL["build_id"],
++                CC1["log"], CC1["build_id"]),
+              "then run: console_batch.py game-evidence"],
+             ["USER arms ploader.elf (game closed)",
+              "USER launches Townfall",
+@@ -3538,6 +3630,148 @@
+         status = "WARN"
+         notes.append("fc1: ZERO fresh records this launch (probe did not run or sink unreachable)")
+     detail = "; ".join(notes) if notes else "probe sinks green"
++    return status, detail, info
++
++
++def _cc1_field(j, key):
++    """Fetch a cc1 record payload key: top-level first, then inside the
++    envelope's `fields` dict (the v3 writer nests per-record payload there)."""
++    if key in j:
++        return j[key]
++    f = j.get("fields")
++    if isinstance(f, dict) and key in f:
++        return f[key]
++    return None
++
++
++def carrier_evidence_verdict(cc1_text, cc1_base, l_text):
++    """Classify the cc1 carrier census sink (evidence-path law; ninth-slot
++    revision per worker-carrier-probe-build/STAGE-PLAN.md §7 + the constants
++    brief):
++      /data/modbridge-carrier-facts.jsonl — build_id cc1-0864d65c1baf, envelope
++        marker modbridge.ingamefacts, every line strict JSON < 1 KiB.
++        Success signature: seq1 `entry`, seq2 `startup` (polls 30, poll_s 4),
++        seq3 `mapscan`, 30 `qh_counter` lines, `census_match` lines,
++        `census_result` verdict CENSUS:VALIDATED (controls None_id_zero:1 +
++        ByteProperty_ascii_ok:1, negative_hits.PostRender:0 +
++        ZZZNotARealFunctionQQ:0), `summary` write_failures:0.
++      UE4SS.log: exactly ONE new `CC1: build=cc1-0864d65c1baf verdict=…` line.
++    Returns (status, detail, info). Presence/freshness/classification only —
++    CENSUS:REFUSED verdicts are honest terminal evidence (WARN; the grace-class
++    remedy is a NEW staged window, never a re-rating of unchanged evidence);
++    this gate never certifies FName-pool internals."""
++    info = {"cc1": {}}
++    notes = []
++    status = "PASS"
++    fresh_c, note_c = _fresh_sink_lines(cc1_text, cc1_base)
++    if fresh_c is None:
++        return "FAIL", "cc1 jsonl: %s" % note_c, info
++    c_lines = [ln for ln in fresh_c.splitlines() if ln.strip()]
++    c_bad, c_foreign, c_long = [], [], []
++    exps = {}
++    census = None
++    summary = None
++    startup = None
++    qh_counter = 0
++    census_match = 0
++    for ln in c_lines:
++        try:
++            j = json.loads(ln)
++        except Exception:
++            c_bad.append(ln[:60])
++            continue
++        if len(ln.encode("utf-8", "replace")) >= 1024:
++            c_long.append(ln[:60])
++        if j.get("build_id") != CC1["build_id"]:
++            c_foreign.append(str(j.get("build_id")))
++            continue
++        exp = str(j.get("exp") or "")
++        exps[exp] = exps.get(exp, 0) + 1
++        if exp == "qh_counter":
++            qh_counter += 1
++        elif exp == "census_match":
++            census_match += 1
++        elif exp == "census_result" and census is None:
++            census = j
++        elif exp == "summary" and summary is None:
++            summary = j
++        elif exp == "startup" and startup is None:
++            startup = j
++    info["cc1"] = {"fresh_records": len(c_lines), "exps": exps,
++                   "qh_counter_lines": qh_counter, "census_match_lines": census_match,
++                   "baseline_note": note_c, "build_id": CC1["build_id"],
++                   "ue4ss_cc1_lines": sum(1 for ln in (l_text or "").splitlines()
++                                          if ln.startswith("CC1: build=cc1-"))}
++    if c_bad:
++        return "FAIL", "cc1 jsonl: %d unparseable line(s): %s" % (len(c_bad), c_bad[:2]), info
++    if c_long:
++        return "FAIL", "cc1 jsonl: %d line(s) >= 1 KiB (envelope law): %s" % (len(c_long), c_long[:2]), info
++    if c_foreign:
++        return "FAIL", "cc1 jsonl: foreign build_id(s) %s (single-writer discipline violated or stale sink)" % c_foreign[:3], info
++    if not c_lines:
++        return "WARN", ("cc1: ZERO fresh records this launch (probe did not run or sink "
++                        "unreachable — check SC-5b OK lines; the cc1 window is ~2 min)"), info
++    if startup is not None:
++        polls = _cc1_field(startup, "polls")
++        poll_s = _cc1_field(startup, "poll_s")
++        info["cc1"]["startup_polls"] = polls
++        info["cc1"]["startup_poll_s"] = poll_s
++        if polls != 30 or poll_s != 4:
++            notes.append("cc1: startup carries polls=%s poll_s=%s (plan: 30 x 4 s)" % (polls, poll_s))
++    if census is None:
++        status = "WARN"
++        notes.append("cc1: fresh records but NO census_result verdict — incomplete sequence "
++                     "(window may still be open; grace-class refusals ride census_result)")
++    else:
++        verdict = _cc1_field(census, "verdict")
++        reason = _cc1_field(census, "reason_code")
++        info["cc1"]["census_verdict"] = verdict
++        info["cc1"]["census_reason"] = reason
++        if verdict == "CENSUS:VALIDATED":
++            controls = _cc1_field(census, "controls") or {}
++            neg = _cc1_field(census, "negative_hits") or {}
++            truncated = _cc1_field(census, "census_truncated")
++            info["cc1"]["controls"] = controls
++            info["cc1"]["negative_hits"] = neg
++            info["cc1"]["census_truncated"] = truncated
++            if controls.get("None_id_zero") == 1 and controls.get("ByteProperty_ascii_ok") == 1 \
++                    and neg.get("PostRender") == 0 and neg.get("ZZZNotARealFunctionQQ") == 0:
++                notes.append("cc1: census_result CENSUS:VALIDATED (controls 1/1, negative hits 0, "
++                             "matched_count=%s, wide_skipped=%s, scanned=%s%s)"
++                             % (_cc1_field(census, "matched_count"),
++                                _cc1_field(census, "wide_entries_skipped"),
++                                _cc1_field(census, "census_entries_scanned"),
++                                "; BOUNDED census — budget/scanned carry the real coverage, "
++                                "never read as full-pool coverage" if truncated == 1 else ""))
++            else:
++                return "FAIL", ("cc1: census_result verdict VALIDATED but oracle fields diverge "
++                                "(controls=%s negative_hits=%s) — corrupt evidence, reconcile"
++                                % (controls, neg)), info
++        elif verdict == "CENSUS:REFUSED":
++            status = "WARN"
++            notes.append("cc1: census_result CENSUS:REFUSED reason=%s (honest terminal verdict; "
++                         "grace-class remedy is a NEW staged window, never a re-rating of "
++                         "unchanged evidence)" % reason)
++        else:
++            status = "WARN"
++            notes.append("cc1: census_result verdict=%r reason=%r (unrecognized — read the raw "
++                         "line before any rating)" % (verdict, reason))
++    if summary is not None:
++        wf = _cc1_field(summary, "write_failures")
++        polls_run = _cc1_field(summary, "polls_run")
++        info["cc1"]["summary_write_failures"] = wf
++        info["cc1"]["summary_polls_run"] = polls_run
++        if wf != 0:
++            status = "WARN" if status == "PASS" else status
++            notes.append("cc1: summary write_failures=%s (sink writes partially failed — "
++                         "evidence incomplete)" % wf)
++    else:
++        notes.append("cc1: no summary record yet")
++    n_cc1_l = info["cc1"]["ue4ss_cc1_lines"]
++    if n_cc1_l != 1:
++        status = "WARN" if status == "PASS" else status
++        notes.append("cc1: %d `CC1:` UE4SS.log lines this window (exactly ONE expected)" % n_cc1_l)
++    detail = "; ".join(notes) if notes else "cc1 sink green"
+     return status, detail, info
+ 
+ 
+@@ -3591,17 +3825,18 @@
+         ok_c, c_text = fetch_console_file(ctx, g["C2"], "C2-ingame-facts.jsonl")
+         ok_x, x_text = fetch_console_file(ctx, XWP_ARMED["log"].lstrip("/"), "XWP-exec-write-probe.jsonl")
+         ok_f, f_text = fetch_console_file(ctx, FC1POOL["log"].lstrip("/"), "FC1-fc1pool-facts.jsonl")
++        ok_c1, c1_text = fetch_console_file(ctx, CC1["log"].lstrip("/"), "CC1-carrier-facts.jsonl")
+         if ctx.dry:
+             return "PASS", "dry"
+         if not (ok_s or ok_l or ok_d):
+             return "FAIL", "all sinks unreachable — wait ~60 s and retry (runbook §2)"
+         ctx.state["s_text"], ctx.state["l_text"], ctx.state["d1_text"], ctx.state["c2_text"] = s_text, l_text, d_text, c_text
+-        ctx.state["xwp_text"], ctx.state["fc1_text"] = x_text, f_text
+-        return "PASS", "fetched: S=%s L=%s D1=%s C2=%s XWP=%s FC1=%s" % (
+-            ok_s, ok_l, ok_d, ok_c, ok_x, ok_f)
++        ctx.state["xwp_text"], ctx.state["fc1_text"], ctx.state["cc1_text"] = x_text, f_text, c1_text
++        return "PASS", "fetched: S=%s L=%s D1=%s C2=%s XWP=%s FC1=%s CC1=%s" % (
++            ok_s, ok_l, ok_d, ok_c, ok_x, ok_f, ok_c1)
+ 
+-    fl.step("ge.2", "Fetch the seven evidence sinks (bounded curl, one fresh fetch per file; "
+-                    "the two probe verdict sinks per their stage plans)", "classify",
++    fl.step("ge.2", "Fetch the eight evidence sinks (bounded curl, one fresh fetch per file; "
++                    "the three probe verdict sinks per their stage plans)", "classify",
+             ["FTP base ftp://ps5-host-not-configured.invalid:2121 anonymous; --connect-timeout 10 --max-time 60 --max-filesize 32M",
+              "if fetches fail: wait ~60 s and re-run before touching staging"],
+             ["curl 'ftp://ps5-host-not-configured.invalid:2121/data/modbridge/roots/PPSA33286/runtime-status.txt'",
+@@ -3609,7 +3844,8 @@
+              "curl 'ftp://ps5-host-not-configured.invalid:2121/data/townfall_runtime_aligned_entry.log'",
+              "curl 'ftp://ps5-host-not-configured.invalid:2121/data/modbridge-ingame-facts.jsonl'",
+              "curl 'ftp://ps5-host-not-configured.invalid:2121/data/modbridge-exec-write-probe.jsonl'",
+-             "curl 'ftp://ps5-host-not-configured.invalid:2121/data/modbridge-fc1pool-facts.jsonl'"],
++             "curl 'ftp://ps5-host-not-configured.invalid:2121/data/modbridge-fc1pool-facts.jsonl'",
++             "curl 'ftp://ps5-host-not-configured.invalid:2121/data/modbridge-carrier-facts.jsonl'"],
+             fetch_fn)
+ 
+     def cp_fn(ctx):
+@@ -3673,6 +3909,42 @@
+             ["python3 console_batch.py probe-sink classifier over XWP/FC1 jsonl in the run dir"],
+             probes_fn)
+ 
++    def carrier_fn(ctx):
++        if ctx.dry:
++            return "PASS", "dry"
++        c_text = ctx.state.get("cc1_text") or ""
++        c_base = ctx.state.get("cc1_jsonl_baseline") or ""
++        l_text = ctx.state.get("l_text") or ""
++        status, detail, info = carrier_evidence_verdict(c_text, c_base, l_text)
++        ctx.save("carrier-verdicts.json", json.dumps({"status": status, "detail": detail,
++                 "sinks": info}, indent=2))
++        ctx.state["carrier_status"] = status
++        if status == "FAIL":
++            return "FAIL", "cc1 census sink: %s" % detail
++        if status == "WARN":
++            return "WARN", "cc1 census sink: %s" % detail
++        return "PASS", "cc1 census sink: %s" % detail
++
++    fl.step("ge.3c", "cc1 census verdict sink (ninth slot) — /data/modbridge-carrier-facts.jsonl "
++                     "(build_id cc1-0864d65c1baf, envelope marker modbridge.ingamefacts): "
++                     "freshness vs the staging baseline, strict-JSON < 1 KiB envelope law, "
++                     "census_result CENSUS:VALIDATED oracle (controls None_id_zero:1 + "
++                     "ByteProperty_ascii_ok:1, negative_hits PostRender:0 + "
++                     "ZZZNotARealFunctionQQ:0), summary write_failures:0; exactly ONE `CC1:` "
++                     "UE4SS.log line recorded", "classify",
++            ["success sequence: entry -> startup (polls 30, poll_s 4) -> mapscan -> 30 "
++             "qh_counter lines -> census_match lines -> census_result -> summary",
++             "CENSUS:REFUSED verdicts are honest terminal evidence (WARN; the grace-class "
++             "remedy is a NEW staged window — never relaunch an identical rejected layout, "
++             "never re-rate unchanged evidence)",
++             "a census_truncated:1 VALIDATED verdict is a BOUNDED census: budget_entries + "
++             "census_entries_scanned carry the real coverage — never read as full-pool coverage",
++             "this gate is EVIDENCE about which of the 53 fixed names are interned in the LIVE "
++             "FName pool for that launch only; it never certifies FUNC_Native, invocation rate, "
++             "game-thread identity, or any UFunction-object walk"],
++            ["python3 console_batch.py carrier-sink classifier over CC1 jsonl in the run dir"],
++            carrier_fn)
++
+     def rung_doc_fn(ctx):
+         return "PASS", ("baselines: RUNG1 strict = engine-ready/mods-started AND ticks_accepted strictly increasing "
+                         "AND one stable non-zero game_thread_id_key AND >=1 counted guard refusal AND a "
+@@ -3833,8 +4105,8 @@
+     fl.notes = ("Recommended single-session order (CONSOLE-STAGE-PLAN-8FAM Sequencing + "
+                 "FINAL-INI-LAYOUT §3 + NEW-SETTINGS §3): payload-only stages first in ONE "
+                 "game-closed window (%s, then e2e), then the DEFINITIVE ridealong+probe staging "
+-                "(stage-ridealongs: xwp-armed + fc1pool + qdrv1 + observer PRXs + the FINAL 8-entry "
+-                "ploader.ini via bootstrap-if-needed + ensure ops, byte-exact canonical, 7 "
++                "(stage-ridealongs: xwp-armed + fc1pool + qdrv1 + observer + cc1-carrier PRXs + the FINAL 9-entry "
++                "ploader.ini via bootstrap-if-needed + ensure ops, byte-exact canonical, 8 "
+                 "registered), then the settings+loadlist lockstep restage (stage-settings, v3 "
+                 "pair), then the single UE4SS game session with evidence collection LAST. %s"
+                 % (dll_tag, fallback_note))
+@@ -3957,15 +4229,18 @@
+ 
+     ctx = Ctx(None, dry=True); FLOWS["stage-ridealongs"]().run(ctx); rd = "\n".join(ctx.events)
+     for anchor in ["52c3221665a4", "1afa0997682c", "87112", "71406d3c", "30143976", "3f89a5b6",
+-                   "SHT-strip", "[PPSA33286]", "EXACTLY 7", "7 registered", "composition = 2",
++                   "SHT-strip", "[PPSA33286]", "EXACTLY 8", "8 registered", "composition = 2",
+                    "modbridge_qh_driver.prx", "modbridge_runtime_aligned_observer.prx",
+                    "modbridge_exec_write_probe_armed.prx", "modbridge_fc1pool.prx",
+                    "48949316", "d2431bf8", "67832", "daea2ff4", "67848", "7e2dce27",
+                    "igd1-6ebab07f2111", "fc1pool1-78508a2e2940",
+-                   "INI-BOOTSTRAPPED", "ploader.ini.canonical", "bbc34c16",
++                   "d83410aa", "e72366c4", "71528", "131ff1c2", "cc1-0864d65c1baf",
++                   "modbridge_carrier.prx",
++                   "INI-BOOTSTRAPPED", "ploader.ini.canonical", "fd9c7393",
+                    ".bak", "rollback-ridealongs", "ARM ploader", "UE4SS.log",
+                    "townfall_runtime_aligned_observer.log",
+-                   "modbridge-exec-write-probe.jsonl", "modbridge-fc1pool-facts.jsonl"]:
++                   "modbridge-exec-write-probe.jsonl", "modbridge-fc1pool-facts.jsonl",
++                   "modbridge-carrier-facts.jsonl"]:
+         check("stage-ridealongs anchor %r" % anchor[:40], anchor in rd)
+ 
+     ctx = Ctx(None, dry=True); FLOWS["stage-settings"]().run(ctx); st = "\n".join(ctx.events)
+@@ -3982,7 +4257,9 @@
+     for anchor in ["post_launch_check.py", "rung_check.py", "runtime-status.txt", "UE4SS.log",
+                    "townfall_runtime_aligned_entry.log", "modbridge-ingame-facts.jsonl",
+                    "modbridge-exec-write-probe.jsonl", "modbridge-fc1pool-facts.jsonl",
++                   "modbridge-carrier-facts.jsonl",
+                    "igd1-6ebab07f2111", "fc1pool1-78508a2e2940", "validated 11/11",
++                   "cc1-0864d65c1baf", "CENSUS:VALIDATED",
+                    "CP0-CP4", "OPTIONS", "CROSS", "0x33ac8c0", "USER ACTION REQUIRED",
+                    "LOAD A SAVE", "ARM ploader.elf"]:
+         check("game-evidence anchor %r" % anchor[:40], anchor in ge)
+@@ -4398,14 +4675,20 @@
+     check("rollback preserves whitespace (single-char edit on odd spacing)",
+           st == "flip" and nt9 == odd.replace("=  2", "=  0"), repr(nt9))
+ 
+-    print("== selftest J: DEFINITIVE final-layout law (FINAL-INI-LAYOUT §3) ==")
++    print("== selftest J: DEFINITIVE final-layout law (FINAL-INI-LAYOUT §3, ninth slot) ==")
+     CANON = final_canonical_text()
+-    check("canonical template is the pinned 400 B / bbc34c16… bytes",
++    check("canonical template is the pinned 440 B / fd9c7393… bytes",
+           len(CANONICAL_BYTES := CANON.encode()) == FINAL_INI["canonical_bytes"]
+           and hashlib.sha256(CANONICAL_BYTES).hexdigest() == FINAL_INI["canonical_sha256"])
+     check("canonical end-state verify accepts the template itself",
+           final_ini_verify_endstate(CANON) == [],
+           str(final_ini_verify_endstate(CANON)))
++    check("ninth-slot structure: 9 entries, carrier line last, immediately after the igf =0 line",
++          CANON.count("\n") == 10
++          and CANON.rstrip("\n").endswith(
++              CC1["ini_predecessor"] + "\n" + CC1["ini_line"])
++          and FINAL_ORDER[-1] == CC1["module_line"]
++          and FINAL_ORDER[-2] == "/data/plugins/modbridge_ingame_facts.prx")
+     X_LINE = XWP_ARMED["module_line"]
+     F_LINE = FC1POOL["module_line"]
+     PRE_EXISTING4 = [C_LINE, E_LINE, P_LINE, I_LINE]   # historical console lines
+@@ -4416,10 +4699,10 @@
+     ORDERED4 = FINAL_INI["header"] + "\n" + "".join(
+         FINAL_LINE_OF[p] + "\n" for p in [C_LINE, E_LINE, P_LINE, I_LINE])
+ 
+-    # ensure-op convergence: EVERY order of the 4 stager ensures from the
++    # ensure-op convergence: EVERY order of the 5 stager ensures from the
+     # canonically-ordered partial pre-image reaches byte-exact canonical (the
+-    # full 8! = 40320-permutation proof lives in simulate_ploader_ini_final.py,
+-    # re-run in receipts; here: all 24 orders + reversed + repeats)
++    # full 9! = 362880-permutation proof lives in simulate_ploader_ini_final.py,
++    # re-run in receipts; here: all 120 orders + reversed + repeats)
+     import itertools as _it
+     convergence = set()
+     for perm in _it.permutations(FINAL_INI["stager_lines"]):
+@@ -4431,7 +4714,7 @@
+             check("ensure permutation %s" % (perm,), False, str(exc))
+             break
+         convergence.add(text)
+-    check("all 24 stager ensure orders from the ordered pre-image converge byte-exact",
++    check("all 120 stager ensure orders from the ordered pre-image converge byte-exact",
+           convergence == {CANON}, "distinct end-states: %d" % len(convergence))
+     text = ORDERED4
+     for p in reversed(FINAL_INI["stager_lines"]):
+@@ -4462,8 +4745,8 @@
+ 
+     ordered5 = ORDERED4.replace(C_LINE + " = 2", C_LINE + " = 2\n" + Q_LINE + " = 2", 1)
+     st, ntj2, apj2 = final_ini_plan(ordered5, list(FINAL_ORDER))
+-    check("plan with qdrv1 pre-staged appends only the remaining 3 lines",
+-          st == "append" and len(apj2) == 3 and ntj2 == CANON, str((st, apj2)))
++    check("plan with qdrv1 pre-staged appends only the remaining 4 lines",
++          st == "append" and len(apj2) == 4 and ntj2 == CANON, str((st, apj2)))
+ 
+     st, ntj3, notej3 = final_ini_plan(HISTORICAL, list(FINAL_ORDER))
+     check("BOOTSTRAP required: historical order (aligned_entry/path_test BEFORE "
+@@ -4515,6 +4798,17 @@
+     endstate_fail("fc1 mode-1 flip", CANON.replace(F_LINE + " = 2", F_LINE + " = 1"), "pinned 2")
+     endstate_fail("duplicate line", CANON + "%s = 2\n" % F_LINE, "duplicate")
+     endstate_fail("empty file", "", "differ from canonical")
++    # ninth-slot rejections: carrier pinned EXACTLY after the igf =0 line at mode 2
++    endstate_fail("carrier BEFORE the igf line (wrong free index)",
++                  FINAL_INI["header"] + "\n" + "".join(FINAL_LINE_OF[p] + "\n" for p in
++                                                       [X_LINE, F_LINE, C_LINE, Q_LINE, O_LINE,
++                                                        E_LINE, P_LINE, CC1["module_line"], I_LINE]),
++                  "ORDER mismatch")
++    endstate_fail("carrier mode-1 flip", CANON.replace(CC1["module_line"] + " = 2",
++                                                       CC1["module_line"] + " = 1"), "pinned 2")
++    endstate_fail("duplicate carrier line", CANON + CC1["ini_line"] + "\n", "duplicate")
++    endstate_fail("the superseded 8-entry law (carrier missing)",
++                  CANON.replace(CC1["ini_line"] + "\n", ""), "missing expected line")
+ 
+     print("== selftest K: probe verdict sink classifier (evidence-path law) ==")
+     xwp_j = {"marker": "modbridge.execwriteprobe", "schema": 1, "seq": 1, "exp": "row",
+@@ -4547,6 +4841,70 @@
+     v, d, info = probe_evidence_verdict(xwp_good, "", fc1_refused, "")
+     check("WARN (not FAIL) on an honestly recorded fc1 refusal", v == "WARN" and
+           "pool_window_uncovered" in d, d)
++
++    print("== selftest M: cc1 carrier census sink classifier (ninth-slot evidence law) ==")
++    def cc1_rec(seq, exp, **fields):
++        rec = {"marker": "modbridge.ingamefacts", "schema": 1, "build_id": CC1["build_id"],
++               "seq": seq, "exp": exp, "rc": 0, "errno": 0}
++        if fields:
++            rec["fields"] = fields
++        return json.dumps(rec)
++    cc1_good = "".join(r + "\n" for r in [
++        cc1_rec(1, "entry"),
++        cc1_rec(2, "startup", polls=30, poll_s=4),
++        cc1_rec(3, "mapscan"),
++    ] + [cc1_rec(4 + i, "qh_counter") for i in range(30)] + [
++        cc1_rec(34, "census_match", name="ReceiveTick"),
++        cc1_rec(35, "census_match", name="Tick"),
++        cc1_rec(36, "census_result", verdict="CENSUS:VALIDATED", reason_code="none",
++                controls={"None_id_zero": 1, "ByteProperty_ascii_ok": 1},
++                negative_hits={"PostRender": 0, "ZZZNotARealFunctionQQ": 0},
++                matched_count=2, wide_entries_skipped=7, census_entries_scanned=98304,
++                census_truncated=0, budget_entries=1048576),
++        cc1_rec(37, "summary", write_failures=0, polls_run=30),
++    ])
++    l_one_cc1 = "CC1: build=%s verdict=CENSUS:VALIDATED reason=none entries=98304 matches=2\n" % CC1["build_id"]
++    v, d, info = carrier_evidence_verdict(cc1_good, "", l_one_cc1)
++    check("cc1 sink PASS on the green census fixture", v == "PASS", d)
++    check("cc1 qh_counter count == 30 detected", info["cc1"]["qh_counter_lines"] == 30)
++    check("cc1 census VERDICT oracle recorded",
++          info["cc1"]["census_verdict"] == "CENSUS:VALIDATED"
++          and info["cc1"]["controls"]["None_id_zero"] == 1)
++    check("cc1 exactly-one CC1: line recorded", info["cc1"]["ue4ss_cc1_lines"] == 1)
++    v, d, _ = carrier_evidence_verdict(cc1_good, cc1_good, l_one_cc1)
++    check("cc1 WARN when no fresh growth this launch", v == "WARN" and "ZERO fresh" in d, d)
++    v, d, info_g = carrier_evidence_verdict(cc1_good + cc1_rec(38, "census_match", name="PostRender") + "\n",
++                                            cc1_good, l_one_cc1)
++    check("cc1 fresh growth isolates this launch's records (WARN: no fresh census_result yet)",
++          v == "WARN" and info_g["cc1"]["fresh_records"] == 1, str(info_g["cc1"].get("fresh_records")))
++    v, d, _ = carrier_evidence_verdict("not-json\n", "", l_one_cc1)
++    check("cc1 FAIL on unparseable line", v == "FAIL" and "unparseable" in d, d)
++    v, d, _ = carrier_evidence_verdict(cc1_rec(1, "entry").replace(
++        CC1["build_id"], "qdrv1-FOREIGN") + "\n", "", l_one_cc1)
++    check("cc1 FAIL on foreign build_id (shared envelope brand, own path law)",
++          v == "FAIL" and "foreign build_id" in d, d)
++    long_line = cc1_rec(2, "startup", polls=30, poll_s=4, pad="x" * 1100) + "\n"
++    v, d, _ = carrier_evidence_verdict(cc1_good + long_line, "", l_one_cc1)
++    check("cc1 FAIL on a >= 1 KiB line (envelope law)", v == "FAIL" and "1 KiB" in d, d)
++    cc1_ref = cc1_good.replace(
++        '"verdict": "CENSUS:VALIDATED", "reason_code": "none"',
++        '"verdict": "CENSUS:REFUSED", "reason_code": "census_gate_closed_after_grace"')
++    v, d, _ = carrier_evidence_verdict(cc1_ref, "", l_one_cc1)
++    check("cc1 WARN (not FAIL) on an honest grace-class refusal",
++          v == "WARN" and "census_gate_closed_after_grace" in d, d)
++    cc1_badoracle = cc1_good.replace('"None_id_zero": 1', '"None_id_zero": 0')
++    v, d, _ = carrier_evidence_verdict(cc1_badoracle, "", l_one_cc1)
++    check("cc1 FAIL when verdict says VALIDATED but the control oracle diverges",
++          v == "FAIL" and "oracle fields diverge" in d, d)
++    cc1_bounded = cc1_good.replace('"census_truncated": 0', '"census_truncated": 1')
++    v, d, _ = carrier_evidence_verdict(cc1_bounded, "", l_one_cc1)
++    check("cc1 BOUNDED census (truncated=1) stays an honest VALIDATED with a coverage note",
++          v == "PASS" and "BOUNDED" in d, d)
++    v, d, _ = carrier_evidence_verdict(cc1_good, "", "")          # zero CC1: UE4SS lines
++    check("cc1 WARN when the UE4SS CC1: mirror line is missing", v == "WARN" and "CC1:" in d, d)
++    v, d, _ = carrier_evidence_verdict(cc1_good, "", l_one_cc1 + l_one_cc1)
++    check("cc1 WARN on two CC1: UE4SS lines (exactly ONE per launch)", v == "WARN" and
++          "2 `CC1:`" in d, d)
+ 
+     print("== selftest L: settings v3 pair lockstep law (NEW-SETTINGS §3) ==")
+     ll_text = open(SETTINGS_V3["loadlist_local"], errors="replace").read()
+@@ -4658,10 +5016,10 @@
+     add_flow("dll7", "7-family DLL payload-only stage — FALLBACK attribution path only (see CONSOLE-STAGE-PLAN-8FAM)")
+     add_flow("e2e", "E2E installer 15-dispatch stage 0..6 cycle (game closed)")
+     add_flow("stage-ridealongs", "DEFINITIVE ridealong+probe staging: xwp-armed + fc1pool + qdrv1 + "
+-                                 "observer PRXs (SHT-strip readback law) + the FINAL 8-entry "
++                                 "observer + cc1-carrier PRXs (SHT-strip readback law) + the FINAL 9-entry "
+                                  "ploader.ini (bootstrap whole-file STOR only when the historical "
+                                  "line moves require it; ensure ops otherwise; byte-exact canonical, "
+-                                 "7 registered) (game closed, BEFORE the session) — supersedes "
++                                 "8 registered) (game closed, BEFORE the session) — supersedes "
+                                  "stage-qdrv1/stage-observer inside `all`")
+     add_flow("stage-observer", "observer ridealong ONLY (legacy partial path): PRX + SHT-strip readback "
+                                "law + idempotent ini append of ONLY the observer line (game closed)")
+@@ -4672,8 +5030,8 @@
+                                "+ loadlist 447 B 4d98ecd7…), byte-exact readback BOTH (game closed)")
+     add_flow("rollback-ridealongs", "STAGE-PLAN-COMBINED §7 rollback: flip BOTH ridealong lines to "
+                                     "= 0 + byte-verified readback (game closed, ploader not armed)")
+-    add_flow("game-evidence", "post-launch evidence + CP0-CP7 + probe verdict sinks (interactive "
+-                              "user handoffs)")
++    add_flow("game-evidence", "post-launch evidence + CP0-CP7 + probe verdict sinks incl. the cc1 "
++                              "census (interactive user handoffs)")
+     add_flow("all", "full recommended session: dll8 -> e2e -> stage-ridealongs -> stage-settings -> "
+                     "game-evidence (--dll 7 swaps in the dll7 fallback attribution path; exactly "
+                     "one DLL stage either way)")

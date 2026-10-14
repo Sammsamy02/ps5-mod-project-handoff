@@ -1,0 +1,1 @@
+Frozen local R5 candidate. Final source/test/target/protection pins are in SOURCE-SELECTION.json and FINAL-RECEIPT.json. No selected R4 changes. Root integration must retain thunk code after any publication and separately drain Lua borrowers before Lua owners are destroyed. No further work or source edits are pending in this output tree.

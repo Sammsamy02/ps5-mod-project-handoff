@@ -1,0 +1,200 @@
+{
+ "tool": "check_odr_emitters.py",
+ "rundir": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/ue4ss-native-supplier-composition-4/run-3",
+ "composed_object": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/ue4ss-native-supplier-composition-4/run-3/coherent-tick-file-witness-runtime.o",
+ "map": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/ue4ss-native-supplier-composition-4/run-3/runtime.map",
+ "checks": {
+  "inputs_complete": {
+   "ok": true,
+   "detail": "all 380 non-archive composition units scanned"
+  },
+  "A2_validate_all_emitter_bodies_identical": {
+   "ok": true,
+   "detail": "emitter body shas: {\"program.o\": \"e9b1ac1d8f81\", \"bootstrap-ue4ss_backend.o\": \"e9b1ac1d8f81\", \"native-loadercontext.o\": \"e9b1ac1d8f81\"}"
+  },
+  "A1_validate_sole_survivor_is_program": {
+   "ok": true,
+   "detail": ".text.VAL map inputs = ['program.o'] (expect exactly ['program.o'])"
+  },
+  "A3_validate_no_retained_emitter_besides_program": {
+   "ok": true,
+   "detail": "retained VAL emitters=['program.o'], offenders=[]"
+  },
+  "A4_validate_composed_single_and_body_equal": {
+   "ok": true,
+   "detail": "composed defines 1 VAL symbol(s); composed section sha=e9b1ac1d8f81; emitter body sha=e9b1ac1d8f81"
+  },
+  "B1_audited13_zero_direct_type_contact": {
+   "ok": true,
+   "detail": "present=['cppmod-base.o', 'cppmod.o', 'csv_data_commands.o', 'generator-sdkgenerator-generator.o', 'generator-sdkgenerator-ueheadergenerator.o', 'generator-usmapgenerator-generator.o', 'lua-library.o', 'luamod.o', 'native-jmap.o', 'native-ownedmappedresolvercollector.o', 'program-object-to-string.o', 'program-signatures.o', 'settings.o']; offenders=none"
+  },
+  "B2_native_mod_source_retained_allow_list": {
+   "ok": true,
+   "detail": "retained NMS emitters=['program-signatures.o', 'program.o', 'settings.o', 'luamod.o'], outside-allow+program=[]"
+  },
+  "B3_audited13_map_sections_clean": {
+   "ok": true,
+   "detail": "offenders=none"
+  },
+  "B4a_offset_sensitive_retained_bodies_identical": {
+   "ok": true,
+   "detail": "7 symbols checked; retained-internal divergence=none"
+  },
+  "B4b_offset_sensitive_fresh_vintage_alignment": {
+   "ok": false,
+   "detail": "fresh-vs-retained or fresh-internal divergence={'_ZN2RC12UE4SSProgram16request_shutdownEv': {'bootstrap-ue4ss_backend.o': '57b7afbb945b'}} (STRICT gate)"
+  },
+  "C1_make_absent_from_retained": {
+   "ok": true,
+   "detail": "MAKE emitters=['native-loadercontext.o'], retained-offenders=[]"
+  },
+  "C2_nlf_token_absent_from_retained": {
+   "ok": true,
+   "detail": "retained NLF-token symbols=none"
+  },
+  "C3_native_mod_source_all_bodies_identical": {
+   "ok": true,
+   "detail": "NMS body shas: {\"program-signatures.o\": \"8823328eb7e6\", \"program.o\": \"8823328eb7e6\", \"settings.o\": \"8823328eb7e6\", \"luamod.o\": \"8823328eb7e6\"}"
+  },
+  "C4_nms_survivor_in_allow_list": {
+   "ok": true,
+   "detail": ".text.NMS map inputs=['luamod.o'] (expect one of ['luamod.o', 'program-signatures.o', 'settings.o'])"
+  },
+  "C5_nms_composed_single_and_body_equal": {
+   "ok": true,
+   "detail": "composed defines 1 NMS symbol(s); composed section sha=8823328eb7e6; emitter sha=8823328eb7e6"
+  },
+  "C6_make_composed_equals_fresh_loadercontext_bytes": {
+   "ok": true,
+   "detail": "composed MAKE syms=2; per-symbol emitter definers=['native-loadercontext.o']; mismatches=none"
+  },
+  "D1_d2_changed_ctors_confined": {
+   "ok": true,
+   "detail": "PsMappedImageCallerC1/C2 standalone=none; OwnedMappedImageCallerC1/C2 outside native-ownedmappedscansource.o=none; native-ownedmappedscansource.o fresh=True"
+  },
+  "E1_retained_npc_definers_subset_program": {
+   "ok": true,
+   "detail": "retained units defining 20NativeProgramContext symbols=['program.o'] (allowed: exactly ['program.o'], which comp6 replaces)"
+  }
+ },
+ "advisories": [
+  "program.o is RETAINED in this run (composition-4 shape): in the comp6 one-pass build it must be replaced (FINDING-4 / design 3.2). Its Validate body currently matches the fresh emitters byte-for-byte, so the linked bytes are vintage-consistent today; use --require-program-fresh for the post-one-pass gate.",
+  "retained program.o also emits native_mod_source (composition-4 shape); the comp6 replacement makes it fresh. Offset-safety is proven by C3 body identity either way."
+ ],
+ "limits": [
+  "symbol/section-level heuristic: proves no retained unit emits a definition whose symbol names the audited types, and that every layout-sensitive body actually linked (Validate/native_mod_source/UE4SSProgram offset-sensitive inlines) is byte-identical across ALL emitters, retained and fresh",
+  "cannot prove absence of stale field-offset immediates inside sections whose symbols name neither the audited types nor an offset-sensitive inline (non-inline helpers compiled elsewhere); ODR-SAFETY.md's source-grep + insertion-point argument covers that residue",
+  "per-unit emitter sets come from input-object symbol tables (the map hides COMDAT-deduped duplicates); allow-lists key on basename, so a same-basename fresh twin of a retained unit would be conflated (the one-pass design replaces program rather than duplicating it)",
+  "composed-object byte proofs resolve symbol -> section index (SHN_XINDEX/SHT_SYMTAB_SHNDX); composed section NAME strings are linker-internal and not used"
+ ],
+ "units": {
+  "total_map_input_refs": 197548,
+  "non_unit_inputs": 8548,
+  "composition_units": 380,
+  "fresh": 15,
+  "retained": 365
+ },
+ "map_survivors": {
+  "validate": [
+   "program.o"
+  ],
+  "native_mod_source": [
+   "luamod.o"
+  ],
+  "make_native_program_context": {
+   "_ZN2RC8Platform24MakeNativeProgramContextENS0_17NativeLoaderFactsE": [
+    "native-loadercontext.o"
+   ],
+   "_ZN2RC8Platform24MakeNativeProgramContextENS0_17NativeLoaderFactsERKNSt3__16vectorIhNS2_9allocatorIhEEEE": [
+    "native-loadercontext.o"
+   ]
+  }
+ },
+ "offset_sensitive_inline_bodies": {
+  "_ZN2RC12UE4SSProgram16request_shutdownEv": {
+   "retained_sha": "d56491a24eba",
+   "fresh_shas": {
+    "bootstrap-ue4ss_backend.o": "57b7afbb945b"
+   }
+  },
+  "_ZN2RC12UE4SSProgram18can_process_eventsEv": {
+   "retained_sha": "3ab6a7e04b7c",
+   "fresh_shas": {
+    "bootstrap-ue4ss_backend.o": "3ab6a7e04b7c",
+    "native-programfactory.o": "3ab6a7e04b7c"
+   }
+  },
+  "_ZN2RC12UE4SSProgram20is_event_loop_threadEv": {
+   "retained_sha": "68e424949754",
+   "fresh_shas": {
+    "bootstrap-ue4ss_backend.o": "68e424949754",
+    "native-programfactory.o": "68e424949754"
+   }
+  },
+  "_ZN2RC12UE4SSProgram22are_mods_being_touchedEv": {
+   "retained_sha": "8a8b67c8ae74",
+   "fresh_shas": {
+    "bootstrap-ue4ss_backend.o": "8a8b67c8ae74",
+    "native-programfactory.o": "8a8b67c8ae74"
+   }
+  },
+  "_ZN2RC12UE4SSProgram25get_current_imgui_contextEv": {
+   "retained_sha": "e8c13405b191",
+   "fresh_shas": {
+    "bootstrap-ue4ss_backend.o": "e8c13405b191",
+    "native-programfactory.o": "e8c13405b191"
+   }
+  },
+  "_ZN2RC12UE4SSProgram37get_current_imgui_allocator_functionsEPPFPvmS1_EPPFvS1_S1_EPS1_": {
+   "retained_sha": "4f9eb8b7b620",
+   "fresh_shas": {
+    "bootstrap-ue4ss_backend.o": "4f9eb8b7b620",
+    "native-programfactory.o": "4f9eb8b7b620"
+   }
+  },
+  "_ZNK2RC12UE4SSProgram24get_event_loop_thread_idEv": {
+   "retained_sha": "02391699de01",
+   "fresh_shas": {
+    "bootstrap-ue4ss_backend.o": "02391699de01",
+    "native-programfactory.o": "02391699de01"
+   }
+  }
+ },
+ "emitters": {
+  "validate_all": [
+   "bootstrap-ue4ss_backend.o",
+   "native-loadercontext.o",
+   "program.o"
+  ],
+  "validate_retained": [
+   "program.o"
+  ],
+  "native_mod_source_all": [
+   "luamod.o",
+   "program-signatures.o",
+   "program.o",
+   "settings.o"
+  ],
+  "native_mod_source_retained": [
+   "luamod.o",
+   "program-signatures.o",
+   "program.o",
+   "settings.o"
+  ],
+  "make_all": [
+   "native-loadercontext.o"
+  ],
+  "owned_mapped_image_caller_ctors": [
+   "native-ownedmappedscansource.o"
+  ],
+  "program_o_fresh": false
+ },
+ "body_hashes": {
+  "validate_emitter_body": "e9b1ac1d8f8130be5d4601c996594387f7150a9c203c9be1ed7d2f1630406111",
+  "native_mod_source_emitter_body": "8823328eb7e656cd133b9adf45f963c79687d49c66ee55db326bed13a3432598"
+ },
+ "result": "FAIL",
+ "failures": [
+  "B4b_offset_sensitive_fresh_vintage_alignment: fresh-vs-retained or fresh-internal divergence={'_ZN2RC12UE4SSProgram16request_shutdownEv': {'bootstrap-ue4ss_backend.o': '57b7afbb945b'}} (STRICT gate)"
+ ]
+}

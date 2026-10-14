@@ -1,0 +1,61 @@
+--- outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
++++ outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
+@@ -6650,6 +6650,17 @@
+     // identical whichever path arms.
+     static auto lua_load_map_pre_callback(Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) -> void
+     {
++#ifdef __PROSPERO__
++        // Eager mode (0) is unchanged. Deferred native Lua delivery is admitted
++        // only after BOTH registrations succeed (2). A partial registration is
++        // inert while pending (1) or refused (3); WORLD-EV retains its fallback.
++        // Do not synchronously unregister here: arming runs inside a callback.
++        const int delivery_state = refused_log::loadmap_state.load(std::memory_order_acquire);
++        if (delivery_state != 0 && delivery_state != 2)
++        {
++            return;
++        }
++#endif
+         TRY([&] {
+ #ifdef __PROSPERO__
+             // [FL-MAP] phase=pre milestone marker (see namespace FlMap above):
+@@ -6703,6 +6714,17 @@
+ 
+     static auto lua_load_map_post_callback(Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) -> void
+     {
++#ifdef __PROSPERO__
++        // Eager mode (0) is unchanged. Deferred native Lua delivery is admitted
++        // only after BOTH registrations succeed (2). A partial registration is
++        // inert while pending (1) or refused (3); WORLD-EV retains its fallback.
++        // Do not synchronously unregister here: arming runs inside a callback.
++        const int delivery_state = refused_log::loadmap_state.load(std::memory_order_acquire);
++        if (delivery_state != 0 && delivery_state != 2)
++        {
++            return;
++        }
++#endif
+         TRY([&] {
+ #ifdef __PROSPERO__
+             // [FL-MAP] phase=loaded milestone marker (see namespace FlMap above):
+@@ -6781,7 +6803,7 @@
+         // refusal pair (InstallHook Warning + AddCallback "[UE4SS.LoadMap.LuaModImpl]
+         // Failed to add hook, detour installation likely failed!" Error). Never a silent
+         // skip: name exactly what stays undelivered, once, for the process lifetime.
+-        Output::send<LogLevel::Error>(STR("[R3] LoadMap deferred arm refused (pre id {:X}, post id {:X}): the LoadMap detour stays off for this process lifetime (no re-arm); Lua RegisterLoadMapPreHook/PostHook callbacks are delivered by the data-only object-index route instead (see [WORLD-EV] lines); mod loading and every other surface are unaffected\n"), pre_id, post_id);
++        Output::send<LogLevel::Error>(STR("[R3] LoadMap deferred arm refused (pre id {:X}, post id {:X}): native Lua LoadMap delivery stays disabled for this process lifetime (no re-arm); any partial native registration remains inert; Lua RegisterLoadMapPreHook/PostHook callbacks are delivered by the data-only object-index route instead (see [WORLD-EV] lines); mod loading and every other surface are unaffected\n"), pre_id, post_id);
+         refused_log::loadmap_state.store(3, std::memory_order_release);
+         // [WORLD-EV] no counted [REFUSED] line here any more: the object-index route delivers these
+         // callbacks; if that route is refused it emits its own counted line.
+@@ -10399,9 +10421,11 @@
+             // Warning + AddCallback Error pair plus the arm's own explicit Error) —
+             // never a silent skip. The flag is set BEFORE the marshal consumer below can
+             // arm the pump, so no drain can precede it.
++            // Publish the prepared route/state before a carrier can acquire pending.
++            // No startup state write may overwrite the armer's final 2/3 result.
++            refused_log::loadmap_state.store(1, std::memory_order_release);
++            refused_log::eager_detour_block_skipped.store(true, std::memory_order_release);
+             m_loadmap_deferred_arm_pending.store(true, std::memory_order_release);
+-            refused_log::eager_detour_block_skipped.store(true, std::memory_order_release);
+-            refused_log::loadmap_state.store(1, std::memory_order_release);
+             // One startup line for every family below that will accept registrations and never deliver them.
+             // [WORLD-EV] InitGameState / BeginPlay left this list: the data-only object-index route delivers them
+             refused_log::emit("detour-block", StringType{STR("EndPlay,StaticConstructObject(NotifyOnNewObject),ULocalPlayerExec,CallFunctionByNameWithArguments,ProcessConsoleExec(+console handlers)")},

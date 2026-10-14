@@ -1,0 +1,153 @@
+--- after7/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py	2026-10-13 16:54:37
++++ after10/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py	2026-10-13 17:27:23
+@@ -53,6 +53,12 @@
+ def pinrow(p):p=Path(p).resolve();return {'path':str(p),'sha256':sha(p),'bytes':p.stat().st_size}
+ def write(p,d):p.write_text(json.dumps(d,indent=2)+'\n')
+ 
++import cap10_integration as cap10
++CAP10=cap10.load(HERE)
++# [CAP10 Team G] fixed, reviewed final expectations (cap10/ADMITTED-IMPORTS.json):
++# P7/P11 = R15e's 207 identities + the admitted rows (each with captured
++# provider evidence), P8 = fixed 240/2. Never computed from the build gated.
++# Loaded where used (finalize_variant / pair_receipt) so it is self-contained.
+ L24PKG=ROOT/'outputs/2026-10-08-l24-package'
+ L26RUN=HERE
+ PAIR_ROOT=ROOT/'outputs/2026-10-08-l26-build-variants'
+@@ -263,7 +269,7 @@
+     m['scope']='LOCAL_COMBINED_PACKAGE_ONLY'
+     m['console_actions_authorized']=False
+     m['variant_warning']=UNSAFE_NOTE if variant['unsafe'] else None
+-    return m
++    return cap10.package_manifest(m,bdir,variant,CAP10,execute)
+ 
+ def prepare_variant(variant,record,steps,execute):
+     pkg=variant['pkg']
+@@ -272,14 +278,16 @@
+         # --prepare may have staged this dir already. Reuse ONLY if every
+         # staged file still matches what we would write now (no silent drift,
+         # no overwrite of a divergent tree).
+-        adapted_text=(L24PKG/'package_combined.py').read_text()
++        adapted_text=Path(CAP10['package_controller']['path']).read_text()
+         if adapted_text.count(FROZEN_NOTE_LINE)!=1:raise RuntimeError('frozen controller note line not found exactly once')
+         adapted_text=adapted_text.replace(FROZEN_NOTE_LINE,"    b.note('"+variant['note']+"')")
+         ok=(pkg/'BUILD-INPUTS.json').exists() and (pkg/'PREPARATION-RECEIPT.json').exists()
+         if ok:
+-            for name in COPY_FILES:ok=ok and (pkg/name).exists() and sha(pkg/name)==sha(L24PKG/name)
++            for name in COPY_FILES:ok=ok and (pkg/name).exists() and sha(pkg/name)==sha(CAP10['package_script']['path'] if name=='package_prx_l19.py' else L24PKG/name)
+             ok=ok and (pkg/'inputs/NuGet.Config').exists() and sha(pkg/'inputs/NuGet.Config')==sha(L24PKG/'inputs/NuGet.Config')
+             ok=ok and (pkg/'package_combined.py').exists() and (pkg/'package_combined.py').read_text()==adapted_text
++        ok=ok and (pkg/'cap10_integration.py').exists() and sha(pkg/'cap10_integration.py')==CAP10['package_helper']['sha256']
++        cap10.stage_assets(pkg,CAP10)
+         record('P1-package-dir-reuse-verified',ok,{'path':str(pkg)})
+         if not ok:raise RuntimeError('existing package dir does not match the reproducible staging (drift or partial failure): '+str(pkg))
+         fresh=derive_manifest(variant,record,steps,execute)
+@@ -292,10 +300,12 @@
+         record('P1-package-dir-fresh',not pkg.exists(),{'path':str(pkg)})
+         pkg.mkdir(parents=True,exist_ok=False);(pkg/'inputs').mkdir()
+         for name in COPY_FILES:
+-            src=L24PKG/name;dst=pkg/name;shutil.copyfile(src,dst)
++            src=Path(CAP10['package_script']['path']) if name=='package_prx_l19.py' else L24PKG/name;dst=pkg/name;shutil.copyfile(src,dst)
+             assert sha(src)==sha(dst)
+         shutil.copyfile(L24PKG/'inputs/NuGet.Config',pkg/'inputs/NuGet.Config')
+-        text=(L24PKG/'package_combined.py').read_text()
++        shutil.copyfile(CAP10['package_helper']['path'],pkg/'cap10_integration.py')
++        write(pkg/'CAP10-RUNTIME-ASSETS.json',cap10.stage_assets(pkg,CAP10))
++        text=Path(CAP10['package_controller']['path']).read_text()
+         if text.count(FROZEN_NOTE_LINE)!=1:raise RuntimeError('frozen controller note line not found exactly once')
+         adapted=text.replace(FROZEN_NOTE_LINE,"    b.note('"+variant['note']+"')")
+         (pkg/'package_combined.py').write_text(adapted)
+@@ -303,9 +313,9 @@
+     else:
+         diff_note={'only_change':'b.note(...) pass label','old':FROZEN_NOTE_LINE.strip(),'new':"b.note('"+variant['note']+"')"}
+         steps.append({'step':'copy-frozen-packaging-scripts','variant':variant['key'],'dest':str(pkg),
+-                      'files':[{ 'source':{'path':str(L24PKG/n),'sha256':sha(L24PKG/n)},'dest':str(pkg/n)} for n in COPY_FILES],
++                      'files':[{ 'source':{'path':str(CAP10['package_script']['path'] if n=='package_prx_l19.py' else L24PKG/n),'sha256':sha(CAP10['package_script']['path'] if n=='package_prx_l19.py' else L24PKG/n)},'dest':str(pkg/n)} for n in COPY_FILES],
+                       'inputs/NuGet.Config':{'source':{'path':str(L24PKG/'inputs/NuGet.Config'),'sha256':sha(L24PKG/'inputs/NuGet.Config')},'dest':str(pkg/'inputs/NuGet.Config')}})
+-        steps.append({'step':'write-adapted-controller','variant':variant['key'],'dest':str(pkg/'package_combined.py'),'source':{'path':str(L24PKG/'package_combined.py'),'sha256':sha(L24PKG/'package_combined.py')},'diff':diff_note})
++        steps.append({'step':'write-adapted-controller','variant':variant['key'],'dest':str(pkg/'package_combined.py'),'source':CAP10['package_controller'],'diff':diff_note})
+     manifest=derive_manifest(variant,record,steps,execute)
+     if execute:
+         write(pkg/'BUILD-INPUTS.json',manifest)
+@@ -351,17 +361,25 @@
+         # before the receipt is written.
+         p5=receipt['status']=='MAC_PACKAGE_CHECKS_PASS'
+         p6=static['status']=='STATIC_CHECKS_PASSED' and len(static['checks'])==20 and all(c['pass'] for c in static['checks'].values())
+-        p7=ids['status'].startswith('PASS') and ids['count']==207
++        contract=cap10.require_package_contract(pinrow(out/'CAP10-PACKAGE-CONTRACT.json'))
++        constructor=json.loads((out/'CAP10-CONSTRUCTOR-CONTRACT.json').read_text())
++        counts=cap10.final_package_counts(ids,arrays,contract,constructor)
++        CAP10_ADMITTED=cap10.admitted(CAP10)
++        actual_ids={cap10.identity_tuple(x) for x in ids['imports']}
++        p7=(ids['status'].startswith('PASS') and ids['count']==len(ids['imports'])==len(actual_ids)==CAP10_ADMITTED['final_count']
++            and actual_ids==CAP10_ADMITTED['identity_set'] and counts['imports']==CAP10_ADMITTED['final_count'])
+         record('P5-build-receipt-'+passno,p5,{'status':receipt['status']})
+         record('P6-static-checks-'+passno,p6,{'count':len(static['checks'])})
+-        record('P7-import-identities-'+passno,p7,{'count':ids['count']})
++        record('P7-import-identities-'+passno,p7,{'count':ids['count'],'expected':CAP10_ADMITTED['final_count'],'admitted_list':CAP10_ADMITTED['pin'],
++               'unexpected':sorted(map(list,actual_ids-CAP10_ADMITTED['identity_set']))[:40],'missing':sorted(map(list,CAP10_ADMITTED['identity_set']-actual_ids))[:40]})
+         init=arrays['combined']['.init_array']['slots'];fini=arrays['combined']['.fini_array']['slots']
+         # P8 re-baseline 2026-10-10 (root, Claude Q4d): 238 -> 239. The +1
+         # legacy .ctors slot (1432->1440 B) is attributable to the Claude
+         # round-2 NEW_UNITS TUs (lua-lfb LuaFNameBridge.cpp + tcselftest
+         # ToolchainSelfTest.cpp are new global-ctor contributors; fini
+         # unchanged; census status itself PASS in both builds).
+-        p8=arrays['status'].startswith('PASS') and init==240 and fini==2
++        p8=(arrays['status'].startswith('PASS') and init==CAP10_ADMITTED['init'] and fini==CAP10_ADMITTED['fini']
++            and init==counts['init'] and fini==counts['fini'])
+         record('P8-constructor-arrays-'+passno,p8,{'init':init,'fini':fini})
+         arrays_seen.append((init,fini))
+         pkg_failed+=[g+'-'+passno for g,ok in (('P5',p5),('P6',p6),('P7',p7),('P8',p8)) if not ok]
+@@ -381,7 +399,7 @@
+            'prx':{'path':str(pkg/'pass-1'/prx_name),'sha256':ha,'bytes':(pkg/'pass-1'/prx_name).stat().st_size},
+            'twin':{'path':str(pkg/'pass-2'/prx_name),'sha256':hb,'bytes':(pkg/'pass-2'/prx_name).stat().st_size},
+            'checks':checks,'static_checks_each_pass':20,'exact_import_count':a['count'],
+-           'imports_unchanged':True,'import_baseline':{'path':str(L24PKG/'pass-1/EXACT-IMPORT-IDENTITIES.json'),'sha256':sha(L24PKG/'pass-1/EXACT-IMPORT-IDENTITIES.json')},
++           'imports_unchanged':False,'cap10_integration':CAP10['manifest'],'runtime_assets':pinrow(pkg/'CAP10-RUNTIME-ASSETS.json'),'import_baseline':{'path':str(L24PKG/'pass-1/EXACT-IMPORT-IDENTITIES.json'),'sha256':sha(L24PKG/'pass-1/EXACT-IMPORT-IDENTITIES.json')},
+            'constructor_arrays':{'.init_array':arrays_seen[0][0],'.fini_array':arrays_seen[0][1]},
+            'runtime_object_sha256':sha(variant['build']/'pass1'/variant['artifact']),
+            'runtime_twins':{'path':str(variant['build']/'TWIN-RECEIPT.json'),'sha256':sha(variant['build']/'TWIN-RECEIPT.json')},
+@@ -407,14 +425,15 @@
+     names_a={r['name'] for r in json.loads(Path(a['prx']['path']).parent.joinpath('EXACT-IMPORT-IDENTITIES.json').read_text())['imports']}
+     names_b={r['name'] for r in json.loads(Path(b['prx']['path']).parent.joinpath('EXACT-IMPORT-IDENTITIES.json').read_text())['imports']}
+     record('P10-variant-prx-differ',a['prx']['sha256']!=b['prx']['sha256'],{'A':a['prx']['sha256'],'B':b['prx']['sha256']})
+-    record('P11-import-name-sets-equal',names_a==names_b and len(names_a)==207,{'count':len(names_a)})
++    CAP10_ADMITTED=cap10.admitted(CAP10)
++    record('P11-import-name-sets-equal',names_a==names_b and len(names_a)==a['exact_import_count']==b['exact_import_count']==CAP10_ADMITTED['final_count'],{'count':len(names_a),'expected':CAP10_ADMITTED['final_count']})
+     if a['prx']['sha256']==b['prx']['sha256']:raise RuntimeError('variant PRXes are identical: the skip-define had no effect')
+-    if names_a!=names_b:raise RuntimeError('variant import name sets differ: '+repr(names_a^names_b))
++    if names_a!=names_b or len(names_a)!=a['exact_import_count'] or len(names_b)!=b['exact_import_count'] or len(names_a)!=CAP10_ADMITTED['final_count']:raise RuntimeError('variant import name sets/counts differ from exact per-variant contracts: '+repr(names_a^names_b))
+     receipt={'status':'MAC_ONLY_L26_VARIANT_PAIR_PACKAGING_RECEIPT','token':TOKEN,
+              'variant_A_prx':a['prx'],'variant_B_prx':b['prx'],
+              'variant_B_unsafe':UNSAFE_NOTE,
+              'import_name_sets_identical':True,'import_count_each':len(names_a),
+-             'static_checks_each':20,'constructor_arrays_each':{'.init_array':238,'.fini_array':2},
++             'static_checks_each':20,'constructor_arrays_each':a['constructor_arrays'],
+              'console_contact':False,'native_execution':False,'upload_approval_pending':True}
+     write(PAIR_ROOT/'VARIANT-PAIR-PACKAGING-RECEIPT.json',receipt)
+     steps.append({'step':'write-variant-pair-packaging-receipt','path':str(PAIR_ROOT/'VARIANT-PAIR-PACKAGING-RECEIPT.json')})
+@@ -572,12 +591,13 @@
+             p=L24PKG/name
+             expected=l24pins.get(str(p))
+             record('P2-frozen-source-pin',p.exists() and (expected is None or sha(p)==expected),{'path':str(p),'sha256':sha(p) if p.exists() else None,'manifest_pinned':expected is not None})
++        CAP10_ADMITTED=cap10.admitted(CAP10)
+         cand,_=l26_profile_candidates()
+         record('P2-l26-profile-candidates',len(cand)>=3,{'candidates':sorted(cand)})
+         pair_gates=([] if not any(v['key']=='B' for v in VARIANTS)
+-                    else ['P10 variant A/B PRX differ','P11 variant import name sets equal (207)'])
+-        steps.append({'step':'verify-expected-gates','static_checks_each_pass':20,'exact_import_identities':207,'init_array_slots':240,'fini_array_slots':2,
+-                      'gates':['P5 build receipt MAC_PACKAGE_CHECKS_PASS','P6 20/20 static checks all pass','P7 exactly 207 exact ELF import identities','P8 constructor arrays preserved 238/2','P9 pass-1/pass-2 PRX twins identical']+pair_gates+
++                    else ['P10 variant A/B PRX differ','P11 variant import name sets/counts equal their exact contracts'])
++        steps.append({'step':'verify-expected-gates','static_checks_each_pass':20,'exact_import_identities':CAP10_ADMITTED['final_count'],'init_array_slots':CAP10_ADMITTED['init'],'fini_array_slots':CAP10_ADMITTED['fini'],
++                      'gates':['P5 build receipt MAC_PACKAGE_CHECKS_PASS','P6 20/20 static checks all pass','P7 exactly %d ELF import identities == R15e 207 + cap10/ADMITTED-IMPORTS.json rows (and the computed contract agrees)'%CAP10_ADMITTED['final_count'],'P8 constructor arrays %d/%d (fixed; computed sum agrees)'%(CAP10_ADMITTED['init'],CAP10_ADMITTED['fini']),'P9 pass-1/pass-2 PRX twins identical']+pair_gates+
+                                ['P12 per-variant symbols sidecar <pkg>/<prx>.symbols.json valid (JSON + required keys + prx_sha256 == packaged pass-1 PRX)',
+                                 'P13 symbols sidecar prx_sha256 matches BOTH packaging twins'],
+                       'pair_gates_note':('A/B pair gates active (B opted in)' if pair_gates else 'P10/P11 skipped: variant B not in the active packaging set (agent-FX P2 drop)')})
+@@ -593,7 +613,7 @@
+     out={'mode':'plan' if args.plan else ('prepare' if args.prepare else 'execute'),
+          'driver':str(Path(__file__).resolve()),'driver_sha256':sha(Path(__file__).resolve()),'token':TOKEN,
+          'frozen_sources':str(L24PKG),'variants':[{'key':v['key'],'build':str(v['build']),'package_dir':str(v['pkg']),'artifact':v['artifact'],'unsafe':v['unsafe'],'unsafe_note':UNSAFE_NOTE if v['unsafe'] else None} for v in VARIANTS],
+-         'expected':{'static_checks_each_pass':20,'exact_import_identities':207,'init_array_slots':240,'fini_array_slots':2,'prx_basename':'modbridge_supplier_composition.prx'},
++         'expected':{'static_checks_each_pass':20,'exact_import_identities':CAP10_ADMITTED['final_count'],'init_array_slots':CAP10_ADMITTED['init'],'fini_array_slots':CAP10_ADMITTED['fini'],'admitted_import_list':CAP10_ADMITTED['pin'],'prx_basename':'modbridge_supplier_composition.prx'},
+          'steps':steps,'gates':gates,
+          'next':'build_variants.py --execute, then this driver --prepare/--execute' if args.plan else ('run this driver --execute' if args.prepare else 'complete'),
+          'console_contact':False,'native_execution':False}

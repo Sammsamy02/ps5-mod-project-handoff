@@ -1,0 +1,59 @@
+0x3ea720 (file 0x3ee720) 55 push rbp
+0x3ea721 (file 0x3ee721) 4889e5 mov rbp, rsp
+0x3ea724 (file 0x3ee724) 4157 push r15
+0x3ea726 (file 0x3ee726) 4156 push r14
+0x3ea728 (file 0x3ee728) 4155 push r13
+0x3ea72a (file 0x3ee72a) 4154 push r12
+0x3ea72c (file 0x3ee72c) 53 push rbx
+0x3ea72d (file 0x3ee72d) 4883ec28 sub rsp, 0x28
+0x3ea731 (file 0x3ee731) 4c8b25d077d408 mov r12, qword ptr [rip + 0x8d477d0]
+0x3ea738 (file 0x3ee738) 4989fe mov r14, rdi
+0x3ea73b (file 0x3ee73b) 4889f3 mov rbx, rsi
+0x3ea73e (file 0x3ee73e) 498b0424 mov rax, qword ptr [r12]
+0x3ea742 (file 0x3ee742) 488945d0 mov qword ptr [rbp - 0x30], rax
+0x3ea746 (file 0x3ee746) 4c8b7f78 mov r15, qword ptr [rdi + 0x78]
+0x3ea74a (file 0x3ee74a) 498b07 mov rax, qword ptr [r15]
+0x3ea74d (file 0x3ee74d) 458b6f30 mov r13d, dword ptr [r15 + 0x30]
+0x3ea751 (file 0x3ee751) 4c89ff mov rdi, r15
+0x3ea754 (file 0x3ee754) ff9070010000 call qword ptr [rax + 0x170]
+0x3ea75a (file 0x3ee75a) 410fb64e70 movzx ecx, byte ptr [r14 + 0x70]
+0x3ea75f (file 0x3ee75f) 488d7db0 lea rdi, [rbp - 0x50]
+0x3ea763 (file 0x3ee763) 4c897db0 mov qword ptr [rbp - 0x50], r15
+0x3ea767 (file 0x3ee767) 44896dc0 mov dword ptr [rbp - 0x40], r13d
+0x3ea76b (file 0x3ee76b) 8945c4 mov dword ptr [rbp - 0x3c], eax
+0x3ea76e (file 0x3ee76e) 31f6 xor esi, esi
+0x3ea770 (file 0x3ee770) 884dc8 mov byte ptr [rbp - 0x38], cl
+0x3ea773 (file 0x3ee773) 48895db8 mov qword ptr [rbp - 0x48], rbx
+0x3ea777 (file 0x3ee777) e8e488feff call 0x3d3060
+0x3ea77c (file 0x3ee77c) f645c801 test byte ptr [rbp - 0x38], 1
+0x3ea780 (file 0x3ee780) 488b7db8 mov rdi, qword ptr [rbp - 0x48]
+0x3ea784 (file 0x3ee784) 750f jne 0x3ea795
+0x3ea786 (file 0x3ee786) 488b3f mov rdi, qword ptr [rdi]
+0x3ea789 (file 0x3ee789) 4885ff test rdi, rdi
+0x3ea78c (file 0x3ee78c) 740c je 0x3ea79a
+0x3ea78e (file 0x3ee78e) e8fdd2ccff call 0xb7a90
+0x3ea793 (file 0x3ee793) eb05 jmp 0x3ea79a
+0x3ea795 (file 0x3ee795) e88692c7ff call 0x63a20
+0x3ea79a (file 0x3ee79a) 498b0424 mov rax, qword ptr [r12]
+0x3ea79e (file 0x3ee79e) 483b45d0 cmp rax, qword ptr [rbp - 0x30]
+0x3ea7a2 (file 0x3ee7a2) 750f jne 0x3ea7b3
+0x3ea7a4 (file 0x3ee7a4) 4883c428 add rsp, 0x28
+0x3ea7a8 (file 0x3ee7a8) 5b pop rbx
+0x3ea7a9 (file 0x3ee7a9) 415c pop r12
+0x3ea7ab (file 0x3ee7ab) 415d pop r13
+0x3ea7ad (file 0x3ee7ad) 415e pop r14
+0x3ea7af (file 0x3ee7af) 415f pop r15
+0x3ea7b1 (file 0x3ee7b1) 5d pop rbp
+0x3ea7b2 (file 0x3ee7b2) c3 ret 
+0x3ea7b3 (file 0x3ee7b3) e8a8760807 call 0x7471e60
+0x3ea7b8 (file 0x3ee7b8) 0f0b ud2 
+0x3ea7ba (file 0x3ee7ba) cc int3 
+0x3ea7bb (file 0x3ee7bb) cc int3 
+0x3ea7bc (file 0x3ee7bc) cc int3 
+0x3ea7bd (file 0x3ee7bd) cc int3 
+0x3ea7be (file 0x3ee7be) cc int3 
+0x3ea7bf (file 0x3ee7bf) cc int3 
+0x3ea7c0 (file 0x3ee7c0) 488b7f78 mov rdi, qword ptr [rdi + 0x78]
+0x3ea7c4 (file 0x3ee7c4) 0fb7473b movzx eax, word ptr [rdi + 0x3b]
+0x3ea7c8 (file 0x3ee7c8) a940100000 test eax, 0x1040
+0x3ea7cd (file 0x3ee7cd) 7403 je 0x3ea7d2

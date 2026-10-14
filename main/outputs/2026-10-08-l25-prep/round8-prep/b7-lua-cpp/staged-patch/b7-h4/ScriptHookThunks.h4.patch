@@ -1,0 +1,25 @@
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/ScriptHookThunks.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/ScriptHookThunks.cpp
+@@ -74,15 +74,22 @@
+     UnrealScriptFunctionCallableContext callable_context{context, frame, result};
+     try { data->FirePreCallbacks(callable_context); }
+     catch (std::exception& e) { Output::send(STR("Error executing thunk pre callback: {}\n"), ensure_str(e.what())); }
++    // [B7-H4] Game boundary. Game frames are below this function and the PS5 unwinder cannot walk them, so
++    // NOTHING may leave here. A Lua error that escaped the callback (Lua as C++: a thrown pointer, not a
++    // std::exception) ends up here instead of in std::terminate. It is logged, not delivered: if the main Lua
++    // state was inside a protected call when the game fired this hook, that call is not unwound by it.
++    catch (...) { Output::send(STR("[B7-H4] contained a non-std exception (a Lua error?) at the game boundary: thunk pre callback\n")); }
+     original(context, frame, result);
+     try { data->FirePostCallbacks(callable_context); }
+     catch (std::exception& e) { Output::send(STR("Error executing thunk post callback: {}\n"), ensure_str(e.what())); }
++    catch (...) { Output::send(STR("[B7-H4] contained a non-std exception (a Lua error?) at the game boundary: thunk post callback\n")); }
+ }
+ 
+ template<size_t Index>
+ void Thunk(UObject* context, FFrame& frame, void* result) {
+     try { Dispatch(Index, context, frame, result); }
+     catch (std::exception& e) { Output::send(STR("Error executing script thunk: {}\n"), ensure_str(e.what())); }
++    catch (...) { Output::send(STR("[B7-H4] contained a non-std exception (a Lua error?) at the game boundary: script thunk\n")); }
+ }
+ template<size_t... Index>
+ constexpr auto MakeThunks(std::index_sequence<Index...>) {

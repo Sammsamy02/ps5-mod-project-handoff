@@ -1,0 +1,102 @@
+{
+  "worker": "worker-diag-channel-postmortem",
+  "date": "2026-10-04",
+  "pass": "FINISH (second attempt; first attempt died mid-work after CLAIM.json + a failing host test)",
+  "scope": "Diagnostic-visibility postmortem for composition-4 zero-output launch, and an AUDIT of the delivered wired entry (outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_module_entry.c, sha256 1c041f8bef1607994ce905591f7e9ed91326465e45081da55e56d6ea2e501b80) against the fail-open requirements, replacing the original design-a-proposal task. HOST-ONLY: source analysis and host-compiled tests with fakes. No console contact, no target execution, no nested subagents, no network.",
+  "claims": {
+    "channel_where": {
+      "claim": "diagnostic_open_channel() opens PROBE_LOG_PATH with sceKernelOpen(path, O_WRONLY|O_CREAT|O_APPEND|O_NOFOLLOW, 0600) and caches the fd in a static; for every composition-3/4 supplier PRX actually built, PROBE_LOG_PATH is /data/townfall_runtime_aligned_entry.log with marker 'modbridge-runtime-aligned-entry/v1 build=f6530c7905934e5a8cc201aa9400ebb0'.",
+      "evidence": [
+        ".superpowers/native-dependency-spike/native-full-runtime-aligned-entry-1/diagnostic.c:56-69 (diagnostic_open_retained/diagnostic_open_channel), :60-61 (flags/mode), :14 (static channel_fd)",
+        "native-full-runtime-aligned-entry-1/generated/probe_config.h:3 (PROBE_LOG_PATH), :4 (PROBE_MARKER)",
+        "strings on the staged composition-3 PRX b8bfae77... (worker-composition-3/prx-candidate-composition3-1/modbridge_supplier_composition.prx): pinned paths /data/townfall_runtime_aligned_entry.log + /data/townfall_worker_input.lua, marker modbridge-runtime-aligned-entry/v1",
+        "strings on composition-4 PRX de372302... (worker-composition-4-fix/prx-candidate-composition4-1/modbridge_supplier_composition.prx): identical pinned path and marker",
+        "outputs/2026-10-04-zcode-team/worker-bootstrap-trace/STARTUP-TRACE.md section 0 (shared generated/probe_config.h -I in every bootstrap compile)"
+      ]
+    },
+    "no_fallback": {
+      "claim": "There is NO fallback anywhere in the composition-3/4 entry. If sceKernelOpen fails, channel_fd stays negative, write_line() no-ops on fd<0, and module_entry.c:57-58 returns -22 from module_start with zero bytes written anywhere; the negative open return (errno equivalent) is dropped by the '< 0' comparison. The -20 (entry-guard busy, module_entry.c:51-52) and -21 (wrong state, module_entry.c:55-56) paths are equally silent. Only the PROBE_ACTIVE idempotent re-entry (return 0) is silent by design.",
+      "evidence": [
+        "native-full-runtime-aligned-entry-1/diagnostic.c:39-54 (write_line: returns silently when !diagnostic_ready() or fd<0; breaks on partial write)",
+        "outputs/ps5-mod-bridge/native-runtime-startup/lifecycle/module_entry.c:51-58",
+        "outputs/2026-10-04-zcode-team/worker-error-path/ERROR-PATH-ANALYSIS.md section 2 (same conclusion, independently reached)"
+      ]
+    },
+    "channel_collision": {
+      "claim": "composition-4's diagnostic channel is the SAME file, with the SAME marker prefix, as the known-good aligned-entry probe module (/data/plugins/modbridge_runtime_aligned_entry.prx, active_console_probe checkpoint). Line-level attribution between the two modules is only possible via event payload (constructor_count 235 vs 232), never via marker or path.",
+      "evidence": [
+        ".superpowers/native-observations/transport-experiments-progress.json /active_console_probe (path, log_path, build_marker, expected_constructor_count 232)",
+        "STARTUP-TRACE.md section 1 step 7 (composition-4 init_slots 235)",
+        "strings evidence above (both PRXes carry the same PROBE_MARKER)"
+      ]
+    },
+    "documented_path_was_wrong": {
+      "claim": "The postmortem docs direct operators to /data/townfall_supplier_composition.log as 'the module diagnostics' file, but NO built candidate binary pins that path (strings: absent from both b8bfae77 and de372302). Any readback of that path could only ever report absent.",
+      "evidence": [
+        "outputs/2026-10-04-zcode-team/worker-post-promotion-runtime/FAILURE-TRIAGE.md lines 8-9 (evidence file list)",
+        "outputs/2026-10-04-zcode-team/worker-activation-accessibility/ACCESSIBILITY-ANALYSIS.md line 69",
+        "strings check of both PRX binaries: no /data/townfall_supplier_composition.log string present"
+      ]
+    },
+    "channel_never_verified": {
+      "claim": "composition-4's own channel output was never captured or reconciled on console. The controller checkpoint zcode_composition_startup_diagnosis (22:40 UTC) records 'No UE4SS.log, no runtime-status.txt, no diagnostic log' without a per-marker readback of /data/townfall_runtime_aligned_entry.log; therefore a silent -22 open failure at module_entry.c:57 is UNFALSIFIED (and remains so), alongside the separately source-proven missing activation wiring (bootstrap units linked, never invoked).",
+      "evidence": [
+        ".superpowers/native-observations/transport-experiments-progress.json /zcode_composition_startup_diagnosis (status NO_OUTPUT_STARTUP_STAGE_UNRESOLVED; gap string; ROOT_CAUSE_FOUND/CONFIRMED sections)",
+        "transport-experiments-progress.json /zcode_path_test_target_run/ue4ss_log: 'PATH_TEST: /data/plugins/UE4SS.log writable at 8866785633337 monotonic-ns' (the fallback channel IS proven writable in-game)",
+        "aligned-entry channel proven working: /zcode_worker_ingame_probe/second_launch_diagnosis (fresh log, full sequence, 17:04 console-time)"
+      ]
+    },
+    "failopen_patch": {
+      "claim": "SUPERSEDED-AS-DESIGN, RETAINED-AS-EVIDENCE: the minimal self-designed patch (5 edits, module_entry_patched.c/diff in host-test/) that makes module_start never return -20/-21/-22 silently compiles and passes its full scenario matrix on host (26/26 checks, 6 scenarios) after this pass repaired a harness argv-indexing bug; the FIRST attempt's HOST-TEST-FAIL receipt was entirely that bug (failover lines were written into scenario-named relative files that accumulated across runs — the code under test was correct all along, as the deleted stray files' content proved).",
+      "evidence": [
+        "host-test/module_entry_patched.diff (5 exact edits, all inside lifecycle/module_entry.c)",
+        "receipts/host-test-output.txt (raw FAILED provenance from attempt 1 — kept unchanged)",
+        "receipts/host-test-pass-patched-design.txt (repaired harness, HOST-TEST-PASS, 26 checks)",
+        "host-test/test_main.c set_paths comment documenting the argv[1]/argv[2] -> argv[2]/argv[3] repair"
+      ],
+      "limits": [
+        "If the kernel import bindings themselves are NULL (diag_bindings_null case on console), NOTHING can be written by construction; the marker attempt is a best-effort no-op. This sub-case stays invisible; host test documents it.",
+        "If the UE4SS.log append itself is refused, there is no further fallback; the module still returns the same code (host scenario t7).",
+        "The idempotent PROBE_ACTIVE re-entry (return 0) intentionally stays silent.",
+        "Console behavior of the patch is NOT claimed; host test proves the logic only."
+      ]
+    },
+    "audit_delivered_entry": {
+      "claim": "AUDIT FINDING (host-proven): the delivered wired entry implements fail-open markers ONLY for post-lifecycle failures. write_ue4ss_log_line (runtime_module_entry.c:166-192, appends 'modbridge module_start failed: <stage> code=<n> detail=<...>' to /data/plugins/UE4SS.log via sceKernelOpen O_WRONLY|O_CREAT|O_APPEND|O_NOFOLLOW mode 0600 at :180-181) and write_status_failed (:198-219, mfa_status_write 'failed' at :217), both invoked only via runtime_failure (:221-226) at call sites :266 mfa_activate_failed, :289 runtime_start_failed, :346 runtime_stop_failed. The early probe-lifecycle returns are STILL SILENT: -20 at :297-298, -21 at :301-302, and the -22 diagnostic-channel-open failure at :303-304. The -22 silence is by OMISSION, not incapacity: write_ue4ss_log_line's own guard (:168-169) only requires diagnostic_ready(), which is TRUE in the channel-open-failed sub-case, so a single call would mark it.",
+      "evidence": [
+        "outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_module_entry.c:166-192,198-226,266,289,297-304,338-339,346",
+        "host-test/audit/run_audit_test.sh + receipts/audit-test-pass-delivered-entry.txt (33/33 checks; a1 is the discriminating scenario: -22 with bindings proven, zero marker bytes anywhere; a5/a7 prove both sinks fire post-lifecycle; a3 positive control shows the diag channel IS open on the constructor-failure -1 path — that path emits runtime_start_skipped to the channel but still no UE4SS.log/status marker, acceptable because the channel works there)"
+      ],
+      "limits": [
+        "module_stop's -20 path (:338-339) is equally silent — inherited frozen behavior, explicitly out of scope.",
+        "The bindings-unproven sub-case of -22 can never write anything on console (no proven imports) — structural, unchanged by any patch.",
+        "Delivered entry uses open mode 0600 where the self-designed patch spec used 0644; both best-effort; not acceptance-relevant on host evidence.",
+        "Host evidence only; no console claim."
+      ]
+    },
+    "patch3line": {
+      "claim": "The exact 3-line patch replacing runtime_module_entry.c:303-304 closes the silent -22 path with unchanged return semantics, host-proven (8/8 checks): (1) 'int channel = diagnostic_ready() ? diagnostic_open_channel() : -1;' (2) 'if (channel < 0)' (3) '        { write_ue4ss_log_line(\"diag_channel_open_failed\", -22, \"diagnostic channel unavailable before wiring\"); return leave_entry(-22); }' — preserves the short-circuit (open_channel never called with unproven bindings; line-3 braces keep it a single guarded block), and write_ue4ss_log_line's internal !diagnostic_ready() guard keeps the bindings-null sub-case a safe no-op. Proof copy + runner live in host-test/audit/patched_proof_runtime_module_entry.c and run_patched_proof.sh; NOTHING outside this worker directory was modified.",
+      "evidence": [
+        "receipts/patched-proof-pass.txt (p1 marker line 'modbridge module_start failed: diag_channel_open_failed code=-22 detail=diagnostic channel unavailable before wiring' while still returning -22; p2 bindings-null no-op preserved; p3 success path untouched)",
+        "Analogous single-call additions for -20 (:297-298) and -21 (:301-302) are noted in CHANNEL-POSTMORTEM.md but were NOT required by the finish brief and are not separately proof-run."
+      ]
+    },
+    "host_test": {
+      "claim": "Host test (Apple clang arm64-native for the audit; x86_64+Rosetta for the retained design test) compiles the audited/patched sources byte-exact (sha-checked at every run) with fakes for sceKernelOpen/Write/Close, diagnostic_*, probe lifecycle and mfa/bridge APIs. Repaired design test: 6 scenarios, 26 checks, PASS. Delivered-entry audit: 7 scenarios (a1-a7), 33 checks, PASS. 3-line patch proof: 3 scenarios (p1-p3), 8 checks, PASS.",
+      "receipts": [
+        "receipts/host-test-output.txt (attempt 1 FAILED — raw provenance, kept)",
+        "receipts/host-test-pass-patched-design.txt (attempt 1 design, repaired harness)",
+        "receipts/audit-test-pass-delivered-entry.txt (delivered entry audit)",
+        "receipts/patched-proof-pass.txt (3-line patch proof)"
+      ]
+    }
+  },
+  "not_claimed": [
+    "No claim that the -22 silent return (rather than the unwired activation caller) is THE composition-4 root cause; both remain consistent with the console observations.",
+    "No console execution, no in-game writability re-test, no PRX rebuild, no composition-5 build.",
+    "No claim about module_stop's silent -20 path (module_entry.c:84-85 baseline, wired entry :338-339); explicitly out of scope, noted in CHANNEL-POSTMORTEM.md.",
+    "No claim that the 3-line patch was APPLIED to the delivered entry — it is a proposal with host proof only; the delivered file is untouched (write scope below).",
+    "No claim of AAA quality or full parity."
+  ],
+  "writes_confined_to": "outputs/2026-10-04-zcode-team/worker-diag-channel-postmortem/"
+}

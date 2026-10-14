@@ -1,0 +1,107 @@
+{
+  "worker": "worker-index-final-edition",
+  "team": "2026-10-04-zcode-team",
+  "date": "2026-10-05",
+  "task": "FINAL session-eve index edition: synthesize the ~30 deliveries that landed after INDEX-v2 (2026-10-04 23:05 local) into INDEX-FINAL.md + CURRENT-STATE-DIGEST-FINAL.md; complete open-items table (every pending console test with plan+expected evidence; every open design question with its owner artifact); cross-check 15 claims with citations.",
+  "constraints": [
+    "NO console contact",
+    "no nested subagents",
+    "read-only synthesis: no file outside this worker directory written",
+    "deliverable order: CLAIM.json (first) -> INDEX-FINAL.md + CURRENT-STATE-DIGEST-FINAL.md -> REPORT.md (last)"
+  ],
+  "baseline": {
+    "prior_index": "outputs/2026-10-04-zcode-team/worker-index-v2-refresh/INDEX-v2.md (2026-10-04 23:05; ledger then 234 zcode_ entries, newest zcode_worker_fc1_validator_probe)",
+    "ledger_at_this_read": "268 zcode_ entries of 599 top-level keys (.superpowers/native-observations/transport-experiments-progress.json); newest zcode_worker_ue4ss_docs_fidelity",
+    "worker_dirs": "249 under outputs/2026-10-04-zcode-team/ at read time"
+  },
+  "claims": [
+    {
+      "id": "IFE-1",
+      "claim": "Both launch candidates are BUILT and GATE-APPROVED and waiting locally: launch-9 = worker-comp6-driver/prx-candidate-composition6-1 (fself 76ee6af39b407ab3..., 30,773,943 B, FINAL gate receipt GO with failed_checks []); launch-10 armed = worker-launch10-prebuild/prx-candidate-composition6-l10-a (wrapped fself d8cb4a7637b2ac58..., 30,818,247 B, offline gate GO 15/15).",
+      "evidence": "sha256 recomputed on disk this pass for both fselfs; gate-receipt-composition6-FINAL.json parsed; gate-receipt-launch10-armed-a-vs-b.json cited from worker-launch10-prebuild REPORT section 2"
+    },
+    {
+      "id": "IFE-2",
+      "claim": "The controller-local staged copy of the launch-9 candidate (outputs/2026-10-04-zcode-controller/console/comp6-staged-fself.prx) is byte-identical to candidate-1 (76ee6af3..., 30,773,943 B) — staged in the local console-backup dir only; the CONSOLE never received it.",
+      "evidence": "sha256 recomputed this pass on both files; worker-session-eve-coherence/EVE-STATE.md L1 row + CONSOLE-DOWN NOTE"
+    },
+    {
+      "id": "IFE-3",
+      "claim": "The console homebrew servers went DOWN before comp6 staging: the on-console payload slot still holds composition-5 r11 fself 0911af0c... (30,792,151 B), the activation root holds the v2 generation, and ploader.ini must still match pre-image 8d331b3f... (247 B). No dispatch, retry, or replay was made against the down console.",
+      "evidence": "worker-session-eve-coherence/EVE-STATE.md CONSOLE-DOWN NOTE + S1/S2/S3 rows; worker-divergence-reconciliation/RECONCILED.md divergence 2 (04869ab3 is the superseded r2-era upload, not the slot identity)"
+    },
+    {
+      "id": "IFE-4",
+      "claim": "GMalloc (required slot 3) is now DERIVED: linked 0x930add8 -> runtime 0x970add8, via the FMallocBinned3 class-anchor + RELA-reconstruction route; seedable only behind its data-side two-qword validator (V1/V2); it enters the compiled seed table ONLY in the launch-10 armed build.",
+      "evidence": "worker-gmalloc-derivation/REPORT.md verdict table; '0x930add8' and '0x970add8' confirmed present in GMALLOC-CANDIDATES.json this pass; worker-ue4ss-docs-fidelity/FIDELITY-REPORT.md section 0 (SeedTable.h 2cab0c52 3-slot vs SeedTable.launch10.h 59effe6e 4-slot)"
+    },
+    {
+      "id": "IFE-5",
+      "claim": "The launch-10 prebuild's sole delta vs launch-9 is the 2-line SeedTable swap (kGMalloc{true,true,0x930add8} + kRequiredSetComplete=true): 13/14 build objects sha-identical, initializer source byte-identical (c85c42f7), bridge object byte-identical (16331ebe), imports 196==196, second full pass byte-identical (determinism).",
+      "evidence": "worker-launch10-prebuild/REPORT.md sections 1-2; SeedTable.h 2cab0c52... / SeedTable.launch10.h 59effe6e... recomputed this pass"
+    },
+    {
+      "id": "IFE-6",
+      "claim": "The launch-9 build completed AFTER worker-comp6-post-build-reviewer's 23:35 NO-GO (which honestly found packaging refused on bridge-header pin drift): the D1 determinism FAIL root cause was a stale reuse-lineage driver default (composition-4/run-3); the d1fix driver + three byte-identical packaging runs produced shipped candidate-1; the FINAL gate receipt (GO, failed_checks []) compares candidate-1 vs the candidate-4 reproduction.",
+      "evidence": "worker-comp6-post-build-reviewer/POST-BUILD-VERDICT.md section 2; worker-d1-determinism-diagnosis/REPORT.md TL;DR + gate commands; gate-receipt-composition6-FINAL.json verdict parsed this pass"
+    },
+    {
+      "id": "IFE-7",
+      "claim": "LAUNCH10-MATRIX.md is now WRITTEN (INDEX-v2 listed it as CLAIM-only/PENDING): rows R1-R9 route post-launch-9 integration by four dimensions (terminal point, IGW verdict, fc1 verdict, GMalloc hunt); launch-10 is a staging decision, not a build wait.",
+      "evidence": "worker-launch10-matrix-prep/LAUNCH10-MATRIX.md sections 0-4; worker-launch10-prebuild/REPORT.md header"
+    },
+    {
+      "id": "IFE-8",
+      "claim": "The app re-pin (APP-SESSION-INTEGRATION P0) is APPLIED: PAYLOAD_IDENTITY now a21771f894dd43be.../681888 (MODE=B config-entry) in all three owned vendored modmgr_api.py copies; 42/42 API + 52/52 UI checks green; the desktop binary a677e7b2.../build_id 9b46b161... is proven UNCHANGED by the re-pin (deterministic rebuild byte-identical).",
+      "evidence": "worker-app-payload-repin/REPORT.md sections 1-3; grep this pass found the new pin in all 3 vendored copies"
+    },
+    {
+      "id": "IFE-9",
+      "claim": "The FINAL ploader.ini is the 8-entry canonical 400 B bbc34c16... template (7 mode-2 registered + mode-0 igf line), adopted into console_batch.py revision b00b3a69... (selftest 372 ok / 0 failed per DOC-SYNC) with content-anchored ensure ops and ONE sanctioned INI-BOOTSTRAPPED whole-file STOR.",
+      "evidence": "worker-final-ini-layout/FINAL-INI-LAYOUT.md section 1; canonical template sha/size/line counts recomputed this pass (7 '= 2' lines, 1 '= 0' line); worker-session-docs-final-sync DOC-SYNC note in RETURN-SESSION-MASTER-PLAN.md header"
+    },
+    {
+      "id": "IFE-10",
+      "claim": "The full-session desk rehearsal ran 78 checks green / 0 failed (Phase 0-3 + 6 required branch shapes) against the fake console drive; its Phase-1 comp6 leg is honestly labeled MOCK (it ran before the one-pass completed).",
+      "evidence": "worker-session-desk-rehearsal/REPORT.md; receipts/SESSION-GO-NO-GO.json read this pass (phase1_comp6 = CONDITIONAL - MOCK ONLY)"
+    },
+    {
+      "id": "IFE-11",
+      "claim": "Bridge r13 is receipted and pinned by the driver: r13 10385e22... (734 lines, 5 review fixes: P2-1 activation-adopted-first, P3-1 lease-cap saturation diagnostic, P3-2 static_assert, P3-3 probe[8] init, P3-4 MRS_ERR_STOP_EXN 2->5); r12 feed5254... byte-frozen; comp6 driver BRIDGE_DEFAULT moved to r13. INDEX-v2's 'r13 NOT receipted' flag is resolved.",
+      "evidence": "worker-bridge-r13-polish/REPORT.md shipped-bytes table; shas recomputed this pass; worker-launch10-prebuild REPORT section 3 (bridge object byte-identical to launch 9)"
+    },
+    {
+      "id": "IFE-12",
+      "claim": "The R3 zero-syscall tier is DESIGN-COMPLETE with a falsifiable gap: SetFuncPtr is real/platform-neutral and Lua RegisterHook already routes through it on the PS5 build; ExecuteInGameThread (A9) is the only interception dependency; PostRender does NOT exist on this title (offline-refuted carrier), surviving carrier candidates are ReceiveTick/BlueprintUpdateAnimation/ambiguous 'Tick'; the cc1 carrier census probe modbridge_carrier.prx is BUILT to decide fact F-1 in-game.",
+      "evidence": "worker-r3-zerosyscall-tier/REPORT.md verdict; worker-r3-carrier-prep/REPORT.md findings 1-3; worker-carrier-probe-build/CLAIM.json (modbridge_carrier.prx on disk in that dir)"
+    },
+    {
+      "id": "IFE-13",
+      "claim": "The U-SWAP-5 gap (no-exec-mode gate for BOTH_FAIL/FATAL matrix rows) is CLOSED AS PROPOSAL: NO-EXEC-GATE.diff (11 hunks, 374 lines, sha 339ef3c4...) compiles OUT the walk arms and detour registrations via compile-time UE4SS_NO_EXEC_MODE with 12 named loud refusals; not integrated into the shipped initializer.",
+      "evidence": "worker-no-exec-mode-gate/REPORT.md sections 1-2; LAUNCH10-MATRIX.md section 1 U-SWAP-5 row ('GAP: no worker owns this yet' at matrix time)"
+    },
+    {
+      "id": "IFE-14",
+      "claim": "The knowledge base (KNOWLEDGE-BASE.md, read-first document) and the fidelity pass (FIDELITY-REPORT.md) landed: KB covers domains A-E incl. 17 anti-patterns; fidelity verdicts: LAUNCH9-PREDICTION CURRENT (line drift + r12->r13 caveat), ENGINE-READY-PATH STALE/superseded, LAUNCH10-MATRIX CURRENT-as-router with stale cited details, MASTER-VERIFICATION-RUNBOOK STALE-with-fix (3 items); merged initializer is 2044 lines (c85c42f7, recomputed).",
+      "evidence": "worker-knowledge-consolidation/REPORT.md; grep of 'verdict:' lines in FIDELITY-REPORT.md this pass; wc -l + sha256 of UnrealInitializer.cpp recomputed this pass"
+    },
+    {
+      "id": "IFE-15",
+      "claim": "Both closure records resolved their divergences from local ground truth: dll8 appends at records 37-40 (dll8-first; 41-44 only if the dll7 fallback runs first; position yields to the append-only invariant) and the staged-slot identity is 0911af0c (r11) with 04869ab3 the superseded r2-era upload; app and DLL track-closure milestones are documented with binding no-claim-inflation criteria; worker-pre-session-inventory delivered CLAIM.json ONLY (its inventory/report files are absent on disk — incomplete delivery).",
+      "evidence": "worker-divergence-reconciliation/RECONCILED.md sections 1-2; worker-dll-track-closure/TRACK-COMPLETE.md criteria 1-6; worker-app-track-closure/APP-SESSION-INTEGRATION.md section 1; ls of worker-pre-session-inventory/ this pass (CLAIM.json only)"
+    }
+  ],
+  "verification_summary": "15/15 claims cross-checked; sha256 recomputed on disk this pass for: launch-9 fself 76ee6af3 (candidate-1 AND controller staged copy), launch-10 fself d8cb4a76 (30,818,247 B), settings v3 d8faa4ec/1448 B + loadlist 4d98ecd7/447 B, canonical ini bbc34c16/400 B (7 mode-2 + 1 mode-0 lines), console_batch.py b00b3a69, SeedTable.h 2cab0c52 + SeedTable.launch10.h 59effe6e, bridge r13 10385e22 + r12 feed5254, initializer c85c42f7/2044 lines, dll8 ELF 79281191, ledger 268 zcode_ entries. All console-state claims are quoted from EVE-STATE/RECONCILED (the console itself was never contacted).",
+  "non_claims": [
+    "No claim that any launch has happened or will succeed; nothing has been executed on the console",
+    "No >8 quality claim anywhere; Item Spawner activation has never been observed in-game (ACCEPTANCE-RECORD goal still [TARGET])",
+    "All PASS numbers are quoted from worker receipts; this worker re-verified only on-disk hashes/counts, never console state",
+    "No raw provenance was modified; all cited artifacts remain unchanged in their owner dirs"
+  ],
+  "outputs": [
+    "CLAIM.json",
+    "INDEX-FINAL.md",
+    "CURRENT-STATE-DIGEST-FINAL.md",
+    "REPORT.md"
+  ]
+}

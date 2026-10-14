@@ -1,0 +1,9 @@
+0x436a60 (file 0x43aa60) 55 push rbp
+0x436a61 (file 0x43aa61) 4889e5 mov rbp, rsp
+0x436a64 (file 0x43aa64) 488b4770 mov rax, qword ptr [rdi + 0x70]
+0x436a68 (file 0x43aa68) 0fbf405c movsx eax, word ptr [rax + 0x5c]
+0x436a6c (file 0x43aa6c) 5d pop rbp
+0x436a6d (file 0x43aa6d) c3 ret 
+0x436a6e (file 0x43aa6e) cc int3 
+0x436a6f (file 0x43aa6f) cc int3 
+0x436a70 (file 0x43aa70) 55 push rbp

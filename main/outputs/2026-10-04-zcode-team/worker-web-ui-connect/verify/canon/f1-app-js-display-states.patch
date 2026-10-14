@@ -1,0 +1,39 @@
+--- a/outputs/ps5-mod-bridge/web/app.js
++++ b/outputs/ps5-mod-bridge/web/app.js
+@@ -747,13 +747,22 @@
+       if (replacement) $$('[data-focus-key]', replacement).find(element => element.dataset.focusKey === focusedKey)?.focus();
+     }
+   };
++  // Running is derived only from runtime acks (runtime-status.txt), never fabricated.
++  const runtimeAckLabel = ackState => ({
++    'not-started': 'No runtime ack',
++    'activated': 'Running (ack: activated)',
++    'engine-ready': 'Running (ack: engine-ready)',
++    'mods-started': 'Running (ack: mods-started)',
++    'failed': 'Failed (ack: failed)',
++    'stopped': 'Stopped (ack: stopped)',
++  })[ackState] || 'Runtime ack unavailable';
+   const renderInstalled = () => {
+     const root = $('#installed-content');
+     if (state.capabilities.mod_service_records === true) {
+       root.className = 'stack';
+       const records = state.serviceRecords;
+       if (!records) { root.innerHTML = `<div class="empty-state"><h2>Service records unavailable</h2><p>${esc(state.serviceRecordsError || 'Reading service records…')}</p><p>Installation and live gameplay status are unverified.</p></div>`; return; }
+-      root.innerHTML = `<p class="content-note">Read-only service records. Live game process unverified; installation controls unavailable.</p>${records.mods.length ? records.mods.map(item => `<article class="card"><div><p class="card-title">${esc(safeText(item.source.name, item.download_id))}</p><p class="card-meta">${esc(item.title_id)} · <span class="pill">${esc({downloaded: 'Downloaded', prepared: 'Prepared', installed: 'Installed'}[item.state])}</span></p>${item.state === 'prepared' ? `<p class="card-meta">${item.blockers?.length ? 'Preparation blocked' : 'Preparation recorded; install readiness unverified'}</p>${(item.blockers || []).map(blocker => `<p>${esc(blocker.code)}: ${esc(blocker.message)}</p>`).join('')}` : ''}</div></article>`).join('') : '<div class="empty-state"><h2>No service mod records</h2></div>'}${records.games.map(game => `<article class="card"><div><p class="card-title">${esc(game.title_id)}</p><p class="card-meta">Installed load list: ${esc(game.installed.mods.length)} mod(s)</p><p>Runtime report: ${esc(game.runtime.state)} · Live game process unverified</p>${game.runtime.detail ? `<p>${esc(game.runtime.detail)}</p>` : ''}</div></article>`).join('')}`;
++      root.innerHTML = `<p class="content-note">Read-only service records. Mod states come from records.list; running is derived only from runtime acknowledgments. Live game process unverified; installation controls unavailable.</p>${records.mods.length ? records.mods.map(item => `<article class="card"><div><p class="card-title">${esc(safeText(item.source.name, item.download_id))}</p><p class="card-meta">${esc(item.title_id)} · <span class="pill">${esc({downloaded: 'Downloaded', prepared: 'Prepared', installed: 'Installed'}[item.state] || 'Unknown state')}</span></p>${item.state === 'prepared' ? `<p class="card-meta">${item.blockers?.length ? 'Preparation blocked' : 'Preparation recorded; install readiness unverified'}</p>${(item.blockers || []).map(blocker => `<p>${esc(blocker.code)}: ${esc(blocker.message)}</p>`).join('')}` : ''}</div></article>`).join('') : '<div class="empty-state"><h2>No service mod records</h2></div>'}${records.games.map(game => `<article class="card"><div><p class="card-title">${esc(game.title_id)}</p><p class="card-meta">Installed load list: ${esc(game.installed.mods.length)} mod(s)</p><p>Runtime ${esc(runtimeAckLabel(game.runtime.state))} · Live game process unverified</p>${game.runtime.detail ? `<p>${esc(game.runtime.detail)}</p>` : ''}</div></article>`).join('')}`;
+       return;
+     }
+     if (!state.installed.length) { root.className = 'empty-state'; root.innerHTML = '<span class="empty-icon" aria-hidden="true">✓</span><h2>No confirmed installations</h2><p>Gameplay status is unverified. ModBridge has not installed anything.</p>'; return; }
+@@ -931,9 +940,9 @@
+       } finally { state.serviceRecordsLoading = false; }
+       return;
+     }
+-    if (state.capabilities.installed_records !== true) { state.installed = []; renderInstalled(); return; }
+-    try { const data = await endpoint('/api/installed'); if (request !== state.requests.installed) return; state.installed = apiItems(data).filter(item => item?.transaction_confirmed === true && typeof item.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(item.sha256)); renderInstalled(); }
+-    catch (error) { if (request === state.requests.installed) { state.installed = []; renderInstalled(); showError(error.message); } }
++    // The host exposes no /api/installed route; without service records the
++    // honest state is an empty list, never a request to a missing endpoint.
++    if (request === state.requests.installed) { state.installed = []; renderInstalled(); }
+   };
+   const cancelLookup = () => { ++state.requests.lookup; state.lookupLoading = false; $('#lookup-status').textContent = ''; };
+   const resetSelection = () => { cancelLookup(); state.pendingIntent = null; state.game = null; state.mod = null; state.file = null; state.mods = []; state.files = []; ++state.requests.mods; ++state.requests.files; saveNavigation(); renderGames(); };

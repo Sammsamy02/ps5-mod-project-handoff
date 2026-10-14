@@ -1,0 +1,30 @@
+{
+  "worker": "worker-lua-mod-smoke",
+  "claim": "Predict TownfallItemSpawner main.lua load-time and F7-press behavior against the port UE4SS Lua API surface by executing it in a local Lua 5.4 host harness with stubs mirroring exactly the globals the port registers in LuaMod.cpp (~614-2200).",
+  "inputs": {
+    "port_tree": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss",
+    "lua_mod_cpp": "src/Mod/LuaMod.cpp within port tree",
+    "mod_bytes": "outputs/2026-10-04-zcode-team/worker-loadlist-final/final-package/ue4ss/Mods/TownfallItemSpawner/Scripts/main.lua (21415B) + Mods/shared/UEHelpers/UEHelpers.lua (9962B)",
+    "api_matrix": "outputs/2026-10-04-zcode-team/worker-itemspawner-lua-audit/LUA-API-MATRIX.md"
+  },
+  "method": [
+    "Extract the exact set of globals the port registers into the mod Lua state from LuaMod.cpp",
+    "Build Lua 5.4 host harness (stock lua5.4 or built LuaRaw) whose host C shim equivalent registers stubs with port-matching return shapes; stubs record calls",
+    "Execute main.lua end to end with UEHelpers preloaded on the port require path; capture prints, keybind registrations, errors",
+    "Drain queued ExecuteInGameThread closures in no-save mode, then save-loaded mode with playable-pawn-shaped FindFirstOf stub",
+    "Cross-check against LUA-API-MATRIX.md IMPLEMENTED list; rank divergences LOAD vs F7-press"
+  ],
+  "scopes": {
+    "writes": "outputs/2026-10-04-zcode-team/worker-lua-mod-smoke/ only",
+    "no_console_contact": true,
+    "no_nested_subagents": true
+  },
+  "created_utc": "2026-10-04",
+  "status": "complete",
+  "verdict": "SMOKE PASS 90/90 checks. Prediction: main.lua loads with zero script errors on the port API surface; exactly 6 keybinds (F7/UP_ARROW/DOWN_ARROW/RETURN/LEFT_ARROW/RIGHT_ARROW, no chords); require('UEHelpers') resolves via Mods/shared/?/?.lua at first F7; no-save F7 takes the mod's own 'Load a save first.' path without error; save-loaded F7 builds the full UMG menu and CROSS spawn path reaches stubs cleanly. Single F7-level gate: ExecuteInGameThread with staged DefaultExecuteInGameThreadMethod=EngineTick throws the port's exact 'EngineTick hook is not available' error if the EngineTick AOB scan is not ready (no ProcessEvent fallback in that function); caught by keybind dispatch and logged, menu never opens - check UE4SS.log after mods-started. No load-time divergence found; RegisterKeyBind returns nil (not a handle table) which the mod ignores.",
+  "results": {
+    "phases": { "env": "11 PASS", "load": "25 PASS", "f7-nosave": "10 PASS", "f7-gate": "4 PASS", "f7-save": "35 PASS", "gt-gate": "5 PASS" },
+    "mod_hashes": { "main.lua": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658", "UEHelpers.lua": "5a8f6609e555eee4a535f51d21fcdef768ac654bf4d4abe283c719b1c12215a7" },
+    "logs": "harness/PHASE-LOGS/"
+  }
+}

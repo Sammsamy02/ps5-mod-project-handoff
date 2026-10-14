@@ -1,0 +1,35 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l19-local-profile-r4/units/UnrealInitializer.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-native-thread-name-adapter/candidate/UnrealInitializer.cpp
+@@ -1,3 +1,6 @@
++#include "ThreadNameRuntime.hpp"
++#include "CandidateBindingData.hpp"
++#include "ThreadNamePackageAdmission.hpp"
+ #include <stdexcept>
+ #include <format>
+ #include <algorithm>
+@@ -225,6 +228,8 @@
+         }
+         // Publish only from the genuine Tick callback; never manufacture a
+         // worker identity. The first published ID is immutable.
++        auto native_name_ticket=NativeNameThread::acquire_runtime();
++        if(!native_name_ticket.ticket)return;
+         const auto publication = NativeGameThreadIdentity.publish_current();
+         if (publication == NativeThreadDetail::Publication::Unavailable)
+         {
+@@ -1312,6 +1317,7 @@
+                     if(!fact.ok) failures+=fact.name+"; ";
+                 }
+                 if(!facts.ok) throw std::runtime_error("[BuildProfile] collect-all preflight refused: "+failures);
++                NativeNameThread::prepare_runtime(UnrealConfig,profile_image,NativeNameThread::kCandidateBindingData,rc::runtimeprofile::kDigest,now_ms,NativeNameThread::kExactPostpackageImportAdmitted);
+             }
+             catch(...)
+             {
+@@ -2480,6 +2486,8 @@
+                 // this false return and drains nothing (refusal, not degradation).
+                 return false;
+             }
++            auto native_name_ticket=NativeNameThread::acquire_runtime();
++            if(!native_name_ticket.ticket)return false;
+             const auto publication = UnrealInitializer::NativeGameThreadIdentity.publish_current();
+             if (publication == NativeThreadDetail::Publication::Unavailable)
+             {

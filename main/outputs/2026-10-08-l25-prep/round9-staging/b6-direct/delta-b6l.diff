@@ -1,0 +1,466 @@
+--- /LOCAL_SCRATCH	2026-10-12 13:34:44
++++ ../2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp	2026-10-12 13:50:13
+@@ -4948,6 +4948,7 @@
+     namespace Unreal::UObjectGlobals
+     {
+         auto r9_take_walk_stats(uint64_t& calls, uint64_t& ns) -> void; // [R9-PERF] UObjectGlobals.cpp
++        auto r9_take_index_stats(uint64_t& del_calls, uint64_t& del_ticks, uint64_t& sync_calls, uint64_t& sync_ticks) -> void;
+     }
+     namespace r9perf
+     {
+@@ -5032,10 +5033,18 @@
+                 StringType fn_wide{};
+                 for (const char* q = fn_ms; *q != '\0'; ++q) { fn_wide.push_back(static_cast<StringType::value_type>(static_cast<unsigned char>(*q))); }
+                 const double fn_total_ms = ticks_per_ns > 0 ? fn_total_ticks / ticks_per_ns / 1e6 : -1.0;
+-                Output::send(STR("[PERF] win_ms={:.0f} frames={} frame_avg_ms={:.1f} frame_max_ms={:.1f} frames_over_40ms={} | pe_calls={} pe_locks={} pe_ms={:.1f} | pump_calls={} pump_ms={:.1f} | run_calls={} run_ms={:.1f} run_max_ms={:.1f} other_ms={:.1f} | walks={} walk_ms={:.1f} walk_avg_ms={:.2f} | api_ms={:.1f}{} |{}\n"),
++                const auto tk = [&](uint64_t ticks) -> double { return ticks_per_ns > 0 ? ticks / ticks_per_ns / 1e6 : -1.0; };
++                uint64_t del_calls{0}, del_ticks{0}, sync_calls{0}, sync_ticks{0};
++                Unreal::UObjectGlobals::r9_take_index_stats(del_calls, del_ticks, sync_calls, sync_ticks);
++                const uint64_t p_calls = LuaType::r9prop::take(LuaType::r9prop::calls), p_hits = LuaType::r9prop::take(LuaType::r9prop::hits);
++                const double p_bridge = tk(LuaType::r9prop::take(LuaType::r9prop::t_bridge)), p_fname = tk(LuaType::r9prop::take(LuaType::r9prop::t_fname));
++                const double p_custom = tk(LuaType::r9prop::take(LuaType::r9prop::t_custom)), p_find = tk(LuaType::r9prop::take(LuaType::r9prop::t_find));
++                const double p_handle = tk(LuaType::r9prop::take(LuaType::r9prop::t_handle));
++                Output::send(STR("[PERF] win_ms={:.0f} frames={} frame_avg_ms={:.1f} frame_max_ms={:.1f} frames_over_40ms={} | pe_calls={} pe_locks={} pe_ms={:.1f} | pump_calls={} pump_ms={:.1f} | run_calls={} run_ms={:.1f} run_max_ms={:.1f} other_ms={:.1f} | walks={} walk_ms={:.1f} walk_avg_ms={:.2f} | api_ms={:.1f}{} | del_calls={} del_ms={:.1f} idx_syncs={} idx_ms={:.1f} | prop calls={} cache_hits={} bridge_ms={:.1f} fname_ms={:.1f} custom_ms={:.1f} find_ms={:.1f} handle_ms={:.1f} |{}\n"),
+                              win_ms, frames, frames ? frame_sum_ns / 1e6 / static_cast<double>(frames) : 0.0, frame_max_ns / 1e6, frames_over_40ms,
+                              pe_calls, pe_locks, pe_ns / 1e6, pump_calls, pump_ns / 1e6, run_calls, run_ns / 1e6, run_max_ns / 1e6, run_other_ns / 1e6,
+-                             walk_calls, walk_ns / 1e6, walk_calls ? walk_ns / 1e6 / static_cast<double>(walk_calls) : 0.0, fn_total_ms, fn_wide, states);
++                             walk_calls, walk_ns / 1e6, walk_calls ? walk_ns / 1e6 / static_cast<double>(walk_calls) : 0.0, fn_total_ms, fn_wide, del_calls, tk(del_ticks), sync_calls, tk(sync_ticks),
++                             p_calls, p_hits, p_bridge, p_fname, p_custom, p_find, p_handle, states);
+             }
+             catch (...)
+             {
+@@ -5148,7 +5157,7 @@
+     // This MUST run on the game thread because Lua is NOT thread-safe
+     namespace Unreal::UObjectGlobals
+     {
+-        auto r9_index_collect_new(std::vector<int32_t>& Out) -> bool; // [R9-NOTIFY] UObjectGlobals.cpp
++        auto r9_index_collect_new(std::vector<int32_t>& Out, std::vector<void*>& OutObj) -> bool; // [R9-NOTIFY] UObjectGlobals.cpp
+     }
+ 
+     // [R9-NOTIFY] NotifyOnNewObject producer for the PS5 (the StaticConstructObject seam is not
+@@ -5159,41 +5168,58 @@
+     // construction) instead of inside StaticConstructObject.
+     static auto r9_feed_notify_from_index() -> void
+     {
+-        static std::vector<int32_t> s_new_indices{};
++        // backlog of new objects, matched under a per-frame budget (~1 ms) so a level load that creates
++        // ~100k objects is spread over frames instead of stacked into one (reviewer, launch 7)
++        static std::vector<int32_t> s_backlog_idx{};
++        static std::vector<void*> s_backlog_obj{};
++        static size_t s_backlog_pos{0};
+         {
+             std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+             if (LuaMod::m_static_construct_object_lua_callbacks.empty())
+             {
+                 Unreal::UObjectGlobals::r9_index_notify_disarm(); // cheap: stop collecting while nobody listens
++                s_backlog_idx.clear();
++                s_backlog_obj.clear();
++                s_backlog_pos = 0;
+                 return;
+             }
+         }
+-        s_new_indices.clear();
+-        Unreal::UObjectGlobals::r9_index_notify_arm(); // no-op when armed; re-arms after a racing disarm
+-        if (!Unreal::UObjectGlobals::r9_index_collect_new(s_new_indices))
++        if (s_backlog_pos >= s_backlog_idx.size())
+         {
+-            static bool s_unusable_logged{false};
+-            if (!s_unusable_logged)
++            s_backlog_idx.clear();
++            s_backlog_obj.clear();
++            s_backlog_pos = 0;
++            Unreal::UObjectGlobals::r9_index_notify_arm(); // no-op when armed; re-arms after a racing disarm
++            if (!Unreal::UObjectGlobals::r9_index_collect_new(s_backlog_idx, s_backlog_obj))
+             {
+-                s_unusable_logged = true;
+-                try { Output::send<LogLevel::Warning>(STR("[R9-NOTIFY] NotifyOnNewObject registered but the object index is not usable yet (delete listener not yet proven live, or index disabled); notifications start once it is\n")); } catch (...) {}
++                static bool s_unusable_logged{false};
++                if (!s_unusable_logged)
++                {
++                    s_unusable_logged = true;
++                    try { Output::send<LogLevel::Warning>(STR("[R9-NOTIFY] NotifyOnNewObject registered but the object index is not usable yet (delete listener not yet proven live, or index disabled); notifications start once it is\n")); } catch (...) {}
++                }
++                return;
+             }
+-            return;
++            if (s_backlog_idx.empty()) { return; }
++            static bool s_logged{false};
++            if (!s_logged)
++            {
++                s_logged = true;
++                try { Output::send(STR("[R9-NOTIFY] NotifyOnNewObject delivered from the object index (first batch: {} new objects)\n"), s_backlog_idx.size()); } catch (...) {}
++            }
+         }
+-        if (s_new_indices.empty()) { return; }
+-        static bool s_logged{false};
++        const auto budget_end = std::chrono::steady_clock::now() + std::chrono::microseconds(1000);
+         std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+-        if (!s_logged)
++        while (s_backlog_pos < s_backlog_idx.size())
+         {
+-            s_logged = true;
+-            Output::send(STR("[R9-NOTIFY] NotifyOnNewObject delivered from the object index (first batch: {} new objects)\n"), s_new_indices.size());
+-        }
+-        for (const int32_t object_index : s_new_indices)
+-        {
++            if ((s_backlog_pos & 63) == 0 && s_backlog_pos > 0 && std::chrono::steady_clock::now() > budget_end) { break; }
++            const int32_t object_index = s_backlog_idx[s_backlog_pos];
++            void* const expected = s_backlog_obj[s_backlog_pos];
++            ++s_backlog_pos;
+             Unreal::FUObjectItem* object_item = Unreal::FUObjectArray::IndexToObject(object_index);
+             if (!object_item || object_item->IsUnreachable()) { continue; }
+             Unreal::UObject* object = object_item->GetUObject();
+-            if (!object) { continue; }
++            if (!object || static_cast<void*>(object) != expected) { continue; } // slot changed hands: the newer object has its own entry
+             for (Unreal::UStruct* object_class = object->GetClassPrivate(); object_class; object_class = object_class->GetSuperStruct())
+             {
+                 for (const auto& callback_data : LuaMod::m_static_construct_object_lua_callbacks)
+@@ -5272,8 +5298,27 @@
+ 
+             std::unordered_set<uint64_t> callbacks_to_remove{};
+             std::vector<std::pair<lua_State*, int32_t>> thread_refs_to_unref{};
+-            for (auto& exec : to_execute)
++            // [R9-NOTIFY] per-frame budget (~2 ms, in order): a level load can queue thousands of
++            // notifications; on PC they are spread across the load, so never stack them into one frame.
++            const auto r9_budget_end = std::chrono::steady_clock::now() + std::chrono::microseconds(2000);
++            static uint64_t s_notify_delivered{0}, s_notify_skipped_dying{0}, s_notify_deferred{0};
++            static uint32_t s_notify_errors{0};
++            for (size_t r9_k = 0; r9_k < to_execute.size(); ++r9_k)
+             {
++                auto& exec = to_execute[r9_k];
++                if (r9_k > 0 && (r9_k & 15) == 0 && std::chrono::steady_clock::now() > r9_budget_end)
++                {
++                    // re-queue the rest at the front, in order (serial 0: the pointer re-check still applies)
++                    std::vector<LuaMod::PendingNotifyOnNewObjectCallback> rest{};
++                    for (size_t j = r9_k; j < to_execute.size(); ++j)
++                    {
++                        rest.push_back(LuaMod::PendingNotifyOnNewObjectCallback{to_execute[j].callback_id, to_execute[j].object_index, 0});
++                    }
++                    s_notify_deferred += rest.size();
++                    LuaMod::m_pending_notify_on_new_object_callbacks.insert(LuaMod::m_pending_notify_on_new_object_callbacks.begin(),
++                                                                            rest.begin(), rest.end());
++                    break;
++                }
+                 if (callbacks_to_remove.contains(exec.callback_id))
+                 {
+                     continue;
+@@ -5285,6 +5330,15 @@
+                 {
+                     continue;
+                 }
++                // [R9-NOTIFY] dying-object check (reviewer): never hand a dying object to a mod
++                if (recheck_item->IsUnreachable() ||
++                    exec.constructed_object->HasAnyFlags(static_cast<Unreal::EObjectFlags>(Unreal::RF_BeginDestroyed | Unreal::RF_FinishDestroyed)))
++                {
++                    ++s_notify_skipped_dying;
++                    continue;
++                }
++                ++s_notify_delivered;
++                const int r9_top = lua_gettop(exec.lua->get_lua_state());
+ 
+                 // [R9-NOTIFY] contain each callback: a Lua error in one mod's NotifyOnNewObject callback
+                 // (TRY re-raises it as a C++ exception here, outside any Lua frame) must not drop the
+@@ -5315,15 +5369,44 @@
+                 }
+                 catch (const std::exception& e)
+                 {
+-                    static uint32_t s_notify_errors{0};
++                    lua_settop(exec.lua->get_lua_state(), r9_top);
+                     if (++s_notify_errors <= 20)
+                     {
+-                        try { Output::send<LogLevel::Error>(STR("[R9-NOTIFY] NotifyOnNewObject callback error (#{}): {}\n"), s_notify_errors, ensure_str(e.what())); } catch (...) {}
++                        const bool r9_need_init = exec.constructed_object->HasAnyFlags(static_cast<Unreal::EObjectFlags>(Unreal::RF_NeedInitialization | Unreal::RF_NeedLoad | Unreal::RF_NeedPostLoad));
++                        try
++                        {
++                            Output::send<LogLevel::Error>(STR("[R9-NOTIFY] NotifyOnNewObject callback error (#{}, object needs-init={}): {}\n"),
++                                                          s_notify_errors, r9_need_init ? 1 : 0, ensure_str(e.what()));
++                        }
++                        catch (...)
++                        {
++                        }
+                     }
+                 }
+                 catch (...)
+                 {
+-                    try { Output::send<LogLevel::Error>(STR("[R9-NOTIFY] NotifyOnNewObject callback threw a non-standard exception\n")); } catch (...) {}
++                    lua_settop(exec.lua->get_lua_state(), r9_top);
++                    if (++s_notify_errors <= 20)
++                    {
++                        try { Output::send<LogLevel::Error>(STR("[R9-NOTIFY] NotifyOnNewObject callback threw a non-standard exception\n")); } catch (...) {}
++                    }
++                }
++            }
++            {
++                static auto s_last_report = std::chrono::steady_clock::now();
++                const auto r9_now = std::chrono::steady_clock::now();
++                if (r9_now - s_last_report >= std::chrono::seconds(10))
++                {
++                    s_last_report = r9_now;
++                    try
++                    {
++                        Output::send(STR("[R9-NOTIFY] stats delivered={} skipped_dying={} deferred_by_budget={} errors={} pending={}\n"),
++                                     s_notify_delivered, s_notify_skipped_dying, s_notify_deferred, s_notify_errors,
++                                     LuaMod::m_pending_notify_on_new_object_callbacks.size());
++                    }
++                    catch (...)
++                    {
++                    }
+                 }
+             }
+ 
+--- /LOCAL_SCRATCH	2026-10-12 13:15:50
++++ ../2026-10-08-l26-runtime/typescan-r4/candidate/src/UObjectGlobals.cpp	2026-10-12 13:49:49
+@@ -1212,6 +1212,7 @@
+     // index order (the walk's order). Storage lives on the engine allocator (GMalloc), never
+     // the small libc heap. Any inconsistency disables the index and the walk is used (fail closed).
+     // =====================================================================================
++    static uint64_t g_r9_sync_calls_fwd{0}, g_r9_sync_ticks_fwd{0}; // [R9-PERF] Sync() cost (see r9_take_index_stats)
+     namespace r9idx
+     {
+         template <typename T>
+@@ -1401,6 +1402,16 @@
+         }
+         static auto Sync(State& S) -> bool
+         {
++            const uint64_t r9_t0 = __builtin_readcyclecounter();
++            struct R9SyncTimer
++            {
++                uint64_t t0;
++                ~R9SyncTimer()
++                {
++                    __atomic_fetch_add(&g_r9_sync_calls_fwd, uint64_t{1}, __ATOMIC_RELAXED);
++                    __atomic_fetch_add(&g_r9_sync_ticks_fwd, __builtin_readcyclecounter() - t0, __ATOMIC_RELAXED);
++                }
++            } r9_sync_timer{r9_t0};
+             if (!GUObjectArray) { return false; }
+             const int32_t Num = GUObjectArray->GetObjObjects().GetNumElements();
+             if (Num < 0 || Num > 64 * 1024 * 1024) { S.Disabled = true; return false; }
+@@ -1590,7 +1601,7 @@
+     // [R9-NOTIFY] game thread, once per pump: indices of objects that appeared since the last call.
+     // false = index unusable (no notifications this frame). Objects alive at the first build are
+     // never reported (upstream notifies constructions only).
+-    auto r9_index_collect_new(std::vector<int32_t>& Out) -> bool
++    auto r9_index_collect_new(std::vector<int32_t>& Out, std::vector<void*>& OutObj) -> bool
+     {
+         r9idx::State& S = *r9idx::g_state;
+         std::lock_guard Lock{S.Mutex};
+@@ -1600,18 +1611,23 @@
+             if (!r9idx::Sync(S)) { return false; }
+             if (S.DeletesSeen == 0) { S.NewIdx.clear(); S.NewObj.clear(); return false; } // delete listener not proven live yet
+             Out.clear();
++            OutObj.clear();
+             for (size_t k = 0; k < S.NewIdx.size(); ++k)
+             {
+                 // keep only entries whose slot still holds exactly that object, reachable (no duplicates
+                 // for a slot that changed hands between two collects; the later object has its own entry)
+                 const int32_t i = S.NewIdx[k];
+-                if (r9idx::LiveAt(i) == S.NewObj[k] && S.ObjAt[i] == S.NewObj[k]) { Out.push_back(i); }
++                if (r9idx::LiveAt(i) == S.NewObj[k] && S.ObjAt[i] == S.NewObj[k] && S.SeenStamp[i] != 0xFFFFFFFFu)
++                {
++                    S.SeenStamp[i] = 0xFFFFFFFFu; // de-dup within this collect
++                    Out.push_back(i);
++                    OutObj.push_back(S.NewObj[k]);
++                }
+             }
++            for (int32_t i : Out) { S.SeenStamp[i] = 0; }
+             S.NewIdx.clear();
+             S.NewObj.clear();
+-            std::sort(Out.begin(), Out.end());
+-            Out.erase(std::unique(Out.begin(), Out.end()), Out.end());
+-            return true;
++            return true; // creation order (index order is not construction order)
+         }
+         catch (...)
+         {
+@@ -1652,8 +1668,27 @@
+     }
+ 
+     // Called by the engine-registered delete listener for every freed object index.
++    // [R9-PERF] listener / index maintenance cost (cycle ticks; read and reset by the [PERF] line)
++    static uint64_t g_r9_del_calls{0}, g_r9_del_ticks{0};
++    auto r9_take_index_stats(uint64_t& del_calls, uint64_t& del_ticks, uint64_t& sync_calls, uint64_t& sync_ticks) -> void
++    {
++        del_calls = __atomic_exchange_n(&g_r9_del_calls, uint64_t{0}, __ATOMIC_RELAXED);
++        del_ticks = __atomic_exchange_n(&g_r9_del_ticks, uint64_t{0}, __ATOMIC_RELAXED);
++        sync_calls = __atomic_exchange_n(&g_r9_sync_calls_fwd, uint64_t{0}, __ATOMIC_RELAXED);
++        sync_ticks = __atomic_exchange_n(&g_r9_sync_ticks_fwd, uint64_t{0}, __ATOMIC_RELAXED);
++    }
+     auto r9_index_note_deleted(int32_t Index) -> void
+     {
++        const uint64_t r9_t0 = __builtin_readcyclecounter();
++        struct R9DelTimer
++        {
++            uint64_t t0;
++            ~R9DelTimer()
++            {
++                __atomic_fetch_add(&g_r9_del_calls, uint64_t{1}, __ATOMIC_RELAXED);
++                __atomic_fetch_add(&g_r9_del_ticks, __builtin_readcyclecounter() - t0, __ATOMIC_RELAXED);
++            }
++        } r9_del_timer{r9_t0};
+         r9idx::State& S = *r9idx::g_state;
+         std::lock_guard Lock{S.Mutex};
+         ++S.DeletesSeen;
+--- /LOCAL_SCRATCH	2026-10-12 13:09:36
++++ ../2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMadeSimple/LuaMadeSimple.cpp	2026-10-12 13:48:37
+@@ -895,7 +895,13 @@
+     auto Lua::Table::add_function_value_internal(Lua::LuaFunction function) const -> void
+     {
+         lua_functions.emplace_back(LuaFunction{function});
+-        note_fn_name(lua_functions.size() - 1, "m:", get_lua_instance().m_working_metatable_name);
++        {
++            // the key was pushed just before this value (add_key -> add_value): use it as the name
++            lua_State* const r9_L = get_lua_instance().get_lua_state();
++            size_t r9_len = 0;
++            const char* r9_key = lua_type(r9_L, -1) == LUA_TSTRING ? lua_tolstring(r9_L, -1, &r9_len) : nullptr;
++            note_fn_name(lua_functions.size() - 1, "m:", r9_key ? std::string_view{r9_key, r9_len} : std::string_view{get_lua_instance().m_working_metatable_name});
++        }
+ 
+         // Upvalues for process_lua_function
+         // Upvalue #1: Function id
+--- /LOCAL_SCRATCH	2026-10-12 11:37:56
++++ ../2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaUObject.cpp	2026-10-12 13:48:09
+@@ -2697,7 +2697,22 @@
+             // It means that the UFunction was found and is stored in 'property', so we don't need to do anything to find it
+             if (!field && property_name != Unreal::FName(0u, 0u))
+             {
+-                func = base->GetFunctionByNameInChain(property_name);
++                // [R9-PROP] cache the method lookup for NATIVE classes (never unloaded); the cached
++                // value lives in the same table as properties under a flagged name key.
++                Unreal::UClass* r9_class = base->GetClassPrivate();
++                const bool r9_cacheable = r9_class != nullptr && r9_class->HasAnyClassFlags(Unreal::EClassFlags::CLASS_Native);
++                const uint64_t r9_key = r9prop::key_of(property_name) | (uint64_t{1} << 63);
++                Unreal::FField* r9_cached{};
++                if (r9_cacheable && r9prop::find(r9_class, r9_key, r9_cached))
++                {
++                    func = std::bit_cast<Unreal::UFunction*>(r9_cached);
++                    r9prop::add(r9prop::hits, 1);
++                }
++                else
++                {
++                    func = base->GetFunctionByNameInChain(property_name);
++                    if (r9_cacheable) { r9prop::store(r9_class, r9_key, std::bit_cast<Unreal::FField*>(func)); }
++                }
+             }
+             else
+             {
+--- /LOCAL_SCRATCH	2026-10-11 11:10:57
++++ ../2026-10-08-l26-runtime/typescan-r4/candidate/include/LuaType/LuaUObject.hpp	2026-10-12 13:47:35
+@@ -30,6 +30,60 @@
+ 
+ namespace RC::LuaType
+ {
++    // =====================================================================================
++    // [R9-PROP] property/member lookup cost + cache (PC-timing work, launch 7: ~13 us per member call)
++    //   - per-step cycle counters for prepare_to_handle (read and reset by the [PERF] line)
++    //   - FindProperty cache for NATIVE classes only (CLASS_Native: compiled engine/game classes are
++    //     never unloaded, so a cached FField* can never point into a freed class). Blueprint classes
++    //     keep the uncached search. Key: class pointer + member FName (comparison index + number).
++    // =====================================================================================
++    namespace r9prop
++    {
++        inline uint64_t calls{0}, hits{0}, t_bridge{0}, t_fname{0}, t_custom{0}, t_find{0}, t_handle{0};
++        struct Slot
++        {
++            const void* cls;
++            uint64_t name;
++            Unreal::FField* field;
++        };
++        inline constexpr size_t kSlots = 8192;
++        inline Slot table[kSlots]{};
++        inline int spin{0};
++        inline auto lock() -> void
++        {
++            while (__atomic_exchange_n(&spin, 1, __ATOMIC_ACQUIRE) != 0) {}
++        }
++        inline auto unlock() -> void { __atomic_store_n(&spin, 0, __ATOMIC_RELEASE); }
++        inline auto key_of(Unreal::FName n) -> uint64_t
++        {
++            return (static_cast<uint64_t>(n.GetComparisonIndex().ToUnstableInt()) << 32) | static_cast<uint32_t>(n.GetNumber());
++        }
++        inline auto pos(const void* cls, uint64_t name) -> size_t
++        {
++            uint64_t h = reinterpret_cast<uintptr_t>(cls) ^ (name * 0x9E3779B97F4A7C15ULL);
++            h ^= h >> 31;
++            return static_cast<size_t>(h) & (kSlots - 1);
++        }
++        // nullptr + false = not cached
++        inline auto find(const void* cls, uint64_t name, Unreal::FField*& out) -> bool
++        {
++            lock();
++            const Slot& s = table[pos(cls, name)];
++            const bool hit = s.cls == cls && s.name == name;
++            if (hit) { out = s.field; }
++            unlock();
++            return hit;
++        }
++        inline auto store(const void* cls, uint64_t name, Unreal::FField* field) -> void
++        {
++            lock();
++            table[pos(cls, name)] = Slot{cls, name, field};
++            unlock();
++        }
++        inline auto add(uint64_t& counter, uint64_t ticks) -> void { __atomic_fetch_add(&counter, ticks, __ATOMIC_RELAXED); }
++        inline auto take(uint64_t& counter) -> uint64_t { return __atomic_exchange_n(&counter, uint64_t{0}, __ATOMIC_RELAXED); }
++    } // namespace r9prop
++
+     struct FLuaObjectDeleteListener : public Unreal::FUObjectDeleteListener
+     {
+         static FLuaObjectDeleteListener s_lua_object_delete_listener;
+@@ -906,7 +960,11 @@
+             // lookup still needs the engine StringType; bridge.string()
+             // fills it from the SAME hand-converted units ((ptr,count),
+             // stride-correct — not a std::wstring conversion).
++            const uint64_t r9_t0 = __builtin_readcyclecounter();
++            r9prop::add(r9prop::calls, 1);
+             const LuaFNameBridge::Bridge member{lua.get_lua_state()};
++            const uint64_t r9_t1 = __builtin_readcyclecounter();
++            r9prop::add(r9prop::t_bridge, r9_t1 - r9_t0);
+ 
+             // If nullptr then we assume the UObject wasn't found so lets return an invalid UObject to Lua
+             // This allows the safe chaining of "__index" as long as the Lua script checks ":IsValid()" before using the object
+@@ -941,11 +999,16 @@
+             // (UObjectGlobals.cpp, rare call sites, no GC-storm volume).
+             // The bridge keeps that law: FNAME_Find, slot-2 ctor direct.
+             Unreal::FName property_name = member.to_fname(Unreal::FNAME_Find);
++            const uint64_t r9_t2 = __builtin_readcyclecounter();
++            r9prop::add(r9prop::t_fname, r9_t2 - r9_t1);
+             Unreal::FField* field = LuaCustomProperty::StaticStorage::property_list.find_or_nullptr(object, member.string());
++            const uint64_t r9_t3 = __builtin_readcyclecounter();
++            r9prop::add(r9prop::t_custom, r9_t3 - r9_t2);
+ 
+             if (!field)
+             {
+                 Unreal::UStruct* obj_as_struct = nullptr;
++                bool r9_cacheable = false;
+                 if constexpr (std::is_base_of_v<Unreal::UStruct, DerivedType>)
+                 {
+                     // Avoid runtime Cast/IsA here; this path is hit in __index for hot code paths.
+@@ -953,12 +1016,26 @@
+                 }
+                 if (!obj_as_struct)
+                 {
+-                    obj_as_struct = object->GetClassPrivate();
++                    Unreal::UClass* r9_class = object->GetClassPrivate();
++                    obj_as_struct = r9_class;
++                    r9_cacheable = r9_class != nullptr && r9_class->HasAnyClassFlags(Unreal::EClassFlags::CLASS_Native) && property_name != Unreal::NAME_None;
+                 }
+-                field = obj_as_struct->FindProperty(property_name);
++                const uint64_t r9_name = r9prop::key_of(property_name);
++                if (r9_cacheable && r9prop::find(obj_as_struct, r9_name, field))
++                {
++                    r9prop::add(r9prop::hits, 1);
++                }
++                else
++                {
++                    field = obj_as_struct->FindProperty(property_name);
++                    if (r9_cacheable) { r9prop::store(obj_as_struct, r9_name, field); }
++                }
+             }
++            const uint64_t r9_t4 = __builtin_readcyclecounter();
++            r9prop::add(r9prop::t_find, r9_t4 - r9_t3);
+ 
+             handle_unreal_property_value(operation, lua, object, property_name, field);
++            r9prop::add(r9prop::t_handle, __builtin_readcyclecounter() - r9_t4);
+         }
+     };
+ 

@@ -1,0 +1,142 @@
+--- a/tests/test_layout_probes.cpp
++++ b/tests/test_layout_probes.cpp (fixtures corrected to UE invariant + T20 live replay)
+@@ -83,7 +83,7 @@
+ // predicate deliberately.
+ struct ImgOpts {
+     bool layout_a = true;         // false = TUObjectArray-direct image
+-    int32_t first_gc = 0x100;     // layout A GC fields
++    int32_t first_gc = 0x201;     // layout A GC fields (0x201 = last_non_gc+1, settled UE state)
+     int32_t last_non_gc = 0x200;
+     int32_t num_elements = 300;
+     int32_t max_elements = 0x20000;
+@@ -172,7 +172,7 @@
+               r.codes[0] == RCode::OK,
+               "T1_gua_layoutA_validated", d);
+         CHECK(r.observed.num_elements == 300 && r.observed.max_elements == 0x20000 &&
+-              r.observed.obj_first_gc_index == 0x100 &&
++              r.observed.obj_first_gc_index == 0x201 &&
+               r.observed.obj_last_non_gc_index == 0x200,
+               "T1b_gua_layoutA_observed_fields", "observed scalars mismatch");
+     }
+@@ -196,7 +196,7 @@
+     // ============ Refuted: adversarial images =============================
+     {
+         Arena ar;  // P1 canonical: half-extended (non-canonical) Objects pointer
+-        build_image(ar, ImgOpts{true, 0x100, 0x200, 300, 0x20000, 4, 1,
++        build_image(ar, ImgOpts{true, 0x201, 0x200, 300, 0x20000, 4, 1,
+                                 /*objects_override=*/0x0000800000000010});
+         GuaProbeResult r = probe_guobject_array(ar.spans.data(), ar.spans.size(),
+                                                 kImageBase, kProfile.guobject_array);
+@@ -217,7 +217,7 @@
+     }
+     {
+         Arena ar;  // P2 counts: NumElements > MaxElements
+-        build_image(ar, ImgOpts{true, 0x100, 0x200, /*num=*/200, /*max=*/100, 4, 1});
++        build_image(ar, ImgOpts{true, 0x201, 0x200, /*num=*/200, /*max=*/100, 4, 1});
+         GuaProbeResult r = probe_guobject_array(ar.spans.data(), ar.spans.size(),
+                                                 kImageBase, kProfile.guobject_array);
+         CHECK(r.verdict == Verdict::Refuted &&
+@@ -245,7 +245,7 @@
+     }
+     {
+         Arena ar;  // P5: chunk pointer readable-but-outside any span (unreadable chunk)
+-        build_image(ar, ImgOpts{true, 0x100, 0x200, 300, 0x20000, 4, 1, 0,
++        build_image(ar, ImgOpts{true, 0x201, 0x200, 300, 0x20000, 4, 1, 0,
+                                 /*chunk_override0=*/0x0000700000001000});
+         GuaProbeResult r = probe_guobject_array(ar.spans.data(), ar.spans.size(),
+                                                 kImageBase, kProfile.guobject_array);
+@@ -255,7 +255,7 @@
+     }
+     {
+         Arena ar;  // P4/P5: NumElements needs 2 chunks, NumChunks=1
+-        build_image(ar, ImgOpts{true, 0x100, 0x200, /*num=*/70000, /*max=*/0x40000, 4,
++        build_image(ar, ImgOpts{true, 0x201, 0x200, /*num=*/70000, /*max=*/0x40000, 4,
+                                 /*nchunks=*/1});
+         GuaProbeResult r = probe_guobject_array(ar.spans.data(), ar.spans.size(),
+                                                 kImageBase, kProfile.guobject_array);
+@@ -265,7 +265,7 @@
+     }
+     {
+         Arena ar;  // P5: two needed chunks share one address
+-        build_image(ar, ImgOpts{true, 0x100, 0x200, /*num=*/70000, /*max=*/0x40000, 4,
++        build_image(ar, ImgOpts{true, 0x201, 0x200, /*num=*/70000, /*max=*/0x40000, 4,
+                                 /*nchunks=*/2, 0, 0 /*chunk0 default*/});
+         // slot1 already defaults to the same chunk0 -> duplicate
+         GuaProbeResult r = probe_guobject_array(ar.spans.data(), ar.spans.size(),
+@@ -276,7 +276,7 @@
+     }
+     {
+         Arena ar;  // P5: two needed chunks with overlapping extents
+-        LabelBufs lb = build_image(ar, ImgOpts{true, 0x100, 0x200, /*num=*/70000,
++        LabelBufs lb = build_image(ar, ImgOpts{true, 0x201, 0x200, /*num=*/70000,
+                                                /*max=*/0x40000, 4, /*nchunks=*/2});
+         Arena::put64(lb.objects_buf, 8, lb.chunk0 + 0x1000);  // inside chunk0 window
+         GuaProbeResult r = probe_guobject_array(ar.spans.data(), ar.spans.size(),
+@@ -298,7 +298,7 @@
+     }
+     {
+         Arena ar;  // needed chunk extent only partially readable
+-        build_image(ar, ImgOpts{true, 0x100, 0x200, 300, 0x20000, 4, 1,
++        build_image(ar, ImgOpts{true, 0x201, 0x200, 300, 0x20000, 4, 1,
+                                 /*objects_override=*/0, /*chunk_override0=*/0,
+                                 /*chunk_override1=*/0, /*chunk0_tail_slack=*/0x800});
+         GuaProbeResult r = probe_guobject_array(ar.spans.data(), ar.spans.size(),
+@@ -317,7 +317,7 @@
+         // lives at bytes+0x18 = MaxChunks|NumChunks<<32, so MaxChunks=8 keeps
+         // that synthetic pointer 8-aligned and a span is placed for it.)
+         Arena ar;
+-        const uint64_t P0 = 0x0000002000000010ULL;      // B.Objects; halves = GC 0x10/0x20
++        const uint64_t P0 = 0x0000000F00000010ULL;      // B.Objects; halves = A GC first 0x10 / last 0x0F
+         const uint64_t A_obj = 0x0000012000030000ULL;   // A.Objects = Max|Num<<32
+         const uint64_t A_pre = 0x0000000100000008ULL;   // MaxChunks=8|NumChunks=1<<32
+         std::vector<uint8_t>* b_chunk_arr = ar.alloc_at(P0, 8);
+@@ -413,6 +413,49 @@
+           "T19_fname_pool_no_predicate_by_rule",
+           "P2 exclusion constant/reason must remain present");
+ 
++
++    // ====== T20: live replay of the captured 0x97ba110 bytes ==============
++    // Header bytes are the EXACT 96 bytes read at 0x97ba110 in the live
++    // target (image_base 0x400000, GOA vaddr 0x93ba110, span
++    // [0x970c000,0x9a34000) RW). Live facts exercised: GC pair
++    // ObjFirstGCIndex=35477, ObjLastNonGCIndex=35476 (= first-1, the normal
++    // settled UE state the old P3 wrongly refuted). The chunk-pointer array
++    // and chunk bodies are RECONSTRUCTED scaffolding at the observed Objects
++    // pointer 0x13800220a0 so the full P1-P5 chain can run; they are NOT
++    // live captures (cfgL span contents were not retained).
++    {
++        Arena ar;
++        const uint64_t kHdrStart = 0x970c000ULL, kHdrSize = 0x328000ULL;
++        const uint64_t kGoaAddr = 0x97ba110ULL;  // image_base 0x400000 + 0x93ba110
++        static const uint8_t kLive[96] = {0x95, 0x8a, 0x00, 0x00, 0x94, 0x8a, 0x00, 0x00, 0x95, 0x8a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa0, 0x20, 0x02, 0x80, 0x13, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x21, 0x00, 0x17, 0x19, 0x01, 0x00, 0x21, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x20, 0x06, 0x01, 0x80, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0xd7, 0x32, 0x40, 0x15, 0x00, 0x00, 0x00, 0x6e, 0x00, 0x00, 0x00, 0xa8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
++        auto* hdr = ar.alloc_at(kHdrStart, (size_t)kHdrSize);
++        std::memcpy(hdr->data() + (size_t)(kGoaAddr - kHdrStart), kLive, sizeof kLive);
++        const uint64_t kObjects = 0x13800220a0ULL;   // live bytes +0x10
++        const uint64_t kC0 = 0x20000000ULL, kC1 = 0x30000000ULL;
++        auto* objarr = ar.alloc_at(kObjects, 16);
++        Arena::put64(objarr, 0, kC0);
++        Arena::put64(objarr, 8, kC1);
++        ar.alloc_at(kC0, (size_t)65536 * kFuObjectItemSize);            // chunk0
++        ar.alloc_at(kC1, (size_t)(71959 - 65536) * kFuObjectItemSize);  // chunk1
++        GuaProbeResult r = probe_guobject_array(ar.spans.data(), ar.spans.size(),
++                                                0x400000ULL, 0x93ba110ULL);
++        char d[192];
++        std::snprintf(d, sizeof d,
++                      "verdict=%s layout=%d first=%d last=%d num=%d max=%d chunks=%d/%d",
++                      verdict_string(r.verdict), (int)r.observed.layout_matched,
++                      r.observed.obj_first_gc_index, r.observed.obj_last_non_gc_index,
++                      r.observed.num_elements, r.observed.max_elements,
++                      r.observed.num_chunks, r.observed.max_chunks);
++        CHECK(r.verdict == Verdict::Validated &&
++              r.observed.layout_matched == GuaLayout::FUObjectArray_Outer &&
++              r.observed.obj_first_gc_index == 35477 &&
++              r.observed.obj_last_non_gc_index == 35476 &&
++              r.observed.num_elements == 71959 &&
++              r.observed.max_elements == 2162688 &&
++              r.observed.max_chunks == 33 && r.observed.num_chunks == 2,
++              "T20_gua_live_bytes_layoutA_validated", d);
++    }
++
+     std::printf("\n%s: %d failure(s)\n", g_failures ? "TESTS FAILED" : "ALL TESTS PASSED",
+                 g_failures);
+     return g_failures ? 1 : 0;

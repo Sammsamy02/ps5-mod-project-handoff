@@ -1,0 +1,47 @@
+--- a/external/corefx/src/Native/Unix/System.Native/pal_io.c
++++ b/external/corefx/src/Native/Unix/System.Native/pal_io.c
+@@ -1108,11 +1108,42 @@
+ {
+     assert(stream != NULL);
+ 
++#if HAVE_GETLINE && HAVE_DECL_GETLINE
+     char* lineptr = NULL;
+     size_t n = 0;
+     ssize_t length = getline(&lineptr, &n, stream);
+-    
+-    return length >= 0 ? lineptr : NULL;
++    if (length >= 0)
++        return lineptr;
++
++    // getline can allocate even when it returns EOF or an error.
++    int savedErrno = errno;
++    free(lineptr);
++    errno = savedErrno;
++    return NULL;
++#elif HAVE_FGETLN && HAVE_DECL_FGETLN && HAVE_FLOCKFILE && HAVE_DECL_FLOCKFILE && HAVE_FUNLOCKFILE && HAVE_DECL_FUNLOCKFILE
++    // fgetln's borrowed buffer is not NUL-terminated and is invalidated by
++    // subsequent stream I/O.  Copy it while holding the public stream lock.
++    char* lineptr = NULL;
++    size_t length = 0;
++    flockfile(stream);
++    const char* line = fgetln(stream, &length);
++    if (line != NULL)
++    {
++        if (length == SIZE_MAX)
++            errno = EOVERFLOW;
++        else if ((lineptr = malloc(length + 1)) != NULL)
++        {
++            memcpy(lineptr, line, length);
++            lineptr[length] = '\0';
++        }
++    }
++    int savedErrno = errno;
++    funlockfile(stream);
++    errno = savedErrno;
++    return lineptr;
++#else
++#error SystemNative_GetLine requires usable getline or fgetln with stream locking.
++#endif
+ }
+ 
+ #endif

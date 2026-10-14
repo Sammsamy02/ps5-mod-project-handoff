@@ -1,0 +1,67 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-enqueue-ladder/staging/luamod-l11-el-ladder/LuaMod.cpp	2026-10-05 10:40:13
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp	2026-10-05 11:56:46
+@@ -7390,6 +7390,56 @@
+         r3_marshal_calibration_consumer();
+ #endif
+         const Unreal::Hook::FCallbackOptions common_opts {false, false, STR("UE4SS"), STR("LuaModImpl")};
++#ifdef __PROSPERO__
++        // =================================================================================
++        // [R3][worker-l11-loadmap-guard r2] RUNBOOK §5.2 closure (launch-11, 2026-10-05).
++        // MEASURED routing of the first eager arm (LoadMap): RegisterLoadMapPreCallback
++        // (Hooks.cpp:211) -> DetourInstance AddCallback -> EnsureHooked -> InstallHook
++        // (is_ready flag check only, no exec access) -> ActivateHook ->
++        // PLH::x64Detour::hook(). This path routes through NEITHER the asmhelper
++        // WalkRxGuard site (ASMHelper::get_first_instruction_at_address is hit only by
++        // the initializer's EARLIER resolve walks that assign the LoadMap address) NOR
++        // a raw unguarded copy: in the composed launch-10/11 units every PLH touch of
++        // live game text is mediated by the owned-memory registry (x64Detour 5bb9cea4
++        // owned path; ZydisDisassembler facfea22 accessor reads; OwnedMemory read-lease
++        // d824528d), whose copy/protect soft-refuse non-owned regions with ZERO
++        // dereference and ZERO syscalls. Live game text is never registered in that
++        // registry (scan sources are file-backed owned images; the AllocatorBridge
++        // records only allocator-owned mappings), so in EVERY world this composition
++        // reaches, each arm below soft-refuses at its FIRST step: the 100-byte prologue
++        // read returns nothing (ZydisDisassembler.cpp:65) and hook() returns false at
++        // the empty-insts check (x64Detour.cpp:355-358) BEFORE any protection or write
++        // attempt; the isGood gates (:487-492) are never reached. Per arm: one PLH SEV
++        // log + one Output Error from AddCallback (DetourInstance.hpp:203-206) + an
++        // ERROR_ID return that this TU ignores. Crash-free, throw-free, and futile.
++        // The igf6 naked-read risk named by RUNBOOK §5.2/DRAIN-TRACE C1 does NOT exist
++        // on this path as composed (their XD pin targets a different-lineage port,
++        // 0619d2b4; the composed unit is 5bb9cea4).
++        // Why defer anyway (honest): (1) R3D §5.3 item 3 — in the R3 world the
++        // initializer deferred the identical-class registrations (pump_pending=true),
++        // so these arms are futile by the same law; (2) log hygiene — ONE loud Warning
++        // naming exactly what stays unregistered instead of ~19 per-arm failure pairs
++        // on every R3 boot; (3) process-lifetime honesty — there is no runtime re-arm
++        // path (DIFF 2 header law), so the Lua-side loss is declared explicitly rather
++        // than left emergent from the owned layer's refusals. Deferral predicate = the
++        // initializer's own pump decision (R3MarshalPumpPending, declared in this TU at
++        // line 93 by the marshal consumer — zero new imports). W-works world
++        // (pump_pending=false): the block below runs unchanged. Lua-side loss:
++        // RegisterLoadMapPreHook/PostHook callbacks are still accepted (they append to
++        // m_load_map_pre/post_callbacks and mod scripts keep loading) but are never
++        // invoked; TownfallItemSpawner main.lua:731-747 loses its per-map state reset
++        // (menu close, UI refs, item/ownedActor caches, pagination/selection reset).
++        // Reachability: at walkguard fold-0 the initializer's walks refuse loudly
++        // BEFORE on_program_start (failed(1,<msg>) ack chain), so this gate is reached
++        // only in worlds where the walks were admitted (fold-1) or seeded.
++        // =================================================================================
++        if (Unreal::R3MarshalPumpPending())
++        {
++            Output::send<LogLevel::Warning>(STR("[R3] LoadMap detour registrations deferred: in this world the initializer deferred its own detour registrations (R3 marshal owns the game-thread pump), so these eager arms are futile by the same law (owned-memory layer soft-refuses every live game-text access; each arm would log PLH SEV + an Error line and register nothing); LoadMap/InitGameState/BeginPlay/EndPlay/StaticConstructObject/ULocalPlayerExec/CallFunctionByNameWithArguments/ProcessConsoleExec/custom-event script hooks stay unregistered for this process lifetime (no re-arm); Lua-side RegisterLoadMapPreHook/PostHook callbacks are accepted but never invoked\n"));
++        }
++        else
++#endif
++        {
+         Unreal::Hook::RegisterLoadMapPreCallback(
+                 [](Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) {
+                     TRY([&] {
+@@ -8169,6 +8219,7 @@
+             Output::send(STR("Enabling custom events\n"));
+             Unreal::Hook::RegisterProcessInternalPostCallback(script_hook, {false, false, STR("UE4SS"), STR("LuaModImplScriptHook")});
+         }
++        } // [R3][worker-l11-loadmap-guard r2] end of the eager detour-arm block (see gate above)
+     }
+ 
+     auto LuaMod::update_async() -> void

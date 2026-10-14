@@ -1,0 +1,22 @@
+--- a/windows-candidate/test_entry_candidate.c
++++ b/windows-candidate/test_entry_candidate.c
+@@ -55,16 +55,17 @@
+  if(MB_OWNED_REJECT_ATTACH)CHECK(r.first_module_cause==MB_PE_MODULE_ENTRY_REJECTED);
+  CHECK(sleeps==(release_fault?2u:0u));
+  CHECK(r.source_releases[0]==1 && r.source_releases[1]==!MB_OWNED_REJECT_ATTACH);
+- if(!MB_OWNED_REJECT_ATTACH)CHECK(r.consumer_imports==(MB_OWNED_CLOCK?18u:16u)+(MB_OWNED_WORKERS?5u:0u)+(MB_OWNED_SYNC?21u:0u)+(MB_OWNED_INIT_ONCE?2u:0u)+(MB_OWNED_MUTEX?5u:0u) && r.helper_imports==(MB_OWNED_CLOCK?10u:8u) && r.entry_attach_result[1]==7 && !r.entry_detach_result[1]);
++ if(!MB_OWNED_REJECT_ATTACH)CHECK(r.consumer_imports==(MB_OWNED_CLOCK?18u:16u)+(MB_OWNED_WORKERS?5u:0u)+(MB_OWNED_SYNC?21u:0u)+(MB_OWNED_INIT_ONCE?2u:0u)+(MB_OWNED_MUTEX?5u:0u)+(MB_OWNED_FILEIO?10u:0u) && r.helper_imports==(MB_OWNED_CLOCK?10u:8u) && r.entry_attach_result[1]==7 && !r.entry_detach_result[1]);
+  CHECK(r.sync_enabled==MB_OWNED_SYNC);
+  CHECK(r.init_once_enabled==MB_OWNED_INIT_ONCE);
+  CHECK(r.mutex_enabled==MB_OWNED_MUTEX);
++ CHECK(r.fileio_enabled==MB_OWNED_FILEIO);
+ #if MB_OWNED_CLOCK
+  CHECK(r.clock_enabled && r.clock_session_begins[0]==1 && r.clock_session_ends[0]==1);
+  CHECK(r.clock_session_begins[1]==!MB_OWNED_REJECT_ATTACH && r.clock_session_ends[1]==!MB_OWNED_REJECT_ATTACH);
+ #endif
+ #if MB_OWNED_WORKERS
+- CHECK(r.worker_enabled && r.worker_calls_started==(MB_OWNED_REJECT_ATTACH?0u:MB_OWNED_REJECT_WORKER_START?1u:2u) && r.worker_calls_returned==r.worker_calls_started);
++ CHECK(r.worker_enabled && r.worker_calls_started==(MB_OWNED_REJECT_ATTACH?0u:MB_OWNED_REJECT_WORKER_START?1u:2u+(MB_OWNED_FILEIO?2u:0u)) && r.worker_calls_returned==r.worker_calls_started);
+  if(!MB_OWNED_REJECT_ATTACH && !MB_OWNED_REJECT_WORKER_START){
+   CHECK(r.worker_begin[0] && r.worker_begin[1] && r.worker_begin[2]==258 && r.worker_begin[3]==259);
+   CHECK(r.worker_result[0]==MB_WORKER_EXPECTED_EXIT && r.worker_result[1]==MB_WORKER_PARAMETER_COOKIE && r.worker_result[2]==MB_WORKER_LAST_ERROR && !r.worker_result[3]);

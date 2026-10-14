@@ -1,0 +1,7 @@
+from pathlib import Path
+import subprocess,json,hashlib,os
+w=Path(__file__).resolve().parent;s=w.parent;r=w.parents[2];o=w/'native-3';o.mkdir(exist_ok=False);sha=lambda x:hashlib.sha256(Path(x).read_bytes()).hexdigest();base=json.loads((s/'ue4ss-unreal-native-build-1/consolidated-23/result.json').read_text());u=next(x for x in base['units']if x['name']=='program');c=json.loads(Path(u['command']).read_text());a=c['argv'][:];src=w/'src/NativeLayoutWidths.cpp';obj=o/'native-layoutwidths.o';a[a.index(u['source'])]=str(src);a[a.index('-o')+1]=str(obj)
+for flag in ['-MF','-MT','-MQ']:
+ while flag in a:i=a.index(flag);del a[i:i+2]
+a=[v for v in a if v not in ['-MD','-MMD']];a[1:1]=['-I',str(w/'include'),'-I',str(s/'ue4ss-native-layout-binding-1/include')];a+=['-MD','-MF',str(o/'widths.d')];env=dict(os.environ,LLVM_CONFIG=c.get('LLVM_CONFIG',str(r/'outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin/llvm-config')));q=subprocess.run(a,env=env,capture_output=True,text=True,timeout=60);(o/'stdout.txt').write_text(q.stdout);(o/'stderr.txt').write_text(q.stderr);command=o/'command.json';command.write_text(json.dumps({'argv':a,'exit':q.returncode,'LLVM_CONFIG':env['LLVM_CONFIG']},indent=2)+'\n');print('native',q.returncode,q.stderr[-6500:]);assert q.returncode==0
+unit={'name':'native-layoutwidths','source':str(src),'source_sha256':sha(src),'object':str(obj),'object_sha256':sha(obj),'object_bytes':obj.stat().st_size,'exit':0,'command':str(command)};(w/'integration-units.json').write_text(json.dumps({'units':[unit]},indent=2)+'\n')

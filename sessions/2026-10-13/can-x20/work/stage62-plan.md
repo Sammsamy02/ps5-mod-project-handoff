@@ -1,0 +1,3 @@
+# Stage 62: guarded Win32 critical sections
+
+Base: exact stage 61. Publish four measured imports: `InitializeCriticalSection`, `InitializeCriticalSectionEx`, `EnterCriticalSection`, `LeaveCriticalSection`, and `DeleteCriticalSection` (five names). Keep state per shim, validate a registered 40-byte x64 guest object, support recursive ownership and cross-thread contention, refuse invalid lifecycle or flags. Test-first through real Win64 thunks; run normal and ASan focused, prior virtual-memory/heap/thread suites, 15 prior runners and fixture, pinned PS5 build, exact-base patch replay and evidence CRC. No unchanged DLL execution or console claim.

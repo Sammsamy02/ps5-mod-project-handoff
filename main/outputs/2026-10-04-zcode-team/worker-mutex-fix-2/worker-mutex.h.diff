@@ -1,0 +1,118 @@
+--- a/tests/worker-mutex.h
++++ b/tests/worker-mutex.h
+@@ -1,18 +1,24 @@
+ #ifndef MB_OWNED_WORKER_MUTEX_H
+ #define MB_OWNED_WORKER_MUTEX_H
+-/* Owned PE fixture: KERNEL32 mutex family through actual imports. Public
+- * handles are pointer-sized tokens; BOOL/DWORD results are 32-bit; names are
+- * UTF-16. Only documented behavior is asserted: ERROR_ALREADY_EXISTS (183)
+- * with a valid handle on an existing name, initial owner ignored on the
+- * existing object, non-owner ReleaseMutex fails 288, ASCII case folding plus
+- * the Local\ prefix in OpenMutexW, backslash names refused 87, alertable
+- * waits fail 50 explicitly, WAIT_TIMEOUT 258, and the worker exiting while
+- * owning a named mutex yields WAIT_ABANDONED 0x80 plus ownership transfer at
+- * the creator. WaitForSingleObject (plain) is intentionally NOT used here:
+- * the existing worker fixture already binds it for thread handles, and the
+- * controller composes the shared KERNEL32 entry with this family's mutex
+- * route. Every token is retired via the combined CloseHandle dispatch
+- * (workers thread handles first, mutex tokens fallback). */
++/* worker-mutex-fix-2: vendored FIXED revision of the real
++ * outputs/ps5-mod-bridge/windows-candidate/tests/worker-mutex.h.
++ * Two changes only (diffs shipped as worker-mutex.h.diff):
++ *  1. Reorder the named-mutex checks: this adapter's documented policy is that
++ *     an owner re-wait NEVER grants (finite timeout -> WAIT_TIMEOUT, infinite
++ *     -> WAIT_FAILED + 771; no recursion). The old order expected the owner
++ *     re-wait through a SECOND handle to succeed (WAIT_OBJECT_0) at -68 while
++ *     also expecting a further owner re-wait to time out at -69: mutually
++ *     inconsistent, and the first half failed at runtime with -68, which is
++ *     the composed -68/begin-failure teardown hang (build 4 checkpoint).
++ *     New order: acquire via `opened`, owner re-wait times out (-69, adapter
++ *     deviation, documented), release, then acquire through the second handle
++ *     (proves both handles name the same object) and release it again.
++ *  2. MFR-2: mb_worker_mutex_finish retires EVERY kept token on EVERY exit
++ *     (success or failure) instead of only on the success tail; failure codes
++ *     are accumulated (first failure wins) and retirement happens even when an
++ *     earlier check failed, so a failed Begin/Collect can never leave tokens
++ *     behind that keep mb_win_mutex_close BUSY (the driver's cleanup retry
++ *     would otherwise hang forever). */
+ typedef __UINT16_TYPE__ mb_worker_u16;
+ __declspec(dllimport) void *CreateMutexW(void *,mb_worker_i32,const mb_worker_u16 *);
+ __declspec(dllimport) void *CreateMutexExW(void *,const mb_worker_u16 *,mb_worker_u32,mb_worker_u32);
+@@ -37,12 +43,9 @@
+  void *tokens[8];mb_worker_u32 token_count;
+  mb_worker_u32 alertable,recursion,transfered,reacquired;
+ } mb_worker_mutex_state;
+-/* Integration fix (worker-mutex-deadlock): every public handle token this
+- * fixture creates must be retired before the creator-side finish returns, or
+- * the native mutex owner can never close (BUSY on outstanding handles) and
+- * the SDK driver retries cleanup forever. Requires the combined CloseHandle
+- * dispatch proposed for owned_runtime.c (workers thread handles first, mutex
+- * tokens second). */
++/* Every public handle token this fixture creates is recorded via keep() and
++ * retired through the combined CloseHandle dispatch (workers thread handles
++ * first, mutex tokens fallback). Retirement runs on every exit path (MFR-2). */
+ __declspec(dllimport) mb_worker_i32 CloseHandle(void *);
+ static void mb_worker_mutex_keep(void *token){
+  if(token && mb_worker_mutex_state.token_count<8)mb_worker_mutex_state.tokens[mb_worker_mutex_state.token_count++]=token;}
+@@ -60,12 +63,20 @@
+  mb_worker_mutex_state.exists=CreateMutexW(0,1,mb_worker_mutex_named);mb_worker_mutex_keep(mb_worker_mutex_state.exists);
+  if(!mb_worker_mutex_state.exists || GetLastError()!=MB_WORKER_MUTEX_ERROR_ALREADY_EXISTS)return -66;
+  if(ReleaseMutex(mb_worker_mutex_state.exists)!=0 || GetLastError()!=MB_WORKER_MUTEX_ERROR_NOT_OWNER)return -67; /* initial owner ignored */
++ /* Acquire the unowned named object through `opened`. */
+  if(WaitForSingleObjectEx(mb_worker_mutex_state.opened,0,0)!=MB_WORKER_MUTEX_WAIT_OBJECT_0)return -68;
+- {void *second=OpenMutexW(0x1f0001u,0,mb_worker_mutex_named_folded);mb_worker_mutex_keep(second);
+- if(WaitForSingleObjectEx(second,0,0)!=MB_WORKER_MUTEX_WAIT_OBJECT_0)return -68;}
++ /* Owner re-wait: this adapter never re-grants (no recursion; adapter policy
++  * documented in mb_win_mutex.h): finite timeout follows the timeout path. */
+  mb_worker_mutex_state.recursion=WaitForSingleObjectEx(mb_worker_mutex_state.opened,1,0);
+- if(mb_worker_mutex_state.recursion!=MB_WORKER_MUTEX_WAIT_TIMEOUT)return -69; /* owner re-wait: finite timeout */
++ if(mb_worker_mutex_state.recursion!=MB_WORKER_MUTEX_WAIT_TIMEOUT)return -69;
+  if(ReleaseMutex(mb_worker_mutex_state.opened)!=1)return -70;
++ /* Second handle to the same object: once the object is unowned again, the
++  * wait through the folded second handle must grant, proving both handles
++  * reference the one object; release it to leave the object unowned. */
++ {void *second=OpenMutexW(0x1f0001u,0,mb_worker_mutex_named_folded);mb_worker_mutex_keep(second);
++  if(!second)return -68;
++  if(WaitForSingleObjectEx(second,0,0)!=MB_WORKER_MUTEX_WAIT_OBJECT_0)return -68;
++  if(ReleaseMutex(second)!=1)return -70;}
+  if(CreateMutexExW(0,mb_worker_mutex_backslash,0,0)!=0 || GetLastError()!=MB_WORKER_MUTEX_ERROR_INVALID_PARAMETER)return -71;
+  return 1;
+ }
+@@ -77,21 +88,26 @@
+  if(!mb_worker_mutex_state.worker_abandon)return 0;
+  return 1;
+ }
+-/* Creator-side after join: WAIT_ABANDONED plus ownership transfer. */
++/* Creator-side after join: WAIT_ABANDONED plus ownership transfer.
++ * MFR-2: every check accumulates into `failure` (first failure wins) and
++ * falls through to the retirement loop, so the kept tokens retire on ALL
++ * exits; -78 is returned only when retirement itself fails. */
+ static mb_worker_i32 mb_worker_mutex_finish(void){
++ mb_worker_i32 failure=1;
+  mb_worker_mutex_state.abandon_open=OpenMutexW(0,0,mb_worker_mutex_abandon_folded);
+  mb_worker_mutex_keep(mb_worker_mutex_state.abandon_open);
+- if(!mb_worker_mutex_state.abandon_open)return -72;
+- mb_worker_u32 wait=WaitForSingleObjectEx(mb_worker_mutex_state.abandon_open,5000,0);
+- if(wait!=MB_WORKER_MUTEX_WAIT_ABANDONED)return -73;
+- if(ReleaseMutex(mb_worker_mutex_state.abandon_open)!=1)return -74; /* ownership transferred to creator */
+- mb_worker_mutex_state.transfered=1;
+- if(WaitForSingleObjectEx(mb_worker_mutex_state.abandon_open,0,0)!=MB_WORKER_MUTEX_WAIT_OBJECT_0)return -75;
+- if(ReleaseMutex(mb_worker_mutex_state.abandon_open)!=1)return -76;
+- mb_worker_mutex_state.reacquired=1;
++ if(!mb_worker_mutex_state.abandon_open)failure=-72;
++ else if(WaitForSingleObjectEx(mb_worker_mutex_state.abandon_open,5000,0)!=MB_WORKER_MUTEX_WAIT_ABANDONED)failure=-73;
++ else if(ReleaseMutex(mb_worker_mutex_state.abandon_open)!=1)failure=-74; /* ownership transferred to creator */
++ else{
++  mb_worker_mutex_state.transfered=1;
++  if(WaitForSingleObjectEx(mb_worker_mutex_state.abandon_open,0,0)!=MB_WORKER_MUTEX_WAIT_OBJECT_0)failure=-75;
++  else if(ReleaseMutex(mb_worker_mutex_state.abandon_open)!=1)failure=-76;
++  else mb_worker_mutex_state.reacquired=1;
++ }
+  for(mb_worker_u32 i=0;i<mb_worker_mutex_state.token_count;++i)
+-  if(mb_worker_mutex_state.tokens[i] && !CloseHandle(mb_worker_mutex_state.tokens[i]))return -78;
++  if(mb_worker_mutex_state.tokens[i] && !CloseHandle(mb_worker_mutex_state.tokens[i]) && failure==1)failure=-78;
+  mb_worker_mutex_state.token_count=0;
+- return 1;
++ return failure;
+ }
+ #endif

@@ -1,0 +1,78 @@
+--- base/ue4ss-native-pad-provider-1/port/PS5PadSource.cpp	2026-10-02 13:51:36
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-pad-coexist/staging/ue4ss-native-pad-provider-coexist/port/PS5PadSource.cpp	2026-10-05 14:59:20
+@@ -1,12 +1,36 @@
+ #include "PS5PadSource.hpp"
+ #include <algorithm>
+ #include <utility>
++// worker-pad-coexist: shared composition diagnostic sink (diagnostic.c), the
++// same in-link C symbol the wpd1 staging already declares (launch10-build
++// EDITION.json edit n=3). Namespace-scope extern "C" declaration only; the
++// symbol is DEFINED in-link by the composition, so this adds no new import
++// and appears as no new undefined symbol at the combined-supplier boundary.
++extern "C" void diagnostic_event(const char* tag, unsigned int value);
+ namespace RC::Input {
+ static constexpr uint32_t known_buttons = PS5_PAD_BUTTON_L3 | PS5_PAD_BUTTON_R3 | PS5_PAD_BUTTON_OPTIONS |
+     PS5_PAD_BUTTON_UP | PS5_PAD_BUTTON_RIGHT | PS5_PAD_BUTTON_DOWN | PS5_PAD_BUTTON_LEFT |
+     PS5_PAD_BUTTON_L2 | PS5_PAD_BUTTON_R2 | PS5_PAD_BUTTON_L1 | PS5_PAD_BUTTON_R1 |
+     PS5_PAD_BUTTON_TRIANGLE | PS5_PAD_BUTTON_CIRCLE | PS5_PAD_BUTTON_CROSS |
+     PS5_PAD_BUTTON_SQUARE | PS5_PAD_BUTTON_TOUCH_PAD;
++namespace {
++// worker-pad-coexist retry pacing, counted in POLLS (the UpdateThread's
++// process_event cadence; ~200 Hz worst case at the documented 5 ms loop sleep,
++// so 200 polls ~= 1 s). One attempt per interval, interval doubling per failed
++// attempt up to the cap (3200 polls ~= 16 s worst case): bounded retries, no
++// busy loop, no timer and no thread of our own. Every attempt re-runs only the
++// cheap tail of activate() (pad_initialize + user_list + open; the user-service
++// acquire stays short-circuited by m_initialized), i.e. <=4 bounded SDK calls.
++constexpr uint32_t retry_interval_initial = 200;
++constexpr uint32_t retry_interval_max = 3200;
++// pad_open_class evidence value: 0 = scePadOpen(user, PS5_PAD_PORT_TYPE_STANDARD,
++// 0, nullptr) — the ONLY open class this source attempts. The pinned SDK stub
++// exports further open-class entry points (scePadOpenExt/OpenExt2/DeviceOpen/
++// GetHandle), but their second-handle semantics are not decidable from any
++// in-tree header (worker-pad-coexist SDK-ANALYSIS.md); they are NOT attempted
++// from production code. The launch-window companion probe answers that question.
++constexpr unsigned int pad_open_class_standard = 0;
++}
+ PS5PadSource::PS5PadSource(std::vector<PadBinding> bindings, PadBackend backend, int user)
+  : m_bindings(std::move(bindings)), m_down(m_bindings.size(),false), m_backend(backend), m_requested_user(user) {
+     m_valid = user >= -1 && !m_bindings.empty() && m_bindings.size() <= 128 &&
+@@ -66,9 +90,37 @@
+     if (!handler) { m_events.clear(); return m_events; }
+     return poll(handler->get_subscribed_keys(),handler->get_allow_input());
+ }
++void PS5PadSource::maybe_retry() {
++    if (!m_valid) return;
++    if (++m_polls_since_retry < m_retry_interval) return;
++    m_polls_since_retry=0;
++    ++m_retry_attempts;
++    if (m_retry_attempts == 1) diagnostic_event("pad_open_class",pad_open_class_standard);
++    diagnostic_event("pad_retry",m_retry_attempts);
++    // Same-thread serialized re-activation: poll() runs only on the sole
++    // processing thread (PlatformInputSource.hpp lifecycle contract; Handler
++    // SAFETY note - no overlap with any other source call, no cross-thread
++    // Handler::init re-injection anywhere in this design).
++    if (activate()) {
++        diagnostic_event("pad_available",static_cast<unsigned int>(m_status.handle));
++        m_retry_interval=retry_interval_initial; // Fast first retry after any success.
++        return;
++    }
++    diagnostic_event("pad_retry_failed",static_cast<unsigned int>(m_status.error));
++    const uint32_t doubled=m_retry_interval*2;
++    m_retry_interval=doubled>retry_interval_max?retry_interval_max:doubled;
++}
+ std::vector<InputEvent>& PS5PadSource::poll(const std::array<bool,max_keys>& subscribed, bool allow) {
+     m_events.clear();
+-    if (!is_available()) return m_events;
++    if (!is_available()) {
++        // worker-pad-coexist: the failure is no longer cached forever. The
++        // exclusive handle may free while we run (disconnect/user-switch/
++        // system-menu windows); retry event-driven from the processing thread
++        // instead of only at startup (the wpd1 lineage's documented dead-code
++        // design, made reachable by the deferred-attached Handler wiring).
++        maybe_retry();
++        return m_events;
++    }
+     PS5_PadData data{};
+     int err=m_backend.read_state(m_status.handle,&data);
+     if (err) { fail(PadPhase::Read,err); return m_events; }

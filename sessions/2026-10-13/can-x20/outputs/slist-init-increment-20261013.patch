@@ -1,0 +1,86 @@
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -437,6 +437,17 @@
+         cv->cv.notify_all();
+     }
+     catch (...) { m->fail_closed("WakeAllConditionVariable host failure"); }
++}
++
++static void impl_InitializeSListHead(WinApiShim::Impl* m, void* header)
++{
++    // The x64 Windows SDK declares SLIST_HEADER as 16 bytes, aligned to 16.
++    if (!header || (reinterpret_cast<uintptr_t>(header) & 15u))
++    {
++        m->fail_closed("InitializeSListHead null or misaligned header");
++        return;
++    }
++    std::memset(header, 0, 16);
+ }
+ 
+ static uint32_t impl_WaitForSingleObject_events(WinApiShim::Impl*, void* handle, uint32_t ms)
+@@ -650,6 +661,7 @@
+         {"kernel32.dll", "ReleaseSRWLockShared", (void*)&impl_ReleaseSRWLockShared, 1, true},
+         {"kernel32.dll", "SleepConditionVariableSRW", (void*)&impl_SleepConditionVariableSRW, 4, true},
+         {"kernel32.dll", "WakeAllConditionVariable", (void*)&impl_WakeAllConditionVariable, 1, true},
++        {"kernel32.dll", "InitializeSListHead", (void*)&impl_InitializeSListHead, 1, true},
+         {"kernel32.dll", "GetSystemTimeAsFileTime", (void*)&impl_GetSystemTimeAsFileTime, 1, true},
+         {"kernel32.dll", "WaitForSingleObject", (void*)&impl_WaitForSingleObject_events, 2, false},
+         {"kernel32.dll", "TlsAlloc", (void*)&impl_TlsAlloc, 0, false},
+--- a/loader/tests/win32_sync_import_test.cpp
++++ b/loader/tests/win32_sync_import_test.cpp
+@@ -5,6 +5,7 @@
+ #include <chrono>
+ #include <cstdint>
+ #include <cstdio>
++#include <cstring>
+ #include <thread>
+ #include <sys/mman.h>
+ #include <unistd.h>
+@@ -82,11 +83,12 @@
+     void* sleep_cv = shim.resolve("kernel32.dll", "SleepConditionVariableSRW", 0);
+     void* wake_all = shim.resolve("kernel32.dll", "WakeAllConditionVariable", 0);
+     void* get_error = shim.resolve("kernel32.dll", "GetLastError", 0);
++    void* initialize_slist = shim.resolve("kernel32.dll", "InitializeSListHead", 0);
+     check(acquire && release && acquire_shared && release_shared &&
+-          sleep_cv && wake_all && get_error,
+-          "six synchronization rows and GetLastError resolve as typed imports");
++          sleep_cv && wake_all && get_error && initialize_slist,
++          "six synchronization rows, GetLastError, and S-list init resolve");
+     if (!acquire || !release || !acquire_shared || !release_shared ||
+-        !sleep_cv || !wake_all || !get_error) return 1;
++        !sleep_cv || !wake_all || !get_error || !initialize_slist) return 1;
+ 
+     alignas(8) uint64_t lock_word = 0;
+     alignas(8) uint64_t cv_word = 0;
+@@ -173,6 +175,31 @@
+     check(invalid_flags && stopped == before_bad + 2,
+           "null lock and unsupported condition flags stop this mod");
+ 
++    alignas(16) uint8_t slist_bytes[48];
++    std::memset(slist_bytes, 0xa5, sizeof(slist_bytes));
++    uint8_t* const slist_head = slist_bytes + 16;
++    (void)cap13_win64_call1(initialize_slist,
++                            reinterpret_cast<uint64_t>(slist_head));
++    bool bounded_zero = true;
++    for (size_t i = 0; i < sizeof(slist_bytes); ++i)
++        bounded_zero &= slist_bytes[i] == ((i >= 16 && i < 32) ? 0 : 0xa5);
++    check(bounded_zero, "S-list init zeroes exactly one aligned 16-byte x64 header");
++    std::memset(slist_head, 0x5a, 16);
++    (void)cap13_win64_call1(initialize_slist,
++                            reinterpret_cast<uint64_t>(slist_head));
++    bool cleared_again = true;
++    for (size_t i = 0; i < 16; ++i) cleared_again &= slist_head[i] == 0;
++    check(cleared_again, "S-list head can be reinitialized");
++    uint8_t before_reject[sizeof(slist_bytes)];
++    std::memcpy(before_reject, slist_bytes, sizeof(slist_bytes));
++    const int before_misaligned = stopped;
++    (void)cap13_win64_call1(initialize_slist,
++                            reinterpret_cast<uint64_t>(slist_head + 1));
++    (void)cap13_win64_call1(initialize_slist, 0);
++    check(stopped == before_misaligned + 2 &&
++          std::memcmp(before_reject, slist_bytes, sizeof(slist_bytes)) == 0,
++          "null and misaligned S-list heads are refused before writing");
++
+     std::printf("TOTAL: %d failed\n", failures);
+     return failures ? 1 : 0;
+ }

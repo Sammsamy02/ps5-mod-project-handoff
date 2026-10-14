@@ -1,0 +1,35 @@
+{
+  "worker": "worker-evidence-freshness-fixes",
+  "date": "2026-10-04",
+  "task": "Apply the evidence-freshness corrections PROVED by worker-evidence-pipeline-rehearsal/REHEARSAL-RECEIPTS.md: (1) rung_check.py O2 freshness gate — stale NQH1 evidence must NOT yield RUNG1 PASS; stale verdict becomes INCONCLUSIVE-STALE with an exit code distinct from PASS/FAIL; (2) post_launch_check.py label fixes (stage_hint init-thread mislabel GAP 2; BRIDGE_GUIDANCE[2] lease-era text GAP 3); (3) console_batch.py cp01234_verdict freshness gate + CP0 fallback label (GAP 1a/1b) respecting the mid-flight owner worker-batch-runner-8fam-patch; (4) re-run the FULL five-scenario rehearsal against the fixed tools and record new receipts.",
+  "ownership": {
+    "edited_in_place": [
+      "worker-rung-evidence-reader/rung_check.py (no active owner; GAP 4) — sha256 287a26844ad2491181b85f19c0dc01fbd2c48675dd0349d3b939acaa63a59694",
+      "worker-post-launch-tools/post_launch_check.py (no active owner; GAPs 2+3) — sha256 cc75d00788b9ae959e6d6e6b07c3752dea29722ec7cecd6b6e67200846301ce7",
+      "worker-console-batch-runner/console_batch.py — ONLY AFTER the owner delivered: worker-batch-runner-8fam-patch wrote receipts/selftest-out.txt, receipts/TEST-RECEIPT.md and terminal REPORT.md (22:01-22:04) during this run; dispatch condition 'if it has DELIVERED, apply directly' met. Patch applied via diffs/console_batch.freshness-gate.patch; as-found snapshot c691cdd4cb8b… and owner-delivered bytes 8c3031ebf34c… preserved; result sha256 92b56889cbfe77ce64271c02db7a02692ef86dc8e52b485929d3196b40895918; owner selftest after patch 162 ok / 0 failed; their dll7/dll8 sections untouched (patch confined to cp01234_verdict + two helpers)"
+    ],
+    "timeline_honesty": "console_batch.py was NOT touched while mid-flight: hash monitored (c691cdd4cb8b -> 8c3031ebf34c during preparation, patch verified against BOTH), fixes first delivered as patch + PATCH-BRIEF.md, applied in place only after the terminal REPORT.md appeared"
+  },
+  "scope_correction_noted": "The dispatch listed 'CP0 fallback mislabel' under post_launch_check.py, but REHEARSAL-RECEIPTS.md GAP 1b locates that label in console_batch.py cp01234_verdict (verified: post_launch_check.py contains no F1/CP0 label). GAP 1b therefore shipped with the console_batch fix; post_launch_check.py received exactly its two documented fixes (GAP 2, GAP 3).",
+  "freshness_oracle": "Shared with post_launch_check.py: status session CLOCK_MONOTONIC ms must exceed FRESH_SESSION_MS_THRESHOLD = 8866785 (MONO_NS_AT_PATH_TEST 8866785633337 ns // 1e6). Fixtures: s01 9435000 / s02 9512000 / s03 9534000 / s04 9577000 all FRESH (verdicts unchanged); s05 + probe_gap4_stale_driver 8812000 STALE (refused).",
+  "verification": {
+    "false_pass_bugs_refused": {
+      "GAP4_rung_check": "BEFORE probe_gap4_stale_driver: RUNG1 PASS exit 0. AFTER: exit 5 INCONCLUSIVE-STALE; s01 still PASS exit 0 (runs/BEFORE_* / AFTER_*)",
+      "GAP1a_cp01234": "BEFORE s05: CP0=PASS CP3=PASS CP2=PARTIAL from stale evidence. AFTER: CP0/CP1/CP2/CP3 INCONCLUSIVE-STALE, zero PASS/PARTIAL cells, overall INCOMPLETE + stale hint; O1 delta guard proven (d1_entered_before gate)"
+    },
+    "full_rerehearsal": "run_rerehearsal.py over all five scenarios + probe tree; every scenario still discriminates exactly as the original rehearsal table (s01 all-green; s02 vs s03 early-failure shapes separated; s04 trap caught at CP4; s05 NOT_STARTED + 3 probe repeats) and now refuses stale evidence at both the rung layer (exit 5) and the CP layer; in-tree patched console_batch agrees with the shadow reference in every cell; --baseline-file variant same-verdict everywhere; s03 --discover, s01 CP7 RUNG2 delegation and CP5/CP6 L-diff all unchanged",
+    "owner_suite": "python3 console_batch.py selftest after patch: 162 ok, 0 failed",
+    "receipts": "RE-RUN-RECEIPTS.md; raw outputs runs/<scenario>/; machine summary rerehearsal-results.json"
+  },
+  "non_goals": [
+    "NO console contact; every verification ran in --from-dir fixture mode on the host",
+    "No nested subagents; no writes outside worker-evidence-freshness-fixes/ and the three owned tool files above",
+    "No replay of failed jobs; no claim that rungs advance or the console is certified (runbook do-not-claim guard); all host/fixture evidence only"
+  ],
+  "pinned_inputs": {
+    "rehearsal_doc": "worker-evidence-pipeline-rehearsal/REHEARSAL-RECEIPTS.md (gap list + proposed one-line fixes)",
+    "fixtures": "worker-evidence-pipeline-rehearsal/fixtures/ (s01-s05 from-dir/ + probe_gap4_stale_driver/ flat) — consumed unmodified",
+    "original_rehearsal_artifacts": "byte-preserved; the re-run writes only under worker-evidence-freshness-fixes/"
+  },
+  "status": "complete"
+}

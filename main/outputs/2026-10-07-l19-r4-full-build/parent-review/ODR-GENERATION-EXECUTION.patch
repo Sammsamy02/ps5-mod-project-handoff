@@ -1,0 +1,99 @@
+--- prior/full_pipeline.py
++++ new/full_pipeline.py
+@@ -5,9 +5,82 @@
+ import sys
+ from pathlib import Path
+ sys.dont_write_bytecode = True
+-from admission import Admission, OWN, require, read, sha, pin
++from admission import Admission, OWN, require, read, sha, pin, resolved, ROLE
+ from hooks import install
+ from composition import write
++
++
++def load_odr_generation(path, digest, rundir):
++    """Exactly the pinned R3 generation, with actual this-pass provenance separate."""
++    data = read(pin({'path': str(path), 'sha256': digest}, 'ODR generation receipt'))
++    require(data.get('schema') == 1 and data['run_directory'] == str(Path(rundir).resolve()),
++            'ODR generation run/schema mismatch')
++    baseline = read(pin(data['baseline_composition'], 'R3 generation composition'))
++    odr = read(pin(data['baseline_ODR'], 'R3 ODR accepted generation'))
++    require(odr['result'] == 'PASS', 'R3 ODR generation was not accepted')
++    pin(data['original_checker'], 'original unchanged ODR checker')
++    require(data['actual_map']['path'] == str(Path(rundir).resolve() / 'runtime.map'), 'actual ODR map path')
++    pin(data['actual_map'], 'actual ODR map')
++    current = read(pin(data['current_composition'], 'actual composition provenance'))
++    r3_eligible = baseline['freshly_compiled_units']
++    require(data['eligible_R3_generation_units'] == r3_eligible and len(set(r3_eligible)) == len(r3_eligible),
++            'exact R3 generation providers required')
++    recipes = read(pin(data['affected_recipes'], 'exact replacement generation recipes'))['recipes']
++    require(data['eligible_replacement_units'] == sorted(recipes), 'exact replacement generation members required')
++    sources = read(pin(data['source_manifest'], 'admitted generation sources'))['selected_sources']
++    eligible = sorted(set(r3_eligible) | set(recipes))
++    result = set()
++    for name in eligible:
++        require(name in current['selected_runtime_units'], 'generation provider missing: ' + name)
++        prior, unit = baseline['selected_runtime_units'][name], current['selected_runtime_units'][name]
++        pin({'path': str(resolved(unit['source'])), 'sha256': unit['source_sha256']}, 'generation source/' + name)
++        obj = pin({'path': str(resolved(unit['object'])), 'sha256': unit['object_sha256']}, 'generation object/' + name)
++        actual_fresh = (name in current['freshly_compiled_units']
++                        and str(obj).startswith(str(Path(rundir).resolve()) + '/'))
++        if name in recipes:
++            recipe = recipes[name]
++            expected_source = sources[ROLE[name]] if name in ROLE else recipe['final_source']
++            require(unit['source_sha256'] == expected_source['sha256'], 'replacement generation source mismatch: ' + name)
++            pin(expected_source, 'admitted generation source/' + name)
++            pin(recipe['required_accepted_header'], 'accepted generation owner header')
++            pin({'path': str(resolved(unit['dependency_file'])), 'sha256': unit['dependency_sha256']},
++                'generation dependency/' + name)
++            if not actual_fresh:
++                require(recipe['pass1_reusable'] is True, 'replacement must actually compile fresh: ' + name)
++                pin(recipe['pass1_object'], 'accepted prior generation object/' + name)
++                pin(recipe['pass1_dependency'], 'accepted prior generation dependency/' + name)
++                require(unit['object_sha256'] == recipe['pass1_object']['sha256']
++                        and unit['dependency_sha256'] == recipe['pass1_dependency']['sha256']
++                        and unit['argv'] == recipe['pass1_argv'], 'prior generation object/dependency/recipe mismatch: ' + name)
++        elif not actual_fresh:
++            pin({'path': str(resolved(prior['source'])), 'sha256': prior['source_sha256']}, 'R3 generation source/' + name)
++            pin({'path': str(resolved(prior['object'])), 'sha256': prior['object_sha256']}, 'R3 generation object/' + name)
++            require(unit['source_sha256'] == prior['source_sha256'] and unit['object_sha256'] == prior['object_sha256'],
++                    'retained-path generation source/object must equal R3: ' + name)
++        result.add(str(obj))
++    require(len(result) == len(eligible), 'distinct generation provider objects required')
++    return result
++
++
++def odr_generation_receipt(a, rundir, output=None):
++    rundir = Path(rundir).resolve()
++    path = Path(output).resolve() if output else rundir / 'R4-ODR-GENERATION.json'
++    require(not path.exists(), 'new ODR generation provenance file required')
++    write(path, {'schema': 1, 'run_directory': str(rundir),
++        'baseline_composition': a.recipes['base_receipt'],
++        'baseline_ODR': a.data['odr_baseline_receipt'],
++        'affected_recipes': a.data['affected_recipes'],
++        'source_manifest': a.data['source_manifest'],
++        'current_composition': {'path': str(rundir / 'receipt.json'), 'sha256': sha(rundir / 'receipt.json')},
++        'actual_map': {'path': str(rundir / 'runtime.map'), 'sha256': sha(rundir / 'runtime.map')},
++        'original_checker': {'path': str(OWN / 'check_odr_emitters_l19.py'), 'sha256': sha(OWN / 'check_odr_emitters_l19.py')},
++        'eligible_R3_generation_units': list(a.base['freshly_compiled_units']),
++        'eligible_replacement_units': sorted(a.recipes['recipes']),
++        'actual_this_pass_fresh_compiles': read(rundir / 'receipt.json')['freshly_compiled_units'],
++        'actual_prior_accepted_reuse': read(rundir / 'receipt.json')['r4_reused_accepted_pass1_units'],
++        'scope': 'hash-backed ODR generation classification only; no compile provenance relabeling'})
++    load_odr_generation(path, sha(path), rundir)
++    return path
+ 
+ 
+ def main():
+@@ -31,6 +104,12 @@
+         values = list(argv)
+         if len(values) > 1 and Path(values[1]) == launcher.DRIVER:
+             values = values[:2] + prefix + values[2:]
++        if name == 'odr-emitter-check':
++            checker = pin(a.data['odr_generation_checker'], 'explicit generation ODR checker')
++            require(Path(values[1]) == OWN / 'check_odr_emitters_l19.py', 'original ODR invocation drift')
++            generation = odr_generation_receipt(a, values[2])
++            values[1] = str(checker)
++            values += ['--generation-receipt', str(generation), '--generation-receipt-sha256', sha(generation)]
+         return original_run(name, values, tail)
+ 
+     launcher.run = run

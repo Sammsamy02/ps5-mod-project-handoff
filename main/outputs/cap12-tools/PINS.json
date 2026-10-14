@@ -1,0 +1,74 @@
+{
+  "capability": "12 SHADER TRANSLATOR (design-phase pins only; nothing built on battery)",
+  "pinned": "2026-10-10 (Mac, battery-safe: shallow clones + raw file fetches only)",
+  "pins": [
+    {
+      "name": "dxil-spirv",
+      "repo": "https://github.com/HansKristian-Work/dxil-spirv",
+      "commit": "8434b0639fb2a48ce13aac08a420ecce5d23df0e",
+      "commit_date": "2026-10-10",
+      "license": "MIT (Copyright (c) 2019-2022 Hans-Kristian Arntzen for Valve Corporation; SPDX MIT)",
+      "local": "outputs/cap12-tools/dxil-spirv/ (shallow clone, ~20 MB)",
+      "role": "Stage 1 of the pipeline: DXIL (SM6) -> SPIR-V; via its dxbc-spirv submodule it also covers legacy DXBC (SM5). C API stable per README. No Sony material."
+    },
+    {
+      "name": "vkd3d-proton (vkd3d-shader + vkd3d-compiler)",
+      "repo": "https://github.com/HansKristian-Work/vkd3d-proton",
+      "commit": "2230755878b01993b4b82d0ac0c0624f3ab4d333",
+      "commit_date": "2026-10-06",
+      "license": "LGPL-2.1 (COPYING) -- NOTE: weak copyleft. We use it as an offline build-time tool only; shader OUTPUT is data, not a derived work of the tool. Never static-link into any distributed binary without relink-provision compliance. Alternative stage-1 (dxil-spirv, MIT) is preferred if licensing ever becomes distributive.",
+      "local": "outputs/cap12-tools/vkd3d-proton/ (shallow clone, ~60 MB)",
+      "role": "Second stage-1 route: libs/vkd3d-shader/dxbc.c + programs/vkd3d-compiler (vkd3d_shader_compile_dxbc -> SPIR-V, source VKD3D_SHADER_SOURCE_DXBC_TPF)."
+    },
+    {
+      "name": "Mesa ACO (source pin, no clone)",
+      "repo": "https://gitlab.freedesktop.org/mesa/mesa (branch main, fetched 2026-10-10)",
+      "license": "MIT (LICENSE.MIT pinned)",
+      "local": "outputs/cap12-tools/mesa-aco-pin/",
+      "files_sha256": {
+        "LICENSE.MIT": "17ce38b6dab5dc0b8d658e4f332aebc6f055275c02af2df772857a83b55ab6a2",
+        "src_amd_compiler_README.md": "525c8b0c916005336be567d161391fd88c52c59bcd72d01257609c4b499fa34d",
+        "src_amd_compiler_aco_interface.cpp": "14636d3f2980a2b07264bc4bbec42833bffeff71abea1572d9489215b034ae7a",
+        "src_amd_compiler_aco_assembler.cpp": "1a5cdbb01a6f850aed1cd5196c23340c8dc01ddb6954e6bcb29e5eaa36bd8935"
+      },
+      "role": "Stage 2: NIR -> RDNA2 machine code (gfx10 family). Pin is main-branch raw files; at build time pin an exact release TAG. Full Mesa tree NOT cloned (size).",
+      "caveat": "No PS5 (gfx1034-class) target exists in public Mesa; ACO targets gfx1030-class RDNA2. The console-specific packaging is learned ONLY from the game's own shipped shader chunks (M1)."
+    },
+    {
+      "name": "cityhash (Google reference)",
+      "repo": "https://github.com/google/cityhash",
+      "file": "src/city.cc (MIT license header in file)",
+      "sha256": "9cd2e21da0d6131b1756f059c6f269c204ee4ecd28c7f4c487376efe2336696b",
+      "local": "outputs/cap12-tools/city.cc",
+      "role": "Reference for the pure-python CityHash64 port used to verify UE IoStore lower_utf16_cityhash derivations against the game's own TOC container ids (verification oracle documented in cap12-research-notes.md)."
+    },
+    {
+      "name": "cityhash64.py (our port)",
+      "local": "outputs/cap12-tools/cityhash64.py",
+      "sha256": "497ddab0a87c0f5e018b755f1f32f7106dcb523a67b081a8d95c9bdfaa96fc67",
+      "role": "Pure-stdlib CityHash64 + lower_utf16_cityhash; VERIFIED against 6 local container-id oracles (mod + 5 base utocs all match)."
+    }
+  ],
+  "not_pinned": [
+    {
+      "name": "LLVM (AMDGPU backend)",
+      "repo": "https://github.com/llvm/llvm-project",
+      "license": "Apache-2.0 WITH LLVM-exception",
+      "why": "repo ~4.6 GB; stage-2 FALLBACK only (llc -mtriple=amdgcn--amdhsa -mcpu=gfx1030). Pin a release tarball at build time in the AC-power window."
+    },
+    {
+      "name": "DirectXShaderCompiler (dxc)",
+      "repo": "https://github.com/microsoft/DirectXShaderCompiler (MIT)",
+      "why": "DXIL disassembly; dxil-spirv's checkout_dxc.sh fetches it at build time; no Mac pin needed at design stage."
+    },
+    {
+      "name": "AMD RDNA 2 Shader ISA manual",
+      "url": "https://www.amd.com/en/developer/resources/developer-guides-manuals (RDNA_2_Shader_ISA November 2020 reference)",
+      "why": "public AMD doc; CITED not copied (AMD copyright; link-only pin)."
+    }
+  ],
+  "laws": [
+    "No Sony SDK material anywhere in this tree; verified: pins contain only MIT/LGPL-2.1/Apache-2.0 open-source code.",
+    "Battery-safe: no builds were run; clones and raw fetches only. Build plan documented in CAP12-SHADER-DESIGN.md section 5."
+  ]
+}

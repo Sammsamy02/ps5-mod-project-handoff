@@ -1,0 +1,113 @@
+--- round9-staging/b6q-pacing/base/LuaMod.cpp	2026-10-12 15:06:59
++++ ../2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp	2026-10-12 15:27:57
+@@ -5166,6 +5166,34 @@
+     // registered name AND outer name); delivery is the existing pending queue below, on the game
+     // thread. Deliberate difference from PC: the callback runs on the next pump (<= one frame after
+     // construction) instead of inside StaticConstructObject.
++    // [R9-PACE] the game-thread pump runs on game event carriers, not once per frame (launch 10: ~800-2900
++    // calls per second), so per-call budgets multiply. Each budgeted step instead gets a fixed amount of
++    // time per ~16 ms window (about one frame), however often the pump fires; a call that finds its
++    // window's budget used up skips the step (the work waits for the next window, nothing is dropped).
++    struct R9Pacer
++    {
++        std::chrono::steady_clock::time_point window_start{};
++        std::chrono::steady_clock::duration spent{};
++        std::chrono::steady_clock::time_point call_start{};
++        uint64_t skipped{0};
++        auto begin(std::chrono::microseconds per_window, std::chrono::steady_clock::time_point& deadline) -> bool
++        {
++            const auto now = std::chrono::steady_clock::now();
++            if (now - window_start >= std::chrono::microseconds(16667)) { window_start = now; spent = {}; }
++            if (spent >= per_window) { ++skipped; return false; }
++            call_start = now;
++            deadline = now + (per_window - spent);
++            return true;
++        }
++        auto end() -> void { spent += std::chrono::steady_clock::now() - call_start; }
++    };
++    struct R9PaceEnd
++    {
++        R9Pacer& pacer;
++        ~R9PaceEnd() { pacer.end(); }
++    };
++    static R9Pacer s_r9_pace_watch{}, s_r9_pace_match{}, s_r9_pace_exec{};
++
+     static auto r9_feed_notify_from_index() -> void
+     {
+         // backlog of new objects, matched under a per-frame budget (~1 ms) so a level load that creates
+@@ -5190,13 +5218,18 @@
+             s_backlog_obj.clear();
+             s_backlog_pos = 0;
+             Unreal::UObjectGlobals::r9_index_notify_arm(); // no-op when armed; re-arms after a racing disarm
+-            // [R9-IDX] per-frame budget (~0.5 ms) for re-checking freed slots: a huge unload can never cost
+-            // more than that per frame; FindFirstOf/FindAllOf still sync exactly
++            // [R9-IDX] ~0.5 ms per ~16 ms window for re-checking freed slots ([R9-PACE]): a huge unload can
++            // never cost more than that per frame; FindFirstOf/FindAllOf still sync exactly
+             static std::chrono::steady_clock::time_point s_watch_budget_end{};
+-            s_watch_budget_end = std::chrono::steady_clock::now() + std::chrono::microseconds(500);
+-            if (!Unreal::UObjectGlobals::r9_index_collect_new(s_backlog_idx, s_backlog_obj,
+-                                                              +[]() -> bool { return std::chrono::steady_clock::now() > s_watch_budget_end; }))
++            if (!s_r9_pace_watch.begin(std::chrono::microseconds(500), s_watch_budget_end)) { return; }
++            bool r9_collected{false};
+             {
++                const R9PaceEnd r9_pace_end{s_r9_pace_watch};
++                r9_collected = Unreal::UObjectGlobals::r9_index_collect_new(s_backlog_idx, s_backlog_obj,
++                                                                            +[]() -> bool { return std::chrono::steady_clock::now() > s_watch_budget_end; });
++            }
++            if (!r9_collected)
++            {
+                 static bool s_unusable_logged{false};
+                 if (!s_unusable_logged)
+                 {
+@@ -5213,7 +5246,10 @@
+                 try { Output::send(STR("[R9-NOTIFY] NotifyOnNewObject delivered from the object index (first batch: {} new objects)\n"), s_backlog_idx.size()); } catch (...) {}
+             }
+         }
+-        const auto budget_end = std::chrono::steady_clock::now() + std::chrono::microseconds(1000);
++        if (s_backlog_pos >= s_backlog_idx.size()) { return; }
++        std::chrono::steady_clock::time_point budget_end{}; // ~1 ms per ~16 ms window ([R9-PACE])
++        if (!s_r9_pace_match.begin(std::chrono::microseconds(1000), budget_end)) { return; }
++        const R9PaceEnd r9_pace_end{s_r9_pace_match};
+         std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+         while (s_backlog_pos < s_backlog_idx.size())
+         {
+@@ -5245,6 +5281,17 @@
+     static auto process_pending_notify_on_new_object_callbacks() -> void
+     {
+         r9_feed_notify_from_index();
++        {
++            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            if (LuaMod::m_pending_notify_on_new_object_callbacks.empty())
++            {
++                return;
++            }
++        }
++        // ~2 ms per ~16 ms window for delivering notifications ([R9-PACE])
++        std::chrono::steady_clock::time_point r9_exec_deadline{};
++        if (!s_r9_pace_exec.begin(std::chrono::microseconds(2000), r9_exec_deadline)) { return; }
++        const R9PaceEnd r9_pace_end{s_r9_pace_exec};
+         struct PendingNotifyExec
+         {
+             uint64_t callback_id{};
+@@ -5313,7 +5360,7 @@
+             std::vector<std::pair<lua_State*, int32_t>> thread_refs_to_unref{};
+             // [R9-NOTIFY] per-frame budget (~2 ms, in order): a level load can queue thousands of
+             // notifications; on PC they are spread across the load, so never stack them into one frame.
+-            const auto r9_budget_end = std::chrono::steady_clock::now() + std::chrono::microseconds(2000);
++            const auto r9_budget_end = r9_exec_deadline;
+             static uint64_t s_notify_delivered{0}, s_notify_skipped_dying{0}, s_notify_deferred{0};
+             static uint32_t s_notify_errors{0};
+             for (size_t r9_k = 0; r9_k < to_execute.size(); ++r9_k)
+@@ -5413,9 +5460,10 @@
+                     s_last_report = r9_now;
+                     try
+                     {
+-                        Output::send(STR("[R9-NOTIFY] stats delivered={} skipped_dying={} deferred_by_budget={} errors={} pending={}\n"),
++                        Output::send(STR("[R9-NOTIFY] stats delivered={} skipped_dying={} deferred_by_budget={} errors={} pending={} paced_skips watch/match/exec={}/{}/{}\n"),
+                                      s_notify_delivered, s_notify_skipped_dying, s_notify_deferred, s_notify_errors,
+-                                     LuaMod::m_pending_notify_on_new_object_callbacks.size());
++                                     LuaMod::m_pending_notify_on_new_object_callbacks.size(),
++                                     s_r9_pace_watch.skipped, s_r9_pace_match.skipped, s_r9_pace_exec.skipped);
+                     }
+                     catch (...)
+                     {

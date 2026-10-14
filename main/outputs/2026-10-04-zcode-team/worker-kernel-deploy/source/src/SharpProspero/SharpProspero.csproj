@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <RootNamespace>SharpProspero</RootNamespace>
+    <AssemblyName>SharpProspero</AssemblyName>
+
+    <!-- The library is written to survive full trimming and ahead-of-time compilation. The analyzer
+         flags any construct that would not. -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <PackageId>SharpProspero</PackageId>
+    <Version>0.9.0</Version>
+    <Description>A C# SDK for building applications that compile to standalone ELF modules and pack into installable packages.</Description>
+    <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
+    <PackageTags>ps5;prospero;homebrew;sdk;aot;elf</PackageTags>
+  </PropertyGroup>
+
+  <!-- Opt-in bridge for the internal layout hooks. Off by default; a run that needs it sets
+       EnableInternalTests=true on the MSBuild command line. -->
+  <Import Project="../../build/InternalBridge.props"
+          Condition="'$(EnableInternalTests)' == 'true' and Exists('../../build/InternalBridge.props')" />
+
+  <!-- The built-in mesh shaders, compiled ahead of time and embedded so a 3D application renders with
+       no shader tooling of its own. The .pssl sources sit beside them for reference. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Graphics\Agc\Shaders\mesh_vs.sb" LogicalName="SharpProspero.Shaders.mesh_vs.sb" />
+    <EmbeddedResource Include="Graphics\Agc\Shaders\mesh_ps.sb" LogicalName="SharpProspero.Shaders.mesh_ps.sb" />
+  </ItemGroup>
+
+</Project>

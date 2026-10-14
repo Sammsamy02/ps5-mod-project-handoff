@@ -1,0 +1,312 @@
+#include "jobs.h"
+#include "modbridge/nexus.hpp"
+extern "C" {
+#include "download/curl_download.h"
+}
+#include <filesystem>
+#include <fstream>
+#include <nlohmann/json.hpp>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include "auth.h"
+#include "oauth_code.h"
+#include "download/provider_transfer.h"
+#include <array>
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <new>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <time.h>
+#include <vector>
+
+namespace {
+constexpr uint64_t sec=1000000000;
+bool free_user=false,expire_job_entropy=false;
+uint64_t wall_ns=1700000000ULL*sec;unsigned wall_calls=0,advance_wall_at=0;uint64_t wall_advance=0;
+uint64_t live_user=42;bool late_link_expiry=false;unsigned archive_calls=0;
+mb_nexus_jobs_context_v1 *secret_context=nullptr;std::string secret_marker="owned_grant";bool grant_erased_before_archive=true,link_query_valid=true;
+mb_nexus_jobs_context_v1 **wall_reentry=nullptr;int wall_reentry_status=-1;bool session_expire_on_wall=false;
+mb_nexus_jobs_context_v1 **reentrant_jobs=nullptr;int reentrant_jobs_code=-1;
+uint64_t mono=100*sec;
+bool clock_failure=false,advance_work_delete=false,last_work_zero=true,last_token_zero=true;
+unsigned work_deletes=0,token_deletes=0,exchanges=0,user_requests=0,mod_requests=0,link_requests=0,sequence=0,last_credential=0,controls=0;
+bool fail_exchange=false,fail_user=false,expire_after_user=false,timeout_after_user=false,expire_after_link=false,timeout_after_link=false,rfc_vector=false,verifier_matches=false;
+unsigned token_ttl=600;
+unsigned file_requests=0,post_requests=0;
+bool unknown_file_hints=false,changed_primary=false,post_failure=false;
+struct Allocation {void *pointer;size_t size;};
+Allocation allocation[512]{};
+void *context_to_inspect=nullptr;
+bool context_erased=true;
+char cookie_to_inspect[44]{},csrf_to_inspect[44]{};
+constexpr size_t work_size=65536+131072+16384;
+bool zero(const void *p,size_t n){auto b=static_cast<const unsigned char*>(p);for(size_t i=0;i<n;++i)if(b[i])return false;return true;}
+bool contains(const void *p,size_t n,const char *text,size_t bytes){auto b=static_cast<const char*>(p);if(!bytes||bytes>n)return false;for(size_t i=0;i+bytes<=n;++i)if(!std::memcmp(b+i,text,bytes))return true;return false;}
+void require(bool condition,const char *label){if(!condition)throw std::runtime_error(label);}
+void observed(bool condition,const char *label){require(condition,label);++controls;}
+void reset_provider(){fail_exchange=fail_user=expire_after_user=timeout_after_user=expire_after_link=timeout_after_link=false;advance_work_delete=false;token_ttl=600;}
+struct Entropy {unsigned calls=0;bool fail=false,vector=false;unsigned fail_at=0,collision_at=0,advance_at=0;uint64_t advance_ns=0;};
+int entropy(void *opaque,uint8_t output[32]){
+ auto &e=*static_cast<Entropy*>(opaque);++e.calls;if(e.fail||(e.fail_at&&e.calls==e.fail_at)){std::memset(output,0x77,32);return 1;}
+ if(e.vector&&e.calls==4){
+  constexpr std::array<uint8_t,32> input{0x74,0x18,0xdf,0xb4,0x97,0x99,0xe0,0x25,0x4f,0xfa,0x60,0x7d,0xd8,0xad,0xbb,0xba,0x16,0xd4,0x25,0x4d,0x69,0xd6,0xbf,0xf0,0x5b,0x58,0x05,0x58,0x53,0x84,0x8d,0x79};std::copy(input.begin(),input.end(),output);
+ }else for(unsigned i=0;i<32;++i)output[i]=static_cast<uint8_t>(e.calls+i*7);
+ if(e.collision_at&&e.calls==e.collision_at)for(unsigned i=0;i<32;++i)output[i]=static_cast<uint8_t>(1+i*7);
+ if(e.advance_at&&e.calls==e.advance_at)mono+=e.advance_ns;
+ if(expire_job_entropy){mono+=1801*sec;expire_job_entropy=false;}
+ if(reentrant_jobs){reentrant_jobs_code=mb_nexus_jobs_free_v1(reentrant_jobs);reentrant_jobs=nullptr;}
+ return 0;
+}
+struct Fixture {
+ mb_nexus_auth_context_v1 *ctx=nullptr;Entropy ent;
+ std::string origin="http://127.0.0.1:18291",client="owned_fixture_client",redirect=origin+"/auth/callback",scope="openid profile email";
+ std::array<uint8_t,4> ca{'C','A','\n',0};std::array<char,44> cookie{},csrf{};mb_nexus_auth_result_v1 out{};
+ Fixture(bool configured=true,bool vector=false){
+  mono+=sec;reset_provider();ent.vector=vector;mb_nexus_auth_create_params_v1 p{};p.struct_size=sizeof(p);p.abi_version=1;p.origin=origin.data();p.origin_bytes=origin.size();p.entropy_context=&ent;p.entropy_read32=entropy;
+  if(configured){p.client_id=client.data();p.client_id_bytes=client.size();p.redirect_uri=redirect.data();p.redirect_uri_bytes=redirect.size();p.scope=scope.data();p.scope_bytes=scope.size();p.ca_pem=ca.data();p.ca_bytes=ca.size();}
+  require(mb_nexus_auth_create_v1(&p,&ctx,&out)==0,"fixture create");require(bootstrap()==0,"fixture bootstrap");
+ }
+ ~Fixture(){mb_nexus_auth_free_v1(&ctx);}
+ int bootstrap(const char *input=nullptr,size_t bytes=0){mb_nexus_auth_session_params_v1 p{};p.struct_size=sizeof(p);p.abi_version=1;p.cookie=input;p.cookie_bytes=bytes;p.cookie_output=cookie.data();p.cookie_capacity=cookie.size();p.csrf_output=csrf.data();p.csrf_capacity=csrf.size();return mb_nexus_auth_session_v1(ctx,&p,&out);}
+ int start(std::array<char,8192>& url,const char *alternate=nullptr,const char *cross_origin=nullptr,size_t cap=8192){mb_nexus_auth_start_params_v1 p{};p.struct_size=sizeof(p);p.abi_version=1;p.cookie=cookie.data();p.cookie_bytes=43;p.csrf=alternate?alternate:csrf.data();p.csrf_bytes=43;p.origin=cross_origin?cross_origin:origin.data();p.origin_bytes=cross_origin?std::strlen(cross_origin):origin.size();p.authorization_url=url.data();p.authorization_capacity=cap;return mb_nexus_auth_start_v1(ctx,&p,&out);}
+ std::string target(std::string_view url,std::string_view code="owned_fake_code"){
+  auto a=url.find("&state=");require(a!=url.npos,"private state extraction");a+=7;auto b=url.find('&',a);return "/auth/callback?state="+std::string(url.substr(a,b-a))+"&code="+std::string(code);
+ }
+ int callback(const std::string &target,std::array<char,8192>& summary,const char *browser=nullptr,uint32_t timeout=30000,size_t cap=8192,mb_nexus_auth_cancel_fn_v1 cancel=nullptr,void *opaque=nullptr){
+  mb_nexus_auth_callback_params_v1 p{};p.struct_size=sizeof(p);p.abi_version=1;p.cookie=browser?browser:cookie.data();p.cookie_bytes=43;p.target=target.data();p.target_bytes=target.size();p.timeout_ms=timeout;p.connect_timeout_ms=std::min(1000u,timeout);p.summary=summary.data();p.summary_capacity=cap;p.cancelled=cancel;p.cancel_context=opaque;return mb_nexus_auth_callback_v1(ctx,&p,&out);
+ }
+ int account(std::array<char,8192>& summary,uint32_t timeout=30000,mb_nexus_auth_cancel_fn_v1 cancel=nullptr,void *opaque=nullptr,size_t cap=8192){
+  mb_nexus_auth_account_params_v1 p{};p.struct_size=sizeof(p);p.abi_version=1;p.cookie=cookie.data();p.cookie_bytes=43;p.timeout_ms=timeout;p.connect_timeout_ms=std::min(1000u,timeout);p.summary=summary.data();p.summary_capacity=cap;p.cancelled=cancel;p.cancel_context=opaque;return mb_nexus_auth_account_v1(ctx,&p,&out);
+ }
+ int disconnect(const char *alternate=nullptr){mb_nexus_auth_disconnect_params_v1 p{};p.struct_size=sizeof(p);p.abi_version=1;p.cookie=cookie.data();p.cookie_bytes=43;p.csrf=alternate?alternate:csrf.data();p.csrf_bytes=43;p.origin=origin.data();p.origin_bytes=origin.size();return mb_nexus_auth_disconnect_v1(ctx,&p,&out);}
+ void login(){std::array<char,8192> url{},summary{};require(start(url)==0,"private login start");require(callback(target(url.data()),summary)==0,"private login callback");}
+ int resolve(std::vector<uint8_t>& raw,std::vector<char>& report,std::array<char,8192>& uri,mb_nexus_auth_resolve_result_v1& result,uint32_t timeout=30000){
+  std::string domain="skyrimspecialedition";mb_nexus_download_params_v1 d{};d.struct_size=sizeof(d);d.abi_version=1;d.domain=domain.data();d.domain_bytes=domain.size();d.mod_id=1;d.file_id=2;d.timeout_ms=timeout;d.connect_timeout_ms=std::min(1000u,timeout);d.raw_body=raw.data();d.raw_capacity=raw.size();d.metadata_report=report.data();d.report_capacity=report.size();d.uri=uri.data();d.uri_capacity=uri.size();mb_nexus_auth_resolve_params_v1 p{};p.struct_size=sizeof(p);p.abi_version=1;p.cookie=cookie.data();p.cookie_bytes=43;p.csrf=csrf.data();p.csrf_bytes=43;p.origin=origin.data();p.origin_bytes=origin.size();p.download=&d;return mb_nexus_auth_resolve_download_v1(ctx,&p,&result);
+ }
+};
+int throws_cancel(void*,uint64_t){throw std::runtime_error("owned callback");}
+int normal_cancel(void*,uint64_t){return 1;}
+struct Reentrant {mb_nexus_auth_context_v1 **ctx;int code=-1;};
+int free_during_callback(void *p,uint64_t){auto& r=*static_cast<Reentrant*>(p);r.code=mb_nexus_auth_free_v1(r.ctx);return 0;}
+}
+void *operator new(std::size_t bytes){void *p=std::malloc(bytes?bytes:1);if(!p)throw std::bad_alloc();for(auto& a:allocation)if(!a.pointer){a={p,bytes};break;}return p;}
+void operator delete(void *p) noexcept {
+ if(!p)return;for(auto& a:allocation)if(a.pointer==p){
+  if(a.size==work_size){last_work_zero=last_work_zero&&zero(p,a.size);++work_deletes;if(advance_work_delete){mono+=sec;advance_work_delete=false;}}
+  if(a.size==sizeof(mb_nexus_oauth_tokens_v1)){last_token_zero=last_token_zero&&zero(p,a.size);++token_deletes;}
+  if(p==context_to_inspect){context_erased=!contains(p,a.size,cookie_to_inspect,43)&&!contains(p,a.size,csrf_to_inspect,43);context_to_inspect=nullptr;}
+  a={};break;
+ }std::free(p);
+}
+extern "C" int auth_control_clock_gettime(clockid_t kind,timespec *out){
+ if(clock_failure){errno=0;return -1;}uint64_t value=0;
+ if(kind==CLOCK_MONOTONIC){mono+=1000;value=mono;}
+ else if(kind==CLOCK_REALTIME){++wall_calls;wall_ns+=1;if(advance_wall_at&&wall_calls==advance_wall_at)wall_ns+=wall_advance;value=wall_ns;
+  if(wall_reentry){wall_reentry_status=mb_nexus_jobs_free_v1(wall_reentry);wall_reentry=nullptr;}
+  if(session_expire_on_wall){mono+=1801*sec;session_expire_on_wall=false;}}
+ else{errno=0;return -1;}
+ errno=0;out->tv_sec=static_cast<time_t>(value/sec);out->tv_nsec=static_cast<long>(value%sec);return 0;
+}
+extern "C" int mb_nexus_oauth_exchange_code_v1(const mb_nexus_oauth_exchange_params_v1 *p,mb_nexus_oauth_exchange_result_v1 *out) noexcept {
+ ++exchanges;*out={};out->struct_size=sizeof(*out);out->abi_version=1;out->status=MB_NEXUS_OAUTH_CODE_TOKEN_REJECTED;std::memset(p->tokens,0,sizeof(*p->tokens));
+ if(fail_exchange){fail_exchange=false;return out->status;}
+ if(rfc_vector)verifier_matches=std::string_view(p->fields.code_verifier,p->fields.code_verifier_bytes)=="dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+ ++sequence;std::string access="owned_fake_access_"+std::to_string(sequence),refresh="owned_fake_refresh_"+std::to_string(sequence);auto& t=*p->tokens;t.access_token_bytes=static_cast<uint32_t>(access.size());t.refresh_token_bytes=static_cast<uint32_t>(refresh.size());t.expires_in_seconds=token_ttl;t.expires_at_monotonic_ns=mono+token_ttl*sec;std::memcpy(t.access_token,access.c_str(),access.size()+1);std::memcpy(t.refresh_token,refresh.c_str(),refresh.size()+1);
+ std::memset(p->raw_body,0,p->raw_capacity);std::memset(p->form,0,p->form_capacity);out->status=MB_NEXUS_OAUTH_CODE_OK;out->complete=1;return 0;
+}
+extern "C" int mb_curl_provider_transfer_v1(const mb_curl_provider_transfer_params_v1 *p,mb_curl_provider_transfer_result_v1 *out){
+ *out={};out->struct_size=sizeof(*out);out->abi_version=1;out->status=MB_CURL_DOWNLOAD_TRANSPORT_FAILED;
+ std::string_view credential(p->credential,p->credential_bytes);constexpr std::string_view prefix="owned_fake_access_";if(p->auth_mode!=2||!credential.starts_with(prefix))return out->status;last_credential=static_cast<unsigned>(std::strtoul(p->credential+prefix.size(),nullptr,10));
+ bool user=std::string_view(p->url)=="https://users.nexusmods.com/oauth/userinfo";bool link=std::string_view(p->url).find("/download_link")!=std::string_view::npos;
+ const char *body=nullptr;
+ if(user){++user_requests;if(fail_user){fail_user=false;std::memset(p->body,0,p->body_capacity);return out->status;}body=free_user?"{\"sub\":\"42\",\"name\":\"Fixture User\",\"membership_roles\":[],\"preferences\":{\"adult\":true}}":"{\"sub\":\"42\",\"name\":\"Fixture User\",\"membership_roles\":[\"premium\"],\"preferences\":{\"adult\":true}}";}
+ else if(link){++link_requests;body="[{\"name\":\"Owned mirror\",\"short_name\":\"OWN\",\"URI\":\"https://owned-cdn.invalid/fixture.zip?owned_signature=fake\"}]";}
+ else{
+  const std::string url=p->url;const auto at=url.find("/mods/");if(at==url.npos)return out->status;
+  const uint64_t mod=std::strtoull(p->url+at+6,nullptr,10);if(!mod)return out->status;
+  static thread_local std::string owned;
+  if(url.ends_with("/files")) {
+   ++file_requests;const uint64_t id=mod*10+2+(changed_primary?100:0);
+   nlohmann::json row={{"file_id",id},{"name","Owned file"},{"file_name","owned.zip"},{"version","owned label"},{"description",""},{"size_kb",1},{"is_primary",true},{"category_id",1},{"category_name","MAIN"}};
+   if(unknown_file_hints)row["is_primary"]="unknown";
+   owned=nlohmann::json{{"files",nlohmann::json::array({row})}}.dump();
+  } else {
+   ++mod_requests;owned=nlohmann::json{{"mod_id",mod},{"game_id",1704},{"domain_name","skyrimspecialedition"},{"name","Fixture Mod"},{"author","Fixture"},{"available",true},{"status","published"},{"contains_adult_content",false}}.dump();
+  }
+  body=owned.c_str();
+ }
+ static thread_local std::string user_body;
+ if(user){user_body=nlohmann::json{{"sub",std::to_string(live_user)},{"name","Fixture User"},{"membership_roles",free_user?nlohmann::json::array():nlohmann::json::array({"premium"})},{"preferences",{{"adult",true}}}}.dump();body=user_body.c_str();}
+ if(link){const std::string_view route=p->url;link_query_valid=link_query_valid&&route.find("?key=owned_grant%26%3D%2F%25%2B%7E&expires=")!=route.npos&&route.find("user_id")==route.npos;if(late_link_expiry){wall_ns+=400*sec;late_link_expiry=false;}}
+ size_t bytes=std::strlen(body);if(bytes>p->body_capacity)return out->status;std::memcpy(p->body,body,bytes);int consumer=p->consume_complete_body(p->consume_context,p->body,bytes);std::memset(p->body,0,p->body_capacity);out->http_status=200;out->received_bytes=bytes;
+ if(user&&expire_after_user){mono+=token_ttl*sec+sec;expire_after_user=false;}if(user&&timeout_after_user){mono+=sec;timeout_after_user=false;}if(link&&expire_after_link){mono+=token_ttl*sec+sec;expire_after_link=false;}if(link&&timeout_after_link){mono+=sec;timeout_after_link=false;}
+ out->status=consumer?MB_CURL_DOWNLOAD_CONSUMER_FAILED:MB_CURL_DOWNLOAD_OK;out->complete=!consumer;return out->status;
+}
+
+// Owned lower-provider substitute only. Actual auth planner, typed client,
+// fixed query writer and strict owning decoder execute in these controls.
+extern "C" int mb_curl_provider_post_transfer_v1(const mb_curl_provider_post_transfer_params_v1 *p,mb_curl_provider_transfer_result_v1 *out) {
+ ++post_requests;*out={};out->struct_size=sizeof(*out);out->abi_version=1;out->status=MB_CURL_DOWNLOAD_TRANSPORT_FAILED;
+ const auto& provider=p->provider;
+ if(std::string_view(provider.url)!="https://api.nexusmods.com/v2/graphql"||provider.auth_mode!=2)return out->status;
+ auto request=nlohmann::json::parse(p->request_body,p->request_body+p->request_body_bytes);
+ const auto mod=request["variables"]["modId"].get<uint64_t>();const auto game=request["variables"]["gameDomainName"].get<std::string>();
+ std::array<char,4096> canonical{};size_t written=0;
+ if(!modbridge::nexus_requirements_body(game,mod,canonical,written)||std::string_view(canonical.data(),written)!=std::string_view(p->request_body,p->request_body_bytes))return out->status;
+ nlohmann::json nodes=nlohmann::json::array();
+ if(mod==2)nodes.push_back({{"id","owned-dependency"},{"externalRequirement",false},{"gameId",game},{"modId","1"},{"modName","Owned prerequisite"},{"notes",nullptr},{"url",""}});
+ nlohmann::json data={{"data",{{"modRequirements",{{"nexusRequirements",{{"nodes",nodes},{"nodesCount",nodes.size()},{"totalCount",nodes.size()}}},{"dlcRequirements",nlohmann::json::array()}}}}}};
+ if(post_failure)data["errors"]=nlohmann::json::array({{{"message","owned private failure"}}});
+ auto body=data.dump();if(body.size()>provider.body_capacity)return out->status;
+ std::memcpy(provider.body,body.data(),body.size());int consumed=provider.consume_complete_body(provider.consume_context,provider.body,body.size());std::memset(provider.body,0,provider.body_capacity);
+ out->http_status=200;out->received_bytes=body.size();out->complete=!consumed;out->status=consumed?MB_CURL_DOWNLOAD_CONSUMER_FAILED:MB_CURL_DOWNLOAD_OK;return out->status;
+}
+
+namespace {
+using Json=nlohmann::json;
+enum class Producer { Success, Interrupted, Corrupt, OverCap };
+Producer producer=Producer::Success;
+std::vector<uint8_t> archive_bytes;
+bool sink_source_valid=true,secret_uri_seen=false;
+std::string input(std::string_view key="owned_key_1",uint64_t file=2) {
+ return "{\"kind\":\"download_analyze\",\"game\":\"skyrimspecialedition\",\"mod_id\":1,\"file_id\":"+std::to_string(file)+",\"idempotency_key\":\""+std::string(key)+"\"}";
+}
+struct JobFixture {
+ Fixture& auth;Entropy ent;int directory=-1;std::string path;
+ mb_nexus_jobs_context_v1 *ctx=nullptr;mb_nexus_jobs_result_v1 result{};
+ std::vector<char> output=std::vector<char>(MB_NEXUS_JOBS_OUTPUT_LIMIT);
+ JobFixture(Fixture& f,uint64_t cap=MB_NEXUS_JOBS_ARCHIVE_LIMIT):auth(f) {
+  char directory_name[]="/tmp/mb-job-controls-XXXXXX";require(mkdtemp(directory_name),"private temp directory");path=directory_name;
+  directory=open(path.c_str(),O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC);require(directory>=0,"directory descriptor");
+  mb_nexus_jobs_create_params_v1 p{};p.struct_size=sizeof(p);p.abi_version=1;p.auth=f.ctx;p.scratch_directory_fd=directory;
+  p.ca_pem=f.ca.data();p.ca_bytes=f.ca.size();p.entropy_context=&ent;p.entropy_read32=entropy;
+  p.resolver_timeout_ms=30000;p.download_timeout_ms=30000;p.analysis_timeout_ms=30000;p.connect_timeout_ms=1000;p.archive_cap_bytes=cap;
+  require(mb_nexus_jobs_create_v1(&p,&ctx,&result)==0,"jobs create");
+ }
+ ~JobFixture(){if(ctx){int code=mb_nexus_jobs_free_v1(&ctx);if(code)std::cerr<<"cleanup refusal "<<code<<"\n";}if(directory>=0)close(directory);rmdir(path.c_str());}
+ int submit(const std::string& body,const char *csrf=nullptr,const char *origin=nullptr,size_t capacity=MB_NEXUS_JOBS_OUTPUT_LIMIT) {
+  std::fill(output.begin(),output.end(),'X');
+  mb_nexus_jobs_submit_params_v1 p{};p.struct_size=sizeof(p);p.abi_version=1;
+  p.cookie=auth.cookie.data();p.cookie_bytes=43;p.csrf=csrf?csrf:auth.csrf.data();p.csrf_bytes=43;p.origin=origin?origin:auth.origin.data();p.origin_bytes=origin?std::strlen(origin):auth.origin.size();
+  p.intent=reinterpret_cast<const uint8_t*>(body.data());p.intent_bytes=body.size();p.output=output.data();p.output_capacity=capacity;
+  return mb_nexus_jobs_submit_v1(ctx,&p,&result);
+ }
+ int list(const char *cookie=nullptr,size_t capacity=MB_NEXUS_JOBS_OUTPUT_LIMIT) {
+  std::fill(output.begin(),output.end(),'X');mb_nexus_jobs_list_params_v1 p{};p.struct_size=sizeof(p);p.abi_version=1;p.cookie=cookie?cookie:auth.cookie.data();p.cookie_bytes=43;p.output=output.data();p.output_capacity=capacity;
+  return mb_nexus_jobs_list_v1(ctx,&p,&result);
+ }
+ int get(const std::string& id,const char *cookie=nullptr) {
+  std::fill(output.begin(),output.end(),'X');mb_nexus_jobs_get_params_v1 p{};p.struct_size=sizeof(p);p.abi_version=1;p.cookie=cookie?cookie:auth.cookie.data();p.cookie_bytes=43;p.id=id.data();p.id_bytes=id.size();p.output=output.data();p.output_capacity=output.size();
+  return mb_nexus_jobs_get_v1(ctx,&p,&result);
+ }
+ int run(){return mb_nexus_jobs_run_one_v1(ctx,&result);}
+ Json value() const {require(result.complete&&result.output_bytes&&output[result.output_bytes]==0,"whole owning result");return Json::parse(output.data(),output.data()+result.output_bytes);}
+ size_t files() const {size_t n=0;for(const auto& entry:std::filesystem::directory_iterator(path)){(void)entry;++n;}return n;}
+ bool queued_secrets_erased() const {
+  for(const auto& allocation_entry:allocation)if(allocation_entry.pointer==ctx)
+   return !contains(ctx,allocation_entry.size,auth.cookie.data(),43)&&!contains(ctx,allocation_entry.size,auth.csrf.data(),43);
+  return false;
+ }
+};
+}
+// The external producing operation is substituted only in these ignored
+// component controls. Its actual file sink, positional adapter, readback SHA
+// and archive analyzer are production modules. This is not an HTTPS receipt.
+extern "C" int mb_curl_download_v1(const mb_curl_download_params_v1 *p,mb_curl_download_result_v1 *out) {
+ *out={};out->struct_size=sizeof(*out);out->abi_version=1;out->status=MB_CURL_DOWNLOAD_TRANSPORT_FAILED;
+ ++archive_calls;
+ for(const auto& a:allocation)if(a.pointer==secret_context)grant_erased_before_archive=grant_erased_before_archive&&!contains(a.pointer,a.size,secret_marker.data(),secret_marker.size());
+ secret_uri_seen=std::string_view(p->url).find("owned_signature=fake")!=std::string_view::npos;
+ struct stat s{};sink_source_valid=sink_source_valid&&fstat(p->sink.fd,&s)==0&&S_ISREG(s.st_mode)&&s.st_size==0&&(s.st_mode&07777)==0600&&s.st_nlink==1;
+ mb_download_file_sink_v1 sink{};
+ if(mb_download_file_sink_start_v1(&sink,&p->sink)){mb_download_file_sink_dispose_v1(&sink);return out->status;}
+ std::vector<uint8_t> body=producer==Producer::Corrupt?std::vector<uint8_t>{'n','o','t',' ','Z','I','P'}:archive_bytes;
+ if(producer==Producer::OverCap)body.resize(static_cast<size_t>(p->sink.cap_bytes)+1,0x44);
+ if(producer==Producer::Interrupted)body.resize(17);
+ auto feed=mb_download_file_sink_feed_v1(&sink,body.data(),body.size());
+ if(feed||producer==Producer::Interrupted){mb_download_file_sink_dispose_v1(&sink);out->status=feed?MB_CURL_DOWNLOAD_LIMIT:MB_CURL_DOWNLOAD_TRANSPORT_FAILED;return out->status;}
+ if(fsync(p->sink.fd)||mb_download_file_sink_finish_v1(&sink,1,1,body.size(),&out->file)){mb_download_file_sink_dispose_v1(&sink);return out->status;}
+ mb_download_file_sink_dispose_v1(&sink);out->received_bytes=body.size();out->status=MB_CURL_DOWNLOAD_OK;out->complete=1;return 0;
+}
+
+
+namespace {
+std::string website(uint64_t user=42,uint64_t expires=0,std::string_view game="skyrimspecialedition",uint64_t mod=1,uint64_t file=2) {
+ if(!expires)expires=wall_ns/sec+300;
+ return "nxm://"+std::string(game)+"/mods/"+std::to_string(mod)+"/files/"+std::to_string(file)+"?key=owned_grant%26%3D%2F%25%2B%7E&expires="+std::to_string(expires)+"&user_id="+std::to_string(user);
+}
+std::string grant_body(const std::string& url){return Json{{"nxm",url}}.dump();}
+int resume(JobFixture& j,const std::string& id,const std::string& body,size_t cap=MB_NEXUS_JOBS_OUTPUT_LIMIT,const char *cookie=nullptr,const char *csrf=nullptr,const char *origin=nullptr) {
+ std::fill(j.output.begin(),j.output.end(),'X');mb_nexus_jobs_resume_params_v1 p{};p.struct_size=sizeof(p);p.abi_version=1;
+ p.cookie=cookie?cookie:j.auth.cookie.data();p.cookie_bytes=43;p.csrf=csrf?csrf:j.auth.csrf.data();p.csrf_bytes=43;p.origin=origin?origin:j.auth.origin.data();p.origin_bytes=origin?std::strlen(origin):j.auth.origin.size();
+ p.id=id.data();p.id_bytes=id.size();p.intent=reinterpret_cast<const uint8_t*>(body.data());p.intent_bytes=body.size();p.output=j.output.data();p.output_capacity=cap;return mb_nexus_jobs_resume_v1(j.ctx,&p,&j.result);
+}
+std::string needs(JobFixture& j){require(j.submit(input())==0,"owned free source admission");auto id=j.value()["id"].get<std::string>();require(j.run()==0&&j.get(id)==0&&j.value()["status"]=="needs_nexus_authorization","owned real resolver free refusal");return id;}
+bool private_secret_absent(JobFixture& j){for(const auto& a:allocation)if(a.pointer==j.ctx)return !contains(a.pointer,a.size,secret_marker.data(),secret_marker.size());return false;}
+void reset_resume(){free_user=true;live_user=42;wall_calls=advance_wall_at=0;wall_advance=0;late_link_expiry=session_expire_on_wall=false;wall_reentry=nullptr;secret_context=nullptr;}
+void unchanged(JobFixture& j,const std::string& id){observed(j.get(id)==0&&j.value()["status"]=="needs_nexus_authorization"&&j.files()==0&&private_secret_absent(j),"refusal leaves authorization-required record without secret or file");}
+}
+int main(int argc,char **argv){try{
+ require(argc==2,"owned unchanged archive input");std::ifstream archive(argv[1],std::ios::binary);archive_bytes.assign(std::istreambuf_iterator<char>(archive),{});require(archive_bytes.size()>100,"owned archive fixture");
+ reset_resume();
+ {
+  Fixture f;f.login();JobFixture j(f);for(unsigned i=0;i<8;++i)require(j.submit(input("owned_full_key_"+std::to_string(i)))==0,"eight occupied slots");
+  require(j.list()==0,"full list");auto id=j.value()["items"][0]["id"].get<std::string>();require(j.run()==0&&j.get(id)==0&&j.value()["status"]=="needs_nexus_authorization","first free source");unsigned entropy_before=j.ent.calls;
+  observed(resume(j,id,grant_body(website(99)))==0&&j.value()["id"]==id&&j.value()["status"]=="queued"&&!j.value().contains("error")&&j.result.job_count==8&&j.ent.calls==entropy_before,"full-cap resume preserves ID/slot and removes old error");
+  observed(resume(j,id,grant_body(website()))==MB_NEXUS_JOBS_REFUSED&&zero(j.output.data(),j.output.size()),"queued resume refuses pending overwrite");
+  unsigned links=link_requests,transfers=archive_calls,users=user_requests;
+  observed(j.run()==0&&j.get(id)==0&&j.value()["status"]=="needs_nexus_authorization"&&user_requests==users+1&&link_requests==links&&archive_calls==transfers&&private_secret_absent(j),"worker takes grant once and binds fresh live user without archive");
+  observed(resume(j,id,grant_body(website()))==0&&j.value()["id"]==id,"fresh correct grant resumes same source");secret_context=j.ctx;
+  observed(j.run()==0&&j.get(id)==0&&j.value()["status"]=="analyzed"&&archive_calls==transfers+1&&grant_erased_before_archive&&link_query_valid&&private_secret_absent(j),"disjoint typed grant canonical link and actual sink/readback/archive succeed");
+  auto job=j.value();observed(job["bytes_downloaded"]==archive_bytes.size()&&job["sha256"]==job["analysis_report"]["source_sha256"]&&!job["runtime_supported"].get<bool>()&&!job["installation_supported"].get<bool>()&&job.dump().find(secret_marker)==std::string::npos,"public original receipt has no grant or authority");
+  observed(resume(j,id,grant_body(website()))==MB_NEXUS_JOBS_REFUSED&&archive_calls==transfers+1,"terminal resume refuses repeat transfer");
+  observed(mb_nexus_jobs_free_v1(&j.ctx)==0&&!j.ctx&&j.files()==0,"free clears pending bindings/grants and owned successful archive");
+ }
+ reset_resume();
+ {
+  Fixture f;f.login();JobFixture j(f);const auto id=needs(j);unsigned users=user_requests,links=link_requests;auto good=website();
+  std::vector<std::string> malformed={"{}",grant_body(good)+"x",R"({"nxm":"nxm://x","nxm":"nxm://x"})",Json{{"nxm",good},{"other",1}}.dump(),Json{{"nxm",true}}.dump(),grant_body("https://example.invalid/mods/1/files/2"),grant_body(good+"#fragment"),grant_body(good+"&other=1"),grant_body(good+"&key=extra"),grant_body("nxm://user@skyrimspecialedition/mods/1/files/2?key=x&expires=2000000000&user_id=42"),grant_body("nxm://skyrimspecialedition:443/mods/1/files/2?key=x&expires=2000000000&user_id=42"),grant_body("nxm://skyrimspecialedition/collection/a/revisions/1?key=x&expires=2000000000&user_id=42"),grant_body("nxm://skyrimspecialedition/mods/01/files/2?key=x&expires=2000000000&user_id=42"),grant_body("nxm://skyrimspecialedition/mods/1/files/2?key=%GG&expires=2000000000&user_id=42"),grant_body("nxm://skyrimspecialedition/mods/1/files/2?key=a+b&expires=2000000000&user_id=42"),grant_body("nxm://skyrimspecialedition/mods/1/files/2?key=%00&expires=2000000000&user_id=42"),grant_body("nxm://skyrimspecialedition/mods/1/files/2?key=x&expires=9223372036854775808&user_id=42"),grant_body("nxm://skyrimspecialedition/mods/1/files/2?key="+std::string(1025,'x')+"&expires=2000000000&user_id=42")};
+  for(const auto& body:malformed)observed(resume(j,id,body)==MB_NEXUS_JOBS_BAD_ARGUMENT&&zero(j.output.data(),j.output.size()),"strict malformed NXM/body refuses secret admission");
+  for(const auto& wrong:{website(42,0,"skyrim"),website(42,0,"skyrimspecialedition",2,2),website(42,0,"skyrimspecialedition",1,3),website(42,wall_ns/sec)})observed(resume(j,id,grant_body(wrong))==MB_NEXUS_JOBS_REFUSED,"source scope and expired admission refuse");
+  observed(user_requests==users&&link_requests==links,"malformed/scope/expiry refuse without provider calls");unchanged(j,id);
+  auto old_cookie=f.cookie,old_csrf=f.csrf;require(f.bootstrap()==0,"other browser");observed(resume(j,id,grant_body(good))==MB_NEXUS_JOBS_NOT_FOUND,"foreign cookie cannot resume source");
+  f.cookie=old_cookie;f.csrf=old_csrf;std::string bad(43,'z');
+  observed(resume(j,id,grant_body(good),j.output.size(),nullptr,bad.data())==MB_NEXUS_JOBS_REFUSED,"wrong CSRF refuses");
+  observed(resume(j,id,grant_body(good),j.output.size(),nullptr,nullptr,"http://127.0.0.1:1")==MB_NEXUS_JOBS_REFUSED,"wrong Origin refuses");
+  unchanged(j,id);
+ }
+ reset_resume();
+ {
+  Fixture f;f.login();JobFixture j(f);const auto id=needs(j);
+  observed(resume(j,id,grant_body(website()),1)==MB_NEXUS_JOBS_OUTPUT_TOO_SMALL&&j.output[0]==0,"short response revokes resume without prefix");unchanged(j,id);
+  wall_calls=0;advance_wall_at=2;wall_advance=400*sec;
+  observed(resume(j,id,grant_body(website()))==MB_NEXUS_JOBS_REFUSED&&zero(j.output.data(),j.output.size()),"final expiry after staging revokes grant");unchanged(j,id);
+ }
+ reset_resume();
+ {
+  Fixture f;f.login();JobFixture j(f);const auto id=needs(j);session_expire_on_wall=true;
+  observed(resume(j,id,grant_body(website()))==MB_NEXUS_JOBS_SESSION_REQUIRED&&zero(j.output.data(),j.output.size())&&private_secret_absent(j),"final session revocation cannot retain grant");
+ }
+ reset_resume();
+ {
+  Fixture f;f.login();JobFixture j(f);const auto id=needs(j);wall_reentry=&j.ctx;
+  observed(resume(j,id,grant_body(website()))==0&&j.ctx&&wall_reentry_status==MB_NEXUS_JOBS_BUSY,"clock reentry cannot free active resume");wall_ns+=400*sec;
+  unsigned links=link_requests,transfers=archive_calls;
+  observed(j.run()==0&&j.get(id)==0&&j.value()["status"]=="needs_nexus_authorization"&&link_requests==links&&archive_calls==transfers&&private_secret_absent(j),"worker-time expired grant remains resumable and produces no link/archive");
+  require(resume(j,id,grant_body(website()))==0,"fresh grant after worker expiry");late_link_expiry=true;
+  observed(j.run()==0&&j.get(id)==0&&j.value()["status"]=="needs_nexus_authorization"&&archive_calls==transfers&&private_secret_absent(j),"late link expiry remains authorization-required instead of terminal failure");
+  require(resume(j,id,grant_body(website()))==0,"fresh grant after late expiry");secret_context=j.ctx;
+  observed(j.run()==0&&j.get(id)==0&&j.value()["status"]=="analyzed"&&archive_calls==transfers+1&&private_secret_absent(j),"fresh identity/expiry retry succeeds once after previous grant erased");
+ }
+ reset_resume();
+ {
+  Fixture f;f.login();JobFixture j(f);const auto id=needs(j);auto body=grant_body(website());auto before=f.cookie;mb_nexus_jobs_resume_params_v1 p{};p.struct_size=sizeof(p);p.abi_version=1;p.cookie=f.cookie.data();p.cookie_bytes=43;p.csrf=f.csrf.data();p.csrf_bytes=43;p.origin=f.origin.data();p.origin_bytes=f.origin.size();p.id=id.data();p.id_bytes=id.size();p.intent=reinterpret_cast<const uint8_t*>(body.data());p.intent_bytes=body.size();p.output=f.cookie.data();p.output_capacity=f.cookie.size();auto result=j.result;auto saved=result;
+  observed(mb_nexus_jobs_resume_v1(j.ctx,&p,&result)==MB_NEXUS_JOBS_BAD_ARGUMENT&&f.cookie==before&&!std::memcmp(&result,&saved,sizeof(result)),"known resume aliases remain untouched");
+ }
+ std::cout<<"controls="<<controls<<" status=PASS actual_auth_resolver_query_sink_archive=1 lower_token_provider_producer_substitutes=1 controlled_clock=1 tls=0 console=0\n";return 0;
+}catch(const std::exception& e){std::cerr<<"control failed: "<<e.what()<<"\n";return 1;}}

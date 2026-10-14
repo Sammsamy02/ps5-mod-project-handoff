@@ -1,0 +1,49 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-marshal-integration/staging/luamod-l11-marshal-consumer/LuaMod.cpp	2026-10-05 09:46:29
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-loadmap-guard/staging/luamod-l11-loadmap-defer/LuaMod.cpp	2026-10-05 10:44:34
+@@ -7321,6 +7321,38 @@
+         r3_marshal_calibration_consumer();
+ #endif
+         const Unreal::Hook::FCallbackOptions common_opts {false, false, STR("UE4SS"), STR("LuaModImpl")};
++#ifdef __PROSPERO__
++        // =================================================================================
++        // [R3][worker-l11-loadmap-guard] RUNBOOK §5.2 closure (launch-11, 2026-10-05):
++        // the eager detour arms below are the ONLY exec-text instruction reads + RWX
++        // writes left on the R3 boot path after DIFF 2. The LuaMod-side arm reaches its
++        // read site through a DIFFERENT path than the initializer's resolve walks: the
++        // LoadMap address is already assigned (initializer's guarded walk), so
++        // InstallHook goes straight to PLH::x64Detour::hook(), whose 100-byte prologue
++        // disassembly (x64Detour.cpp:351, PLH's own Zydis) is OUTSIDE the asmhelper
++        // WalkRxGuard's coverage (ASMHelper.guarded.cpp coverage note names the "PLH
++        // x64Detour disasm+write phases" NOT covered), and whose RWX source transition
++        // (x64Detour.cpp:491) is the FLAG-1 exec-write class. In a reads-fault world the
++        // naked read kills the process (igf6 class) AFTER the marshal armed; in a
++        // write-refused world each arm refuses. Either way the arms are unavailable in
++        // the R3 world by the same law DIFF 2 applied to the initializer's registrations
++        // (r3 initializer comment: "arming would throw here before any Lua loads").
++        // Deferral predicate = the initializer's own pump decision (DIFF 2 bridge
++        // R3MarshalPumpPending, already declared at the top of this TU by the marshal
++        // consumer — zero new imports). W-works world (pump_pending=false): the block
++        // below runs unchanged. No runtime re-arm path (DIFF 2 header law): deferred
++        // means deferred for this process lifetime, loudly, once. The Lua-side
++        // RegisterLoadMapPreHook binding only appends to m_load_map_pre_callbacks
++        // (never touches the detour), so mod scripts keep loading; their LoadMap
++        // callbacks are retained but never invoked.
++        // =================================================================================
++        if (Unreal::R3MarshalPumpPending())
++        {
++            Output::send<LogLevel::Warning>(STR("[R3] LoadMap detour registrations deferred: eager exec-text detour arms (PLH prologue read + RWX write) are unguarded in this world; LoadMap/InitGameState/BeginPlay/EndPlay/StaticConstructObject/ULocalPlayerExec/CallFunctionByNameWithArguments/ProcessConsoleExec/custom-event script hooks stay unregistered for this process lifetime (no re-arm); Lua-side RegisterLoadMapPreHook callbacks are accepted but never invoked\n"));
++        }
++        else
++#endif
++        {
+         Unreal::Hook::RegisterLoadMapPreCallback(
+                 [](Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) {
+                     TRY([&] {
+@@ -8100,6 +8132,7 @@
+             Output::send(STR("Enabling custom events\n"));
+             Unreal::Hook::RegisterProcessInternalPostCallback(script_hook, {false, false, STR("UE4SS"), STR("LuaModImplScriptHook")});
+         }
++        } // [R3][worker-l11-loadmap-guard] end of the eager detour-arm block (see gate above)
+     }
+ 
+     auto LuaMod::update_async() -> void

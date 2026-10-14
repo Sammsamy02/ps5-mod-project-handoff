@@ -1,0 +1,24 @@
+0x459d40 file0x45dd40 55 push rbp
+0x459d41 file0x45dd41 4889e5 mov rbp, rsp
+0x459d44 file0x45dd44 4156 push r14
+0x459d46 file0x45dd46 53 push rbx
+0x459d47 file0x45dd47 488d052252aa07 lea rax, [rip + 0x7aa5222] rip->0x7efef70
+0x459d4e file0x45dd4e 4889fb mov rbx, rdi
+0x459d51 file0x45dd51 488907 mov qword ptr [rdi], rax
+0x459d54 file0x45dd54 4c8bb798000000 mov r14, qword ptr [rdi + 0x98]
+0x459d5b file0x45dd5b 66666664488b042500000000 mov rax, qword ptr fs:[0]
+0x459d67 file0x45dd67 4c89b038f9ffff mov qword ptr [rax - 0x6c8], r14
+0x459d6e file0x45dd6e 4d85f6 test r14, r14
+0x459d71 file0x45dd71 740e je 0x459d81
+0x459d73 file0x45dd73 0fb683a1000000 movzx eax, byte ptr [rbx + 0xa1]
+0x459d7a file0x45dd7a 410886a1000000 or byte ptr [r14 + 0xa1], al
+0x459d81 file0x45dd81 488b7b68 mov rdi, qword ptr [rbx + 0x68]
+0x459d85 file0x45dd85 4885ff test rdi, rdi
+0x459d88 file0x45dd88 7405 je 0x459d8f
+0x459d8a file0x45dd8a e801ddc5ff call 0xb7a90
+0x459d8f file0x45dd8f 4889df mov rdi, rbx
+0x459d92 file0x45dd92 e8f914bbff call 0xb290
+0x459d97 file0x45dd97 5b pop rbx
+0x459d98 file0x45dd98 415e pop r14
+0x459d9a file0x45dd9a 5d pop rbp
+0x459d9b file0x45dd9b c3 ret 

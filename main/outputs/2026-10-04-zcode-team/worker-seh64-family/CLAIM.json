@@ -1,0 +1,47 @@
+{
+  "worker": "worker-seh64-family",
+  "date": "2026-10-04",
+  "attempt": "restart (prior attempt died with an empty directory; this dir is the sole output location)",
+  "track": "Windows-services-on-PS5 (retained AMD64 PE execution, win64cc/ms_abi route)",
+  "task": "Implement the SEH64 (x64 structured exception handling) family per the recovered worker-seh64-design DESIGN.md, as an OWN vendored copy — NOT integrated into the 7-family tree.",
+  "bounds": {
+    "console_contact": false,
+    "target_execution": false,
+    "nested_subagents": false,
+    "network": false,
+    "writes": "only under outputs/2026-10-04-zcode-team/worker-seh64-family/",
+    "static_tls": "worker-static-tls-7fam directory not read, not copied, not touched",
+    "no_engine_claims": true,
+    "budget_tool_calls": "60-100"
+  },
+  "inputs_read_only": [
+    "outputs/2026-10-04-zcode-team/worker-seh64-design/DESIGN.md (recovered SEH64 design; design-only, never implemented)",
+    "outputs/2026-10-04-zcode-team/worker-seh64-design/REPORT.md",
+    "outputs/2026-10-04-zcode-team/worker-combined-dll-allfam/ (console-PASS six-family candidate: vendored tree, build.py, receipts)",
+    "outputs/2026-10-04-zcode-team/worker-modreqs/ (backlog context, read-only)"
+  ],
+  "claims": {
+    "family_surface": "SEH64 minimal control surface: dynamic unwind registration (RtlAddFunctionTable/RtlRemoveFunctionTable registry), in-image .pdata lookup (RtlLookupFunctionEntry), UNWIND_INFO decode + RtlVirtualUnwind core, ms_abi raise/dispatch/recover path (RaiseException-equivalent substrate entry -> two-pass dispatcher -> __C_specific_handler personality reached through the PE's own import thunk -> target-frame transfer via continue trampoline), RtlCaptureContext, SetUnhandledExceptionFilter state owner.",
+    "loader_amendment": "pe_module admits the PE exception directory only when SEH64 is compiled active (MB_PE_SEH64); the SEH64 ABI session registers the mapped module's .pdata range at session begin and removes it at session end.",
+    "fixture": "worker-seh64.h hook riding LoaderExercise (consumer ACTIVE window), unique error codes -130..-137, exercised through actual PE imports; base results [86,93] unchanged.",
+    "validation": "host-only validation (--host-only --entry --workers --seh64) plus SDK-composition compile-only; no target/console evidence.",
+    "prior_evidence": "base entry/worker/clock evidence paths untouched when --seh64 is off; all off-path behavior byte-identical to the vendored combined tree."
+  },
+  "non_claims": [
+    "No Windows ntdll/VCRUNTIME parity; semantic conformance target only (per design H5).",
+    "No C++ EH (EH3/EH4/EH5) — separate family by design.",
+    "No vectored handlers, callback/growable tables, stack-overflow dispatch, COLLIDED_UNWIND, signal->exception shim, or continue-execution resume: design phases 4+/M2, out of scope here.",
+    "Guard-frame rsp contract (design H2): filters/handlers in this fixture do not dereference parent locals via the guard rsp; documented boundary, host-verifiable surface only.",
+    "Nothing console-proven, nothing PS5-executed; the SDK ELF (if composed) is a compiled candidate only.",
+    "No quality score above 8 is claimed anywhere; no AAA/full-parity claims."
+  ],
+  "deliverables_ordered": [
+    "CLAIM.json (this file, written first)",
+    "vendor/ (owned vendored tree + SEH64 implementation)",
+    "SEH64-IMPLEMENTATION.md",
+    "out-host-validation/ + out-host-validation.log",
+    "out-sdk-composition/ + out-sdk-composition.log",
+    "console-results-delta.md",
+    "REPORT.md (written last)"
+  ]
+}

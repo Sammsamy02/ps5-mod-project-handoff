@@ -1,0 +1,555 @@
+--- /dev/null
++++ b/loader/include/guest_virtual_memory.h
+@@ -0,0 +1,226 @@
++#ifndef CAP13_GUEST_VIRTUAL_MEMORY_H
++#define CAP13_GUEST_VIRTUAL_MEMORY_H
++
++#include "guest_read_map.h"
++#include "guest_write_map.h"
++
++#include <cstddef>
++#include <cstdint>
++#include <limits>
++#include <mutex>
++#include <new>
++#include <unordered_map>
++#include <sys/mman.h>
++#include <unistd.h>
++
++namespace cap13 {
++
++// Owns anonymous page regions. Only whole-region reserve/commit/release is
++// admitted. The caller must quiesce direct guest accesses before destruction
++// or release; map removal only serializes the guarded copy helpers.
++class GuestVirtualMemory
++{
++  public:
++    ~GuestVirtualMemory();
++    bool bind(GuestReadMap* reads, GuestWriteMap* writes);
++    bool ready() const;
++    void* allocate(void* base, size_t bytes, uint32_t type,
++                   uint32_t protect, uint32_t* error);
++    bool release(void* base, size_t bytes, uint32_t type, uint32_t* error);
++
++  private:
++    struct Region
++    {
++        size_t mapped;
++        bool committed;
++        uint32_t protect;
++    };
++    mutable std::mutex mu_;
++    GuestReadMap* reads_ = nullptr;
++    GuestWriteMap* writes_ = nullptr;
++    std::unordered_map<void*, Region> regions_;
++
++    bool register_region(void* base, size_t length, uint32_t protect);
++    void unregister_region(void* base, uint32_t protect);
++};
++
++namespace virtual_memory_detail {
++constexpr uint32_t kCommit = 0x1000;
++constexpr uint32_t kReserve = 0x2000;
++constexpr uint32_t kRelease = 0x8000;
++constexpr uint32_t kReadOnly = 0x02;
++constexpr uint32_t kReadWrite = 0x04;
++constexpr uint32_t kInvalidParameter = 87;
++constexpr uint32_t kNotEnoughMemory = 8;
++constexpr uint32_t kInvalidAddress = 487;
++#if defined(MAP_ANONYMOUS)
++constexpr int kAnonymousMap = MAP_ANONYMOUS;
++#elif defined(MAP_ANON)
++constexpr int kAnonymousMap = MAP_ANON;
++#else
++constexpr int kAnonymousMap = 0;
++#endif
++}
++
++inline GuestVirtualMemory::~GuestVirtualMemory()
++{
++    std::lock_guard guard(mu_);
++    for (const auto& row : regions_)
++    {
++        if (row.second.committed)
++            unregister_region(row.first, row.second.protect);
++        munmap(row.first, row.second.mapped);
++    }
++}
++
++inline bool GuestVirtualMemory::bind(GuestReadMap* reads, GuestWriteMap* writes)
++{
++    if (!reads || !writes) return false;
++    std::lock_guard guard(mu_);
++    if (reads_ || writes_) return reads_ == reads && writes_ == writes;
++    reads_ = reads;
++    writes_ = writes;
++    return true;
++}
++
++inline bool GuestVirtualMemory::ready() const
++{
++    std::lock_guard guard(mu_);
++    return reads_ && writes_;
++}
++
++inline bool GuestVirtualMemory::register_region(void* base, size_t length,
++                                                 uint32_t protect)
++{
++    if (!reads_->add(base, base, length)) return false;
++    if (protect == virtual_memory_detail::kReadWrite &&
++        !writes_->add(base, base, length))
++    {
++        reads_->remove(base);
++        return false;
++    }
++    return true;
++}
++
++inline void GuestVirtualMemory::unregister_region(void* base, uint32_t protect)
++{
++    if (protect == virtual_memory_detail::kReadWrite) writes_->remove(base);
++    reads_->remove(base);
++}
++
++inline void* GuestVirtualMemory::allocate(void* base, size_t bytes,
++                                           uint32_t type, uint32_t protect,
++                                           uint32_t* error)
++{
++    using namespace virtual_memory_detail;
++    if (error) *error = kInvalidParameter;
++    if (!bytes || (protect != kReadOnly && protect != kReadWrite) ||
++        (type != kReserve && type != kCommit &&
++         type != (kReserve | kCommit)))
++        return nullptr;
++    const long page_value = sysconf(_SC_PAGESIZE);
++    if (page_value <= 0) return nullptr;
++    const size_t page = static_cast<size_t>(page_value);
++    if (bytes > static_cast<size_t>(std::numeric_limits<ptrdiff_t>::max()) ||
++        bytes > SIZE_MAX - (page - 1))
++        return nullptr;
++    const size_t length = ((bytes + page - 1) / page) * page;
++    std::lock_guard guard(mu_);
++    if (!reads_ || !writes_) return nullptr;
++
++    if (base)
++    {
++        if (type != kCommit)
++        {
++            if (error) *error = kInvalidAddress;
++            return nullptr; // Fixed-address reservation is not admitted.
++        }
++        auto found = regions_.find(base);
++        if (found == regions_.end() || found->second.committed ||
++            found->second.mapped != length)
++        {
++            if (error) *error = kInvalidAddress;
++            return nullptr;
++        }
++        const int os_protect = protect == kReadWrite ?
++            PROT_READ | PROT_WRITE : PROT_READ;
++        if (mprotect(base, length, os_protect) != 0)
++        {
++            if (error) *error = kNotEnoughMemory;
++            return nullptr;
++        }
++        if (!register_region(base, length, protect))
++        {
++            mprotect(base, length, PROT_NONE);
++            if (error) *error = kNotEnoughMemory;
++            return nullptr;
++        }
++        found->second.committed = true;
++        found->second.protect = protect;
++        return base;
++    }
++
++    if (!kAnonymousMap)
++    {
++        if (error) *error = kNotEnoughMemory;
++        return nullptr;
++    }
++    void* memory = mmap(nullptr, length, PROT_NONE,
++                        MAP_PRIVATE | kAnonymousMap, -1, 0);
++    if (memory == MAP_FAILED)
++    {
++        if (error) *error = kNotEnoughMemory;
++        return nullptr;
++    }
++    const bool commit = (type & kCommit) != 0;
++    if (commit)
++    {
++        const int os_protect = protect == kReadWrite ?
++            PROT_READ | PROT_WRITE : PROT_READ;
++        if (mprotect(memory, length, os_protect) != 0 ||
++            !register_region(memory, length, protect))
++        {
++            munmap(memory, length);
++            if (error) *error = kNotEnoughMemory;
++            return nullptr;
++        }
++    }
++    try { regions_.emplace(memory, Region{length, commit, protect}); }
++    catch (const std::bad_alloc&)
++    {
++        if (commit) unregister_region(memory, protect);
++        munmap(memory, length);
++        if (error) *error = kNotEnoughMemory;
++        return nullptr;
++    }
++    return memory;
++}
++
++inline bool GuestVirtualMemory::release(void* base, size_t bytes,
++                                        uint32_t type, uint32_t* error)
++{
++    using namespace virtual_memory_detail;
++    if (error) *error = kInvalidParameter;
++    if (!base || bytes || type != kRelease) return false;
++    std::lock_guard guard(mu_);
++    auto found = regions_.find(base);
++    if (found == regions_.end())
++    {
++        if (error) *error = kInvalidAddress;
++        return false;
++    }
++    if (found->second.committed)
++        unregister_region(base, found->second.protect);
++    const size_t length = found->second.mapped;
++    if (munmap(base, length) != 0)
++    {
++        if (found->second.committed)
++            register_region(base, length, found->second.protect);
++        return false;
++    }
++    regions_.erase(found);
++    return true;
++}
++
++} // namespace cap13
++#endif
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -15,6 +15,7 @@
+ #include "guest_read_map.h"
+ #include "guest_write_map.h"
+ #include "guest_process_heap.h"
++#include "guest_virtual_memory.h"
+ #include "guest_stack_write.h"
+ #include "win32_last_error_state.h"
+ #include "win32_thread_identity.h"
+@@ -119,6 +120,13 @@
+             !std::strcmp(symbol, "HeapSize"));
+ }
+ 
++bool needs_virtual_memory(const std::string& dll, const char* symbol)
++{
++    return dll == "kernel32.dll" && symbol &&
++           (!std::strcmp(symbol, "VirtualAlloc") ||
++            !std::strcmp(symbol, "VirtualFree"));
++}
++
+ } // namespace
+ 
+ struct WinApiShim::Impl
+@@ -134,6 +142,7 @@
+     GuestReadMap* guest_read_map = nullptr;
+     GuestWriteMap* guest_write_map = nullptr;
+     GuestProcessHeap process_heap;
++    GuestVirtualMemory virtual_memory;
+     void* guest_thread_user = nullptr;
+     CreateGuestThread guest_thread_create = nullptr;
+     WaitGuestThread guest_thread_wait = nullptr;
+@@ -289,7 +298,8 @@
+         if (row.second.mapped_lookup) return false;
+     if (m->guest_read_map && m->guest_read_map != map) return false;
+     if (m->guest_write_map &&
+-        !m->process_heap.bind(map, m->guest_write_map)) return false;
++        (!m->process_heap.bind(map, m->guest_write_map) ||
++         !m->virtual_memory.bind(map, m->guest_write_map))) return false;
+     m->guest_read_map = map;
+     m->hooks.read_guest_bytes = GuestReadMap::read_callback;
+     m->hooks.read_guest_user = map;
+@@ -303,7 +313,8 @@
+         if (row.second.mapped_lookup) return false;
+     if (m->guest_write_map && m->guest_write_map != map) return false;
+     if (m->guest_read_map &&
+-        !m->process_heap.bind(m->guest_read_map, map)) return false;
++        (!m->process_heap.bind(m->guest_read_map, map) ||
++         !m->virtual_memory.bind(m->guest_read_map, map))) return false;
+     m->guest_write_map = map;
+     m->hooks.write_guest_bytes = GuestWriteMap::write_callback;
+     m->hooks.write_guest_user = map;
+@@ -515,24 +526,22 @@
+ 
+ static void* impl_VirtualAlloc(WinApiShim::Impl* m, void* base, size_t size, uint32_t type, uint32_t protect)
+ {
+-    (void)base;
+-    (void)type;
+-    // RW allocations only. Any EXEC request is a refusal signal: the loader
+-    // route has no JIT surface, and game-code patching stays unsupported.
+-    // PAGE_EXECUTE=0x10, PAGE_EXECUTE_READ=0x20, _READWRITE=0x40,
+-    // _WRITECOPY=0x80 (documented Win32 protection constants).
+-    if (protect & 0xF0)
+-    {
+-        m->log(2, "VirtualAlloc(EXEC) refused: no executable-allocation surface");
+-        return nullptr;
+-    }
+-#if CAP13_POSIX
+-    (void)m;
+-    return std::calloc(1, size ? size : 1);
+-#else
+-    (void)m;
+-    return nullptr;
+-#endif
++    uint32_t error = ERROR_INVALID_PARAMETER;
++    void* result = m->virtual_memory.allocate(base, size, type, protect, &error);
++    if (!result) win32_set_last_error(error);
++    return result;
++}
++
++static uint32_t impl_VirtualFree(WinApiShim::Impl* m, void* base,
++                                 size_t size, uint32_t type)
++{
++    uint32_t error = ERROR_INVALID_PARAMETER;
++    if (!m->virtual_memory.release(base, size, type, &error))
++    {
++        win32_set_last_error(error);
++        return 0;
++    }
++    return 1;
+ }
+ 
+ static uint32_t impl_Sleep(WinApiShim::Impl* m, uint32_t ms)
+@@ -1207,7 +1216,8 @@
+     const Row rows[] = {
+         // These identity/time rows have host-checked basic behavior.
+         // The other raw bodies are catalogued but remain unresolved imports.
+-        {"kernel32.dll", "VirtualAlloc", (void*)&impl_VirtualAlloc, 4, false},
++        {"kernel32.dll", "VirtualAlloc", (void*)&impl_VirtualAlloc, 4, true},
++        {"kernel32.dll", "VirtualFree", (void*)&impl_VirtualFree, 3, true},
+         {"kernel32.dll", "GetProcessHeap", (void*)&impl_GetProcessHeap, 0, true},
+         {"kernel32.dll", "HeapAlloc", (void*)&impl_HeapAlloc, 3, true},
+         {"kernel32.dll", "HeapFree", (void*)&impl_HeapFree, 3, true},
+@@ -1287,6 +1297,8 @@
+             return BuiltinInstallStatus::Unsupported;
+         if (needs_process_heap(dll, symbol) && !m->process_heap.ready())
+             return BuiltinInstallStatus::Unsupported;
++        if (needs_virtual_memory(dll, symbol) && !m->virtual_memory.ready())
++            return BuiltinInstallStatus::Unsupported;
+         auto existing = m->exports.find(dll);
+         if (existing != m->exports.end() && existing->second.count(symbol))
+             return BuiltinInstallStatus::AlreadyPublished;
+@@ -1427,6 +1439,8 @@
+                     !m->hooks.read_guest_bytes) eligible = false;
+                 if (eligible && needs_process_heap(dll, symbol) &&
+                     !m->process_heap.ready()) eligible = false;
++                if (eligible && needs_virtual_memory(dll, symbol) &&
++                    !m->virtual_memory.ready()) eligible = false;
+                 if (eligible && dll == "kernel32.dll" &&
+                     (!std::strcmp(symbol, "CreateThread") ||
+                      !std::strcmp(symbol, "WaitForSingleObject") ||
+--- /dev/null
++++ b/loader/tests/guest_virtual_memory_test.cpp
+@@ -0,0 +1,180 @@
++#include "guest_read_map.h"
++#include "guest_write_map.h"
++#include "win_api_shim.h"
++#include "win64_bridge.h"
++
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <limits>
++#include <sys/mman.h>
++#include <unistd.h>
++
++namespace {
++int checks = 0;
++int failures = 0;
++void check(bool ok, const char* name)
++{
++    ++checks;
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", name);
++    if (!ok) ++failures;
++}
++bool seal(void* memory, size_t length, void*)
++{
++    return mprotect(memory, length, PROT_READ | PROT_EXEC) == 0;
++}
++void* slot(size_t page)
++{
++    void* p = mmap(nullptr, page, PROT_READ | PROT_WRITE,
++                   MAP_PRIVATE | MAP_ANON, -1, 0);
++    return p == MAP_FAILED ? nullptr : p;
++}
++struct BackendState
++{
++    size_t page = 0;
++    void* slots[2]{};
++    int allocations = 0;
++};
++bool backend_allocate(size_t minimum, void** memory, size_t* bytes, void* user)
++{
++    auto& state = *static_cast<BackendState*>(user);
++    if (minimum > state.page || state.allocations >= 2) return false;
++    *memory = slot(state.page);
++    if (!*memory) return false;
++    *bytes = state.page;
++    state.slots[state.allocations++] = *memory;
++    return true;
++}
++void backend_release(void* memory, size_t bytes, void*)
++{
++    munmap(memory, bytes);
++}
++}
++
++int main()
++{
++    constexpr uint64_t MEM_COMMIT = 0x1000;
++    constexpr uint64_t MEM_RESERVE = 0x2000;
++    constexpr uint64_t MEM_RELEASE = 0x8000;
++    constexpr uint64_t PAGE_READONLY = 0x02;
++    constexpr uint64_t PAGE_READWRITE = 0x04;
++    constexpr uint64_t PAGE_EXECUTE_READWRITE = 0x40;
++    const long host_page = sysconf(_SC_PAGESIZE);
++    if (host_page <= 0) return 2;
++    const size_t page = static_cast<size_t>(host_page);
++    cap13::WinApiShim shim;
++    shim.register_builtin_exports();
++    void* alloc_slot = slot(page);
++    void* free_slot = slot(page);
++    if (!alloc_slot || !free_slot) return 2;
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", "VirtualAlloc",
++                                               alloc_slot, page, seal, nullptr) ==
++              cap13::BuiltinInstallStatus::Unsupported,
++          "virtual allocation refuses import publication before maps bind");
++    cap13::GuestReadMap reads;
++    cap13::GuestWriteMap writes;
++    check(shim.set_guest_read_map(&reads) && shim.set_guest_write_map(&writes),
++          "guest read and write maps bind");
++    const bool installed =
++        shim.install_builtin_integer_wrapper("kernel32.dll", "VirtualAlloc",
++                                             alloc_slot, page, seal, nullptr) ==
++            cap13::BuiltinInstallStatus::Ok &&
++        shim.install_builtin_integer_wrapper("kernel32.dll", "VirtualFree",
++                                             free_slot, page, seal, nullptr) ==
++            cap13::BuiltinInstallStatus::Ok;
++    check(installed, "VirtualAlloc and VirtualFree publish sealed Win64 wrappers");
++    if (!installed) return 1;
++
++    const uint64_t block = cap13_win64_call4(
++        alloc_slot, 0, 32, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
++    uint8_t zeros[32]{};
++    uint8_t output[32]{};
++    check(block && !(block % page) &&
++          reads.read(reinterpret_cast<void*>(block), output, 32) &&
++          !std::memcmp(output, zeros, 32),
++          "combined reserve and commit yields aligned zeroed readable memory");
++    const uint8_t mark = 0x5a;
++    check(writes.write(reinterpret_cast<void*>(block + page - 1), &mark, 1) &&
++          !writes.write(reinterpret_cast<void*>(block + page), &mark, 1) &&
++          reads.read(reinterpret_cast<void*>(block + page - 1), output, 1) &&
++          output[0] == mark,
++          "committed read/write page has guarded bounds");
++    check(cap13_win64_call4(alloc_slot, 0, 0, MEM_RESERVE | MEM_COMMIT,
++                            PAGE_READWRITE) == 0 &&
++          cap13_win64_call4(alloc_slot, 0, std::numeric_limits<size_t>::max(),
++                            MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) == 0 &&
++          cap13_win64_call4(alloc_slot, 0, page, MEM_RESERVE | MEM_COMMIT,
++                            PAGE_EXECUTE_READWRITE) == 0,
++          "zero, oversized, and executable allocation refuse");
++    check(cap13_win64_call4(alloc_slot, block, page,
++                            MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) == 0 &&
++          cap13_win64_call4(alloc_slot, 0, page, MEM_RESERVE | 1,
++                            PAGE_READWRITE) == 0,
++          "fixed address and unsupported allocation modes refuse");
++    check(cap13_win64_call3(free_slot, block, page, MEM_RELEASE) == 0 &&
++          cap13_win64_call3(free_slot, block + 1, 0, MEM_RELEASE) == 0 &&
++          reads.read(reinterpret_cast<void*>(block), output, 1),
++          "invalid release leaves owned mapping registered");
++    check(cap13_win64_call3(free_slot, block, 0, MEM_RELEASE) == 1 &&
++          !reads.read(reinterpret_cast<void*>(block), output, 1) &&
++          !writes.write(reinterpret_cast<void*>(block), &mark, 1) &&
++          cap13_win64_call3(free_slot, block, 0, MEM_RELEASE) == 0,
++          "release revokes both guest maps and refuses double release");
++
++    const uint64_t reserved = cap13_win64_call4(
++        alloc_slot, 0, 2 * page, MEM_RESERVE, PAGE_READWRITE);
++    check(reserved && !reads.read(reinterpret_cast<void*>(reserved), output, 1) &&
++          !writes.write(reinterpret_cast<void*>(reserved), &mark, 1),
++          "reserved uncommitted pages have no guest access");
++    const uint64_t committed = cap13_win64_call4(
++        alloc_slot, reserved, 2 * page, MEM_COMMIT, PAGE_READONLY);
++    check(committed == reserved &&
++          reads.read(reinterpret_cast<void*>(reserved), output, 32) &&
++          !std::memcmp(output, zeros, 32) &&
++          !writes.write(reinterpret_cast<void*>(reserved), &mark, 1),
++          "whole reserved region commits as guarded read-only pages");
++    check(cap13_win64_call4(alloc_slot, reserved, page,
++                            MEM_COMMIT, PAGE_READWRITE) == 0 &&
++          cap13_win64_call3(free_slot, reserved, 0, MEM_RELEASE) == 1,
++          "partial recommit refuses and whole region releases");
++    const uint64_t direct = cap13_win64_call4(
++        alloc_slot, 0, page, MEM_COMMIT, PAGE_READWRITE);
++    check(direct && cap13_win64_call3(free_slot, direct, 0, MEM_RELEASE) == 1,
++          "null-address direct commit allocates and releases a region");
++
++    cap13::WinApiShim lazy;
++    lazy.register_builtin_exports();
++    BackendState state{};
++    state.page = page;
++    cap13::WinApiShim::ExecutableMemoryBackend backend{};
++    backend.allocate_writable = backend_allocate;
++    backend.seal_executable = seal;
++    backend.release = backend_release;
++    backend.user = &state;
++    check(lazy.set_executable_backend(backend) &&
++          lazy.resolve("kernel32.dll", "VirtualAlloc", 0) == nullptr &&
++          state.allocations == 0,
++          "lazy PE import refuses before maps without allocating a thunk");
++    cap13::GuestReadMap lazy_reads;
++    cap13::GuestWriteMap lazy_writes;
++    bool lazy_bound = lazy.set_guest_read_map(&lazy_reads) &&
++                      lazy.set_guest_write_map(&lazy_writes);
++    void* lazy_alloc = lazy_bound ?
++        lazy.resolve("kernel32.dll", "VirtualAlloc", 0) : nullptr;
++    void* lazy_free = lazy_bound ?
++        lazy.resolve("kernel32.dll", "VirtualFree", 0) : nullptr;
++    const uint64_t lazy_block = lazy_alloc ?
++        cap13_win64_call4(lazy_alloc, 0, page, MEM_RESERVE | MEM_COMMIT,
++                          PAGE_READWRITE) : 0;
++    check(lazy_alloc && lazy_free && lazy_block &&
++          lazy.resolve("kernel32.dll", "VirtualAlloc", 0) == lazy_alloc &&
++          cap13_win64_call3(lazy_free, lazy_block, 0, MEM_RELEASE) == 1 &&
++          state.allocations == 2,
++          "PE-style resolution reuses sealed imports and owned virtual memory");
++    for (void* p : state.slots)
++        if (p) munmap(p, page);
++    munmap(alloc_slot, page);
++    munmap(free_slot, page);
++    std::printf("TOTAL: checks=%d failures=%d\n", checks, failures);
++    return failures ? 1 : 0;
++}
+--- /dev/null
++++ b/loader/tests/run_guest_virtual_memory.py
+@@ -0,0 +1,19 @@
++#!/usr/bin/env python3
++"""Build and test guarded virtual-memory imports through Win64 thunks."""
++from pathlib import Path
++import subprocess
++import sys
++
++root = Path(__file__).resolve().parents[1]
++asan = '--asan' in sys.argv[1:]
++build = root / ('tests/guest-virtual-memory-asan' if asan else
++                'tests/guest-virtual-memory-host')
++sources = sorted((root / 'src').glob('*.cpp')) + sorted((root / 'src').glob('*.S'))
++command = ['clang++', '-arch', 'x86_64', '-std=c++17', '-O1', '-g',
++           '-Wall', '-Wextra', '-Werror', '-pthread',
++           *(['-fsanitize=address', '-fno-omit-frame-pointer'] if asan else []),
++           '-I' + str(root / 'include'), '-I' + str(root / 'src'),
++           str(root / 'tests/guest_virtual_memory_test.cpp'),
++           *map(str, sources), '-o', str(build)]
++subprocess.run(command, cwd=root, check=True, timeout=90)
++subprocess.run(['arch', '-x86_64', str(build)], cwd=root, check=True, timeout=30)

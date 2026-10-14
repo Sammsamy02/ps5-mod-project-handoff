@@ -1,0 +1,31 @@
+--- cap09/PATCH/candidate/src/Mod/CppMod.cpp	2026-10-13 01:07:31
++++ cap11/PATCH/candidate/src/Mod/CppMod.cpp	2026-10-13 01:07:31
+@@ -1,3 +1,10 @@
++#ifdef __PROSPERO__
++// [CAP11] must precede every include: the first inclusion of imgui.h in this
++// unit (via UE4SSProgram.hpp -> GUI/GUI.hpp) must already use the shared GUI
++// configuration (no file functions, host allocator, non-aborting IM_ASSERT,
++// math on already-imported C functions only).
++#define IMGUI_USER_CONFIG "Platform/mbm_imconfig.h"
++#endif
+ #include <filesystem>
+ #include <cstdio>
+ #include <stdexcept>
+@@ -12,6 +19,8 @@
+ #include <Platform/NativeCppModPath.hpp>
+ // [CAP09] ABI-v1 native mod host (engine-free core + runtime binding).
+ #include "NativeModEngineServices.inc"
++// [CAP11] native GUI host (Dear ImGui context, tabs, canvas render target route).
++#include "NativeGuiEngineBackend.inc"
+ #include <unordered_map>
+ #endif
+ #include <Helpers/Utf16Utf8.hpp>
+@@ -194,6 +203,8 @@
+             if (it != native_abi_states().end()) entry = it->second.entry;
+         }
+         if (!entry) throw std::logic_error("Native C++ mod has no admitted entry");
++        // [CAP11] publish the GUI table before the first mod constructor runs.
++        Platform::NativeGui::publish_runtime_gui();
+         uint64_t token{};
+         std::string why;
+         const auto status = Platform::NativeMods::runtime_host().attach(Unicode::EncodeUtf8(m_mod_name), entry, &token, &why);

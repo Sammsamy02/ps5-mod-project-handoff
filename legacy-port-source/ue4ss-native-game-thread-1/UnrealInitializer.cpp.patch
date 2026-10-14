@@ -1,0 +1,101 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-hook-registration-errors-1/src/UnrealInitializer.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-game-thread-1/src/UnrealInitializer.cpp
+@@ -7,6 +7,9 @@
+ #include <SigScanner/SinglePassSigScanner.hpp>
+ #include <DynamicOutput/Output.hpp>
+ #include <Unreal/UnrealInitializer.hpp>
++#ifdef __PROSPERO__
++#include <Unreal/Platform/NativeGameThreadIdentity.hpp>
++#endif
+ #if defined(__PROSPERO__)
+ #include <PsScanAbi.h>
+ #include <OwnedMappedScanSource.hpp>
+@@ -102,13 +105,31 @@
+ 
+     // These globals are explicitly not defined in a header file.
+     // This is to force access via getter to catch if/when the game thread id is being used before it's been set.
++#ifdef __PROSPERO__
++    static NativeThreadDetail::Identity NativeGameThreadIdentity;
++#else
+     std::thread::id GGameThreadId{};
+     bool GGameThreadIdInitialized{};
++#endif
+ 
+     static Hook::GlobalCallbackId FNameConstructedHookId{};
+ 
+     auto HookedEngineTick(Hook::TCallbackIterationData<void>&, UEngine*, float, bool) -> void
+     {
++#ifdef __PROSPERO__
++        // Publish only from the genuine Tick callback; never manufacture a
++        // worker identity. The first published ID is immutable.
++        const auto publication = NativeGameThreadIdentity.publish_current();
++        if (publication == NativeThreadDetail::Publication::Unavailable)
++        {
++            Output::send<LogLevel::Error>(STR("Unable to retrieve or synchronize ID of game thread\n"));
++            return;
++        }
++        if (publication == NativeThreadDetail::Publication::DifferentThread)
++        {
++            return;
++        }
++#else
+         if (GGameThreadId == std::thread::id{})
+         {
+             GGameThreadId = std::this_thread::get_id();
+@@ -118,6 +139,7 @@
+                 Output::send<LogLevel::Error>(STR("Unable to retrieve ID of game thread\n"));
+             }
+         }
++#endif
+ 
+         if (StaticStorage::FNameVerificationStatus.load(std::memory_order_acquire))
+         {
+@@ -1330,11 +1352,15 @@
+ {
+     auto GetGameThreadId() -> std::thread::id
+     {
++#ifdef __PROSPERO__
++        return UnrealInitializer::NativeGameThreadIdentity.id();
++#else
+         if (!UnrealInitializer::GGameThreadIdInitialized)
+         {
+             throw std::runtime_error{"GetGameThreadId called too early, not yet initialized by UGameEngine::Tick"};
+         }
+         return UnrealInitializer::GGameThreadId;
++#endif
+     }
+ 
+     auto IsInGameThread() -> bool
+@@ -1344,20 +1370,32 @@
+ 
+     auto IsGameThreadInitialized() noexcept-> bool
+     {
++#ifdef __PROSPERO__
++        return UnrealInitializer::NativeGameThreadIdentity.initialized();
++#else
+         return UnrealInitializer::GGameThreadIdInitialized;
++#endif
+     }
+ 
+     auto GetGameThreadIdRaw() noexcept -> std::thread::id
+     {
++#ifdef __PROSPERO__
++        return UnrealInitializer::NativeGameThreadIdentity.id_raw();
++#else
+         if (!UnrealInitializer::GGameThreadIdInitialized)
+         {
+             return {};
+         }
+         return UnrealInitializer::GGameThreadId;
++#endif
+     }
+ 
+     auto IsInGameThreadRaw() noexcept -> bool
+     {
++#ifdef __PROSPERO__
++        return UnrealInitializer::NativeGameThreadIdentity.in_current_raw();
++#else
+         return IsGameThreadInitialized() && std::this_thread::get_id() == GetGameThreadId();
++#endif
+     }
+ }

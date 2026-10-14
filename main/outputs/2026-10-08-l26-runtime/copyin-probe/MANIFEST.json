@@ -1,0 +1,101 @@
+{
+ "part": "copyin-probe",
+ "item": "Claude l25 item 7 - resident copyin probe liveness logging",
+ "author": "agent-Q (2026-10-08)",
+ "status": "PENDING_INTEGRATION - overlay files + wiring instructions; NOT wired into build_runtime.py (see WIRING.md for the reason and the exact wiring)",
+ "scope": "Observation only. Adds one-time post-admission probe-state logging (diagnostic events + UE4SS.log line) and throttled events if a kernel-write probe dispatch is ever attempted after admission retirement. No probe behavior, gating or import set changes.",
+ "base_files": {
+  "unrealinitializer": {
+   "base_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp",
+   "base_sha256": "c4364dd73401",
+   "candidate_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/copyin-probe/candidate/src/UnrealInitializer.cpp",
+   "candidate_sha256": "125a04718b52ef3b2314ca5c7bcae846ae5fc7c0c4d55fcb1ee38a2bd5c3765f",
+   "patch": "patches/unrealinitializer-copyin-probe-liveness.patch",
+   "patch_sha256": "c5c081fe21e2dc7998997e65539ccf3473d13391f8bb48f0f467e3fb8ad50196",
+   "ownership": "base owned by the typescan-r4 agent; the patch must be adopted by that owner or the coordinator (pure additions)",
+   "base_sha256_history": [
+    {
+     "from": "pinned",
+     "to": "6a9087b55207d69d",
+     "when": "2026-10-11 root per Claude round-9 item 2: re-baseline the expectation pin so the tolerated ok:false gate goes green; the overlay always rebases onto the current candidate (patch-rebased mode), so the expectation now records that"
+    }
+   ]
+  },
+  "runtime_start_bridge": {
+   "base_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l24-package/lineage/lifecycle/runtime_start_bridge.cpp",
+   "base_sha256": "89e4b64344fe0acd5cb5cf30156420f3f73c994f7ccdc949ab66b50a1a6f0eac",
+   "candidate_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/copyin-probe/candidate/lifecycle/runtime_start_bridge.cpp",
+   "candidate_sha256": "a35c7f9111b1f91cead80a05d489db04f6d4a25bb32b6bf0bee09879785baca1",
+   "patch": "patches/runtime_start_bridge-copyin-probe-liveness.patch",
+   "patch_sha256": "6771e33e022dd5511d47f53db6111ab4e150647eb3f64f429d31406bc8bb8297",
+   "ownership": "packaging-side lineage file (NOT consumed by build_runtime.py); wire at the l26 packaging step"
+  },
+  "copyinsink": {
+   "base_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l19-r4-full-build/driver/staging/lineage-overlay-2/CopyinSink.hpp",
+   "base_sha256": "2018c9bdc63b8f2001aeadcc44ab698d0d5c54c08652e5fc0c78f45c0fa65d98",
+   "candidate_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/copyin-probe/candidate/CopyinSink.hpp",
+   "candidate_sha256": "0b113b1c19b4eac7f9959567487845c8639a28937f94a4881103dcbb163e69cd",
+   "ownership": "lineage-root header consumed by the bridge TU at packaging; wired by l26_packaging_driver.py as a lineage_overlays destination 'CopyinSink.hpp' (EQ pattern) that shadows the frozen copytree file"
+  }
+ },
+ "new_diagnostic_tags": [
+  "copyin_probe_state (bridge; one-time at bank retirement: bit0 gate_armed, bit1 bank_retired, bit2 parent_fd_still_open(abnormal), bit3 sink_still_open(abnormal))",
+  "copyin_probe_gate_armed, copyin_probe_bank_retired, copyin_probe_parent_fd_open, copyin_probe_sinks_open, copyin_probe_nonce_used, copyin_probe_attempts_total (bridge; one-time)",
+  "copyin_probe_gate_released, copyin_probe_attempts_late_total (bridge; one-time at shutdown leave)",
+  "copyin_probe_fire_init_phase (bridge; first init-phase dispatch census)",
+  "copyin_probe_fire_post_admission + copyin_probe_fire_addr_lo/hi + copyin_probe_fire_len + copyin_probe_fire_parent_fd (bridge; throttled 10 s after retirement)",
+  "copyin_probe_liveness_state (=3: bank retired + gate still armed), copyin_probe_liveness_oracle_calls (UnrealInitializer; one-time, mirrors into UE4SS.log)",
+  "copyin_probe_fire_post_admission (UnrealInitializer admission-ops side; throttled 10 s; identical tag intentionally: both sides observe the same dispatch class)",
+  "copyin_probe_gate_l26_early_release (bridge; one-time at admission completion; [Seeds][L26] gating: positive proof the owner gate closed early; replaces the shutdown-time copyin_probe_gate_released proof in a gated session)"
+ ],
+ "new_link_symbols": [],
+ "import_delta": "none - diagnostic_event is already an undefined symbol of the composed runtime object (outputs/2026-10-08-l24-build-r2/pass1/undefined.stdout line 38); build_runtime.py's raw-import-delta assertion is untouched",
+ "builds_run": false,
+ "console_contact": false,
+ "reanchor_note": {
+  "date": "2026-10-08",
+  "by": "agent-R (build execute failure fix, coordinator instruction)",
+  "change": "unrealinitializer patch struct-definition hunk re-anchored from the post-L13AdmissionOps region (generic admission context that drifted and landed AFTER the probe-lambda call on base cac95e48: use-of-undeclared CopyinProbeLiveness at composed :982) to the stable early landmark right after the extern-C bridge declaration block / #include \"NativePropertyReadBackend.inl\", BEFORE struct L13AdmissionOps. Content of all three hunks byte-identical; only anchor and line numbers changed.",
+  "old_patch_sha256": "d9fac38265b42bb7473cf859116ffc183606f88b590ddde76011b2dc5d14e2b8",
+  "new_patch_sha256": "d9fac38265b42bb7473cf859116ffc183606f88b590ddde76011b2dc5d14e2b8",
+  "order_gate": "build_variants.py G2q-order-def-before-use now enforces struct-before-use on every composition"
+ },
+ "l26_repoint_note": {
+  "date": "2026-10-08",
+  "by": "agent CM (l26 driver prep)",
+  "change": "base_path/candidate_path repointed from the l25-runtime tree to this l26-runtime tree copy (files byte-identical at repoint time). base_sha256 for unrealinitializer deliberately KEPT at Q's recorded pre-listener value c4364dd7 so the driver always takes the patch-rebased composition path (adopting the ready candidate 125a0471 would drop the listener edits and the variant token guards). The unrealinitializer base is expected to drift further as the logwriter/UFunction agents edit the tree; G2q treats .base pins as expectations, not invariants, and the rebase path preserves all landed edits. The bridge base stays pinned to the frozen l24-package lineage file (89e4b643), which the l26 packaging driver still asserts equals the frozen l24 manifest outer_bridge.",
+  "base_sha256_unchanged": true
+ },
+ "l26_gating_note": {
+  "date": "2026-10-08",
+  "by": "agent EE (l26 integration, Claude review 3 + user OK)",
+  "change": "LABELLED l26 change applied on top of agent-Q's adopted bridge candidate f510c014...: gating-proposal/gating-patch.diff (agent Z15) applied with /usr/bin/patch --fuzz=0 (clean, no fuzz), reproducing Z15's proof candidate gating-proposal/candidate-l25base/lifecycle/runtime_start_bridge.cpp sha 50caba3b... byte-identically, then ONE three-line [Seeds][L26] marker comment added above the gated region (delta vs 50caba3b = marker text only). Result: copyin-probe/candidate/lifecycle/runtime_start_bridge.cpp sha 94f81a17d6904b9edfe8b06e8e4284268fbd4c738f96ac4475931225e719274c (this row). Effect: bridge_copyin_initializer_complete() now disarms the copyin owner gate at admission completion (diagnostic_event copyin_probe_gate_l26_early_release + g_copyin_initializer_owner.leave()); probe_until and gate siblings fail closed for the rest of the session; shutdown leave() is an idempotent no-op. See gating-proposal/CHANGES.json (own CHANGES entry) and gating-proposal/DECISION-MEMO.md for Q's four safety reasons.",
+  "base": {
+   "path": "copyin-probe/candidate/lifecycle/runtime_start_bridge.cpp",
+   "pre_gating_sha256": "f510c01484e3edcc21960fb0bb5c23562e548522b30cc629e43baf3dd1911712"
+  },
+  "patch": {
+   "path": "gating-proposal/gating-patch.diff",
+   "sha256": "5692775cb6ac83bdf53a669acaa8eecfdce3f012f6ebab964def5670cf7d75e3"
+  },
+  "marker_delta_vs_z15_proof": "three comment lines only; code identical to 50caba3b..."
+ },
+ "notes": [
+  "hunk-3 re-anchored post-Phase-6 by root (EP sequencing fix)"
+ ],
+ "eq_reanchor_note": {
+  "date": "2026-10-09",
+  "by": "agent-EQ (typescan-r4 owner this cycle)",
+  "what": "hunk 3 (note_admission_complete insertion) re-anchored onto the EQ phase-armor completion wrap (try { copyin_cleanup.complete(); <insert> L25 send } catch ...) \u2014 same immediately-after-complete() position; hunks 1/2 byte-identical to Q's overlay; added lines unchanged except indentation inside the try block",
+  "why": "the 2026-10-09 11:36 run showed Phase 5/6 admission throws unwind silently (seed_refused throws without logging); the armor wraps completion so any complete()/send failure logs '[Seeds] Phase 6 completion exception' before rethrowing",
+  "base_note": "base_sha256 deliberately left at Q-era c4364dd7 (expectation, not invariant): the current armored candidate 5f7ae2bc differs, so build_variants always composes via the patch-rebased path (adopting Q's ready candidate would silently drop the EM stringfix + EQ armor). Patch sha updated to the EQ re-anchored c5c081fe."
+ },
+ "l27_fledger_note": {
+  "date": "2026-10-10",
+  "by": "agent FX (parked P1 patch set, outputs/2026-10-08-l25-prep/parked/P1-fault-ledger/)",
+  "change": "fault-ledger desaturation applied to the wired bridge candidate a35c7f91... (prev 94f81a17): (a) FaultLedger::record() no longer saturates on an INVALID range (rejects, counts rejected_invalid, returns RecordResult::InvalidRange); (b) overlaps() no longer consults the saturated flag - capacity saturation is observable ONLY via the new saturated_capacity() accessor, which the admission gate bridge_copyin_range_faulted never calls; (c) [ST] one-shot self-test line copyin_fault_ledger_st/copyin_fault_ledger_st_pass emitted from bridge_copyin_directory_prepare, plus a compile-time static_assert (self_test_mask()==0xF) in the new CopyinSink.hpp candidate. The fail-closed owner-gate line in bridge_copyin_range_faulted is byte-unchanged; real recorded faults still refuse. New header candidate: copyin-probe/candidate/CopyinSink.hpp sha 0b113b1c (base: frozen lineage-overlay-2 CopyinSink.hpp 2018c9bd), wired at packaging via lineage_overlays destination 'CopyinSink.hpp'.",
+  "composition_chain_step": "94f81a17 (EE gated) + FX fault-ledger desaturation = a35c7f91",
+  "root_cause_context": "tonight's 15:36Z [Seeds][L27] refusal was actually the owner-gate fail-closed path (agent-EM root cause, l27_ei_stringfix in typescan-r4/CHANGES.json); this change removes the REMAINING latent false-positive mechanism in the ledger itself (EO candidate mechanism: record() saturating on an invalid range / capacity, overlaps() conflating saturation with a real hit)",
+  "console_contact": false
+ }
+}

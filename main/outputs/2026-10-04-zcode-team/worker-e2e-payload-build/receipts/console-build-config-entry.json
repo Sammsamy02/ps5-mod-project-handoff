@@ -1,0 +1,83 @@
+{
+  "worker": "worker-e2e-payload-build",
+  "date": "2026-10-04",
+  "recipe_source": "worker-d1-chain-relink/composition/receipts/console-build.json (exact argv; only -c source, -o, -MF, -Map redirected inside this worker dir) + env LLVM_CONFIG same as D1 composer line 542",
+  "toolchain": {
+    "prospero_clang": "outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/bin/prospero-clang",
+    "resource_dir": ".superpowers/native-dependency-spike/tools/resource-root/LLVM-21.1.8-macOS-ARM64/lib/clang/21",
+    "llvm_nm": "outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/bin/llvm-nm",
+    "llvm_readobj": "outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin/llvm-readobj",
+    "LLVM_CONFIG": "outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin/llvm-config"
+  },
+  "source_chain": {
+    "pristine_d1_core": "45c04d084215cb5da520ff1a5bf70219f5ce0e86baf55bda4da706dd8dda044d",
+    "diff": "worker-e2e-config-entry/patch/modinst_core-config-entry.diff (4bab84ab8c91a06a92f4d73cdd42c95f315631e7681a0d190dec2f992bfcb150), applied via patch -p1",
+    "patched_core": "43ea66c1c5dcf52bfb9158bae5f782438911b61f699eeb1f8dc29c6b702dcda0",
+    "patched_core_expected": "43ea66c1c5dcf52bfb9158bae5f782438911b61f699eeb1f8dc29c6b702dcda0",
+    "diff_shape_actual": "2 hunks; +624/-1 counting the diff's +++/--- header lines (= +623/-0 content). Design sec 0 said '3 hunks (+624/-1)': the hunk count in the design text is inaccurate, the byte-exact apply-check is unaffected."
+  },
+  "compile": {
+    "argv": "console-build.json cmd 1 (prospero-clang -std=c11 -O2 -Wall -Wextra -resource-dir ... -DMB_ARCHIVE_BUILTIN_XZ=1 -I vendored -I owned -I vendored/archive -I mbedtls -I config -MD -MF ... -c SRC -o OBJ)",
+    "exit": 0,
+    "warnings": "3 pre-existing (lines 643 ids / 1379 pos / 1365 argc - same as D1 receipt), ZERO new",
+    "r1_stderr": "receipts/console-compile-modinst_core-r1.stderr"
+  },
+  "link": {
+    "argv": "console-build.json cmd 11 (10 D1 objects UNCHANGED except modinst_core.ps5.o = mine; pinned libarchive/liblzma/zlib/libmbedcrypto closure; -Wl,--no-undefined,-z,now; caller script elf_x86_64.dynamic-only.x 6704c97b...; -Map; -o)",
+    "exit": 0
+  },
+  "gates": {
+    "8.1_patch_apply": "PASS byte-exact (receipts/gate-8.1-patch-apply.log)",
+    "host_byte_reproduction": "PASS EXACT: .o 51b881715d9a43f7c29886622f5d74becee5b38f02a93198f02549688c52ec40; binary 4659c24c4a4d829dc13a59813e7b137bf4d0efeaf0bca45b21e064b589eb2aa1 (receipts/gate-byte-repro-host/)",
+    "console_compile_reproduction": "PASS EXACT: pristine source + exact argv -> modinst_core.ps5.o dafd4214856d269d9a8462a64df49ac8da4cf16e085af04dca409cd6c7821ac6 == D1 object",
+    "console_link_reproduction": "PASS with documented exception: my relink of the UNCHANGED D1 inputs differs from payload e3489297... in EXACTLY the 16-byte .note.gnu.build-id descriptor (file offset 0x93D00); two relinks of identical inputs differ from EACH OTHER in exactly the same 16 bytes (per-link random); all 681512/681528 non-build-id bytes bit-identical (receipts/gate-console-repro/, BID lines in run log)",
+    "census_116": "PASS: new payload 116 dynamic imports; import set byte-identical to D1 payload census AND to receipts/console-imports.stdout; no plain strtol; missing=[] follows from name-set identity + D1 console-import-providers.json (receipts/census-*.*)",
+    "determinism": "PASS with documented exception: r1 vs r2 identical in all 681872/681888 non-build-id bytes (both 681888 B); the per-link random build-id is the ONLY variance",
+    "dynamic_layout": "21 entries, terminal DT_NULL, BIND_NOW - same shape as D1 (receipts/console-elf-readobj-r1.stdout)"
+  },
+  "payloads": {
+    "DELIVERABLE_r1": {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-e2e-payload-build/build-r1/modbridge-installer.payload.elf",
+      "sha256": "a21771f894dd43be3dc650b12ffa65ccdc6413d150c0b9fb338302836901a054",
+      "bytes": 681888,
+      "zeroed_build_id_canonical_sha256": "c40346c0268f2aede0f554697939b3587344f0b7db5ceb14896567d1b13537bd",
+      "note": "delivered artifact bytes; sha covers its own per-link build-id"
+    },
+    "r2_determinism_twin": {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-e2e-payload-build/build-r2/modbridge-installer.payload.elf",
+      "sha256": "ec8acdfc19161ac716e0a7b74a3b012230f39827b0dc58784c2b356c07df5fc3",
+      "bytes": 681888
+    },
+    "pristine_relink_proofs": {
+      "link1": "b50a6fab7522909999f7599af50a7e561476bac77a7e3cad9c57ee56cd665ea4",
+      "link2": "71477c7be25e63d91c0c5538c300d8f4b5445ead12cbbc5356e531bd066e81e3",
+      "d1_reference": "e3489297193a639aab19567bad680f7a4687d7a37d841ee3545ea4502b4a0436"
+    }
+  },
+  "step_P_repin": {
+    "CONFIG_ENTRY_SHA": "a21771f894dd43be3dc650b12ffa65ccdc6413d150c0b9fb338302836901a054",
+    "CONFIG_ENTRY_BYTES": 681888
+  },
+  "size_law": {
+    "pt_load_prefix_bytes": 606256,
+    "magic": "7f454c46",
+    "computed_from": "r1 program headers: max(PT_LOAD Offset+FileSize) = 0x94030 (same prefix value as D1 payload, independently recomputed)"
+  },
+  "tuples": {
+    "delivered": [
+      "g1_block.py",
+      "patches.json.new",
+      "receipts/gate-tuples-verify.log"
+    ],
+    "order": "appended after r2-install-status-ok (chain 51 -> 54): g1-cmd-entry-parse, g1-cmd-entry-allowlist, g1-cmd-entry-consume",
+    "content_mapping": "parse = ej_* parser; allowlist = e2e_refuse/e2e_verb_legal/e2e_opt_flag; consume = e2e_consume/override_path/e2e_cmd_entry + main consult block (spanning anchor)",
+    "verification": "each anchor occurrences==1 in its pre-state; sequential application 45c04d08... -> 43ea66c1... byte-exact (independently re-verified from g1_block.py literals)",
+    "promotion_note": "patches.json.new written INSIDE this worker dir per write scope; promoting it to composition/receipts/patches.json is the controller's step"
+  },
+  "not_run": [
+    "suite re-runs (bridge 75 / F-R2 87 / fault 186 + new config-entry cases) per design sec 8.6 - controller/staging work",
+    "any console contact or target execution",
+    "console STOR/readback/consumed behavior - all [TARGET] for the controller run"
+  ],
+  "write_scope": "outputs/2026-10-04-zcode-team/worker-e2e-payload-build/ only"
+}

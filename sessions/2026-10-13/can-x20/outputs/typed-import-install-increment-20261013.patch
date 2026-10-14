@@ -1,0 +1,497 @@
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -1,27 +1,24 @@
+ // win_api_shim.cpp -- kernel32/ucrt subset implementations (T1-T3) and the
+ // fail-closed EH stubs (T4). See win_api_shim.h for the tier policy.
+ //
+-// Notes baked into the implementations:
+-//  * Dynamic TLS (TlsAlloc family) is EMULATED with a slot table -- this is
+-//    NOT the refused static PE TLS directory (design 3e).
+-//  * GetLastError/SetLastError ride a thread-local error slot, NOT the TEB
+-//    (no gs addressing anywhere in OUR code).
+-//  * Encode/DecodePointer use one process cookie; self-consistent pairs.
+-//  * File APIs apply the GA path-shim rules and confine writes to the mod
+-//    root (design 5b T2; agent-GA-path-shim.md rules).
+-//  * EH/SEH entry points FAIL CLOSED with a precise diagnostic (design 4c).
++// Candidate bodies exist for dynamic TLS, files, threads, and EH/SEH, but
++// their full Win32 behavior or guest-callable ABI is not established. They
++// remain unresolved imports. Static PE TLS is a separate loader refusal.
++// GetLastError/SetLastError and pointer encoding are not implemented here.
+ //
+ // Raw built-in handlers are private metadata. No PE import receives one
+ // until a per-signature guest-callable wrapper is explicitly published.
+ // CAP13 proposal-only; design-grade; bodies are intentionally small.
+ 
+ #include "win_api_shim.h"
+-
+-#include <chrono>
++#include "win64_bridge.h"
++
++#include <cerrno>
+ #include <cstdio>
+ #include <cstring>
+ #include <ctime>
+ #include <mutex>
++#include <new>
+ #include <thread>
+ #include <vector>
+ 
+@@ -57,11 +54,17 @@
+ 
+ struct WinApiShim::Impl
+ {
++    struct RawExport
++    {
++        void* body = nullptr;
++        uint8_t integer_arity = UINT8_MAX;
++        bool reviewed_for_publication = false;
++    };
+     Hooks hooks;
+     std::string mod_root = "/data/modbridge/roots/";
+     std::mutex mu;
+     // dll-name(lowercased) -> { symbol/ordinal -> address }
+-    std::unordered_map<std::string, std::unordered_map<std::string, void*>> raw_exports;
++    std::unordered_map<std::string, std::unordered_map<std::string, RawExport>> raw_exports;
+     std::unordered_map<std::string, std::unordered_map<std::string, void*>> exports;
+     struct ModuleEntry
+     {
+@@ -70,7 +73,7 @@
+     };
+     std::unordered_map<std::string, ModuleEntry> modules;
+     uint64_t pointer_cookie = 0xA5A5'5A5A'0000'0042ull; // fixed for design; M1 randomizes at DllMain time
+-    void* last_error_slot_value = nullptr; // M1: per-thread (emulated TEB-free TLS slot)
++    void* last_error_slot_value = nullptr; // reserved; no public error API yet
+ 
+     // ---- T1 emulation state ----
+     std::vector<bool> tls_slot_used;
+@@ -139,10 +142,26 @@
+ #endif
+ }
+ 
+-static uint32_t impl_Sleep(WinApiShim::Impl*, uint32_t ms)
+-{
+-#if CAP13_POSIX
+-    ::usleep(useconds_t(ms) * 1000);
++static uint32_t impl_Sleep(WinApiShim::Impl* m, uint32_t ms)
++{
++#if CAP13_POSIX
++    if (ms == 0)
++    {
++        std::this_thread::yield();
++        return 0;
++    }
++    struct timespec remaining{};
++    remaining.tv_sec = static_cast<time_t>(ms / 1000);
++    remaining.tv_nsec = static_cast<long>(ms % 1000) * 1000000L;
++    while (::nanosleep(&remaining, &remaining) != 0)
++    {
++        if (errno == EINTR) continue;
++        m->fail_closed("Sleep host clock failed");
++        break;
++    }
++#else
++    (void)m;
++    (void)ms;
+ #endif
+     return 0;
+ }
+@@ -246,10 +265,20 @@
+ #endif
+ }
+ 
+-static uint32_t impl_GetTickCount(WinApiShim::Impl*)
+-{
+-    using namespace std::chrono;
+-    return uint32_t(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
++static uint32_t impl_GetTickCount(WinApiShim::Impl* m)
++{
++#if CAP13_POSIX
++    struct timespec now{};
++    if (::clock_gettime(CLOCK_MONOTONIC, &now) != 0)
++    {
++        m->fail_closed("GetTickCount host clock failed");
++        return 0;
++    }
++    return uint32_t(uint64_t(now.tv_sec) * 1000 + uint64_t(now.tv_nsec) / 1000000);
++#else
++    (void)m;
++    return 0;
++#endif
+ }
+ 
+ // ---- T4: fail-closed EH/SEH (design 4c). These raw bodies are cataloged,
+@@ -330,47 +359,74 @@
+         const char* dll;
+         const char* sym;
+         void* fn;
++        uint8_t integer_arity;
++        bool reviewed_for_publication;
+     };
+     const Row rows[] = {
+-        // T1 MAP rows (implemented bodies above):
+-        {"kernel32.dll", "VirtualAlloc", (void*)&impl_VirtualAlloc},
+-        {"kernel32.dll", "Sleep", (void*)&impl_Sleep},
+-        {"kernel32.dll", "WaitForSingleObject", (void*)&impl_WaitForSingleObject_events},
+-        {"kernel32.dll", "TlsAlloc", (void*)&impl_TlsAlloc},
+-        {"kernel32.dll", "TlsGetValue", (void*)&impl_TlsGetValue},
+-        {"kernel32.dll", "TlsSetValue", (void*)&impl_TlsSetValue},
+-        {"kernel32.dll", "CreateThread", (void*)&impl_CreateThread},
+-        {"kernel32.dll", "QueryPerformanceCounter", (void*)&impl_QueryPerformanceCounter},
+-        {"kernel32.dll", "GetTickCount", (void*)&impl_GetTickCount},
+-        {"kernel32.dll", "CreateFileW", (void*)&impl_CreateFileW},
++        // Only Sleep and GetTickCount have host-checked basic time behavior.
++        // The other raw bodies are catalogued but remain unresolved imports.
++        {"kernel32.dll", "VirtualAlloc", (void*)&impl_VirtualAlloc, 4, false},
++        {"kernel32.dll", "Sleep", (void*)&impl_Sleep, 1, true},
++        {"kernel32.dll", "WaitForSingleObject", (void*)&impl_WaitForSingleObject_events, 2, false},
++        {"kernel32.dll", "TlsAlloc", (void*)&impl_TlsAlloc, 0, false},
++        {"kernel32.dll", "TlsGetValue", (void*)&impl_TlsGetValue, 1, false},
++        {"kernel32.dll", "TlsSetValue", (void*)&impl_TlsSetValue, 2, false},
++        {"kernel32.dll", "CreateThread", (void*)&impl_CreateThread, 6, false},
++        {"kernel32.dll", "QueryPerformanceCounter", (void*)&impl_QueryPerformanceCounter, 1, false},
++        {"kernel32.dll", "GetTickCount", (void*)&impl_GetTickCount, 0, true},
++        {"kernel32.dll", "CreateFileW", (void*)&impl_CreateFileW, 7, false},
+         // T4 fail-closed (the important policy rows):
+-        {"vcruntime140.dll", "__CxxFrameHandler4", (void*)&impl_fail_closed_cxx_frame},
+-        {"kernel32.dll", "RaiseException", (void*)&impl_fail_closed_raise},
+-        {"vcruntime140.dll", "CxxThrowException", (void*)&impl_fail_closed_throw},
+-        {"kernel32.dll", "RtlUnwind", (void*)&impl_fail_closed_raise},
+-        {"ntdll.dll", "RtlUnwindEx", (void*)&impl_fail_closed_raise},
+-        {"vcruntime140.dll", "__C_specific_handler", (void*)&impl_fail_closed_specific_handler},
++        {"vcruntime140.dll", "__CxxFrameHandler4", (void*)&impl_fail_closed_cxx_frame, UINT8_MAX, false},
++        {"kernel32.dll", "RaiseException", (void*)&impl_fail_closed_raise, UINT8_MAX, false},
++        {"vcruntime140.dll", "CxxThrowException", (void*)&impl_fail_closed_throw, UINT8_MAX, false},
++        {"kernel32.dll", "RtlUnwind", (void*)&impl_fail_closed_raise, UINT8_MAX, false},
++        {"ntdll.dll", "RtlUnwindEx", (void*)&impl_fail_closed_raise, UINT8_MAX, false},
++        {"vcruntime140.dll", "__C_specific_handler", (void*)&impl_fail_closed_specific_handler, UINT8_MAX, false},
+     };
+     std::lock_guard g(m->mu);
+     for (const auto& r : rows)
+     {
+         std::string key = r.sym;
+-        m->raw_exports[r.dll][key] = r.fn;
+-    }
+-}
+-
+-bool WinApiShim::publish_builtin_wrapper(const char* dll_name, const char* symbol,
+-                                          void* win64_entry)
+-{
+-    if (!dll_name || !*dll_name || !symbol || !*symbol || !win64_entry)
+-        return false;
++        m->raw_exports[r.dll][key] = Impl::RawExport{
++            r.fn, r.integer_arity, r.reviewed_for_publication};
++    }
++}
++
++BuiltinInstallStatus WinApiShim::install_builtin_integer_wrapper(
++    const char* dll_name, const char* symbol, void* writable_slot,
++    size_t slot_bytes, SealExecutable seal, void* seal_user)
++{
++    if (!dll_name || !*dll_name || !symbol || !*symbol || !writable_slot ||
++        slot_bytes < sizeof(ContextBridgeTramp) || !seal)
++        return BuiltinInstallStatus::InvalidInput;
+     const std::string dll = ascii_module_key(dll_name);
+-    std::lock_guard g(m->mu);
+-    auto raw_dll = m->raw_exports.find(dll);
+-    if (raw_dll == m->raw_exports.end() ||
+-        raw_dll->second.find(symbol) == raw_dll->second.end()) return false;
+-    m->exports[dll][symbol] = win64_entry;
+-    return true;
++    Impl::RawExport raw;
++    {
++        std::lock_guard g(m->mu);
++        auto raw_dll = m->raw_exports.find(dll);
++        if (raw_dll == m->raw_exports.end()) return BuiltinInstallStatus::Unsupported;
++        auto row = raw_dll->second.find(symbol);
++        if (row == raw_dll->second.end() || !row->second.reviewed_for_publication)
++            return BuiltinInstallStatus::Unsupported;
++        auto existing = m->exports.find(dll);
++        if (existing != m->exports.end() && existing->second.count(symbol))
++            return BuiltinInstallStatus::AlreadyPublished;
++        raw = row->second;
++    }
++    const void* thunk = bridge_select_context_thunk(raw.integer_arity);
++    if (!thunk) return BuiltinInstallStatus::Unsupported;
++    bridge_stamp_context_tramp(writable_slot, m, raw.body, thunk);
++    if (!seal(writable_slot, slot_bytes, seal_user))
++        return BuiltinInstallStatus::SealFailed;
++    {
++        std::lock_guard g(m->mu);
++        auto existing = m->exports.find(dll);
++        if (existing != m->exports.end() && existing->second.count(symbol))
++            return BuiltinInstallStatus::AlreadyPublished;
++        try { m->exports[dll][symbol] = writable_slot; }
++        catch (const std::bad_alloc&) { return BuiltinInstallStatus::OutOfMemory; }
++    }
++    return BuiltinInstallStatus::Ok;
+ }
+ 
+ void* WinApiShim::resolve(const char* dll_name, const char* symbol, uint64_t ordinal)
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -1,6 +1,6 @@
+ // win_api_shim.h -- Windows API import shim for the cap13 PE loader.
+ //
+-// Tiered policy (DESIGN/native-dll-loader.md section 5):
++// Intended tiered policy (DESIGN/native-dll-loader.md section 5):
+ //   T1 MAP  memory / sync / time / thread / text / TLS-API emulation
+ //   T2 MAP  files + the GA path-shim rules (drive letters, backslashes,
+ //           Binaries/Win64 virtual-cwd, write confinement to the mod root)
+@@ -10,12 +10,14 @@
+ //   T5 REFUSE (load time, in the loader/census, not here) game-code
+ //           rewriting APIs and user32/gdi32 surfaces
+ //
+-// The shim bodies model selected Win32 signatures. Raw bodies remain private
+-// until a per-signature guest-callable wrapper is supplied and checked.
++// Most tiers remain candidate bodies or design. Raw bodies stay private;
++// only explicitly reviewed integer rows can be published after sealing a
++// context-bound Win64 wrapper. The loader still refuses real static TLS/GS.
+ // CAP13 proposal-only; design-grade.
+ #ifndef CAP13_WIN_API_SHIM_H
+ #define CAP13_WIN_API_SHIM_H
+ 
++#include <cstddef>
+ #include <cstdint>
+ #include <string>
+ #include <unordered_map>
+@@ -26,6 +28,16 @@
+ 
+ // A mod-visible module handle ("HMODULE"): opaque index into the registry.
+ using WinModule = void*;
++
++enum class BuiltinInstallStatus
++{
++    Ok,
++    InvalidInput,
++    Unsupported,
++    SealFailed,
++    AlreadyPublished,
++    OutOfMemory
++};
+ 
+ class WinApiShim : public ImportResolver
+ {
+@@ -61,12 +73,15 @@
+     // unresolved imports until a per-signature Win64 wrapper is published.
+     void register_builtin_exports();
+ 
+-    // Call only after generating and validating a guest-callable wrapper
+-    // that also supplies the handler's hidden Impl* context. Unknown rows,
+-    // null pointers, and malformed names refuse. Publication does not by
+-    // itself prove the wrapper's behavior; the caller owns that gate.
+-    bool publish_builtin_wrapper(const char* dll_name, const char* symbol,
+-                                 void* win64_entry);
++    // Stamp and publish one reviewed integer/pointer signature. The caller
++    // owns writable_slot through process exit. seal must transition the
++    // entire slot region to readable executable memory, including needed
++    // target cache maintenance, and return false without publication on
++    // failure. Neither this method nor the Mac host test proves PS5 sealing.
++    using SealExecutable = bool (*)(void* memory, size_t bytes, void* user);
++    BuiltinInstallStatus install_builtin_integer_wrapper(
++        const char* dll_name, const char* symbol, void* writable_slot,
++        size_t slot_bytes, SealExecutable seal, void* seal_user);
+ 
+     // ImportResolver: exact match on (dll, symbol) or (dll, ordinal).
+     // Unknown => nullptr (the loader refuses with the full missing list).
+--- a/loader/tests/import_registry_test.cpp
++++ b/loader/tests/import_registry_test.cpp
+@@ -14,10 +14,19 @@
+     if (!condition) ++failures;
+ }
+ 
++static bool helper_lookup(cap13::WinModule handle, const char* name, void** out)
++{
++    if (handle != reinterpret_cast<void*>(0x4321) ||
++        name[0] != 'H' || name[1] != '\0') return false;
++    *out = reinterpret_cast<void*>(0x8765);
++    return true;
++}
++
+ static bool lookup(cap13::WinModule handle, const char* name, void** out)
+ {
+     if (handle != reinterpret_cast<void*>(0x1234)) return false;
+-    reentered = active->resolve("KERNEL32.DLL", "Sleep", 0) != nullptr;
++    reentered = active->resolve("HELPER.DLL", "H", 0) ==
++                reinterpret_cast<void*>(0x8765);
+     if (name[0] == 'F' && name[1] == 'n' && name[2] == '\0')
+     {
+         *out = reinterpret_cast<void*>(0x5678);
+@@ -33,16 +42,11 @@
+     shim.register_builtin_exports();
+     check(shim.resolve("KERNEL32.DLL", "Sleep", 0) == nullptr,
+           "raw SysV built-in body is not exposed as a guest import");
+-    check(!shim.publish_builtin_wrapper("kernel32.dll", "Imaginary", reinterpret_cast<void*>(0x99)) &&
+-          !shim.publish_builtin_wrapper("kernel32.dll", "Sleep", nullptr),
+-          "unknown rows and null wrappers cannot be published");
+-    check(shim.publish_builtin_wrapper("KERNEL32.DLL", "Sleep", reinterpret_cast<void*>(0x9999)) &&
+-          shim.resolve("kernel32.dll", "Sleep", 0) == reinterpret_cast<void*>(0x9999),
+-          "a known row resolves only through its published Win64 wrapper");
++    shim.register_module("Helper.DLL", reinterpret_cast<void*>(0x4321), helper_lookup);
+     shim.register_module("UE4SS.DLL", reinterpret_cast<void*>(0x1234), lookup);
+     check(shim.resolve("ue4ss.dll", "Fn", 0) == reinterpret_cast<void*>(0x5678),
+           "registered module names use ASCII case-insensitive lookup");
+-    check(reentered, "module lookup may resolve a built-in import recursively");
++    check(reentered, "module lookup may resolve another registered module recursively");
+     check(shim.resolve("ue4ss.dll", "Missing", 0) == nullptr,
+           "missing registered export remains unresolved");
+     shim.register_module(nullptr, reinterpret_cast<void*>(0x1234), lookup);
+--- a/loader/tests/run_import_registry.py
++++ b/loader/tests/run_import_registry.py
+@@ -10,6 +10,7 @@
+     '-Wextra', '-Werror', '-pthread', '-I' + str(root / 'src'),
+     '-I' + str(root / 'include'),
+     str(root / 'tests/import_registry_test.cpp'),
+-    str(root / 'src/win_api_shim.cpp'), '-o', str(out),
++    str(root / 'src/win_api_shim.cpp'),
++    str(root / 'src/win64_bridge.S'), '-o', str(out),
+ ], check=True, timeout=30)
+ subprocess.run(['arch', '-x86_64', str(out)], check=True, timeout=5)
+--- /dev/null
++++ b/loader/tests/typed_import_install_test.cpp
+@@ -0,0 +1,127 @@
++#include "win_api_shim.h"
++#include "win64_bridge.h"
++
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <sys/mman.h>
++#include <unistd.h>
++
++static int failures = 0;
++static int seal_calls = 0;
++static bool stamp_seen = false;
++static bool visible_during_seal = false;
++static cap13::WinApiShim* active_shim = nullptr;
++static const char* sealing_symbol = nullptr;
++
++static void check(bool condition, const char* label)
++{
++    std::printf("%s %s\n", condition ? "PASS" : "FAIL", label);
++    if (!condition) ++failures;
++}
++
++static bool reject_seal(void*, size_t, void*)
++{
++    ++seal_calls;
++    return false;
++}
++
++static bool seal_rx(void* memory, size_t bytes, void*)
++{
++    ++seal_calls;
++    visible_during_seal |= active_shim->resolve("kernel32.dll", sealing_symbol, 0) != nullptr;
++    const auto* code = static_cast<const uint8_t*>(memory);
++    stamp_seen = code[0] == 0x49 && code[1] == 0xBA &&
++                 code[10] == 0x49 && code[11] == 0xBB &&
++                 code[20] == 0x48 && code[21] == 0xB8 &&
++                 code[30] == 0xFF && code[31] == 0xE0;
++    return stamp_seen && mprotect(memory, bytes, PROT_READ | PROT_EXEC) == 0;
++}
++
++int main()
++{
++    using cap13::BuiltinInstallStatus;
++    const long page_bytes = sysconf(_SC_PAGESIZE);
++    if (page_bytes < 4096) return 2;
++    auto map_page = [=]() -> void* {
++        void* p = mmap(nullptr, static_cast<size_t>(page_bytes),
++                       PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
++        return p == MAP_FAILED ? nullptr : p;
++    };
++    void* sleep_page = map_page();
++    void* tick_page = map_page();
++    void* spare_page = map_page();
++    if (!sleep_page || !tick_page || !spare_page) return 2;
++
++    cap13::WinApiShim shim;
++    active_shim = &shim;
++    cap13::WinApiShim empty_shim;
++    check(empty_shim.install_builtin_integer_wrapper("kernel32.dll", "Sleep", spare_page,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Unsupported,
++          "unregistered catalog cannot publish an import");
++    shim.register_builtin_exports();
++    check(shim.resolve("kernel32.dll", "Sleep", 0) == nullptr &&
++          shim.resolve("kernel32.dll", "GetTickCount", 0) == nullptr,
++          "catalog names remain unresolved before executable sealing");
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", "Imaginary", spare_page,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Unsupported,
++          "unknown row is refused before stamping or sealing");
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", "VirtualAlloc", spare_page,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Unsupported,
++          "unreviewed Windows API stays unresolved");
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", "Sleep", nullptr,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::InvalidInput &&
++          shim.install_builtin_integer_wrapper("kernel32.dll", "Sleep", sleep_page,
++          31, seal_rx, nullptr) == BuiltinInstallStatus::InvalidInput &&
++          shim.install_builtin_integer_wrapper("kernel32.dll", "Sleep", sleep_page,
++          static_cast<size_t>(page_bytes), nullptr, nullptr) ==
++          BuiltinInstallStatus::InvalidInput,
++          "null, undersized, and unsealable memory are rejected");
++    check(seal_calls == 0 && shim.resolve("kernel32.dll", "VirtualAlloc", 0) == nullptr,
++          "invalid requests did not seal memory or publish APIs");
++
++    check(shim.install_builtin_integer_wrapper("KERNEL32.DLL", "Sleep", sleep_page,
++          static_cast<size_t>(page_bytes), reject_seal, nullptr) ==
++          BuiltinInstallStatus::SealFailed &&
++          shim.resolve("kernel32.dll", "Sleep", 0) == nullptr,
++          "failed executable-memory transition publishes no import");
++    sealing_symbol = "Sleep";
++    check(shim.install_builtin_integer_wrapper("KERNEL32.DLL", "Sleep", sleep_page,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Ok && stamp_seen && !visible_during_seal &&
++          shim.resolve("kernel32.dll", "Sleep", 0) == sleep_page,
++          "Sleep remains hidden during sealing, then publishes its trampoline");
++    sealing_symbol = "GetTickCount";
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", "GetTickCount", tick_page,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Ok && !visible_during_seal &&
++          shim.resolve("KERNEL32.DLL", "GetTickCount", 0) == tick_page,
++          "second typed time API publishes independently");
++
++    auto* sleep_entry = shim.resolve("kernel32.dll", "Sleep", 0);
++    auto* tick_entry = shim.resolve("kernel32.dll", "GetTickCount", 0);
++    const auto start = std::chrono::steady_clock::now();
++    const uint32_t before = static_cast<uint32_t>(cap13_win64_call0(tick_entry));
++    (void)cap13_win64_call1(sleep_entry, 5);
++    const uint32_t after = static_cast<uint32_t>(cap13_win64_call0(tick_entry));
++    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
++        std::chrono::steady_clock::now() - start).count();
++    check(elapsed >= 3 && elapsed < 10000 && uint32_t(after - before) < 10000,
++          "published Win64 Sleep and GetTickCount cross into SysV handlers");
++    const int before_duplicate = seal_calls;
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", "Sleep", spare_page,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::AlreadyPublished && seal_calls == before_duplicate &&
++          shim.resolve("kernel32.dll", "Sleep", 0) == sleep_page,
++          "duplicate installation cannot replace a live IAT target");
++
++    munmap(spare_page, static_cast<size_t>(page_bytes));
++    // Published trampolines stay mapped until process exit, as required by
++    // the retained-module lifetime rule.
++    std::printf("TOTAL: %d failed\n", failures);
++    return failures ? 1 : 0;
++}
+--- /dev/null
++++ b/loader/tests/run_typed_import_install.py
+@@ -0,0 +1,16 @@
++#!/usr/bin/env python3
++"""Build and run typed, sealed import installation host checks."""
++import subprocess
++from pathlib import Path
++
++root = Path(__file__).resolve().parents[1]
++out = root / 'tests/typed-import-install-host'
++subprocess.run([
++    'clang++', '-arch', 'x86_64', '-std=c++17', '-O1', '-g', '-Wall',
++    '-Wextra', '-Werror', '-pthread', '-I' + str(root / 'src'),
++    '-I' + str(root / 'include'),
++    str(root / 'tests/typed_import_install_test.cpp'),
++    str(root / 'src/win_api_shim.cpp'),
++    str(root / 'src/win64_bridge.S'), '-o', str(out),
++], check=True, timeout=30)
++subprocess.run(['arch', '-x86_64', str(out)], check=True, timeout=20)

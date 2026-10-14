@@ -1,0 +1,94 @@
+{
+  "worker": "worker-game-session-ridealongs",
+  "date": "2026-10-04",
+  "environment": "host-side static verification only; no console contact, no native execution",
+  "hash_verification": {
+    "qdrv1": {
+      "file": "worker-record-sink-addon/modbridge_qh_driver.prx",
+      "bytes": 26157,
+      "sha256": "52c3221665a423ddd2b22faddd4ac59ea8fd0ab8c1880c61e225d32a43df70a4",
+      "against": "STAGE-PLAN-QDRV1.md sec 1 pin + worker-record-sink-addon/build-receipt.json final_sha256/final_bytes",
+      "result": "MATCH",
+      "extra": "top-level copy cmp-equal to determinism/run1/modbridge_qh_driver.prx; bare-sdk sha 7ae1e4e39c5f312ec5927be6bec82d92c860ab8b3b65ef4a9826fd296c8ce1d9 == build-receipt.json inner_elf_sha256"
+    },
+    "observer": {
+      "file": "worker-observer-packaging/modbridge_runtime_aligned_observer.prx",
+      "bytes": 30152151,
+      "sha256": "1afa0997682cc6ecc14fd9f82961d68755edfacb36b36a4135203e37b1011e30",
+      "against": "worker-observer-packaging/CLAIM.json claims.observer_packaged",
+      "result": "MATCH",
+      "extra": "top-level copy cmp-equal to build-1/modbridge_runtime_aligned_observer.prx"
+    }
+  },
+  "checker_reruns": [
+    {
+      "checker": "worker-record-sink-addon/check_qdrv_artifact.py",
+      "args": ["determinism/run1", "determinism/run2"],
+      "results": [
+        {"status": "LOCAL_PACKAGE_CHECKS_PASSED", "rc": 0, "bytes": 26157, "sha256": "52c32216..."},
+        {"status": "LOCAL_PACKAGE_CHECKS_PASSED", "rc": 0, "bytes": 26157, "sha256": "52c32216..."}
+      ],
+      "covers": "fself container law, init/fini 1/1 sentinels, SDK 0x11000000, explicit DT_INIT/DT_FINI, loader-unowned arrays, 11-row decoded import exact equality, forbidden-identity gate"
+    },
+    {
+      "checker": "worker-observer-packaging/check_observer_artifact.py",
+      "args": ["build-1", "build-2"],
+      "invocation_note": "argv[1] is relative to the checker's own dir (out = base/argv[1]); a plain 'python3 check_observer_artifact.py build-1' from the team dir fails with a doubled path — run as documented",
+      "results": [
+        {"status": "LOCAL_PACKAGE_CHECKS_PASSED", "rc": 0, "bytes": 30152151, "sha256": "1afa0997...", "init_slots": 232, "fini_slots": 2, "dynsym_import_count": 191, "sdk": "0x11000000", "build2_byte_identical": true},
+        {"status": "LOCAL_PACKAGE_CHECKS_PASSED", "rc": 0, "bytes": 30152151, "sha256": "1afa0997...", "init_slots": 232, "fini_slots": 2, "dynsym_import_count": 191, "sdk": "0x11000000", "build2_byte_identical": null}
+      ],
+      "covers": "fself container law, embedded-header equality with e_shnum zeroed, per-segment byte equality, PT_SCE_MODULE unique, 191-row frozen contract exact equality (contract sha 58d94bc6...), combined object 225f6d68... == frozen recipe, init/fini 232/2 == frozen lineage"
+    }
+  ],
+  "ploader_ini_reconciliation": {
+    "source": ".superpowers/native-dependency-spike/ploader-cleanup-candidate-1/original/main.c",
+    "parser_facts": [
+      "MAX_PLUGINS=10 per title (L26), MAX_TITLES=10 (L27), MAX_PATH_LEN=255, line buffer 1024 (L658)",
+      "parse_mode (L605-610): only 0/1/2 valid; others -> -1 and dropped",
+      "mode<=0 SKIPPED at read_ini (L672-673): never registered -> no PT_ATTACH, no FAIL notify, no timeout wait; consumes NO plugin slot",
+      "mode 2 = late: stable_ms=1000, min_mod=16, settle_ms=600 (L471-476); per-plugin wait cap 25 s (L779); overall INJECTOR_TIMEOUT_S=120 (L735)",
+      "registration order == file order == injection order (sequential per-pid loop L776-820)",
+      "NO path dedup: register_plugin appends blindly (L642-648); duplicate lines inject twice (confirmed by simulation)"
+    ],
+    "combined_layout": "6 lines: 4 existing (aligned_entry=2, path_test=2, ingame_facts=0, composition=2, exact order taken from Step-0 RETR pre-image) + appended qdrv1=2 and observer=2 AFTER composition",
+    "decision_ingame_facts_stays_0": "parser-inert; qdrv1 C2 channel stays single-writer (satisfies STAGE-PLAN-QDRV1 sec 1 concern without touching any existing byte)",
+    "decision_path_test_stays_2": "one-shot freshness oracle; appends PATH_TEST+ACTIVATION_TEST to /data/plugins/UE4SS.log at module_start, returns 0 always, no threads; non-interfering (audit); registered count 5/10",
+    "simulation": {
+      "tool": "simulate_ploader_ini.py (this dir), parser-faithful port of read_ini/parse_mode/normalize_path/get_or_create_slot/register_plugin",
+      "result": "SIMULATION_PASSED rc=0",
+      "variants": {
+        "canonical": "5 registered, mode-0 skipped, order == file order",
+        "no_trailing_newline": "identical parse",
+        "crlf": "identical parse (trim strips \\r)",
+        "blank_lines_comments": "identical parse",
+        "ridealongs_first": "registration == file order even when ridealongs precede (order not load-bearing)",
+        "duplicate_line_hazard": "HAZARD CONFIRMED: duplicated qdrv1 line registers 2x -> duplicate injection; append-only edit + count check mandatory",
+        "no_stray_paths (igf flipped to 2)": "6 registered, still <= MAX_PLUGINS=10",
+        "invalid_mode_3": "mode-3 line dropped"
+      }
+    }
+  },
+  "readback_law": {
+    "law": "worker-v3-startup-diag REPORT sec 2 (pinned): ftpsrv decryption readback of a staged fself == segment-covered prefix of the bare-sdk ELF (max p_offset+p_filesz over phdrs); SHT tail not embedded; e_shnum zeroed in embedded header; full-file hash equality impossible by construction",
+    "constants": {
+      "qdrv1": {"staged_fself_bytes": 26157, "bare_sdk_sha256": "7ae1e4e39c5f312ec5927be6bec82d92c860ab8b3b65ef4a9826fd296c8ce1d9", "expected_readback_bytes": 87112, "expected_readback_body_sha256": "71406d3ccc7c1da0688b68ff35fd35c4a7ef9241b4d02ce427504cd392002cf5"},
+      "observer": {"staged_fself_bytes": 30152151, "bare_sdk_sha256": "d0a3d6feebae18680962fb976726e86ea1ea397e183185793b75c290c6c0290f", "expected_readback_bytes": 30143976, "expected_readback_body_sha256": "3f89a5b66bba614926f7e7b1273c1d2aadeb505b2797dcd7389b12cebeee6622"}
+    },
+    "snippet_validation": {
+      "method": "simulated ftpsrv output = bare[:end] with e_shoff/e_shentsize/e_shnum/e_shstrndx zeroed, run through the EXACT snippet published in STAGE-PLAN-COMBINED.md sec 3",
+      "qdrv1_positive": "rc=0 READBACK-OK",
+      "observer_positive": "rc=0 READBACK-OK",
+      "negative_control": "single flipped payload byte -> rc=1 READBACK-FAIL body=MISMATCH",
+      "note": "hdr_diff diagnostic lists only Ehdr byte positions (allowed-zeroing region); body mismatch is reported separately as body=MISMATCH"
+    }
+  },
+  "interaction_audit_sources": {
+    "observer": "worker-aligned-entry-observer/OBSERVER-DESIGN.md (worker thread 30x2s; stat + O_RDONLY|O_NOFOLLOW pread<=512B tail, drain<=1MiB; own log O_APPEND 0600; never writes UE4SS.log; no lseek; import table L112-118 has no mutex)",
+    "qdrv1": "worker-record-sink-addon/DESIGN.md + CLAIM.json (1 detached driver thread 30x4s; own sceKernelOpen/Write/Close O_APPEND|O_CREAT 0600 on /data/modbridge-ingame-facts.jsonl, one <1KB sceKernelWrite per line; GUA header-window reads only; 11-row import surface incl. nanosleep/pthread_create/pthread_detach/pthread_self, no mutex; admission gate refuses until GUA admits)",
+    "composition5": "worker-composition-5-rebuild/staging/lineage-overlay-1/lifecycle/runtime_module_entry.c (runtime-status.txt via mfa_status sink, one-sink-per-process S4; UE4SS.log O_APPEND|O_NOFOLLOW write ONLY on failure paths, pre-thread; diagnostic channel PROBE_LOG_PATH = /data/townfall_runtime_aligned_entry.log per frozen generated/probe_config.h L3) + qdrv1 CLAIM tree-grep (composition never calls OnEngineTickDispatch/FormatRecordJsonLine -> never writes the jsonl)",
+    "path_test": "worker-minimal-path-test/STAGE-PLAN.md sec 1-2 (module_start once: loadlist.txt 16B read + UE4SS.log O_WRONLY|O_CREAT|O_APPEND 2 lines + return 0 always; no threads, no ctor walk, no C++)",
+    "ploader": "pinned main.c (sequential injection, mode-2 timings, 120 s budget, all_ok re-injection quirk L775-822)"
+  },
+  "verdict": "ALL LOCAL CHECKS PASSED; combined 6-entry ini is parser-proven; interaction audit found NO interference; STAGE-PLAN-COMBINED.md is ready to feed worker-console-batch-runner stage-qdrv1 (its files untouched)"
+}

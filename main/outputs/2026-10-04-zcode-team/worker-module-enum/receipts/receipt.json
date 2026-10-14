@@ -1,0 +1,151 @@
+{
+ "worker": "worker-module-enum",
+ "receipt": "module-enum-family",
+ "toolchain": {
+  "prospero_clang": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/bin/prospero-clang",
+  "llvm_config": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin/llvm-config",
+  "llvm_version": "21.1.8",
+  "sdk": "ps5-payload-sdk v0.43 (pinned cached copy)"
+ },
+ "commands": [
+  {
+   "label": "host-compile",
+   "exit": 0,
+   "note": "Apple clang -arch x86_64 -std=c11 -O2 -Wall -Wextra -Werror; sources + abi + test"
+  },
+  {
+   "label": "host-run",
+   "exit": 0,
+   "note": "arch -x86_64 build/host-test -> MODULE_ENUM_SELFTEST_RESULT 0"
+  },
+  {
+   "label": "sanitized-run",
+   "exit": 0,
+   "note": "-fsanitize=address -> MODULE_ENUM_SELFTEST_RESULT 0"
+  },
+  {
+   "label": "native-owner",
+   "exit": 0,
+   "argv": [
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/bin/prospero-clang",
+    "-std=c11",
+    "-O2",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-ffreestanding",
+    "-fno-builtin",
+    "-fPIC",
+    "-march=x86-64",
+    "-I",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-module-enum/sources",
+    "-I",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-module-enum/../../ps5-mod-bridge/windows-execution",
+    "-c",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-module-enum/sources/mb_win_module_enum.c",
+    "-o",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-module-enum/receipts/mb_win_module_enum.o"
+   ]
+  },
+  {
+   "label": "bridge-ir",
+   "exit": 0,
+   "argv": [
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/bin/prospero-clang",
+    "-std=c11",
+    "-O2",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-ffreestanding",
+    "-fno-builtin",
+    "-fPIC",
+    "-march=x86-64",
+    "-I",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-module-enum/sources",
+    "-I",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-module-enum/../../ps5-mod-bridge/windows-execution",
+    "--target=x86_64-unknown-freebsd9",
+    "-fshort-wchar",
+    "-S",
+    "-emit-llvm",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-module-enum/sources/mb_win_module_enum_abi.c",
+    "-o",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-module-enum/receipts/mb_win_module_enum_abi.ll"
+   ]
+  },
+  {
+   "label": "bridge-backend",
+   "exit": 0,
+   "argv": [
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/bin/prospero-clang",
+    "-x",
+    "ir",
+    "-O2",
+    "-fPIC",
+    "-Werror",
+    "-Wno-override-module",
+    "-c",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-module-enum/receipts/mb_win_module_enum_abi.ll",
+    "-o",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-module-enum/receipts/mb_win_module_enum_abi_ps5.o"
+   ]
+  }
+ ],
+ "evidence": {
+  "host_result": "MODULE_ENUM_SELFTEST_RESULT 0 (failures=0)",
+  "sanitized_result": "MODULE_ENUM_SELFTEST_RESULT 0 (ASan)",
+  "owner_undefined_symbols": 0,
+  "bridge_undefined_symbols": "12, all mb_win_module_enum_* owner core (register not needed by ABI)",
+  "win64cc_definitions": 14,
+  "win64cc_names": [
+   "GetModuleHandleA",
+   "GetModuleHandleW",
+   "GetModuleHandleExW",
+   "GetModuleFileNameA",
+   "GetModuleFileNameW",
+   "GetProcAddress",
+   "LoadLibraryA",
+   "LoadLibraryW",
+   "LoadLibraryExA",
+   "LoadLibraryExW",
+   "FreeLibrary",
+   "K32EnumProcessModules",
+   "K32GetModuleBaseNameA",
+   "K32GetModuleInformation"
+  ],
+  "moduleinfo_layout": "{void* base @0; uint32 size_of_image @8; void* entry @16} == 24 bytes (_Static_assert in abi unit)",
+  "target_executed": false,
+  "console_contact": false
+ },
+ "artifacts_sha256": {
+  "sources/mb_win_module_enum.h": "8bb400305ac548c8e1af19a2307e9a7a69a7e76baae3b91b72e685ea9b3f1e2c",
+  "sources/mb_win_module_enum.c": "ecb62b384ead556f818c135a74adb02e519f96d9b5e2d09b2aa5a5d889ac9926",
+  "sources/mb_win_module_enum_abi.h": "8767cd1ee824746d6c91cbf99d2004189be22b06232c4a655a5f71eed8eb5d4f",
+  "sources/mb_win_module_enum_abi.c": "3ff4e1b564c5e62c8aba969aa7ba7d8482a26bdbe823ec330b7ae8837d1c917b",
+  "tests/test_win_module_enum.c": "dcf5db907ef87326447bb4e78ddee46c6fb6e4f4001aaed7a88faa06e721ef4f",
+  "receipts/mb_win_module_enum.o": "495768857397509b72a33eb8013150bd8ea0224a302e34ad78970391dcc917b1",
+  "receipts/mb_win_module_enum_abi.ll": "513a049984f962c303bd1a332b215f6ea6ca98578e429f50ae074c59776a3c79",
+  "receipts/mb_win_module_enum_abi_ps5.o": "fd45e8a6858a9c1c15c030788df31a2c59f9e9e658068ad147560fda66e3ef7c"
+ },
+ "census_sources": {
+  "census": "outputs/2026-10-04-zcode-team/worker-dll-mod-retention/baseline-dll-census.json",
+  "targeted": [
+   "FreeLibrary",
+   "GetModuleFileNameW",
+   "GetProcAddress",
+   "LoadLibraryW (dwmapi.dll)",
+   "GetModuleHandleA/W",
+   "GetModuleHandleExW",
+   "GetModuleFileNameA/W",
+   "GetProcAddress",
+   "LoadLibraryA",
+   "LoadLibraryExA/W",
+   "FreeLibrary",
+   "K32EnumProcessModules",
+   "K32GetModuleBaseNameA",
+   "K32GetModuleInformation (UE4SS.dll)"
+  ]
+ },
+ "status": "MODULE_ENUM_HOST_AND_NATIVE_OBJECTS_PASSED"
+}

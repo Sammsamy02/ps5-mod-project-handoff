@@ -1,0 +1,31 @@
+{
+  "id": "worker-installer-composition",
+  "team": "zcode-team-2026-10-04",
+  "role": "console-side installer composition recipe (controller-runnable build script)",
+  "claimed_utc": "2026-10-04",
+  "output_dir": "outputs/2026-10-04-zcode-team/worker-installer-composition/",
+  "inputs_consumed_read_only": [
+    "outputs/2026-10-04-zcode-team/worker-7-installer/ (modinst.c, vendored modforge_*)",
+    "outputs/2026-10-04-zcode-team/worker-installer-ps5io/ (ps5_io, ps5_prepare_bridge, RUNTIME-ACK.md, CONSOLE-E2E-PLAN.md, build_console.sh)",
+    "outputs/ps5-mod-bridge/native-host/archive/ (intake.c ABI v1, private/posix_compat, link_layout.py, dependency_build.py, verify.py)",
+    "pinned SDK outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk (compile/link/nm only)",
+    "pinned LLVM 21.1.8 via native-probe/build/deps/llvm (LLVM_CONFIG)",
+    "pinned codec profile .superpowers/native-dependency-spike/native-libarchive-lzma-experiment-1 (libarchive 3.8.7 / xz 5.8.4 / zlib 1.3.2, both flavors)",
+    "pinned mbedcrypto artifacts (host-a4768e3a50d32394616f27f8, native-038ce86825317d4d74716405)",
+    "saved corpus .superpowers/native-observations/nexus-real-mods-2026-10-01/minimap-v3.1.zip (+infinite-stamina-v1.zip)"
+  ],
+  "deliverables": [
+    "compose_installer.py: vendors + patches (recorded anchors) + compiles + links the installer composition; host flavor (PS5IO_HOST=1) and console flavor (prospero-clang, static 3.8.7 closure link inputs exactly as archive/verify.py assembles them); never uploads",
+    "owned adapters: ps5_io_dir (directory-enumeration gap binding), e2e_status (bounded JSONL status interface), modinst_archive_prepare (E2E stage 2a via ps5_prepare_bridge + real intake)",
+    "payload ELF candidate with nm import provider check that refuses unresolvable symbols loudly",
+    "test/smoke_host.sh: host prepare+install+rollback run over a saved corpus zip",
+    "REPORT.md: composition map, exact remaining gaps, controller run sequence"
+  ],
+  "bounds": {
+    "no_network": true,
+    "no_console_execution": "console flavor is compile+link+import-verification only; nothing runs on a PS5",
+    "existing_files_immutable": "all inputs consumed read-only; adaptations happen on vendored copies inside this output dir",
+    "call_budget": 50
+  },
+  "honesty": "The console ELF is a link-verified candidate, not a target-verified payload; directory enumeration binds libc readdir providers (nm-verified) because pure sceKernel Dopen/Dread/Dclose are absent from the pinned libs; runtime behavior of stub-linked libc on a real console is unproven."
+}

@@ -1,0 +1,297 @@
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -165,8 +165,12 @@
+   private:
+     using CreateGuestThread = uint64_t (*)(void*, void*, size_t, void*,
+                                            void*, uint32_t, uint32_t*);
++    using WaitGuestThread = uint32_t (*)(void*, uint64_t, uint32_t);
++    using QueryGuestThread = bool (*)(void*, uint64_t, uint32_t*);
+     using CloseGuestThread = bool (*)(void*, uint64_t);
+     bool set_guest_thread_adapter(void* user, CreateGuestThread create,
++                                  WaitGuestThread wait,
++                                  QueryGuestThread query,
+                                   CloseGuestThread close);
+     Impl* m;
+ };
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -124,6 +124,8 @@
+     GuestWriteMap* guest_write_map = nullptr;
+     void* guest_thread_user = nullptr;
+     CreateGuestThread guest_thread_create = nullptr;
++    WaitGuestThread guest_thread_wait = nullptr;
++    QueryGuestThread guest_thread_query = nullptr;
+     CloseGuestThread guest_thread_close = nullptr;
+     std::string mod_root = "/data/modbridge/roots/";
+     std::mutex mu;
+@@ -292,15 +294,19 @@
+ 
+ bool WinApiShim::set_guest_thread_adapter(void* user,
+                                           CreateGuestThread create,
++                                          WaitGuestThread wait,
++                                          QueryGuestThread query,
+                                           CloseGuestThread close)
+ {
+-    if (!user || !create || !close) return false;
++    if (!user || !create || !wait || !query || !close) return false;
+     std::lock_guard guard(m->mu);
+     if (m->guest_thread_user) return false;
+     for (const auto& row : m->modules)
+         if (row.second.mapped_lookup) return false;
+     m->guest_thread_user = user;
+     m->guest_thread_create = create;
++    m->guest_thread_wait = wait;
++    m->guest_thread_query = query;
+     m->guest_thread_close = close;
+     return true;
+ }
+@@ -310,7 +316,8 @@
+ {
+     std::lock_guard guard(m->mu);
+     return manager && m->guest_thread_user == manager &&
+-           m->guest_thread_create && m->guest_thread_close;
++           m->guest_thread_create && m->guest_thread_wait &&
++           m->guest_thread_query && m->guest_thread_close;
+ }
+ 
+ bool WinApiShim::write_guest_bytes(void* address, const void* source,
+@@ -730,14 +737,53 @@
+     return 1;
+ }
+ 
+-static uint32_t impl_WaitForSingleObject_events(WinApiShim::Impl*, void* handle, uint32_t ms)
+-{
+-    // Event handles come from our CreateEvent emulation (condvar class).
+-    // Design-grade: returns WAIT_FAILED for unknown handles; M1 wires the
+-    // real condvar event object table.
+-    (void)handle;
+-    (void)ms;
+-    return WAIT_FAILED;
++static uint32_t impl_WaitForSingleObject_threads(WinApiShim::Impl* m,
++                                                 uint64_t handle, uint32_t ms)
++{
++    if (!m->guest_thread_wait) return WAIT_FAILED;
++    const uint32_t result = m->guest_thread_wait(m->guest_thread_user,
++                                                 handle, ms);
++    if (result == WAIT_FAILED) win32_set_last_error(ERROR_INVALID_HANDLE);
++    if (result == 0xFFFFFFFEu)
++    {
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return WAIT_FAILED;
++    }
++    return result;
++}
++
++static uint32_t impl_GetExitCodeThread_managed(WinApiShim::Impl* m,
++                                               uint64_t handle,
++                                               uint32_t* out_code)
++{
++    if (!m->guest_thread_query || !out_code)
++    {
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return 0;
++    }
++    uint32_t code = 0;
++    if (!m->guest_thread_query(m->guest_thread_user, handle, &code))
++    {
++        win32_set_last_error(ERROR_INVALID_HANDLE);
++        return 0;
++    }
++    if (!m->owner->write_guest_bytes(out_code, &code, sizeof(code)))
++    {
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return 0;
++    }
++    return 1;
++}
++
++static uint32_t impl_CloseHandle_thread(WinApiShim::Impl* m, uint64_t handle)
++{
++    if (!m->guest_thread_close ||
++        !m->guest_thread_close(m->guest_thread_user, handle))
++    {
++        win32_set_last_error(ERROR_INVALID_HANDLE);
++        return 0;
++    }
++    return 1;
+ }
+ 
+ static uint32_t impl_TlsAlloc(WinApiShim::Impl* m)
+@@ -1110,7 +1156,9 @@
+         {"kernel32.dll", "InitializeSListHead", (void*)&impl_InitializeSListHead, 1, true},
+         {"kernel32.dll", "DisableThreadLibraryCalls", (void*)&impl_DisableThreadLibraryCalls, 1, true},
+         {"kernel32.dll", "GetSystemTimeAsFileTime", (void*)&impl_GetSystemTimeAsFileTime, 1, true},
+-        {"kernel32.dll", "WaitForSingleObject", (void*)&impl_WaitForSingleObject_events, 2, false},
++        {"kernel32.dll", "WaitForSingleObject", (void*)&impl_WaitForSingleObject_threads, 2, true},
++        {"kernel32.dll", "GetExitCodeThread", (void*)&impl_GetExitCodeThread_managed, 2, true},
++        {"kernel32.dll", "CloseHandle", (void*)&impl_CloseHandle_thread, 1, true},
+         {"kernel32.dll", "TlsAlloc", (void*)&impl_TlsAlloc, 0, false},
+         {"kernel32.dll", "TlsGetValue", (void*)&impl_TlsGetValue, 1, false},
+         {"kernel32.dll", "TlsSetValue", (void*)&impl_TlsSetValue, 2, false},
+@@ -1157,7 +1205,11 @@
+         auto row = raw_dll->second.find(symbol);
+         if (row == raw_dll->second.end() || !row->second.reviewed_for_publication)
+             return BuiltinInstallStatus::Unsupported;
+-        if (dll == "kernel32.dll" && !std::strcmp(symbol, "CreateThread") &&
++        if (dll == "kernel32.dll" &&
++            (!std::strcmp(symbol, "CreateThread") ||
++             !std::strcmp(symbol, "WaitForSingleObject") ||
++             !std::strcmp(symbol, "GetExitCodeThread") ||
++             !std::strcmp(symbol, "CloseHandle")) &&
+             !m->guest_thread_create)
+             return BuiltinInstallStatus::Unsupported;
+         if (needs_guest_reader(dll, symbol) && !m->hooks.read_guest_bytes)
+@@ -1301,7 +1353,10 @@
+                 if (eligible && needs_guest_reader(dll, symbol) &&
+                     !m->hooks.read_guest_bytes) eligible = false;
+                 if (eligible && dll == "kernel32.dll" &&
+-                    !std::strcmp(symbol, "CreateThread") &&
++                    (!std::strcmp(symbol, "CreateThread") ||
++                     !std::strcmp(symbol, "WaitForSingleObject") ||
++                     !std::strcmp(symbol, "GetExitCodeThread") ||
++                     !std::strcmp(symbol, "CloseHandle")) &&
+                     !m->guest_thread_create) eligible = false;
+             }
+             backend = m->executable_backend;
+--- a/loader/src/guest_thread_import.cpp
++++ b/loader/src/guest_thread_import.cpp
+@@ -16,6 +16,28 @@
+             if (out_id) *out_id = result.thread_id;
+             return result.handle;
+         },
++        [](void* user, uint64_t handle, uint32_t ms) -> uint32_t {
++            const auto result = static_cast<GuestThreadManager*>(user)->wait(
++                handle, ms);
++            switch (result)
++            {
++                case GuestThreadWaitStatus::Object0: return 0;
++                case GuestThreadWaitStatus::Timeout: return 0x102;
++                case GuestThreadWaitStatus::WouldDeadlock: return 0xFFFFFFFEu;
++                case GuestThreadWaitStatus::InvalidHandle: return 0xFFFFFFFFu;
++            }
++            return 0xFFFFFFFFu;
++        },
++        [](void* user, uint64_t handle, uint32_t* out_code) -> bool {
++            const auto result = static_cast<GuestThreadManager*>(user)->query(
++                handle);
++            if (!result.valid || !out_code ||
++                (result.finished && result.run.status !=
++                                        GuestThreadRunStatus::Ok))
++                return false;
++            *out_code = result.finished ? result.run.exit_code : 259u;
++            return true;
++        },
+         [](void* user, uint64_t handle) -> bool {
+             return static_cast<GuestThreadManager*>(user)->close(handle);
+         });
+--- a/loader/src/guest_thread_manager.cpp
++++ b/loader/src/guest_thread_manager.cpp
+@@ -227,6 +227,8 @@
+         std::lock_guard<std::mutex> guard(m_->mutex);
+         auto it = m_->handles.find(handle);
+         if (it == m_->handles.end()) return GuestThreadWaitStatus::InvalidHandle;
++        if (m_->deferred && milliseconds == UINT32_MAX)
++            return GuestThreadWaitStatus::WouldDeadlock;
+         rec = it->second;
+     }
+     if (rec->worker.get_id() == std::this_thread::get_id())
+--- a/loader/tests/guest_pe_thread_test.cpp
++++ b/loader/tests/guest_pe_thread_test.cpp
+@@ -246,6 +246,19 @@
+                   seal_executable, nullptr) ==
+                   cap13::BuiltinInstallStatus::Unsupported,
+               "CreateThread remains unpublished without an owned manager");
++        check(thread_shim.install_builtin_integer_wrapper(
++                  "kernel32.dll", "WaitForSingleObject", entry, allocated,
++                  seal_executable, nullptr) ==
++                  cap13::BuiltinInstallStatus::Unsupported &&
++              thread_shim.install_builtin_integer_wrapper(
++                  "kernel32.dll", "GetExitCodeThread", entry, allocated,
++                  seal_executable, nullptr) ==
++                  cap13::BuiltinInstallStatus::Unsupported &&
++              thread_shim.install_builtin_integer_wrapper(
++                  "kernel32.dll", "CloseHandle", entry, allocated,
++                  seal_executable, nullptr) ==
++                  cap13::BuiltinInstallStatus::Unsupported,
++              "thread handle APIs remain unpublished without an owner");
+         cap13::GuestThreadManager imported(batch, bank, blocked_runner);
+         cap13::GuestWriteMap thread_writes;
+         uint32_t output_tid = 0;
+@@ -259,6 +272,32 @@
+                   seal_executable, nullptr) ==
+                   cap13::BuiltinInstallStatus::Ok,
+               "owned manager and guest output map admit sealed CreateThread");
++        void* wait_entry = nullptr;
++        void* exit_entry = nullptr;
++        void* close_entry = nullptr;
++        size_t wait_bytes = 0, exit_bytes = 0, close_bytes = 0;
++        uint32_t exit_code = 0;
++        int exit_owner = 0;
++        const bool handles_installed =
++              allocate_writable(32, &wait_entry, &wait_bytes, nullptr) &&
++              allocate_writable(32, &exit_entry, &exit_bytes, nullptr) &&
++              allocate_writable(32, &close_entry, &close_bytes, nullptr) &&
++              thread_writes.add(&exit_owner, &exit_code, sizeof(exit_code)) &&
++              thread_shim.install_builtin_integer_wrapper(
++                  "kernel32.dll", "WaitForSingleObject", wait_entry,
++                  wait_bytes, seal_executable, nullptr) ==
++                  cap13::BuiltinInstallStatus::Ok &&
++              thread_shim.install_builtin_integer_wrapper(
++                  "kernel32.dll", "GetExitCodeThread", exit_entry,
++                  exit_bytes, seal_executable, nullptr) ==
++                  cap13::BuiltinInstallStatus::Ok &&
++              thread_shim.install_builtin_integer_wrapper(
++                  "kernel32.dll", "CloseHandle", close_entry,
++                  close_bytes, seal_executable, nullptr) ==
++                  cap13::BuiltinInstallStatus::Ok;
++        check(handles_installed,
++              "thread wait, exit-code, and close imports seal for owned handles");
++        if (!handles_installed) return 1;
+         blocked_started.store(false);
+         blocked_release.store(false);
+         const auto call_create = [&](uint64_t flags, uint64_t out) {
+@@ -276,13 +315,28 @@
+               imported.query(created).valid,
+               "Win64 CreateThread publishes manager handle and reserved ID");
+         while (!blocked_started.load()) std::this_thread::yield();
++        check(cap13_win64_call2(wait_entry, created, 0) == 0x102 &&
++              cap13_win64_call2(exit_entry, created,
++                                 reinterpret_cast<uint64_t>(&exit_code)) == 1 &&
++              exit_code == 259 &&
++              cap13_win64_call2(exit_entry, created, 1) == 0,
++              "running thread times out and reports STILL_ACTIVE safely");
+         blocked_release.store(true);
+-        check(imported.wait(created, 10000) ==
+-                  cap13::GuestThreadWaitStatus::Object0 &&
+-              imported.query(created).run.exit_code == 77 &&
+-              imported.close(created) && imported.quiesce_all(),
+-              "published CreateThread worker completes and quiesces");
++        check(cap13_win64_call2(wait_entry, created, 10000) == 0 &&
++              cap13_win64_call2(exit_entry, created,
++                                 reinterpret_cast<uint64_t>(&exit_code)) == 1 &&
++              exit_code == 77,
++              "signaled thread exposes its completed exit code");
++        check(cap13_win64_call1(close_entry, created) == 1 &&
++              cap13_win64_call2(wait_entry, created, 0) == 0xFFFFFFFFu &&
++              cap13::win32_get_last_error() == 6 &&
++              cap13_win64_call1(close_entry, created) == 0 &&
++              imported.quiesce_all(),
++              "CloseHandle invalidates one handle without losing worker");
+         release_mapping(entry, allocated, nullptr);
++        release_mapping(wait_entry, wait_bytes, nullptr);
++        release_mapping(exit_entry, exit_bytes, nullptr);
++        release_mapping(close_entry, close_bytes, nullptr);
+         blocked_started.store(false);
+         blocked_release.store(false);
+         blocked_identity.store(0);
+@@ -434,7 +488,9 @@
+               pending.handle != closed.handle &&
+               !blocked_started.load() &&
+               manager.wait(pending.handle, 0) ==
+-                  cap13::GuestThreadWaitStatus::Timeout,
++                  cap13::GuestThreadWaitStatus::Timeout &&
++              manager.wait(pending.handle, UINT32_MAX) ==
++                  cap13::GuestThreadWaitStatus::WouldDeadlock,
+               "pre-attach CreateThread requests retain handles without entry");
+         check(manager.close(closed.handle) &&
+               manager.activate(batch),

@@ -1,0 +1,35 @@
+  PASS  A. OLD: pcall reports a Lua runtime error
+  PASS  A. OLD: mutex STILL OWNED after the error (guard skipped by longjmp) - defect reproduced
+  PASS  A. (cleanup) leaked count drained for the next case
+  PASS  B. NEW: mutex free after each of 1000 refused calls (4 message shapes)
+  PASS  C. msg#0 return RegisterHook(5)                   status/type/text/traceback/stack identical
+  PASS  C. msg#0 return RegisterCustomEvent(5)            status/type/text/traceback/stack identical
+  PASS  C. msg#0 return RegisterHook({})                  status/type/text/traceback/stack identical
+  PASS  C. msg#0 return RegisterHook()                    status/type/text/traceback/stack identical
+  PASS  C. msg#1 return RegisterHook(5)                   status/type/text/traceback/stack identical
+  PASS  C. msg#1 return RegisterCustomEvent(5)            status/type/text/traceback/stack identical
+  PASS  C. msg#1 return RegisterHook({})                  status/type/text/traceback/stack identical
+  PASS  C. msg#1 return RegisterHook()                    status/type/text/traceback/stack identical
+  PASS  C. msg#2 return RegisterHook(5)                   status/type/text/traceback/stack identical
+  PASS  C. msg#2 return RegisterCustomEvent(5)            status/type/text/traceback/stack identical
+  PASS  C. msg#2 return RegisterHook({})                  status/type/text/traceback/stack identical
+  PASS  C. msg#2 return RegisterHook()                    status/type/text/traceback/stack identical
+  PASS  C. msg#3 return RegisterHook(5)                   status/type/text/traceback/stack identical
+  PASS  C. msg#3 return RegisterCustomEvent(5)            status/type/text/traceback/stack identical
+  PASS  C. msg#3 return RegisterHook({})                  status/type/text/traceback/stack identical
+  PASS  C. msg#3 return RegisterHook()                    status/type/text/traceback/stack identical
+  PASS  C. msg#0 mod-side pcall(RegisterHook, 5) -> (false, 'string', text) identical OLD/NEW
+  PASS  C. msg#1 mod-side pcall(RegisterHook, 5) -> (false, 'string', text) identical OLD/NEW
+  PASS  C. msg#2 mod-side pcall(RegisterHook, 5) -> (false, 'string', text) identical OLD/NEW
+  PASS  C. msg#3 mod-side pcall(RegisterHook, 5) -> (false, 'string', text) identical OLD/NEW
+  PASS  D. OLD get_mod_ref under the lock: mutex leaked (helper raise is a longjmp)
+  PASS  D. NEW get_mod_ref_cxx under the lock: mutex free
+  PASS  D. get_mod_ref / get_mod_ref_cxx: identical Lua error text and status
+      INFO message payload kept: OLD=1500 bytes, NEW=1023 bytes
+  PASS  E. KNOWN DIFFERENCE reproduced: NEW truncates the text to 1023 bytes (OLD kept 1500); longest real site message is far below 1023
+  PASS  F. OLD nested native hook: lua.throw_error longjmps over the guard AND the local catch (leak, no log)
+  PASS  F. NEW nested native hook: caught by the local catch, logged once, mutex free, Lua call completes
+  PASS  G. raw CFunction raising with the guard alive: mutex leaked (a C++ throw would NOT be caught here)
+  PASS  G. raw CFunction unlock-then-raise: mutex free, same Lua error
+b5_sites_host_test: checks=32 failures=0
+PASS b5 sites host test

@@ -1,0 +1,42 @@
+--- v1/profiles/generate_profile.py
++++ r2/profiles/generate_profile.py
+@@ -74,22 +74,34 @@
+    value=fact['current_value'];offset=int(value,0) if isinstance(value,str) and value.startswith('0x') else None
+    pins[kind].append({'name':name,'offset':offset,'width':None,'source':'retained authenticated image/static evidence' if offset is not None else ''})
+  static_resolved={}
+- for filename in ['STATIC-FACTS.json','REFLECTION-FACTS.json']:
+-  static_path=workspace/'outputs/2026-10-07-l19-static-layout-check'/filename
++ static_paths=[workspace/'outputs/2026-10-07-l19-static-layout-check'/filename for filename in ['STATIC-FACTS.json','REFLECTION-FACTS.json']]
++ static_paths += [workspace/'outputs/2026-10-07-l19-unresolved-evidence'/filename for filename in ['FIELDC-FACTS.json','UCLASS-FACTS.json']]
++ static_paths += [workspace/'outputs/2026-10-07-l19-class-size-evidence/CLASS-SIZE-FACTS.json',workspace/'outputs/2026-10-07-l19-property-subtype-evidence/SUBTYPE-FACTS.json']
++ for static_path in static_paths:
+   static=json.loads(static_path.read_text());assert static['image']['sha256']==sha
+   for key,window in static['evidence'].items():
+    offset=int(window['file_byte_offset'],0);vaddr=int(window['elf_image_vaddr'],0);raw=bytes.fromhex(window['instruction_bytes']);assert b[offset:offset+len(raw)]==raw
+    loads=[h for h in ph if h[0]==1 and h[3]<=vaddr and vaddr-h[3]+len(raw)<=h[5]];assert len(loads)==1 and offset==loads[0][2]+vaddr-loads[0][3]
++  for window in static.get('data_evidence',{}).values():
++   offset=int(window.get('file_byte_offset',window.get('relocation_file_offset')),0);raw=bytes.fromhex(window.get('bytes',window.get('entry_bytes')));assert b[offset:offset+len(raw)]==raw
++   if 'elf_image_vaddr' in window:
++    vaddr=int(window['elf_image_vaddr'],0);loads=[h for h in ph if h[0]==1 and h[3]<=vaddr and vaddr-h[3]+len(raw)<=h[5]];assert len(loads)==1 and offset==loads[0][2]+vaddr-loads[0][3]
++   if 'r_offset' in window:
++    assert len(raw)==24 and struct.unpack('<QQq',raw)==(int(window['r_offset'],0),int(window['r_info'],0),int(window.get('r_addend',window.get('addend')),0))
+   for fact in static['facts']:
+    if fact['status']!='validated-static' or fact['confidence']!='high':continue
+    static_resolved[fact['key']]=fact
+-   matches=[pin for pin in pins['member'] if pin['name']==fact['key'].replace('.', '::',1)]
++   kind='vtable' if fact['key'].endswith('.vtable_byte_offset') else 'member'
++   name=fact['key'].removesuffix('.vtable_byte_offset').replace('.', '::',1)
++   matches=[pin for pin in pins[kind] if pin['name']==name]
+    for pin in matches:pin.update(offset=int(fact['value'],0),width=fact['width_bytes'],source=str(static_path.relative_to(workspace))+':'+fact['key'])
+   sources.append(static_path);evidence['sources'][str(static_path.relative_to(workspace))]=hashlib.sha256(static_path.read_bytes()).hexdigest()
+-  evidence['static_layout_windows_verified_'+filename]=len(static['evidence'])
++  evidence['static_layout_windows_verified_'+static_path.name]=len(static['evidence'])
++  evidence['static_layout_data_windows_verified_'+static_path.name]=len(static.get('data_evidence',{}))
++ audit_path=workspace/'outputs/2026-10-07-l19-fact-summary-r2/SUBTYPE-AUDIT.json';sources.append(audit_path);evidence['sources'][str(audit_path.relative_to(workspace))]=hashlib.sha256(audit_path.read_bytes()).hexdigest()
+  assert static_resolved['object_storage.native_chunked_65536']['value'] is True
+  assert static_resolved['FField.owner_variant_encoding']['value']=={'storage_bytes':8,'tag_bit':0,'tag_set_kind':'UObject','tag_clear_kind':'FField','untag_mask':'0xfffffffffffffffe'}
+- evidence['resolved_runtime_static_facts']={k:static_resolved[k] for k in ['object_storage.native_chunked_65536','FField.owner_variant_encoding']}
++ evidence['resolved_runtime_static_facts']={k:static_resolved[k] for k in ['object_storage.native_chunked_65536','FField.owner_variant_encoding','UClass.ClassCastFlags','FFieldClass.CastFlags']}
+  required_names={v['name'].replace('::','.',1) for v in pins['member']}
+  unknown=['accessor_width.'+v for v in ['UStruct.SuperStruct','UClass.ClassFlags','UClass.ClassCastFlags','FField.Owner','FField.Next','FField.NamePrivate','FFieldClass.CastFlags','FProperty.PropertyFlags','UFunction.FunctionFlags'] if v in required_names and v not in static_resolved]
+  p={'schema':1,'name':'townfall-ps5-ue56-shipping-stats-off','image':{'sha256':sha,'size':len(b),'extent':extent,'base':0x400000},'layout':{'format':1,'target':'prospero-x86_64-sysv','pointer_size':8,'major':5,'minor':6,'engine_revision':'5.6.1-0+++UE5','build_id':'04bb4330a7d71dcefe1cc2c4d19769d5'},'axes':{'build_configuration':1,'stats':1,'build_source':'PT_SCE PATH:Townfall-PS5-Shipping.self','stats_source':'independent 244-marker classification:54 present;off margin12;C+Python agreement'},'fname':{'case_preserving':False,'output_bytes':8,'output_alignment':8,'source':'retained independently authenticated FNameAbiProfile + l18 native roundtrip'},'evidence':evidence,'required_members':pins['member'],'required_vtables':pins['vtable'],'unknown_required_static_facts':unknown}

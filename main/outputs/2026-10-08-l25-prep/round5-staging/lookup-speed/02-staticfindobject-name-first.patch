@@ -1,0 +1,120 @@
+--- a/src/UObjectGlobals.cpp	2026-10-11 21:26:18
++++ b/src/UObjectGlobals.cpp	2026-10-11 21:26:18
+@@ -555,23 +555,52 @@
+ 
+         bool bQuickSearch = Searcher.IsFast();
+ 
++        // [IT lookup-speed 03, Claude round-13 item 2] Name-first walk order.
++        //
++        // The old predicate ran, PER OBJECT and BEFORE ever comparing the
++        // name: (a) Object->IsA(Class) — a full SuperStruct chain walk, and
++        // (b) for the no-outer short-name shape, Object->GetOutermost() — a
++        // full OuterPrivate chain walk — compared against PackageName, which
++        // is NAME_None for every short-name query. GetOutermost() of a live
++        // object is its UPackage (never NAME_None), so that branch
++        // continued for EVERY object: the walk could never match anything
++        // (the name compare at the bottom only ran for ObjectPackage /
++        // bAnyPackage shapes), yet it still scanned all ~35K objects —
++        // exactly the measured StaticFindObject-short = 55ms self-test line
++        // (PASS valid=false: a guaranteed, expensive miss).
++        //
++        // Fix, preserving every shape that could match before:
++        //   1. Integer name compare FIRST (FName::Equals), so the common
++        //      reject costs 1 read + 1 compare.
++        //   2. The class checks (exact pointer, then IsA) only on a name
++        //      hit — a quick-search guarantee still short-circuits IsA.
++        //   3. Outer verification only on a name hit:
++        //        - explicit ObjectPackage: same outer-chain walk as before;
++        //        - ANY_PACKAGE: no check (same as before);
++        //        - no outer at all (the dead branch): match TOP-LEVEL
++        //          objects only (GetOuterPrivate() == nullptr). That is the
++        //          engine's own StaticFindObjectFastInternal semantics for a
++        //          name-only lookup (the Hash table stores name-hits with
++        //          outer==null), so short-name lookups now actually resolve
++        //          (e.g. "GameEngine" -> the /Script/Engine GameEngine
++        //          package) instead of always missing.
++        //   4. Long names keep the exact GetFullName verification on the
++        //      name-matched candidate only (unchanged behavior, now rare).
+         Searcher.ForEach([&](UObject* Object) {
++            if (!Object->GetNamePrivate().Equals(ShortName))
++            {
++                return LoopAction::Continue;
++            }
++
+             if (Class && bExactClass && Class != Object->GetClassPrivate()) { return LoopAction::Continue; }
+ 
+             // If this is a quick search, then the object is guaranteed to be of the specified class.
+             // Otherwise, we're searching the entirety of GUObjectArray, and we need to check that the class matches.
+             if (Class && !bQuickSearch && !Object->IsA(Class)) { return LoopAction::Continue; }
+ 
+-            bool bIsInOuter{};
+-            if (!bAnyPackage && !ObjectPackage)
++            if (!bAnyPackage && ObjectPackage)
+             {
+-                if (Object->GetOutermost()->GetNamePrivate().Equals(PackageName))
+-                {
+-                    bIsInOuter = true;
+-                }
+-            }
+-            else if (!bAnyPackage)
+-            {
++                bool bIsInOuter{};
+                 UObject* Outer = Object->GetOuterPrivate();
+                 do
+                 {
+@@ -582,32 +611,42 @@
+                     }
+                     Outer = Outer->GetOuterPrivate();
+                 } while (Outer);
+-            }
+ 
+-            if (!bAnyPackage && !bIsInOuter) { return LoopAction::Continue; }
+-
+-            if (bIsLongName)
++                if (!bIsInOuter) { return LoopAction::Continue; }
++            }
++            else if (!bAnyPackage && !ObjectPackage)
+             {
+-                if (!Object->GetNamePrivate().Equals(ShortName))
++                if (bIsLongName)
+                 {
+-                    return LoopAction::Continue;
++                    // Long name: same package filter as the old order — the
++                    // outermost package's name must equal the queried
++                    // package part (runs now only on the name-matched
++                    // candidate, not per object).
++                    if (!Object->GetOutermost()->GetNamePrivate().Equals(PackageName)) { return LoopAction::Continue; }
+                 }
+-                auto FullName = Object->GetFullName();
+-                auto ClassLessFullName = FullName.substr(FullName.find(STR(" ")) + 1);
+-                if (ToCharTypePtr(InName) == ClassLessFullName)
++                else
+                 {
+-                    FoundObject = Object;
+-                    return LoopAction::Break;
++                    // Short name, no outer: the engine's name-only hash
++                    // lookup only ever returns top-level objects.
++                    if (Object->GetOuterPrivate() != nullptr) { return LoopAction::Continue; }
+                 }
+             }
+-            else if (ObjectPackage || bAnyPackage)
++
++            if (bIsLongName)
+             {
+-                if (ShortName.Equals(Object->GetNamePrivate()))
++                auto FullName = Object->GetFullName();
++                auto ClassLessFullName = FullName.substr(FullName.find(STR(" ")) + 1);
++                if (ToCharTypePtr(InName) == ClassLessFullName)
+                 {
+                     FoundObject = Object;
+                     return LoopAction::Break;
+                 }
+             }
++            else
++            {
++                FoundObject = Object;
++                return LoopAction::Break;
++            }
+ 
+             return LoopAction::Continue;
+         });

@@ -1,0 +1,1186 @@
+--- outputs/2026-10-04-zcode-controller/launch11-combined/units-l12/UnrealInitializer.cpp
++++ outputs/2026-10-07-l13-local-admission/units/UnrealInitializer.cpp
+@@ -15,12 +15,11 @@
+ #if defined(__PROSPERO__)
+ #include <PsScanAbi.h>
+ #include <OwnedMappedScanSource.hpp>
+-// [L12] shadow-corroboration fallback units + settings switch + stdio for
+-// the decrypted-eboot read (NID-routed stdio proven live by PATH_TEST).
++// L13 bounded, VirtualQuery-first pool admission and settings policy.
+ #include <cstdio>
+ #include <vector>
+-#include "shadow_arm.hpp"
+ #include "pool_admission.h"
++#include "PoolAdmissionEngine.hpp"
+ #endif
+ #include <Unreal/PlatformModuleSnapshot.hpp>
+ #include <Unreal/VersionedContainer/Container.hpp>
+@@ -664,57 +663,13 @@
+ 
+     namespace SeedArming
+     {
+-        // ---- launch10-c published-span accessors (worker-fname-heap-runtime-bounds)
+-        // ---- v4 admission (worker-fname-validator-v4): the published spans
+-        // ---- are the bridge's READABLE spans, IMAGE OR NON-IMAGE. Why the
+-        // ---- v3 outside-image rule is gone (FNAME-POOL-RE.md R2, storage
+-        // ---- separation): the ALLOCATOR OBJECT is a static image-BSS
+-        // ---- FMallocBinned2-family object, but Blocks[0] is an ALLOCATED
+-        // ---- BLOCK whose storage class is not pinned; the launch-9
+-        // ---- REGION-CLASS observation placed Blocks[0]'s mapping in LOAD7's
+-        // ---- BSS tail inside the image extent (no captured Blocks[0]
+-        // ---- pointer value exists), so refusing image residency refused a
+-        // ---- plausible live pool. Wrong-base protection is now the
+-        // ---- entry-0 'None' content anchor below.
+-        // ---- Defined by the bridge TU (runtime_start_bridge_r13.geometrydiag-spanpub.cpp)
+-        // ---- in the SAME composed PRX; intra-module link, no new PRX imports or
+-        // ---- exports. The bridge publishes, at module_start (before conversion —
+-        // ---- the same walk that feeds bridge_register_readable_ranges), the
+-        // ---- readable spans of its own kernel VMMAP snapshot:
+-        // ---- prot&READ, at least one FName block capacity (0x20000), top-16
+-        // ---- by size, ascending by address. These bounds replace the retired
+-        // ---- frozen kHeapLo/kHeapHi envelope for Blocks[0] admission.
++        // Current bridge-readable spans prove the exact pool metadata
++        // fields. Heap bytes are independently queried by the L13 engine.
+         extern "C" uint32_t bridge_readable_span_count();
+         extern "C" int bridge_readable_span_at(uint32_t index, uint64_t* lo, uint64_t* hi);
+-        // Captured-envelope end (max record end over the WHOLE snapshot):
+-        // kernel VMMAP enumeration is address-ordered, so a truncated capture
+-        // is a prefix; check_pool_shape uses this to refuse an admission miss
+-        // at/above the cut as 'snapshot truncated' (omitted mapping) instead
+-        // of a false 'unmapped'. Bridge capture capacity is 32,768 records
+-        // (static bss; live full-fix run observed 10,070 entries, stop=0 ->
+-        // complete walk).
+-        extern "C" int bridge_capture_envelope(uint64_t* envelope_end);
+-        // Listing-gap probe (v5.2, session 934 evidence): the mincore raw
+-        // syscall was FATAL in-game (0xa002030a SYSTEM_ILLEGAL_FUNCTION_CALL
+-        // — the sandboxed game process permits only NID-resolved calls) and
+-        // bridge_kernel_range_verdict was REMOVED. This is the replacement,
+-        // now INTEGRATED (worker-copyin-unit): the SOLE listing-gap oracle.
+-        // Every kernel touch is NID-resolved (POSIX fd wrappers open/write/
+-        // fstat/read/close/unlink — all in the composed module's existing
+-        // 196-import contract; no raw syscall anywhere). The probe writes
+-        // the probed range into a bridge-owned real file: refused (0) means
+-        // the kernel refuses that source (EFAULT class — never "unmapped",
+-        // address-class-unknown); readable (1) means the FULL range was
+-        // already transferred — authorization AND execution in one event;
+-        // unavailable (-1) is an oracle failure (open/policy/partial/
+-        // vacuous-sink) and admits nothing. Tags: pool_copyin_probe_fresh
+-        // (1/0/2/3) + raw rc/errno/sink captures.
+-        extern "C" int bridge_kernel_write_copyin_probe(uint64_t addr, uint64_t len);
+-        // Sink-capture lookup BY PROBED ADDRESS (R-4 sink-fed validation):
+-        // 1 + pointer/len when a READABLE probe captured that range's first
+-        // page; 0 on a miss. On a copyin-admitted boot EVERY downstream pool
+-        // read consumes capture bytes — a capture miss REFUSES LOUDLY and
+-        // never falls back to a direct block read.
++        // Owned captures never authorize subsequent direct reads. Interior
++        // addresses return only their remaining proven prefix; a recorded
++        // source fault excludes that evidence through the bridge ledger.
+         extern "C" int bridge_write_copyin_capture(uint64_t addr, const uint8_t** out_bytes, uint32_t* out_len);
+ 
+         // Set only after the ctor was seed-bound AND behaviorally verified.
+@@ -776,10 +731,9 @@
+             uint32_t byte_property_id{};
+         };
+ 
+-        // Volatile byte-wise reads: data-side only, no code bytes ever
+-        // (FNAME-VERDICT section 5). An unmapped pool address faults by design
+-        // (accepted deref class for sha-pinned constants); a wrong-but-mapped
+-        // address is caught by the chain below.
++        // Volatile byte-wise image-data reads. The pool metadata fields and
++        // indexed pointer slots require exact readable-span coverage first;
++        // live heap content uses the admission engine below.
+         static auto read_u32(const volatile uint8_t* base_ptr, uint64_t offset) -> uint32_t
+         {
+             uint32_t value{};
+@@ -798,22 +752,6 @@
+                 value |= static_cast<uint64_t>(base_ptr[offset + i]) << (8 * i);
+             }
+             return value;
+-        }
+-
+-        // v4 entry-0 anchor read: bounded volatile byte-wise read at an
+-        // absolute runtime address (same discipline as read_u32/read_u64;
+-        // data-side only). Used for the Blocks[0] entry-0 'None' anchor —
+-        // the address is ownership-covered by the published-span membership
+-        // check that must already have passed.
+-        static auto read_bytes_at(uint64_t runtime_addr, size_t needed) -> std::vector<uint8_t>
+-        {
+-            std::vector<uint8_t> bytes(needed, 0);
+-            const auto* p = reinterpret_cast<const volatile uint8_t*>(runtime_addr);
+-            for (size_t i = 0; i < needed; ++i)
+-            {
+-                bytes[i] = p[i];
+-            }
+-            return bytes;
+         }
+ 
+         static auto read_pool_words(uint64_t pool_runtime) -> PoolWords
+@@ -828,26 +766,6 @@
+             };
+         }
+ 
+-        // Resolves a pool entry id to its bytes (header u16 + Len ANSI chars)
+-        // through Blocks[], after the pure bounds check passed.
+-        static auto pool_entry_bytes(uint64_t pool_runtime, uint32_t id, size_t needed) -> std::vector<uint8_t>
+-        {
+-            const auto location = rc_seed::entry_location(id);
+-            const auto* pool = reinterpret_cast<const volatile uint8_t*>(pool_runtime);
+-            const uint64_t block_ptr = read_u64(pool, rc_seed::kPoolLayout.blocks_offset + location.block_index * 8);
+-            if (block_ptr == 0)
+-            {
+-                seed_refused(fmt::format("pool entry id 0x{:X}: Blocks[{}] is null", id, location.block_index));
+-            }
+-            std::vector<uint8_t> bytes(needed, 0);
+-            const auto* entry = reinterpret_cast<const volatile uint8_t*>(block_ptr + location.byte_offset);
+-            for (size_t i = 0; i < needed; ++i)
+-            {
+-                bytes[i] = entry[i];
+-            }
+-            return bytes;
+-        }
+-
+         static auto require_present(const SeedTableNS::SlotSeed& slot) -> void
+         {
+             if (!slot.present)
+@@ -859,274 +777,97 @@
+         // Consumes the armed seed table: validates, binds, and (for the FName
+         // ctor) behaviorally verifies. Runs in ScanGame() in place of the
+         // structurally-dead ps_scan arm (SLOTS-FEASIBILITY section 0: G0-G4).
+-        // ===================== [L12] inserted units =====================
+-        // (virtual_query_coverage.inc)
+-// [L12] Primary coverage proof via sceKernelVirtualQuery (Claude upgrade C1)
+-// + per-page coverage bitmap (C2). Insertion: SeedArming namespace
+-// (Prospero block) of UnrealInitializer.cpp, beside the copyin probe seam.
+-//
+-// Mechanism (agent-verified against the SharpProspero SDK: KernelMemory.cs,
+-// KernelMemoryQuery.cs, CompatEmitter.cs, StubCatalog.cs):
+-//   - plain extern "C" libkernel import — the SAME name-resolved prx import
+-//     route session 1047 proved live in-game (sceKernelOpen/Write/Close).
+-//   - never dereferences the queried address; rc<0 means not mapped (the
+-//     error return is the permitted class — raw syscalls are what kill).
+-//   - closes exactly the gap that terminal-refused us: the sysctl
+-//     KERN_PROC_VMMAP listing omits this direct-memory block; VirtualQuery
+-//     reports it directly (protection + committed flag + extent).
+-//
+-// Data discipline (upgrade B law, mirrored from the copyin path): a VirtualQuery
+-// PROTECTION-without-CPU-READ verdict, or an absent mapping, is real evidence
+-// against the range — the shadow fallback may not admit over it either.
+-
+-enum { kPsVqQueryExact = 0, kPsVqQueryFindNext = 1 };
+-enum { kPsProtCpuRead = 0x01, kPsProtCpuWrite = 0x02, kPsProtCpuExec = 0x04 };
+-enum { kPsVqFlagDirect = 0x02, kPsVqFlagCommitted = 0x10 };
+-
+-struct L12VqInfo // SceKernelVirtualQueryInfo, 0x48 bytes — do not reorder
+-{
+-    void   *start;       // +0x00
+-    void   *end;         // +0x08
+-    int64_t offset;      // +0x10
+-    int32_t protection;  // +0x18
+-    int32_t memory_type; // +0x1C
+-    uint8_t flags;       // +0x20
+-    char    name[32];    // +0x21
+-    uint8_t gpu_mask_id; // +0x41
+-};
+-static_assert(sizeof(L12VqInfo) == 0x48, "SceKernelVirtualQueryInfo layout drifted");
+-
+-// Sony-native NID route (same class as the proven sceKernelOpen/Write/Close
+-// declarations in the bridge TU).
+-extern "C" int sceKernelVirtualQuery(const void *, int, L12VqInfo *, size_t);
+-
+-struct L12Coverage
+-{
+-    bool proven{};       // every needed page mapped + CPU-readable
+-    bool hard_negative{}; // real evidence AGAINST the range (unmapped/no-read)
+-    uint32_t pages_total{};
+-    uint32_t pages_readable{};
+-    char detail[256]{};
+-};
+-
+-// Prove [addr, addr+len) readable page-by-page via exact + FindNext queries.
+-// Needed-range variant of C2: call with ONLY the bytes actually required
+-// (entry-0 anchor window / validated entry windows), not the whole block.
+-static auto l12_virtual_query_coverage(uint64_t addr, size_t len) -> L12Coverage
+-{
+-    L12Coverage out;
+-    const uint64_t page = 0x1000;
+-    const uint64_t first = addr & ~(page - 1);
+-    const uint64_t last = ((addr + len + page - 1) & ~(page - 1)) - 1;
+-    out.pages_total = static_cast<uint32_t>(((last - first) >> 12) + 1);
+-
+-    uint64_t cursor = first;
+-    while (cursor <= last)
+-    {
+-        L12VqInfo info{};
+-        const int rc = sceKernelVirtualQuery(reinterpret_cast<const void *>(cursor), kPsVqQueryExact, &info, sizeof(info));
+-        if (rc != 0)
+-        {
+-            out.hard_negative = true;
+-            std::snprintf(out.detail, sizeof(out.detail),
+-                          "VirtualQuery: page 0x%llX unmapped (rc=%d)", static_cast<unsigned long long>(cursor), rc);
+-            return out;
+-        }
+-        const uint64_t rstart = reinterpret_cast<uint64_t>(info.start);
+-        const uint64_t rend = reinterpret_cast<uint64_t>(info.end);
+-        if (rend <= rstart)
+-        {
+-            out.hard_negative = true;
+-            std::snprintf(out.detail, sizeof(out.detail),
+-                          "VirtualQuery: degenerate region [0x%llX,0x%llX) at page 0x%llX",
+-                          static_cast<unsigned long long>(rstart), static_cast<unsigned long long>(rend),
+-                          static_cast<unsigned long long>(cursor));
+-            return out;
+-        }
+-        if ((info.protection & kPsProtCpuRead) == 0)
+-        {
+-            out.hard_negative = true;
+-            std::snprintf(out.detail, sizeof(out.detail),
+-                          "VirtualQuery: region [0x%llX,0x%llX) prot=0x%X has no CPU-read",
+-                          static_cast<unsigned long long>(rstart), static_cast<unsigned long long>(rend), info.protection);
+-            return out;
+-        }
+-        const uint64_t covered_end = (rend > (last + 1)) ? (last + 1) : rend;
+-        out.pages_readable += static_cast<uint32_t>(((covered_end - cursor) + page - 1) >> 12);
+-        // Committed flag is reported per region; a readable-but-uncommitted
+-        // reservation is NOT admitted (flags bit 0x10 = has memory behind it).
+-        if ((info.flags & kPsVqFlagCommitted) == 0)
+-        {
+-            out.hard_negative = true;
+-            std::snprintf(out.detail, sizeof(out.detail),
+-                          "VirtualQuery: region [0x%llX,0x%llX) readable but NOT committed (flags=0x%X)",
+-                          static_cast<unsigned long long>(rstart), static_cast<unsigned long long>(rend), info.flags);
+-            return out;
+-        }
+-        Output::send(STR("[Seeds][L12] VirtualQuery: [0x{:X},0x{:X}) prot=0x{:X} flags=0x{:X} type={} name='{}' — readable+committed\n"),
+-                     rstart, rend, info.protection, info.flags, info.memory_type, ensure_str(info.name));
+-        cursor = rend; // jump to next region (exact query on the new cursor)
+-    }
+-    out.proven = (out.pages_readable >= out.pages_total);
+-    if (out.proven)
+-    {
+-        std::snprintf(out.detail, sizeof(out.detail), "VirtualQuery: %u/%u pages readable+committed",
+-                      out.pages_readable, out.pages_total);
+-    }
+-    return out;
+-}
+-
+-        // (shadow_fallback.inc)
+-// [L12] Shadow-corroboration fallback for the FName pool admission.
+-// Insertion: SeedArming namespace (Prospero block) of UnrealInitializer.cpp.
+-// Design per Claude decision 4 + upgrades A/B: only reached when the
+-// oracle resolution was UNAVAILABLE (never REFUSED — a kernel refusal is
+-// real evidence against the range and shadow may not override it), and it
+-// never admits a range the probe showed faulting.
+-//
+-// Dependencies (added alongside in the Prospero include block):
+-//   #include <cstdio>   // NID-routed stdio proven live (PATH_TEST)
+-//   #include <vector>
+-//   #include "shadow_arm.hpp"            // worker-shadow-integrate staged unit
+-//   #include "pool_admission.h"          // l12 settings switch (agent deliverable)
+-// Note: shadow_module_source.hpp + shadow_copy.{hpp,cpp} compile as units in
+-// the same TU set; shadow_arm.hpp is header-only over them.
+-
+-// ---- [L12] repinned console path (the dumper's pristine decrypt; identity
+-// ---- gate below verifies sha256 == SeedTable::kImageSha256 = 3b6cfad4...).
+-static constexpr const char* kDecryptedEbootPath =
+-    "/data/homebrew/Silent Hill Townfall PPSA33286/decrypted/eboot.bin";
+-
+-// Read the decrypted eboot via the NID-routed stdio route (proven in-sandbox
+-// by PATH_TEST/ACTIVATION_TEST). Bounded by the pinned image extent.
+-static auto l12_read_decrypted_eboot(std::vector<uint8_t>& bytes) -> bool
+-{
+-    FILE* fh = std::fopen(kDecryptedEbootPath, "rb");
+-    if (fh == nullptr)
+-    {
+-        return false;
+-    }
+-    std::fseek(fh, 0, SEEK_END);
+-    const long size = std::ftell(fh);
+-    std::fseek(fh, 0, SEEK_SET);
+-    if (size <= 0)
+-    {
+-        std::fclose(fh);
+-        return false;
+-    }
+-    bytes.resize(static_cast<size_t>(size));
+-    const size_t got = std::fread(bytes.data(), 1, bytes.size(), fh);
+-    std::fclose(fh);
+-    return got == bytes.size();
+-}
+-
+-struct L12Corroboration
+-{
+-    bool armed{};             // identity + slide + 4/4 slots proven
+-    char detail[512]{};       // status name + first refusal detail, if any
+-    uint64_t slide{};
+-};
+-
+-// Runs the staged shadow arm with the REAL seed pins. Never throws, never
+-// calls seed_refused — the caller decides. Logs every step via Output::send.
+-static auto l12_shadow_corroborate() -> L12Corroboration
+-{
+-    L12Corroboration out{};
+-    std::vector<uint8_t> eboot;
+-    if (!l12_read_decrypted_eboot(eboot))
+-    {
+-        std::snprintf(out.detail, sizeof(out.detail),
+-                      "shadow corroboration unavailable: cannot read decrypted eboot at %s", kDecryptedEbootPath);
+-        return out;
+-    }
+-    Output::send(STR("[Seeds][L12] shadow corroboration: eboot read ({} bytes), running arm\n"),
+-                 eboot.size());
+-
+-    namespace shadowarm = rc::shadowarm;
+-    shadowarm::ShadowArmInput in{};
+-    in.eboot = eboot.data();
+-    in.eboot_size = eboot.size();
+-    in.bridge_observed_base = module_view_base(); // same-capture geometry; 0 => arm refuses
+-    in.pins.base_observed = SeedTableNS::kBaseObserved;
+-    in.pins.image_sha256 = SeedTableNS::kImageSha256.data();
+-    in.pins.image_extent = 0xbc602c8ull; // pinned whole-image extent (game profile)
+-    in.pins.required[0] = {&shadowarm::kGuaXref, SeedTableNS::kGUObjectArray.label};
+-    in.pins.required[1] = {&shadowarm::kFNameCtor, SeedTableNS::kFNameCtorWchar.label};
+-    in.pins.required[2] = {&shadowarm::kGMallocStore, SeedTableNS::kGMalloc.label};
+-    in.pins.required[3] = {&shadowarm::kScoPrologue, SeedTableNS::kStaticConstructObject.label};
+-    in.optional[0] = {"fname_tostring", nullptr};
+-    in.optional[1] = {"gnatives", nullptr};
+-    in.optional[2] = {"fuobject_hash_tables_get", nullptr};
+-    in.optional[3] = {"console_manager_singleton", nullptr};
+-    in.log = [](void*, const char* msg) { Output::send(STR("{}\n"), ensure_str(msg)); };
+-
+-    shadowarm::ShadowArmReport report{};
+-    const auto status = shadowarm::shadow_arm(in, &report);
+-    if (status != shadowarm::ShadowArmStatus::Armed)
+-    {
+-        std::snprintf(out.detail, sizeof(out.detail), "shadow arm refused: %s (%.256s)",
+-                      shadowarm::shadow_arm_status_name(status), report.detail);
+-        return out;
+-    }
+-    out.armed = true;
+-    out.slide = report.slide;
+-    std::snprintf(out.detail, sizeof(out.detail), "shadow arm armed: slide 0x%llX, image sha256 verified",
+-                  static_cast<unsigned long long>(report.slide));
+-    return out;
+-}
+-
+-// The admission hook, called at the pool budget-expiry point (see the retry
+-// restructure): oracle-resolution was UNAVAILABLE (not REFUSED) and the
+-// shape failure was rescuable. Returns true when the pool pin is admitted
+-// under image corroboration (caller sets the provenance and breaks).
+-static auto l12_try_pool_admission_fallback(uint64_t pool_runtime, const char* oracle_note) -> bool
+-{
+-    const auto setting = read_pool_admission("/data/plugins/UE4SS-settings.ini");
+-    const char* mode_name = setting.mode == PoolAdmissionMode::Oracle ? "oracle"
+-                          : setting.mode == PoolAdmissionMode::Shadow ? "shadow"
+-                                                                      : "auto";
+-    Output::send(STR("[Seeds][L12] pool admission fallback considered (mode={}, oracle resolution: {})\n"),
+-                 ensure_str(mode_name), ensure_str(oracle_note ? oracle_note : "?"));
+-
+-    if (setting.mode == PoolAdmissionMode::Oracle)
+-    {
+-        return false; // forced existing-mechanism: never fall back
+-    }
+-
+-    // A kernel REFUSED verdict is evidence against the range: the fallback
+-    // must not admit over it (upgrade B law). The caller only invokes us on
+-    // the UNAVAILABLE class; this is a defensive re-check.
+-    if (oracle_note != nullptr && std::strstr(oracle_note, "REFUSED") != nullptr)
+-    {
+-        Output::send(STR("[Seeds][L12] fallback declined: oracle resolution was REFUSED (real evidence; shadow may not override)\n"));
+-        return false;
+-    }
+-
+-    const auto corroboration = l12_shadow_corroborate();
+-    if (!corroboration.armed)
+-    {
+-        Output::send(STR("[Seeds][L12] shadow corroboration failed: {}\n"), ensure_str(corroboration.detail));
+-        return false;
+-    }
+-
+-    // Cross-check vs the pinned candidate (Claude: always log this).
+-    constexpr uint64_t kPinnedPoolRuntime = 0x9765EC0ull;
+-    const bool cross_match = (pool_runtime == kPinnedPoolRuntime);
+-    Output::send(STR("[Seeds] slot 1 fname pool 0x{:X}: admitted via shadow corroboration "
+-                      "(image sha256 verified, slide 0x{:X}, required slots 0/2/3/4 sig-resolved and agreed; "
+-                      "cross-check vs pinned 0x{:X}: {}; source: shadow-corroboration; oracle was: unavailable)\n"),
+-                 pool_runtime, corroboration.slide, kPinnedPoolRuntime,
+-                 cross_match ? STR("MATCH") : STR("DIFFERS (refusing — pin arithmetic changed)"));
+-    if (!cross_match)
+-    {
+-        return false; // arithmetic drift between table and mission pin: refuse loudly, admit nothing
+-    }
+-    return true;
+-}
+-
+-        // ================== end [L12] inserted units ==================
+-
+-                static auto consume_required_slot_seeds(std::chrono::seconds validation_budget) -> void
++        // L13: the host-tested engine owns exact-range proof and the single
++        // deadline; this adapter contains only native operations and logging.
++        namespace admission = rc::pooladmission;
++        struct L13VqInfo
++        {
++            void* start;
++            void* end;
++            int64_t offset;
++            int32_t protection;
++            int32_t memory_type;
++            uint8_t flags;
++            char name[32];
++            uint8_t gpu_mask_id;
++        };
++        static_assert(sizeof(L13VqInfo) == 0x48, "SceKernelVirtualQueryInfo layout drifted");
++        extern "C" int sceKernelVirtualQuery(const void*, int, L13VqInfo*, size_t);
++        extern "C" int bridge_kernel_write_copyin_probe_until(uint64_t, uint64_t, uint64_t);
++        extern "C" int bridge_copyin_range_faulted(uint64_t, uint64_t);
++
++        struct L13AdmissionOps
++        {
++            bool shadow_enabled = true;
++            auto now_ms() const -> uint64_t
++            {
++                return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
++                    std::chrono::steady_clock::now().time_since_epoch()).count());
++            }
++            auto wait_ms(uint64_t duration) -> void
++            {
++                Output::send(STR("[Seeds][L13] admission not ready; retry in {}ms within shared deadline\n"), duration);
++                WaitForStartupRetry(std::chrono::milliseconds(duration));
++            }
++            auto known_fault(uint64_t address, size_t length) -> bool
++            {
++                return bridge_copyin_range_faulted(address, length) != 0;
++            }
++            auto query(uint64_t address) -> admission::Query
++            {
++                CheckStartupWait();
++                L13VqInfo info{};
++                const int result = sceKernelVirtualQuery(reinterpret_cast<const void*>(address), 0, &info, sizeof(info));
++                if (result != 0)
++                {
++                    // No documented exact-unmapped return code is established
++                    // for this firmware. An API/policy error proves no mapping
++                    // fact, so it remains inconclusive and can fall to copyin.
++                    Output::send(STR("[Seeds][L13] VirtualQuery address=0x{:X} rc=0x{:X}: unavailable/inconclusive\n"),
++                                 address, static_cast<uint32_t>(result));
++                    return {admission::QueryKind::Unavailable, 0, 0, 0, 0, result};
++                }
++                return {admission::QueryKind::Available, reinterpret_cast<uint64_t>(info.start),
++                        reinterpret_cast<uint64_t>(info.end), static_cast<uint32_t>(info.protection), info.flags, result};
++            }
++            auto log_region(uint64_t address, size_t length, const admission::Query& query) -> void
++            {
++                Output::send(STR("[Seeds][L13] VirtualQuery needed=[0x{:X},0x{:X}) region=[0x{:X},0x{:X}) protection=0x{:X} flags=0x{:X}\n"),
++                             address, address + length, query.start, query.end, query.protection, query.flags);
++            }
++            auto capture(uint64_t address, size_t, const uint8_t** bytes, size_t* length) -> bool
++            {
++                uint32_t available = 0;
++                const int result = bridge_write_copyin_capture(address, bytes, &available);
++                *length = available;
++                return result == 1;
++            }
++            auto probe(uint64_t address, size_t length, admission::Budget& budget) -> int
++            {
++                CheckStartupWait();
++                return bridge_kernel_write_copyin_probe_until(address, length, budget.deadline_ms);
++            }
++            auto shadow(admission::Budget&) -> bool
++            {
++                // shadow_arm hashes/scans the complete disk image with no
++                // cancellation seam. It can corroborate seed identity, but
++                // cannot prove any live heap bytes. Do not start that work
++                // inside this admission deadline or claim it admits a range.
++                Output::send(STR("[Seeds][L13] shadow fallback considered after VQ/copyin unavailable: "
++                                 "declined; image identity cannot prove live heap readability; "
++                                 "deadline-aware shadow byte source unavailable\n"));
++                return false;
++            }
++            auto read_direct(uint64_t address, size_t length, uint8_t* bytes) -> void
++            {
++                // Sole direct heap-read site: the engine calls this only
++                // after proving this exact address/length with VirtualQuery.
++                const auto* source = reinterpret_cast<const volatile uint8_t*>(address);
++                for (size_t i = 0; i < length; ++i) bytes[i] = source[i];
++            }
++        };
++
++        static auto consume_required_slot_seeds(std::chrono::seconds validation_budget) -> void
+         {
+             const uint64_t base = SeedTableNS::kBaseObserved;
+ 
+@@ -1204,6 +945,13 @@
+             GMalloc = std::bit_cast<FMalloc**>(gmalloc_runtime);
+             Output::send(STR("[Seeds] slot 3 gmalloc bound at {} -> {} (data; V1 instance + V2 vptr match; identity and ABI unverified)\n"),
+                          reinterpret_cast<void*>(gmalloc_runtime), reinterpret_cast<void*>(malloc_ptr));
++
++            // This one admission deadline also covers metadata preparation,
++            // settings IO, all needed entry proofs and every retry sleep.
++            // The legacy per-scan setting must never multiply this budget.
++            (void)validation_budget;
++            L13AdmissionOps admission_ops;
++            admission::Budget admission_budget(admission_ops.now_ms());
+ 
+             // ---- Phase 3: FName pool validation chain (FNAME-VERDICT section 5, steps 1-3) ----
+             // Retries are only for "pool not initialized YET" shapes (shape
+@@ -1238,7 +986,7 @@
+             const uint32_t spanpub_published = bridge_readable_span_count();
+             if (spanpub_published == 0)
+             {
+-                seed_refused(fmt::format("FName pool admission at 0x{:X}: span table unavailable (bridge published 0 readable spans; Blocks[0] cannot be bounded; frozen envelope retired)", pool_runtime));
++                seed_refused(fmt::format("FName pool admission at 0x{:X}: span table unavailable (bridge published 0 readable spans; pool metadata cannot be bounded; frozen envelope retired)", pool_runtime));
+             }
+             rc_seed::AddressSpan published[rc_seed::kMaxPublishedSpans];
+             uint32_t published_count = 0;
+@@ -1255,390 +1003,108 @@
+             }
+             if (published_count == 0)
+             {
+-                seed_refused(fmt::format("FName pool admission at 0x{:X}: span table unavailable (bridge published {} spans but none survived the snapshot; Blocks[0] cannot be bounded; frozen envelope retired)", pool_runtime, spanpub_published));
+-            }
+-            // Captured-envelope end for truncation honesty: an admission miss
+-            // at/above this address must refuse as 'snapshot truncated'
+-            // (omitted mapping), never as 'unmapped'. Fall back to the
+-            // highest published span end when the accessor declines — that
+-            // understates the envelope, which can only ever shift refusals
+-            // toward the honest truncation class, never admit more.
+-            uint64_t capture_envelope = 0;
+-            for (uint32_t i = 0; i < published_count; ++i)
+-            {
+-                if (published[i].hi > capture_envelope) { capture_envelope = published[i].hi; }
+-            }
+-            {
+-                uint64_t env = 0;
+-                if (bridge_capture_envelope(&env) && env > capture_envelope) { capture_envelope = env; }
+-            }
++                seed_refused(fmt::format("FName pool admission at 0x{:X}: span table unavailable (bridge published {} spans but none survived the snapshot; pool metadata cannot be bounded; frozen envelope retired)", pool_runtime, spanpub_published));
++            }
++            // Prove the exact metadata words before touching them. A span
++            // containing only the pool base does not cover its far id fields.
++            const auto metadata_readable = [&](uint64_t address, size_t length) -> bool {
++                if (!admission::valid_range(address, length)) return false;
++                for (uint32_t i = 0; i < published_count; ++i)
++                {
++                    if (address >= published[i].lo && address + length <= published[i].hi) return true;
++                }
++                return false;
++            };
++            for (const uint64_t offset : {rc_seed::kPoolLayout.current_block_offset,
++                                          rc_seed::kPoolLayout.current_byte_offset_offset,
++                                          rc_seed::kPoolLayout.none_id_offset,
++                                          rc_seed::kPoolLayout.byte_property_id_offset})
++            {
++                if (!metadata_readable(pool_runtime + offset, 4))
++                    seed_refused(fmt::format("FName metadata word at 0x{:X} lacks exact readable-span coverage", pool_runtime + offset));
++            }
++            if (!metadata_readable(pool_runtime + rc_seed::kPoolLayout.blocks_offset, 8))
++                seed_refused("FName Blocks[0] pointer slot lacks exact readable-span coverage");
++
++            if (admission_budget.expired(admission_ops.now_ms()))
++                seed_refused("FName admission deadline exhausted during metadata preparation");
++            const auto setting = read_pool_admission("/data/plugins/UE4SS-settings.ini");
++            admission_ops.shadow_enabled = setting.mode != PoolAdmissionMode::Oracle;
++            // All modes retain VQ first; shadow mode cannot remove a memory
++            // proof requirement. The mode only enables identity corroboration.
++            Output::send(STR("[Seeds][L13] pool admission: one total {}ms budget (including operations and retry sleeps); "
++                             "mode={}; VirtualQuery first; copyin only on inconclusive VQ\n"),
++                         admission::kAdmissionBudgetMs, ensure_str(pool_admission_mode_name(setting.mode)));
++            admission::Session admission_session;
+             PoolWords words{};
+-            // v5.2 (worker-copyin-unit): set at loop exit when the admission
+-            // was carried by the copyin owned-read gap path rather than span
+-            // membership — switches the anchor AND the entry validation to
+-            // SINK-FED bytes (R-4) and the provenance line in the success
+-            // message.
+-            bool pool_admitted_via_copyin = false;
+-            // [L12] provenance for the admission source (logged on success).
+-            const char* pool_admission_source = "span-membership";
+-            // [L12] bounded retry (Claude upgrade C3): the pool may not be
+-            // fully committed this early; instead of one terminal refusal at
+-            // budget expiry, retry the whole admission attempt every
+-            // kPoolAdmissionRoundInterval up to kPoolAdmissionMaxRounds
+-            // (~150 s, safely inside the 5-minute StartupWaitControl
+-            // deadline with ~150 s margin for downstream waits). Invariants
+-            // (agent-audited): the copyin probe stays once-per-boot; each
+-            // round re-reads words, re-checks shape, re-consults the CACHED
+-            // oracle note only; the span snapshot stays pre-loop.
+-            constexpr int kPoolAdmissionMaxRounds = 30;
+-            constexpr std::chrono::seconds kPoolAdmissionRoundInterval{5};
+-            bool pool_words_admitted = false;
+-            bool pool_budget_expired = false;
+-            const char* pool_expired_note = nullptr; // cached gap note at expiry
+-            const char* pool_expired_class = nullptr;
+-            Output::send(STR("[Seeds][L12] pool admission retry armed: {} rounds x {}s (budget {}s per round)\n"),
+-                         kPoolAdmissionMaxRounds, kPoolAdmissionRoundInterval.count(), validation_budget.count());
+-            for (int l12_round = 0; l12_round < kPoolAdmissionMaxRounds && !pool_words_admitted; ++l12_round)
+-            {
+-            const auto pool_wait_start = std::chrono::steady_clock::now();
+-            if (l12_round > 0)
+-            {
+-                Output::send(STR("[Seeds][L12] pool admission round {}/{}: retrying (shape may have been early)\n"),
+-                             l12_round + 1, kPoolAdmissionMaxRounds);
+-            }
+-            for (;;)
+-            {
++            const char* pool_admission_source = "none";
++            bool used_vq = false, used_copyin = false;
++            const auto admission_read = [&](uint64_t address, size_t length, std::vector<uint8_t>& bytes) -> admission::Result {
++                bytes.resize(length);
++                const auto result = admission::read(admission_ops, admission_budget, admission_session, address, length, bytes.data());
++                if (result.verdict == admission::Verdict::Readable)
++                {
++                    used_vq |= result.source == admission::Source::VirtualQuery;
++                    used_copyin |= result.source == admission::Source::CopyinCapture;
++                }
++                return result;
++            };
++            const auto result = admission::retry(admission_ops, admission_budget, [&]() -> admission::Result {
+                 CheckStartupWait();
+                 words = read_pool_words(pool_runtime);
+-                // v4 shape admission: engine invariant none_id>>16 <=
+-                // CurrentBlock (CurrentBlock is the 0-BASED index of the OPEN
+-                // block — 0 is valid), Blocks[0] nonzero + 8-aligned, and
+-                // membership in one PUBLISHED readable span (image or
+-                // non-image). The already-read words feed the invariant; no
+-                // extra reads.
+-                const auto shape = rc_seed::check_pool_shape(words.current_block, words.none_id, words.blocks0, published, published_count, capture_envelope);
+-                // v5.2 listing-gap resolution (worker-copyin-unit): the
+-                // write-copyin probe is the SOLE listing-gap oracle (the
+-                // mincore range verdict is gone — edits 13b/14; no Mapped
+-                // gating exists or is needed: the probe is inherently
+-                // self-gating, a refused or unmapped range cannot classify
+-                // readable). Fired ONCE per boot on the first listing-gap
+-                // miss with a RESCUABLE class (CaptureTruncated /
+-                // NotCovered — structural classes stay unrescuable; the
+-                // mapping is static, re-probing every retry would multiply
+-                // fresh-evidence events without new information).
+-                // resolve_listing_gap holds the evidence contract: admission
+-                // rests on the copyin classification ALONE (Readable means
+-                // the full range was ALREADY transferred — authorization AND
+-                // execution), and Refused never reads as "unmapped"
+-                // (address-class-unknown). Structural checks gate everything.
+-                const char* gap_note = nullptr;
+-                static bool gap_probed_this_boot = false;
+-                static const char* gap_note_cached = nullptr;
+-                // v5.2: copyin owned-read gap admission, address-pinned — it
+-                // counts only while words.blocks0 stays the probed value.
+-                static bool gap_admitted_via_copyin = false;
+-                static uint64_t gap_admitted_blocks0 = 0;
+-                // Audit fix 3: if blocks0 CHANGED since the probe (e.g. a
+-                // transient null was probed then a real value appeared), the
+-                // cached admission is stale and must be invalidated.
+-                if (gap_admitted_via_copyin && words.blocks0 != gap_admitted_blocks0)
+-                {
+-                    gap_admitted_via_copyin = false;
+-                    gap_admitted_blocks0 = 0;
+-                    gap_note_cached = "cached admission invalidated: blocks0 changed since probe";
+-                }
+-                // Audit fix 2: only RESCUABLE coverage classes may consume the
+-                // one probe attempt. Structural failures (null blocks0,
+-                // misaligned, None-entry-invariant) must NEVER spend it —
+-                // a transient structural glitch could burn the sole
+-                // candidate-read on a garbage address.
+-                const bool shape_is_rescuable =
+-                    shape.failure_class == rc_seed::PoolShapeCheck::FailureClass::CaptureTruncated ||
+-                    shape.failure_class == rc_seed::PoolShapeCheck::FailureClass::NotCovered;
+-                if (!shape.ok)
+-                {
+-                    if (!gap_probed_this_boot && shape_is_rescuable)
+-                    {
+-                        // Session 1084 fix: Control D (io_ctrl_d at module_start)
+-                        // already probed and captured the pool bytes. Check the
+-                        // capture FIRST — only re-probe if no capture exists.
+-                        // (The re-probe after Control D's sink consumption
+-                        // returned 0x7ffdfffe; using the capture avoids that.)
+-                        const uint8_t* cap = nullptr; uint32_t cap_len = 0;
+-                        if (bridge_write_copyin_capture(words.blocks0, &cap, &cap_len) == 1 && cap != nullptr)
+-                        {
+-                            const auto resolution = rc_seed::resolve_listing_gap(
+-                                shape, rc_seed::CopyinProbeClass::Readable);
+-                            gap_probed_this_boot = true;
+-                            gap_note_cached = resolution.note;
+-                            gap_admitted_via_copyin = resolution.ok;
+-                            gap_admitted_blocks0 = words.blocks0;
+-                        }
+-                        else
+-                        {
+-                            const auto copyin_class = static_cast<rc_seed::CopyinProbeClass>(
+-                                bridge_kernel_write_copyin_probe(words.blocks0, rc_seed::kFNameBlockCapacityBytes));
+-                            const auto resolution = rc_seed::resolve_listing_gap(shape, copyin_class);
+-                            gap_probed_this_boot = true;
+-                            gap_note_cached = resolution.note;
+-                            gap_admitted_via_copyin = resolution.ok;
+-                            gap_admitted_blocks0 = words.blocks0;
+-                        }
+-                    }
+-                    else if (!gap_probed_this_boot && !shape_is_rescuable)
+-                    {
+-                        gap_note_cached = shape.failure; // structural: the probe was NOT spent
+-                    }
+-                    gap_note = gap_note_cached;
+-                }
+-                const bool pool_admitted = (shape.ok || (gap_admitted_via_copyin && words.blocks0 == gap_admitted_blocks0));
+-                if (pool_admitted && words.byte_property_id != 0) // audit fix 1: NoneId==0 is the legitimate UE5 default; ByteProperty id is the readiness signal
+-                {
+-                    pool_admitted_via_copyin = !shape.ok; // shape ok ⇒ span membership carried it
+-                    if (shape.ok) { pool_admission_source = "span-membership"; }
+-                    else if (gap_admitted_via_copyin) { pool_admission_source = "copyin-owned-read"; }
+-                    pool_words_admitted = true;
+-                    break;
+-                }
+-                if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - pool_wait_start).count() > validation_budget.count())
+-                {
+-                    // [L12] round boundary: record and retry (or fall through
+-                    // to the rescue chain after the last round). The message
+-                    // TEXT is unchanged from the pre-L12 terminal refusal —
+-                    // it fires verbatim below if every rescue declines.
+-                    pool_budget_expired = true;
+-                    pool_expired_note = gap_note ? gap_note : "not consulted (failure class not rescuable)";
+-                    pool_expired_class = shape.failure;
+-                    Output::send(STR("[Seeds][L12] pool admission round {} exhausted: CurrentBlock {} Blocks[0] 0x{:X} class {} oracle-note: {}\n"),
+-                                 l12_round + 1, words.current_block, words.blocks0,
+-                                 ensure_str(shape.ok ? "ids-zero" : pool_expired_class), ensure_str(pool_expired_note));
+-                    break;
+-                }
+-                WaitForStartupRetry(std::chrono::milliseconds(50));
+-            }
+-            if (pool_words_admitted)
+-            {
+-                break; // admitted this round: leave the round loop
+-            }
+-            if (l12_round + 1 < kPoolAdmissionMaxRounds)
+-            {
+-                WaitForStartupRetry(kPoolAdmissionRoundInterval);
+-            }
+-            }
+-
+-            // ===================== [L12] rescue chain =====================
+-            // Reached only when every round expired unadmitted. Order per
+-            // Claude upgrades C1/C3 + the fallback laws: (1) VirtualQuery
+-            // coverage proof on the NEEDED range — primary, no sink; guarded
+-            // by a calibration query on the span-proven pool struct so an
+-            // untrusted query route can never fabricate a hard negative.
+-            // (2) Shadow corroboration — only when the oracle resolution was
+-            // UNAVAILABLE (never REFUSED; never over a faulting range).
+-            // (3) The original terminal refusal, text unchanged.
+-            if (!pool_words_admitted && pool_budget_expired)
+-            {
+-                // [L12] rescue 1: VirtualQuery on Blocks[0]'s needed window
+-                // (entry-0 anchor: first 2 + "None" bytes … plus the block
+-                // head the chain reads). Calibration first.
+-                const uint64_t needed_len = 2ull + rc_seed::kNoneString.size() + 16ull;
+-                Output::send(STR("[Seeds][L12] rescue 1: VirtualQuery coverage proof for Blocks[0] 0x{:X} (+{} bytes)\n"),
+-                             words.blocks0, needed_len);
+-                const auto cal = l12_virtual_query_coverage(pool_runtime, 16);
+-                if (cal.hard_negative)
+-                {
+-                    Output::send(STR("[Seeds][L12] VirtualQuery calibration FAILED on the span-proven pool struct ({}): route untrusted this boot, rescue 1 skipped\n"),
+-                                 ensure_str(cal.detail));
+-                }
+-                else
+-                {
+-                    const auto cov = l12_virtual_query_coverage(words.blocks0, needed_len);
+-                    if (cov.proven)
+-                    {
+-                        Output::send(STR("[Seeds] slot 1 fname pool 0x{:X}: Blocks[0] 0x{:X} admitted via VirtualQuery coverage ({} — readable+committed, no sink); source: sceKernelVirtualQuery\n"),
+-                                     pool_runtime, words.blocks0, ensure_str(cov.detail));
+-                        pool_words_admitted = true;
+-                        pool_admission_source = "virtual-query";
+-                        words = read_pool_words(pool_runtime); // fresh words for the anchor chain
+-                    }
+-                    else if (cov.hard_negative)
+-                    {
+-                        Output::send(STR("[Seeds][L12] VirtualQuery HARD NEGATIVE on Blocks[0] ({}): real evidence against the range — shadow fallback is barred, refusing\n"),
+-                                     ensure_str(cov.detail));
+-                    }
+-                    else
+-                    {
+-                        Output::send(STR("[Seeds][L12] VirtualQuery inconclusive ({}): falling to rescue 2\n"), ensure_str(cov.detail));
+-                    }
+-                }
+-
+-                // [L12] rescue 2: shadow corroboration (UNAVAILABLE-class only).
+-                if (!pool_words_admitted)
+-                {
+-                    if (l12_try_pool_admission_fallback(pool_runtime, pool_expired_note))
+-                    {
+-                        pool_words_admitted = true;
+-                        pool_admission_source = "shadow-corroboration";
+-                        words = read_pool_words(pool_runtime);
+-                    }
+-                }
+-
+-                // [L12] final: the ORIGINAL terminal refusal, text unchanged.
+-                if (!pool_words_admitted)
+-                {
+-                    seed_refused(fmt::format("FName pool at 0x{:X}: {} (observed CurrentBlock {}, Blocks[0] 0x{:X}; published readable spans {}; copyin-probe resolution: {})",
+-                                             pool_runtime, pool_expired_class, words.current_block, words.blocks0, published_count,
+-                                             pool_expired_note));
+-                }
+-            }
+-
+-            // ---- v4 entry-0 content anchor (FNAME-POOL-RE.md R3) ----
+-            // With image residency no longer a refusal, wrong-base/wrong-pool
+-            // protection is CONTENT: entry 0 of Blocks[0] is ANSI 'None'
+-            // (header u16 with h>>6 == 4, h&1 == 0, payload "None"). Terminal
+-            // on mismatch (content identity, same class as the entry matches
+-            // below — never retried).
+-            // v5.2 (worker-copyin-unit): SINK-FED VALIDATION (R-4 + the
+-            // user's standing rule — copy success must not silently
+-            // authorize later unsupported direct reads). On a
+-            // copyin-admitted boot EVERY entry byte comparison below reads
+-            // SINK-CAPTURED bytes via bridge_write_copyin_capture: the
+-            // anchor from the Blocks[0] capture, and each validated entry
+-            // from its OWN block's capture (a non-zero entry block is
+-            // probed once — bounded: only the blocks referenced by the two
+-            // validated ids + block 0). A capture miss or a byte range
+-            // beyond a capture's first page REFUSES LOUDLY — never a
+-            // fallback to a direct block read. The span-membership path
+-            // keeps the direct volatile byte reads exactly as before (the
+-            // address is ownership-covered by the published-span membership
+-            // check that just passed).
+-            {
+-                rc_seed::Check anchor{false, "anchor bytes unavailable"};
+-                if (pool_admitted_via_copyin)
+-                {
+-                    const uint8_t* capture = nullptr;
+-                    uint32_t capture_len = 0;
+-                    if (bridge_write_copyin_capture(words.blocks0, &capture, &capture_len) == 1 &&
+-                        capture != nullptr && capture_len >= 2 + rc_seed::kNoneString.size())
+-                    {
+-                        anchor = rc_seed::check_none_anchor(capture, capture_len);
+-                    }
+-                    else
+-                    {
+-                        anchor = rc_seed::Check{false, "copyin sink capture unavailable or short for the 'None' anchor"};
+-                    }
+-                }
+-                else
+-                {
+-                    const auto anchor_bytes = read_bytes_at(words.blocks0, 2 + rc_seed::kNoneString.size());
+-                    anchor = rc_seed::check_none_anchor(anchor_bytes.data(), anchor_bytes.size());
+-                }
+-                if (!anchor.ok)
+-                {
++                if (words.blocks0 == 0 || (words.blocks0 & 7u) != 0 ||
++                    words.current_block >= rc_seed::kPoolLayout.max_blocks ||
++                    (words.none_id >> rc_seed::kPoolLayout.block_offset_bits) > words.current_block || words.byte_property_id == 0)
++                {
++                    return {admission::Verdict::Unavailable, admission::Source::None, "pool structure or ByteProperty id not ready"};
++                }
++                used_vq = used_copyin = false;
++                std::vector<uint8_t> bytes;
++                auto proof = admission_read(words.blocks0, 2 + rc_seed::kNoneString.size(), bytes);
++                if (proof.verdict != admission::Verdict::Readable) return proof;
++                if (const auto anchor = rc_seed::check_none_anchor(bytes.data(), bytes.size()); !anchor.ok)
+                     seed_refused(fmt::format("FName pool at 0x{:X}: Blocks[0] 0x{:X}: {}", pool_runtime, words.blocks0, anchor.failure));
+-                }
+-            }
+-
+-            // v5.2 sink-fed entry bytes for copyin-admitted boots (see the
+-            // anchor note above). A non-zero entry id's block address comes
+-            // from the pool pointer array, read through the SAME volatile
+-            // byte-wise discipline as read_pool_words: the pool STRUCT is
+-            // image-resident and was never the listing-gap concern — the
+-            // BLOCK storage is what the probe owns on this path. Probes are
+-            // bounded (<= 2 distinct entry blocks) and once-per-boot each.
+-            const auto copyin_entry_view = [&](uint32_t id, size_t needed, const uint8_t** out_bytes, uint32_t* out_avail) -> bool {
+-                const uint64_t block_index = id >> rc_seed::kPoolLayout.block_offset_bits;
+-                const uint64_t entry_offset = (id & 0xFFFFu) * 2ull;
+-                uint64_t block_addr = words.blocks0;
+-                if (block_index != 0)
+-                {
+-                    const auto* pool = reinterpret_cast<const volatile uint8_t*>(pool_runtime);
+-                    block_addr = read_u64(pool, rc_seed::kPoolLayout.blocks_offset + 8ull * block_index);
+-                    static uint64_t probed_entry_block[2] = {0, 0};
+-                    bool known = false;
+-                    for (const uint64_t a : probed_entry_block)
+-                    {
+-                        if (a == block_addr) { known = true; break; }
+-                    }
+-                    if (!known)
+-                    {
+-                        int slot = -1;
+-                        for (int i = 0; i < 2 && slot < 0; ++i)
+-                        {
+-                            if (probed_entry_block[i] == 0) { slot = i; }
+-                        }
+-                        if (slot < 0)
+-                        {
+-                            return false; // bounded: >2 distinct entry blocks cannot be sink-fed
+-                        }
+-                        if (bridge_kernel_write_copyin_probe(block_addr, rc_seed::kFNameBlockCapacityBytes) != 1)
+-                        {
+-                            return false; // entry block not readable by the sole oracle: refuse
+-                        }
+-                        probed_entry_block[slot] = block_addr;
+-                    }
+-                }
+-                const uint8_t* capture = nullptr;
+-                uint32_t capture_len = 0;
+-                if (bridge_write_copyin_capture(block_addr, &capture, &capture_len) != 1 || capture == nullptr)
+-                {
+-                    return false;
+-                }
+-                if (entry_offset + needed > capture_len)
+-                {
+-                    return false; // first-page capture law: entries beyond it refuse loudly
+-                }
+-                *out_bytes = capture + entry_offset;
+-                *out_avail = static_cast<uint32_t>(capture_len - entry_offset);
+-                return true;
+-            };
+-            const auto validate_entry = [&](uint32_t id, const rc_seed::Check& bounds, std::string_view expected) -> void {
+-                if (!bounds.ok)
+-                {
+-                    seed_refused(fmt::format("FName pool entry id 0x{:X}: {}", id, bounds.failure));
+-                }
+-                if (pool_admitted_via_copyin)
+-                {
+-                    // Sink-fed (R-4): the byte comparison consumes the
+-                    // capture; the bounds check above stayed pure address
+-                    // arithmetic. A capture gap REFUSES LOUDLY — never a
+-                    // direct block read on this boot.
+-                    const uint8_t* entry_bytes = nullptr;
+-                    uint32_t entry_avail = 0;
+-                    if (!copyin_entry_view(id, 2 + expected.size(), &entry_bytes, &entry_avail))
+-                    {
+-                        seed_refused(fmt::format("FName pool entry id 0x{:X}: copyin sink capture cannot cover the entry bytes "
+-                                                 "(entry-block probe refused, capture cap exceeded, or entry beyond the captured "
+-                                                 "first page) — refusing rather than reading directly", id));
+-                    }
+-                    if (const auto match = rc_seed::entry_matches_ascii(entry_bytes, entry_avail, expected); !match.ok)
+-                    {
++
++                const auto validate_entry = [&](uint32_t id, std::string_view expected) -> admission::Result {
++                    const auto bounds = rc_seed::check_entry_bounds(id, words.current_block, words.current_byte_offset, 2 + expected.size());
++                    if (!bounds.ok)
++                        seed_refused(fmt::format("FName pool entry id 0x{:X}: {}", id, bounds.failure));
++                    const auto location = rc_seed::entry_location(id);
++                    const uint64_t pointer_slot = pool_runtime + rc_seed::kPoolLayout.blocks_offset + location.block_index * 8;
++                    if (!metadata_readable(pointer_slot, 8))
++                        seed_refused(fmt::format("FName Blocks[{}] pointer slot lacks exact readable-span coverage", location.block_index));
++                    // Pin this read to the exact pointer observed now. No
++                    // admission proof is reused after a pointer changes.
++                    const uint64_t block = location.block_index == 0 ? words.blocks0 :
++                        read_u64(reinterpret_cast<const volatile uint8_t*>(pointer_slot), 0);
++                    if (!block || (block & 7u) != 0 || location.byte_offset > UINT64_MAX - block)
++                        return {admission::Verdict::Invalid, admission::Source::None, "entry block pointer invalid or overflowing"};
++                    auto entry_proof = admission_read(block + location.byte_offset, 2 + expected.size(), bytes);
++                    if (entry_proof.verdict != admission::Verdict::Readable) return entry_proof;
++                    if (const auto match = rc_seed::entry_matches_ascii(bytes.data(), bytes.size(), expected); !match.ok)
+                         seed_refused(fmt::format("FName pool entry id 0x{:X} (expected '{}'): {}", id, expected, match.failure));
+-                    }
+-                    return;
+-                }
+-                const auto bytes = pool_entry_bytes(pool_runtime, id, 2 + expected.size());
+-                if (const auto match = rc_seed::entry_matches_ascii(bytes.data(), bytes.size(), expected); !match.ok)
+-                {
+-                    seed_refused(fmt::format("FName pool entry id 0x{:X} (expected '{}'): {}", id, expected, match.failure));
+-                }
+-            };
+-            validate_entry(words.none_id,
+-                           rc_seed::check_entry_bounds(words.none_id, words.current_block, words.current_byte_offset, 2 + rc_seed::kNoneString.size()),
+-                           rc_seed::kNoneString);
+-            validate_entry(words.byte_property_id,
+-                           rc_seed::check_entry_bounds(words.byte_property_id, words.current_block, words.current_byte_offset, 2 + rc_seed::kBytePropertyString.size()),
+-                           rc_seed::kBytePropertyString);
+-            // v5.2 (worker-copyin-unit): the provenance phrase names the
+-            // actual admission source — span membership OR the copyin
+-            // owned-read gap path (never claim span membership for a
+-            // listing-gap admission). Controller compile fix: split into
+-            // two sends with all-wide args (the ternary produced a narrow
+-            // std::string inside the WIDE Output::send).
+-            // [L12] unified success line: ALWAYS names the admission source.
+-            Output::send(STR("[Seeds] FName pool validated at {} (CurrentBlock {}, Blocks[0] 0x{:X}; source: {}; 'None' anchor ok; 'None' id 0x{:X}, 'ByteProperty' id 0x{:X})\n"),
++                    return entry_proof;
++                };
++                proof = validate_entry(words.none_id, rc_seed::kNoneString);
++                if (proof.verdict != admission::Verdict::Readable) return proof;
++                proof = validate_entry(words.byte_property_id, rc_seed::kBytePropertyString);
++                if (proof.verdict != admission::Verdict::Readable) return proof;
++                pool_admission_source = used_vq && used_copyin ? "virtual-query + copyin-owned-read" :
++                                        used_vq ? "virtual-query" : "copyin-owned-read";
++                return proof;
++            });
++            if (result.verdict != admission::Verdict::Readable)
++                seed_refused(fmt::format("FName pool at 0x{:X}: {} (CurrentBlock {}, Blocks[0] 0x{:X}; elapsed {}ms; "
++                                         "hard-negative ranges excluded; shadow cannot grant heap readability)",
++                                         pool_runtime, result.note, words.current_block, words.blocks0,
++                                         admission_ops.now_ms() - admission_budget.start_ms));
++            Output::send(STR("[Seeds] slot 1 fname pool 0x{:X}: admitted via {} (all exact needed ranges readable; elapsed {}ms)\n"),
++                         pool_runtime, ensure_str(pool_admission_source), admission_ops.now_ms() - admission_budget.start_ms);
++            Output::send(STR("[Seeds] FName pool validated at {} (CurrentBlock {}, Blocks[0] 0x{:X}; source: {}; "
++                             "'None' anchor ok; 'None' id 0x{:X}, 'ByteProperty' id 0x{:X}; elapsed {}ms)\n"),
+                          reinterpret_cast<void*>(pool_runtime), words.current_block, words.blocks0,
+-                         ensure_str(pool_admission_source), words.none_id, words.byte_property_id);
++                         ensure_str(pool_admission_source), words.none_id, words.byte_property_id,
++                         admission_ops.now_ms() - admission_budget.start_ms);
+ 
+             // ---- Phase 4: bind the ctor + behavioral ByteProperty probe (FNAME-VERDICT section 5) ----
+             // FNAME_Find EXPLICITLY: the default is FNAME_Add, which would
+--- /dev/null
++++ outputs/2026-10-07-l13-local-admission/units/PoolAdmissionEngine.hpp
+@@ -0,0 +1,163 @@
++#pragma once
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++#include <limits>
++
++// Production policy shared by UnrealInitializer and host tests. Ops supplies
++// only OS/clock/read/log adapters; ordering, range proof and retry live here.
++namespace rc::pooladmission {
++constexpr uint64_t kAdmissionBudgetMs = 60000;
++constexpr uint64_t kRetryIntervalMs = 5000;
++struct Budget {
++    uint64_t start_ms, deadline_ms;
++    explicit Budget(uint64_t now, uint64_t duration = kAdmissionBudgetMs)
++        : start_ms(now), deadline_ms(duration > UINT64_MAX-now ? UINT64_MAX : now+duration) {}
++    bool expired(uint64_t now) const { return now >= deadline_ms; }
++    uint64_t remaining(uint64_t now) const { return expired(now) ? 0 : deadline_ms-now; }
++};
++enum class QueryKind { Available, Unavailable, Unmapped };
++struct Query {
++    QueryKind kind = QueryKind::Unavailable;
++    uint64_t start = 0, end = 0;
++    uint32_t protection = 0, flags = 0;
++    int raw_rc = 0;
++};
++enum class Verdict { Readable, Unavailable, HardNegative, Expired, Invalid };
++enum class Source { None, VirtualQuery, CopyinCapture };
++struct Result {
++    Verdict verdict = Verdict::Unavailable;
++    Source source = Source::None;
++    const char* note = "readability unavailable";
++    uint64_t fault_address = 0;
++    size_t fault_length = 0;
++};
++struct Range { uint64_t address = 0; size_t length = 0; };
++inline bool valid_range(uint64_t address, size_t length) {
++    return address != 0 && length != 0 && length <= UINT64_MAX-address;
++}
++inline bool overlaps(Range a, Range b) {
++    return a.address < b.address+b.length && b.address < a.address+a.length;
++}
++struct Session {
++    // Fail closed if bounded evidence storage fills: never forget a fault.
++    Range faults[16]{}; size_t fault_count = 0; bool all_excluded = false;
++    Range probes[16]{}; size_t probe_count = 0;
++    bool shadow_attempted = false;
++    bool excluded(Range range) const {
++        if (all_excluded) return true;
++        for (size_t i=0;i<fault_count;++i) if (overlaps(faults[i],range)) return true;
++        return false;
++    }
++    void exclude(Range range) {
++        if (fault_count == 16) all_excluded = true;
++        else faults[fault_count++] = range;
++    }
++    bool probe_once(Range range) {
++        for (size_t i=0;i<probe_count;++i)
++            if (probes[i].address==range.address && probes[i].length==range.length) return false;
++        if (probe_count==16) return false;
++        probes[probe_count++] = range;
++        return true;
++    }
++};
++inline Result expired() { return {Verdict::Expired, Source::None, "one total admission deadline exhausted"}; }
++
++template<class Ops>
++Result coverage(Ops& ops, Budget& budget, uint64_t address, size_t length) {
++    if (!valid_range(address,length)) return {Verdict::Invalid,Source::None,"invalid or overflowing exact range"};
++    const uint64_t end=address+length;
++    uint64_t cursor=address;
++    for (unsigned regions=0; cursor<end && regions<128; ++regions) {
++        if (budget.expired(ops.now_ms())) return expired();
++        const auto query=ops.query(cursor);
++        if (budget.expired(ops.now_ms())) return expired();
++        if (query.kind==QueryKind::Unmapped)
++            return {Verdict::HardNegative,Source::None,"VirtualQuery proved unmapped"};
++        if (query.kind!=QueryKind::Available)
++            return {Verdict::Unavailable,Source::None,"VirtualQuery unavailable"};
++        ops.log_region(address,length,query);
++        // EXACT means the result must contain this byte, not merely overlap
++        // some later part of the range. Malformed replies prove nothing.
++        if (query.start>cursor || query.end<=cursor || query.end<=query.start)
++            return {Verdict::Unavailable,Source::None,"VirtualQuery returned non-containing or degenerate region"};
++        if ((query.protection & 1u)==0)
++            return {Verdict::HardNegative,Source::None,"VirtualQuery proved no CPU-read protection", query.start, static_cast<size_t>(query.end-query.start)};
++        if ((query.flags & 0x10u)==0)
++            return {Verdict::HardNegative,Source::None,"VirtualQuery proved uncommitted reservation", query.start, static_cast<size_t>(query.end-query.start)};
++        cursor=query.end<end ? query.end : end;
++    }
++    if (cursor!=end) return {Verdict::Unavailable,Source::None,"VirtualQuery region limit reached"};
++    return {Verdict::Readable,Source::VirtualQuery,"exact needed range mapped and CPU-readable"};
++}
++
++template<class Ops>
++Result read(Ops& ops, Budget& budget, Session& session, uint64_t address, size_t length, uint8_t* destination) {
++    if (!destination || !valid_range(address,length))
++        return {Verdict::Invalid,Source::None,"invalid or overflowing exact range"};
++    if (budget.expired(ops.now_ms())) return expired();
++    const Range range{address,length};
++    // Stored fault provenance is checked before any new proof; a later VQ
++    // or prefix capture cannot erase a fault observed during this admission.
++    if (session.excluded(range) || ops.known_fault(address,length)) {
++        session.exclude(range);
++        return {Verdict::HardNegative,Source::None,"range excluded by recorded fault"};
++    }
++    auto result=coverage(ops,budget,address,length);
++    if (result.verdict==Verdict::HardNegative) {
++        session.exclude(valid_range(result.fault_address,result.fault_length) ?
++                        Range{result.fault_address,result.fault_length} : range);
++        return result;
++    }
++    if (result.verdict==Verdict::Expired || result.verdict==Verdict::Invalid) return result;
++    if (result.verdict==Verdict::Readable) {
++        if (budget.expired(ops.now_ms())) return expired();
++        ops.read_direct(address,length,destination);
++        if (budget.expired(ops.now_ms())) return expired();
++        return result; // optional oracle cross-check is disabled by default
++    }
++    if (budget.expired(ops.now_ms())) return expired();
++    const uint8_t* bytes=nullptr; size_t captured=0;
++    if (ops.capture(address,length,&bytes,&captured) && bytes && captured>=length) {
++        if (budget.expired(ops.now_ms())) return expired();
++        std::memcpy(destination,bytes,length);
++        return {Verdict::Readable,Source::CopyinCapture,"exact needed bytes from owned copyin capture"};
++    }
++    if (session.probe_once(range)) {
++        if (budget.expired(ops.now_ms())) return expired();
++        const int probe=ops.probe(address,length,budget);
++        if (probe==0 || ops.known_fault(address,length)) {
++            session.exclude(range);
++            return {Verdict::HardNegative,Source::None,"copyin fault; range excluded and shadow barred"};
++        }
++        if (budget.expired(ops.now_ms())) return expired();
++        if (ops.capture(address,length,&bytes,&captured) && bytes && captured>=length) {
++            if (budget.expired(ops.now_ms())) return expired();
++            std::memcpy(destination,bytes,length);
++            return {Verdict::Readable,Source::CopyinCapture,"exact needed bytes from owned copyin capture"};
++        }
++    }
++    // The fallback is diagnostic corroboration only. Matching disk-image
++    // identity never supplies live heap bytes or grants a direct read.
++    if (!session.shadow_attempted && ops.shadow_enabled) {
++        if (budget.expired(ops.now_ms())) return expired();
++        session.shadow_attempted=true;
++        ops.shadow(budget);
++        if (budget.expired(ops.now_ms())) return expired();
++    }
++    return {Verdict::Unavailable,Source::None,"VQ/copyin inconclusive; shadow identity cannot prove heap readability"};
++}
++
++template<class Ops,class Attempt>
++Result retry(Ops& ops, Budget& budget, Attempt attempt) {
++    for (;;) {
++        if (budget.expired(ops.now_ms())) return expired();
++        auto result=attempt();
++        if (budget.expired(ops.now_ms())) return expired();
++        if (result.verdict!=Verdict::Unavailable) return result;
++        const uint64_t remaining=budget.remaining(ops.now_ms());
++        if (!remaining) return expired();
++        ops.wait_ms(remaining<kRetryIntervalMs ? remaining : kRetryIntervalMs);
++    }
++}
++} // namespace rc::pooladmission

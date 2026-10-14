@@ -1,0 +1,455 @@
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -17,11 +17,15 @@
+ 
+ #include <atomic>
+ #include <cerrno>
++#include <chrono>
++#include <condition_variable>
+ #include <cstdio>
+ #include <cstring>
+ #include <ctime>
++#include <memory>
+ #include <mutex>
+ #include <new>
++#include <shared_mutex>
+ #include <thread>
+ #include <vector>
+ 
+@@ -40,6 +44,7 @@
+ 
+ // ---- fixed Win32 constants used by the shims (public documentation values)
+ constexpr uint32_t WAIT_FAILED = 0xFFFFFFFFu;
++constexpr uint32_t ERROR_TIMEOUT = 1460;
+ constexpr uint32_t TLS_OUT_OF_INDEXES = 0xFFFFFFFFu;
+ constexpr uint32_t GENERIC_WRITE = 0x40000000u;
+ 
+@@ -105,6 +110,61 @@
+     }
+ };
+ 
++namespace {
++
++struct HostSrwLock
++{
++    std::shared_mutex rw;
++    std::mutex owners_mu;
++    std::thread::id exclusive_owner{};
++    std::unordered_map<std::thread::id, uint32_t> shared_owners;
++};
++
++struct HostCondition
++{
++    std::mutex mu;
++    std::condition_variable cv;
++    uint64_t generation = 0;
++};
++
++struct HostSyncRegistry
++{
++    std::mutex mu;
++    std::unordered_map<void*, std::shared_ptr<HostSrwLock>> locks;
++    std::unordered_map<void*, std::shared_ptr<HostCondition>> conditions;
++};
++
++HostSyncRegistry& host_sync_registry()
++{
++    static HostSyncRegistry registry;
++    return registry;
++}
++
++std::shared_ptr<HostSrwLock> host_srw_lock(void* address, bool create)
++{
++    auto& registry = host_sync_registry();
++    std::lock_guard guard(registry.mu);
++    auto found = registry.locks.find(address);
++    if (found != registry.locks.end()) return found->second;
++    if (!create) return {};
++    auto state = std::make_shared<HostSrwLock>();
++    registry.locks.emplace(address, state);
++    return state;
++}
++
++std::shared_ptr<HostCondition> host_condition(void* address)
++{
++    auto& registry = host_sync_registry();
++    std::lock_guard guard(registry.mu);
++    auto found = registry.conditions.find(address);
++    if (found != registry.conditions.end()) return found->second;
++    auto state = std::make_shared<HostCondition>();
++    registry.conditions.emplace(address, state);
++    return state;
++}
++
++} // namespace
++
+ WinApiShim::WinApiShim() : m(new Impl()) {}
+ 
+ void WinApiShim::set_hooks(const Hooks& hooks) { m->hooks = hooks; }
+@@ -230,6 +290,153 @@
+ #else
+     m->fail_closed("GetSystemTimeAsFileTime host clock unavailable");
+ #endif
++}
++
++static void impl_AcquireSRWLockExclusive(WinApiShim::Impl* m, void* address)
++{
++    if (!address) { m->fail_closed("AcquireSRWLockExclusive null lock"); return; }
++    try
++    {
++        auto state = host_srw_lock(address, true);
++        state->rw.lock();
++        std::lock_guard guard(state->owners_mu);
++        state->exclusive_owner = std::this_thread::get_id();
++    }
++    catch (...) { m->fail_closed("AcquireSRWLockExclusive host failure"); }
++}
++
++static void impl_ReleaseSRWLockExclusive(WinApiShim::Impl* m, void* address)
++{
++    if (!address) { m->fail_closed("ReleaseSRWLockExclusive null lock"); return; }
++    try
++    {
++        auto state = host_srw_lock(address, false);
++        if (!state) { m->fail_closed("ReleaseSRWLockExclusive unknown lock"); return; }
++        bool owned = false;
++        {
++            std::lock_guard guard(state->owners_mu);
++            owned = state->exclusive_owner == std::this_thread::get_id();
++            if (owned) state->exclusive_owner = {};
++        }
++        if (!owned) { m->fail_closed("ReleaseSRWLockExclusive wrong owner"); return; }
++        state->rw.unlock();
++    }
++    catch (...) { m->fail_closed("ReleaseSRWLockExclusive host failure"); }
++}
++
++static void impl_AcquireSRWLockShared(WinApiShim::Impl* m, void* address)
++{
++    if (!address) { m->fail_closed("AcquireSRWLockShared null lock"); return; }
++    try
++    {
++        auto state = host_srw_lock(address, true);
++        state->rw.lock_shared();
++        try
++        {
++            std::lock_guard guard(state->owners_mu);
++            ++state->shared_owners[std::this_thread::get_id()];
++        }
++        catch (...) { state->rw.unlock_shared(); throw; }
++    }
++    catch (...) { m->fail_closed("AcquireSRWLockShared host failure"); }
++}
++
++static void impl_ReleaseSRWLockShared(WinApiShim::Impl* m, void* address)
++{
++    if (!address) { m->fail_closed("ReleaseSRWLockShared null lock"); return; }
++    try
++    {
++        auto state = host_srw_lock(address, false);
++        if (!state) { m->fail_closed("ReleaseSRWLockShared unknown lock"); return; }
++        bool owned = false;
++        {
++            std::lock_guard guard(state->owners_mu);
++            auto found = state->shared_owners.find(std::this_thread::get_id());
++            owned = found != state->shared_owners.end() && found->second != 0;
++            if (owned) --found->second;
++        }
++        if (!owned) { m->fail_closed("ReleaseSRWLockShared wrong owner"); return; }
++        state->rw.unlock_shared();
++    }
++    catch (...) { m->fail_closed("ReleaseSRWLockShared host failure"); }
++}
++
++static uint32_t impl_SleepConditionVariableSRW(
++    WinApiShim::Impl* m, void* condition, void* lock, uint32_t milliseconds,
++    uint32_t flags)
++{
++    if (!condition || !lock || (flags & ~1u))
++    {
++        m->fail_closed("SleepConditionVariableSRW invalid arguments");
++        return 0;
++    }
++    try
++    {
++        auto srw = host_srw_lock(lock, false);
++        if (!srw) { m->fail_closed("SleepConditionVariableSRW unknown lock"); return 0; }
++        auto cv = host_condition(condition);
++        const bool shared = (flags & 1u) != 0;
++        const auto thread = std::this_thread::get_id();
++        std::unique_lock cv_guard(cv->mu);
++        bool owned = false;
++        {
++            std::lock_guard owner_guard(srw->owners_mu);
++            if (shared)
++            {
++                auto found = srw->shared_owners.find(thread);
++                owned = found != srw->shared_owners.end() && found->second != 0;
++                if (owned) --found->second;
++            }
++            else
++            {
++                owned = srw->exclusive_owner == thread;
++                if (owned) srw->exclusive_owner = {};
++            }
++        }
++        if (!owned)
++        {
++            cv_guard.unlock();
++            m->fail_closed(shared ? "SleepConditionVariableSRW shared lock not held"
++                                  : "SleepConditionVariableSRW exclusive lock not held");
++            return 0;
++        }
++        const uint64_t observed = cv->generation;
++        if (shared) srw->rw.unlock_shared();
++        else srw->rw.unlock();
++        const auto signaled = [&] { return cv->generation != observed; };
++        bool woken = true;
++        if (milliseconds == 0xffffffffu)
++            cv->cv.wait(cv_guard, signaled);
++        else
++            woken = cv->cv.wait_for(cv_guard,
++                std::chrono::milliseconds(milliseconds), signaled);
++        cv_guard.unlock();
++        if (shared) srw->rw.lock_shared();
++        else srw->rw.lock();
++        {
++            std::lock_guard owner_guard(srw->owners_mu);
++            if (shared) ++srw->shared_owners[thread];
++            else srw->exclusive_owner = thread;
++        }
++        if (!woken) { win32_set_last_error(ERROR_TIMEOUT); return 0; }
++        return 1;
++    }
++    catch (...) { m->fail_closed("SleepConditionVariableSRW host failure"); return 0; }
++}
++
++static void impl_WakeAllConditionVariable(WinApiShim::Impl* m, void* condition)
++{
++    if (!condition) { m->fail_closed("WakeAllConditionVariable null condition"); return; }
++    try
++    {
++        auto cv = host_condition(condition);
++        {
++            std::lock_guard guard(cv->mu);
++            ++cv->generation;
++        }
++        cv->cv.notify_all();
++    }
++    catch (...) { m->fail_closed("WakeAllConditionVariable host failure"); }
+ }
+ 
+ static uint32_t impl_WaitForSingleObject_events(WinApiShim::Impl*, void* handle, uint32_t ms)
+@@ -437,6 +644,12 @@
+         {"kernel32.dll", "GetCurrentThreadId", (void*)&impl_GetCurrentThreadId, 0, true},
+         {"kernel32.dll", "GetLastError", (void*)&impl_GetLastError, 0, true},
+         {"kernel32.dll", "SetLastError", (void*)&impl_SetLastError, 1, true},
++        {"kernel32.dll", "AcquireSRWLockExclusive", (void*)&impl_AcquireSRWLockExclusive, 1, true},
++        {"kernel32.dll", "ReleaseSRWLockExclusive", (void*)&impl_ReleaseSRWLockExclusive, 1, true},
++        {"kernel32.dll", "AcquireSRWLockShared", (void*)&impl_AcquireSRWLockShared, 1, true},
++        {"kernel32.dll", "ReleaseSRWLockShared", (void*)&impl_ReleaseSRWLockShared, 1, true},
++        {"kernel32.dll", "SleepConditionVariableSRW", (void*)&impl_SleepConditionVariableSRW, 4, true},
++        {"kernel32.dll", "WakeAllConditionVariable", (void*)&impl_WakeAllConditionVariable, 1, true},
+         {"kernel32.dll", "GetSystemTimeAsFileTime", (void*)&impl_GetSystemTimeAsFileTime, 1, true},
+         {"kernel32.dll", "WaitForSingleObject", (void*)&impl_WaitForSingleObject_events, 2, false},
+         {"kernel32.dll", "TlsAlloc", (void*)&impl_TlsAlloc, 0, false},
+--- /dev/null
++++ b/loader/tests/win32_sync_import_test.cpp
+@@ -0,0 +1,178 @@
++#include "win_api_shim.h"
++#include "win64_bridge.h"
++
++#include <atomic>
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <thread>
++#include <sys/mman.h>
++#include <unistd.h>
++
++static int failures = 0;
++static void check(bool ok, const char* label)
++{
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", label);
++    if (!ok) ++failures;
++}
++
++static bool allocate_writable(size_t minimum, void** address, size_t* bytes, void*)
++{
++    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
++    if (minimum > page) return false;
++    void* mapping = mmap(nullptr, page, PROT_READ | PROT_WRITE,
++                         MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (mapping == MAP_FAILED) return false;
++    *address = mapping;
++    *bytes = page;
++    return true;
++}
++static bool seal_executable(void* address, size_t bytes, void*)
++{
++    return mprotect(address, bytes, PROT_READ | PROT_EXEC) == 0;
++}
++static void release_mapping(void* address, size_t bytes, void*)
++{
++    munmap(address, bytes);
++}
++static bool wait_until(std::atomic<int>& value, int goal)
++{
++    const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(2);
++    while (value.load() < goal)
++    {
++        if (std::chrono::steady_clock::now() > limit) return false;
++        std::this_thread::yield();
++    }
++    return true;
++}
++
++struct StopContext
++{
++    std::atomic<int> calls{0};
++    void* wake_entry = nullptr;
++    uint64_t condition = 0;
++    bool reenter = false;
++};
++
++int main()
++{
++    cap13::WinApiShim shim;
++    shim.register_builtin_exports();
++    cap13::WinApiShim::ExecutableMemoryBackend backend{};
++    backend.allocate_writable = allocate_writable;
++    backend.seal_executable = seal_executable;
++    backend.release = release_mapping;
++    check(shim.set_executable_backend(backend), "executable-memory backend accepted");
++    StopContext stop{};
++    std::atomic<int>& stopped = stop.calls;
++    cap13::WinApiShim::Hooks hooks{};
++    hooks.stop_mod = +[](void* user, const char*) {
++        auto& state = *static_cast<StopContext*>(user);
++        state.calls.fetch_add(1);
++        if (state.reenter)
++            (void)cap13_win64_call1(state.wake_entry, state.condition);
++    };
++    hooks.stop_user = &stop;
++    shim.set_hooks(hooks);
++
++    void* acquire = shim.resolve("kernel32.dll", "AcquireSRWLockExclusive", 0);
++    void* release = shim.resolve("kernel32.dll", "ReleaseSRWLockExclusive", 0);
++    void* acquire_shared = shim.resolve("kernel32.dll", "AcquireSRWLockShared", 0);
++    void* release_shared = shim.resolve("kernel32.dll", "ReleaseSRWLockShared", 0);
++    void* sleep_cv = shim.resolve("kernel32.dll", "SleepConditionVariableSRW", 0);
++    void* wake_all = shim.resolve("kernel32.dll", "WakeAllConditionVariable", 0);
++    void* get_error = shim.resolve("kernel32.dll", "GetLastError", 0);
++    check(acquire && release && acquire_shared && release_shared &&
++          sleep_cv && wake_all && get_error,
++          "six synchronization rows and GetLastError resolve as typed imports");
++    if (!acquire || !release || !acquire_shared || !release_shared ||
++        !sleep_cv || !wake_all || !get_error) return 1;
++
++    alignas(8) uint64_t lock_word = 0;
++    alignas(8) uint64_t cv_word = 0;
++    const uint64_t lock = reinterpret_cast<uint64_t>(&lock_word);
++    const uint64_t cv = reinterpret_cast<uint64_t>(&cv_word);
++    stop.wake_entry = wake_all;
++    stop.condition = cv;
++    (void)cap13_win64_call1(acquire, lock);
++    std::atomic<int> entered{0};
++    std::thread blocked([&] {
++        (void)cap13_win64_call1(acquire, lock);
++        entered = 1;
++        (void)cap13_win64_call1(release, lock);
++    });
++    std::this_thread::sleep_for(std::chrono::milliseconds(15));
++    const bool stayed_blocked = entered.load() == 0;
++    (void)cap13_win64_call1(release, lock);
++    blocked.join();
++    check(stayed_blocked && entered == 1 && stopped == 0,
++          "exclusive SRW lock blocks another thread until release");
++
++    std::atomic<int> waiting{0};
++    std::atomic<int> woke{0};
++    auto waiter = [&] {
++        (void)cap13_win64_call1(acquire, lock);
++        waiting.fetch_add(1);
++        if (cap13_win64_call4(sleep_cv, cv, lock, 0xffffffffu, 0) != 0)
++            woke.fetch_add(1);
++        (void)cap13_win64_call1(release, lock);
++    };
++    std::thread one(waiter);
++    std::thread two(waiter);
++    const bool both_entered = wait_until(waiting, 2);
++    if (both_entered)
++    {
++        (void)cap13_win64_call1(acquire, lock);
++        (void)cap13_win64_call1(release, lock);
++        (void)cap13_win64_call1(wake_all, cv);
++    }
++    one.join();
++    two.join();
++    check(both_entered && woke == 2 && stopped == 0,
++          "wake-all releases and reacquires SRW lock for two waiters");
++
++    (void)cap13_win64_call1(acquire, lock);
++    const bool timed_out = cap13_win64_call4(sleep_cv, cv, lock, 0, 0) == 0;
++    const uint32_t timeout_error = static_cast<uint32_t>(cap13_win64_call0(get_error));
++    (void)cap13_win64_call1(release, lock);
++    check(timed_out && timeout_error == 1460 && stopped == 0,
++          "zero timeout returns FALSE and ERROR_TIMEOUT with lock reacquired");
++
++    (void)cap13_win64_call1(acquire_shared, lock);
++    std::atomic<int> shared_entered{0};
++    std::thread reader([&] {
++        (void)cap13_win64_call1(acquire_shared, lock);
++        shared_entered = 1;
++        (void)cap13_win64_call1(release_shared, lock);
++    });
++    const bool concurrent_readers = wait_until(shared_entered, 1);
++    (void)cap13_win64_call1(release_shared, lock);
++    reader.join();
++    check(concurrent_readers && stopped == 0,
++          "shared SRW acquisition allows a second reader concurrently");
++
++    (void)cap13_win64_call1(acquire_shared, lock);
++    const bool shared_timeout = cap13_win64_call4(sleep_cv, cv, lock, 0, 1) == 0;
++    (void)cap13_win64_call1(release_shared, lock);
++    check(shared_timeout && stopped == 0 &&
++          static_cast<uint32_t>(cap13_win64_call0(get_error)) == 1460,
++          "shared condition timeout reacquires the shared lock");
++
++    const int before_unowned = stopped;
++    stop.reenter = true;
++    const bool unowned_refused = cap13_win64_call4(sleep_cv, cv, lock, 0, 0) == 0;
++    stop.reenter = false;
++    check(unowned_refused && stopped == before_unowned + 1,
++          "invalid ownership stop hook can reenter condition wake");
++
++    const int before_bad = stopped;
++    (void)cap13_win64_call1(acquire, 0);
++    (void)cap13_win64_call1(acquire, lock);
++    const bool invalid_flags = cap13_win64_call4(sleep_cv, cv, lock, 0, 2) == 0;
++    (void)cap13_win64_call1(release, lock);
++    check(invalid_flags && stopped == before_bad + 2,
++          "null lock and unsupported condition flags stop this mod");
++
++    std::printf("TOTAL: %d failed\n", failures);
++    return failures ? 1 : 0;
++}
+--- /dev/null
++++ b/loader/tests/run_win32_sync_import.py
+@@ -0,0 +1,16 @@
++#!/usr/bin/env python3
++"""Build and run Win32 SRW/condition import host checks."""
++import subprocess
++from pathlib import Path
++
++root = Path(__file__).resolve().parents[1]
++out = root / 'tests/win32-sync-import-host'
++subprocess.run([
++    'clang++', '-arch', 'x86_64', '-std=c++17', '-O1', '-g', '-Wall',
++    '-Wextra', '-Werror', '-pthread', '-I' + str(root / 'src'),
++    '-I' + str(root / 'include'),
++    str(root / 'tests/win32_sync_import_test.cpp'),
++    str(root / 'src/win_api_shim.cpp'),
++    str(root / 'src/win64_bridge.S'), '-o', str(out),
++], check=True, timeout=30)
++subprocess.run(['arch', '-x86_64', str(out)], check=True, timeout=20)

@@ -1,0 +1,125 @@
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -11,8 +11,8 @@
+ //    root (design 5b T2; agent-GA-path-shim.md rules).
+ //  * EH/SEH entry points FAIL CLOSED with a precise diagnostic (design 4c).
+ //
+-// Every function listed in the registry crosses the guest->host bridge with
+-// its documented Win32 signature; the bridge carries the signature table.
++// Raw built-in handlers are private metadata. No PE import receives one
++// until a per-signature guest-callable wrapper is explicitly published.
+ // CAP13 proposal-only; design-grade; bodies are intentionally small.
+ 
+ #include "win_api_shim.h"
+@@ -61,6 +61,7 @@
+     std::string mod_root = "/data/modbridge/roots/";
+     std::mutex mu;
+     // dll-name(lowercased) -> { symbol/ordinal -> address }
++    std::unordered_map<std::string, std::unordered_map<std::string, void*>> raw_exports;
+     std::unordered_map<std::string, std::unordered_map<std::string, void*>> exports;
+     struct ModuleEntry
+     {
+@@ -251,8 +252,8 @@
+     return uint32_t(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+ }
+ 
+-// ---- T4: fail-closed EH/SEH (design 4c). Presence != use, so these are
+-// registered but never fire unless the mod ACTUALLY throws/raises.
++// ---- T4: fail-closed EH/SEH (design 4c). These raw bodies are cataloged,
++// but do not enter a PE IAT until a valid Win64 wrapper is published.
+ static int32_t impl_fail_closed_cxx_frame(WinApiShim::Impl* m)
+ {
+     m->fail_closed("__CxxFrameHandler4 (mod unwound through C++ EH; unsupported)");
+@@ -319,11 +320,9 @@
+ 
+ // Rows are (dll, symbol) -> impl. Ordinals are accepted but this surface is
+ // name-exported; the census (JG) verifies which ordinals real mods use.
+-// BRIDGE NOTE: in the integrated system the registry holds the BRIDGED
+-// pointer (trampoline -> shared thunk -> these SysV bodies); the staging
+-// table stores the SysV bodies and the adapter stamps trampolines over them
+-// at load time (win64_bridge.h). The fail-closed rows must be bridged too,
+-// or a mod's throw would enter SysV code under a Win64 frame.
++// These SysV bodies require a hidden Impl* argument. Name presence alone
++// cannot put one in a PE IAT; a guest-callable wrapper must inject context
++// and honor the exact Win64 signature before publication.
+ void WinApiShim::register_builtin_exports()
+ {
+     struct Row
+@@ -352,11 +351,26 @@
+         {"ntdll.dll", "RtlUnwindEx", (void*)&impl_fail_closed_raise},
+         {"vcruntime140.dll", "__C_specific_handler", (void*)&impl_fail_closed_specific_handler},
+     };
++    std::lock_guard g(m->mu);
+     for (const auto& r : rows)
+     {
+         std::string key = r.sym;
+-        m->exports[r.dll][key] = r.fn;
+-    }
++        m->raw_exports[r.dll][key] = r.fn;
++    }
++}
++
++bool WinApiShim::publish_builtin_wrapper(const char* dll_name, const char* symbol,
++                                          void* win64_entry)
++{
++    if (!dll_name || !*dll_name || !symbol || !*symbol || !win64_entry)
++        return false;
++    const std::string dll = ascii_module_key(dll_name);
++    std::lock_guard g(m->mu);
++    auto raw_dll = m->raw_exports.find(dll);
++    if (raw_dll == m->raw_exports.end() ||
++        raw_dll->second.find(symbol) == raw_dll->second.end()) return false;
++    m->exports[dll][symbol] = win64_entry;
++    return true;
+ }
+ 
+ void* WinApiShim::resolve(const char* dll_name, const char* symbol, uint64_t ordinal)
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -10,8 +10,8 @@
+ //   T5 REFUSE (load time, in the loader/census, not here) game-code
+ //           rewriting APIs and user32/gdi32 surfaces
+ //
+-// The shim is authored against DOCUMENTED Win32 signatures; every export
+-// crosses the guest->host win64 bridge (known signature by construction).
++// The shim bodies model selected Win32 signatures. Raw bodies remain private
++// until a per-signature guest-callable wrapper is supplied and checked.
+ // CAP13 proposal-only; design-grade.
+ #ifndef CAP13_WIN_API_SHIM_H
+ #define CAP13_WIN_API_SHIM_H
+@@ -57,9 +57,16 @@
+     void register_module(const char* name, WinModule handle,
+                          bool (*lookup)(WinModule, const char* symbol, void** out));
+ 
+-    // Install the built-in T4 fail-closed rows (EH/SEH) and the shape of the
+-    // T1/T3 row table. M1 generates the complete row set from the census.
++    // Catalog raw SysV handlers. They are NOT guest-callable and remain
++    // unresolved imports until a per-signature Win64 wrapper is published.
+     void register_builtin_exports();
++
++    // Call only after generating and validating a guest-callable wrapper
++    // that also supplies the handler's hidden Impl* context. Unknown rows,
++    // null pointers, and malformed names refuse. Publication does not by
++    // itself prove the wrapper's behavior; the caller owns that gate.
++    bool publish_builtin_wrapper(const char* dll_name, const char* symbol,
++                                 void* win64_entry);
+ 
+     // ImportResolver: exact match on (dll, symbol) or (dll, ordinal).
+     // Unknown => nullptr (the loader refuses with the full missing list).
+--- a/loader/tests/import_registry_test.cpp
++++ b/loader/tests/import_registry_test.cpp
+@@ -31,6 +31,14 @@
+     cap13::WinApiShim shim;
+     active = &shim;
+     shim.register_builtin_exports();
++    check(shim.resolve("KERNEL32.DLL", "Sleep", 0) == nullptr,
++          "raw SysV built-in body is not exposed as a guest import");
++    check(!shim.publish_builtin_wrapper("kernel32.dll", "Imaginary", reinterpret_cast<void*>(0x99)) &&
++          !shim.publish_builtin_wrapper("kernel32.dll", "Sleep", nullptr),
++          "unknown rows and null wrappers cannot be published");
++    check(shim.publish_builtin_wrapper("KERNEL32.DLL", "Sleep", reinterpret_cast<void*>(0x9999)) &&
++          shim.resolve("kernel32.dll", "Sleep", 0) == reinterpret_cast<void*>(0x9999),
++          "a known row resolves only through its published Win64 wrapper");
+     shim.register_module("UE4SS.DLL", reinterpret_cast<void*>(0x1234), lookup);
+     check(shim.resolve("ue4ss.dll", "Fn", 0) == reinterpret_cast<void*>(0x5678),
+           "registered module names use ASCII case-insensitive lookup");

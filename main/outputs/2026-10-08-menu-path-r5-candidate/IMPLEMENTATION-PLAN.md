@@ -1,0 +1,11 @@
+This separate local candidate preserves the sealed prototype and all selected runtime files. Nine actual-method tests fail against the copied prototype: noninstalling data/callback queries, absent unregister, four empty-callable variants, a callable-copy exception, and default256 capacity.
+
+Only registration creates a slot. Validate callable and original first, construct callback data in a temporary same-type map node, then commit the active map/slot and publish Func. A failed callable copy or capacity/configuration check leaves both Func and active map unchanged. Queries return absent/throw without installation. Removing the last callback retires the owned slot; old loaded thunks retain original forwarding and cannot target a new registration.
+
+Source-compiled maximum256 slots are generic bounded configuration. A smaller configured limit can be chosen before the first publication; invalid or later changes refuse. Slots never reuse. No per-game native constants enter the helper.
+
+Teardown closes callback/registration admission and reports whether any thunk code was ever published. Without independently proved external quiescence, restoration and zero current dispatches do not justify unloading the module: callers may retain a loaded thunk. Preserve transparent original forwarding after teardown; do not automatically touch possibly dead native UFunction objects. Explicit per-object retirement requires a valid caller-owned object.
+
+Function-pointer access publication and thread authentication are separate constraints. The ordinary public GetFunc storage type is8-byte on the selected target; atomic_ref can enforce the port's accessor load/store ordering without changing native layout. Real engine read behavior and native code residence still need their own evidence. A new game-thread comparator is not invented here; the native-thread worker's sealed evidence will be reviewed by root.
+
+Callbacks use borrowed original frames in GNatives-null mode, with no clone or interpreted parameter guarantee. Pre/Post snapshots are per phase, including pre-add-post same-dispatch behavior. New nonvirtual query methods do not change class layout; actual target compilation and caller/dependency checks remain mandatory before promotion.

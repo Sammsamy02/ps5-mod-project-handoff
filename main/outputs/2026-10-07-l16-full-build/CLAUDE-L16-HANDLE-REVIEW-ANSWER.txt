@@ -1,0 +1,2247 @@
+L16 — RESPONSE TO THE FOUR FILE-HANDLE REVIEW QUESTIONS
+Local read-only source review, 2026-10-07. Original l16 PRX/source/tests/receipts unchanged; no console contact or operation. This packet embeds requested source and test evidence so Mac filesystem access is unnecessary.
+
+1. OWNERSHIP / LIFETIME
+The current code has one central bank owner and an exclusive in-place reservation, not a moved owning consumer object. g_copyin_probe_nonce++ reserves a slot. Its descriptor remains in the table during use; the table entry is set to -1 after exactly one close attempt. Normal error-return paths converge on close. Stop joins/destroys the one initializer before releasing remaining table entries; empty-owner startup failure releases the bank. This is internally consistent ONLY under the existing single-initializer and serialized module-start/module-stop contract.
+The bank, nonce, capture slots and fault ledger are not locked for arbitrary concurrent consumers. No multi-consumer support or TSan proof is claimed. The loader fills the bank before creating the initializer std::thread; later stop joins it before cleanup.
+No close retry exists. The current close-error mock really closes the host fd before returning -1/EIO, so its receipt models the retired-fd case. A dedicated numeric-reuse sentinel test is still missing. FreeBSD close(2) documents retirement on errors other than EBADF: https://man.freebsd.org/cgi/man.cgi?query=close . This is relevant platform evidence, not direct proof of every Sony wrapper error. For an uncertain error we mark the descriptor retired, log and refuse; we do not risk closing a replacement descriptor by retrying.
+C++ diagnostics throwing mid-probe do not have a per-attempt RAII closer; the descriptor stays bank-owned for subsequent owner teardown. A dedicated thrown-diagnostic test and resource-lifetime policy clarification remain useful.
+
+2. EXISTING / MISSING EVIDENCE
+Already tested: partial startup acquisition, startup failure/exception cleanup, positive partial writes, signed and zero-extended SCE EFAULT after a partial write, zero/oversized write counts, short readback refusal, read EPERM, close-error refusal, standalone exhaustion, source changes between attempts, expiry before/after operations, normal stop and actual owner destruction after injected stop exception.
+Missing or unproved: TSan of SUPPORTED producer/initializer/join lifecycle; explicit fd-number reuse/double-close sentinel; acquisition failures EMFILE/ENFILE/EPERM/EEXIST at first and partial-bank positions; combined actual admission retries + finite bank exhaustion; actual game descriptor headroom; leftover file cleanup; interrupted I/O cases; exception diagnostics mid-operation. A multi-threaded consume stress test would exercise an unsupported API contract, so it cannot establish that arbitrary callers are currently safe. Add synchronization before introducing such callers.
+The code's pread is ONE exact-length read (up to 4096 bytes) and conservatively refuses any short read. It does not loop on short pread. That prevents partial/stale bytes from being published but may reject otherwise recoverable I/O. The write path does loop on positive short writes. A partial write followed by EFAULT marks the whole requested range faulted and does not publish a prefix.
+At most 64 probe descriptors + 1 parent are retained; lowering to 8-16 is not automatically correct without measuring how many checks/retries consume them. Files are retained as evidence, not unlinked, and no stale-file purge is implemented. Never perform broad deletion based only on a filename prefix.
+
+3. DEADLINES — CORRECTED PRECISE CLAIM
+Both clocks are std::chrono::steady_clock.
+The 5000ms acquisition clock starts in module_start before opening the parent; it is checked before each sink creation. The initial credential diagnostics occur BEFORE that timer. The 60000ms shared admission clock is created LATER inside the initializer and covers admission/retry and the constructor witness. Therefore acquisition is OUTSIDE the admission budget, not charged inside it.
+These are scheduling/refusal budgets. Diagnostics, OS calls, close cleanup, and worker join are not preempted. Hence neither '5s plus one call' nor 'the outer 300s deadline caps a hung syscall' is a complete hard bound. The outer 5-minute startup control is also cooperative and starts later during initializer setup; it throws only when its check runs again. No hard wall-clock hang guarantee is established.
+
+4. EXACT SOURCE / TESTS
+Embedded below: complete production I/O region, acquire/release and descriptor-selection code, error normalization and startup scope helper, bridge stop body, actual selected RuntimeOwner start/initialize/stop/destructor, selected supplier start/stop, current initializer callsites and budget creation, actual outer timeout control, normal/sanitizer runners and fixtures, actual-owner tests and receipt, precise host outputs, and artifact identity.
+Ordinary host fixture flags: C++17, -O1, -Wall -Wextra -Werror -Wno-unused-function. ASan/UBSan adds -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer. Actual-owner tests also use -pthread. TSan WAS NOT RUN.
+
+SINCE L15
+L15 console admission passed in 22ms; delayed file creation failed with EPERM before native FName invocation. L16 changes only the bootstrap bridge: acquire full read/write descriptors at startup, retain/use them later, add diagnostics and fix cleanup. Acquisition flags O_RDWR|O_CREAT|O_TRUNC|O_NOFOLLOW|O_EXCL, target 0xF02, mode0600. The exact path generator is included. Engine adapters, pad and original downloaded mod unchanged.
+The separate 284-entry engine ABI audit remains 1 saved-disassembly-verified, 280 unverified, 3 suspected wrong (structured-archive wrappers). This is static signature inventory, not 284 runtime calls. FName native call and roundtrip remain console-untested; subsequent ProcessEvent/reflection, property/allocator and widget calls also need native evidence. Historical full audit is already in CLAUDE-L16-REVIEW.txt; don't mistake the l14 old constructor declaration for the l15/l16 corrected native adapter.
+The old-ABI host negative is an isolated child that must exit77 or signal under the intentionally incompatible calling form. Saved output: PASS: native output ABI; zero/alignment; mode; UTF16 and UTF32; invalid/overflow; legacy rejected. The sanitized adapter skips only that deliberate UB experiment.
+Final PRX: 30,932,967 bytes; sha256 34e43b25cb99333e472146ebd518a0d9d8418e8fe762f90084cd88c0c190c121; SELF 4f153d1d. Two final builds identical, package20/20 PASS, offline gates11/11 GO. NEW target imports remain console-unproved. No upload approval is inferred from these host results.
+
+
+========================================================================
+PRODUCTION FILE IO — INCLUDING PATH, FLAGS, ACQUIRE, RETIRE, READBACK, CLASSIFICATION
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units/runtime_start_bridge_r14_diag_spanpub.cpp
+Full-source SHA256: d05a307728cee0105b721934fdfed0ba739774536b89d4ad76d7fd5d4b358f00
+Lines 872-1210
+========================================================================
+// Source-address faults are retained separately from sink/path/policy failures.
+// HOST-TEST-EXTRACT compiles this production region with filesystem/kernel-call
+// adapters; tests do not duplicate its normalization, accounting or admission.
+
+// ---- HOST-TEST-EXTRACT-BEGIN (io-controls + write-copyin probe) ----------
+
+// The in-contract Sony-native route (session 968: the POSIX-layer fd
+// wrappers fail in the sandboxed game process; session 1047: THIS route
+// transferred real pool bytes in-game).
+extern "C" int sceKernelOpen(const char *, int, uint16_t);
+extern "C" int64_t sceKernelWrite(int, const void *, size_t);
+extern "C" int sceKernelClose(int);
+
+#ifndef O_NOFOLLOW
+#define O_NOFOLLOW 0x0100 // BSD/Prospero fcntl.h value; guarded for hosts
+#endif
+
+// Legacy diagnostic-only paths. Lazy admission probes use their own basename
+// under the retained /data/plugins parent; Control A/B/C are not run at startup.
+static const char *kSinkPath = "/data/plugins/modbridge-copyin-sink.bin";
+static const char *kIoCreateTestPath = "/data/plugins/modbridge-io-create-test.bin";
+
+// L16: fully open bounded single-use sinks during module_start. No target
+// memory is read until a fresh delayed probe. Restored namespaces cannot
+// require a late create/reopen; positional readback uses the same descriptor.
+#include "CopyinSink.hpp"
+#include "CopyinStartup.hpp"
+extern "C" int64_t sceKernelPread(int, void *, size_t, int64_t);
+extern "C" int sceKernelIsInSandbox(void);
+extern "C" int sysctlbyname(const char *, void *, size_t *, const void *, size_t);
+static const char *kProbeParent = "/data/plugins";
+static int g_copyin_parent_fd = -1;
+static uint32_t g_copyin_probe_nonce = 0;
+static uint64_t g_copyin_generation = 0;
+static uint32_t g_copyin_pid = 0;
+static l13_sink::FaultLedger g_copyin_faults;
+static constexpr uint32_t kCopyinHandleLimit = 64u; // existing attempt cap
+static constexpr uint64_t kCopyinStartupBudgetMs = 5000u;
+static constexpr int kCopyinSinkFlags = O_RDWR | O_CREAT | O_TRUNC | O_NOFOLLOW | O_EXCL;
+struct CopyinHandle { int fd = -1; char path[96]{}; };
+static CopyinHandle g_copyin_handles[kCopyinHandleLimit]{};
+static void l13_format_probe_sink(char *, uint64_t, uint32_t);
+static void bridge_copyin_directory_release();
+
+static void bridge_copyin_path_diagnostic(const char *path)
+{
+    // Lossless ASCII, four little-endian bytes per repeated word. Length and
+    // word order reconstruct the exact path without a new text logger/import.
+    size_t n = 0;
+    while (path[n] != '\0') ++n;
+    ::diagnostic_event("pool_copyin_path_len", static_cast<uint32_t>(n));
+    for (size_t i = 0; i < n; i += 4) {
+        uint32_t word = 0;
+        for (size_t j = 0; j < 4 && i + j < n; ++j)
+            word |= uint32_t(static_cast<unsigned char>(path[i + j])) << (8 * j);
+        ::diagnostic_event("pool_copyin_path_word", word);
+    }
+}
+// Read-only public API observations. Jail/sandbox unavailability remains
+// UNKNOWN; uid0 is not evidence of a restored root, prison or credential set.
+static void bridge_copyin_credentials(uint32_t phase)
+{
+    const int saved_errno = errno;
+    ::diagnostic_event("copyin_cred_phase", phase); // 1 startup, 2 delayed
+    ::diagnostic_event("copyin_uid", static_cast<uint32_t>(::getuid()));
+    ::diagnostic_event("copyin_euid", static_cast<uint32_t>(::geteuid()));
+    ::diagnostic_event("copyin_gid", static_cast<uint32_t>(::getgid()));
+    ::diagnostic_event("copyin_egid", static_cast<uint32_t>(::getegid()));
+    errno = 0;
+    const int sandbox = sceKernelIsInSandbox();
+    const int sandbox_error = l13_sink::error(sandbox, errno);
+    ::diagnostic_event("copyin_sandbox_raw", static_cast<uint32_t>(sandbox));
+    ::diagnostic_event("copyin_sandbox_available", (sandbox == 0 || sandbox == 1) && !sandbox_error ? 1u : 0u);
+    ::diagnostic_event("copyin_sandbox_errno", static_cast<uint32_t>(sandbox_error));
+    int jailed = -1;
+    size_t size = sizeof jailed;
+    errno = 0;
+    const int jail_rc = sysctlbyname("security.jail.jailed", &jailed, &size, nullptr, 0);
+    const int jail_err = l13_sink::error(jail_rc, errno);
+    const bool known = jail_rc == 0 && !jail_err && size == sizeof jailed && (jailed == 0 || jailed == 1);
+    ::diagnostic_event("copyin_jail_available", known ? 1u : 0u);
+    ::diagnostic_event("copyin_jail_value", static_cast<uint32_t>(known ? jailed : -1));
+    ::diagnostic_event("copyin_jail_raw", static_cast<uint32_t>(jail_rc));
+    ::diagnostic_event("copyin_jail_errno", static_cast<uint32_t>(jail_err));
+    errno = saved_errno;
+}
+static void bridge_copyin_file_failure(uint32_t op, const char *path, int flags,
+                                       int64_t raw, int err, uint32_t phase)
+{
+    // op1=open, 2=copyin write, 3=positional read, 4=close. Short/zero/malformed
+    // results use EIO, retaining raw bits and the actual source errno separately.
+    bridge_copyin_path_diagnostic(path);
+    ::diagnostic_event("copyin_file_op", op);
+    ::diagnostic_event("copyin_file_flags", static_cast<uint32_t>(flags));
+    ::diagnostic_event("copyin_file_raw_lo", static_cast<uint32_t>(raw));
+    ::diagnostic_event("copyin_file_raw_hi", static_cast<uint32_t>(uint64_t(raw) >> 32));
+    ::diagnostic_event("copyin_file_errno", static_cast<uint32_t>(err));
+    bridge_copyin_credentials(phase);
+}
+static void bridge_copyin_directory_prepare()
+{
+    if (g_copyin_parent_fd >= 0) return;
+    bridge_copyin_credentials(1u);
+    const auto start = std::chrono::steady_clock::now();
+    const int flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW;
+    errno = 0;
+    const int fd = sceKernelOpen(kProbeParent, flags, 0);
+    const int err = l13_sink::error(fd, errno);
+    ::diagnostic_event("pool_copyin_parent_flags", static_cast<uint32_t>(flags));
+    ::diagnostic_event("pool_copyin_parent_raw", static_cast<uint32_t>(fd));
+    ::diagnostic_event("pool_copyin_parent_errno", static_cast<uint32_t>(err));
+    if (fd < 0 || err != 0) {
+        bridge_copyin_file_failure(1, kProbeParent, flags, fd, err, 1);
+        return;
+    }
+    g_copyin_parent_fd = fd;
+    g_copyin_generation = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        start.time_since_epoch()).count());
+    g_copyin_pid = static_cast<uint32_t>(::getpid());
+    g_copyin_probe_nonce = 0;
+    for (uint32_t i = 0; i < kCopyinHandleLimit; ++i) {
+        auto& handle = g_copyin_handles[i];
+        // Target address is unknown at startup; the delayed diagnostic records
+        // it separately. PID/generation/ordinal make each process-owned sink unique.
+        l13_format_probe_sink(handle.path, 0, i + 1);
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        if (elapsed >= static_cast<int64_t>(kCopyinStartupBudgetMs)) {
+            ::diagnostic_event("copyin_startup_timeout", static_cast<uint32_t>(elapsed));
+            bridge_copyin_directory_release();
+            return; // scheduling bound; cannot preempt a kernel call already entered
+        }
+        errno = 0;
+        handle.fd = sceKernelOpen(handle.path, kCopyinSinkFlags, 0600);
+        const int sink_err = l13_sink::error(handle.fd, errno);
+        ::diagnostic_event("pool_copyin_open_flags", static_cast<uint32_t>(kCopyinSinkFlags));
+        if (handle.fd < 0 || sink_err != 0) {
+            bridge_copyin_file_failure(1, handle.path, kCopyinSinkFlags, handle.fd, sink_err, 1);
+            handle.fd = -1;
+            bridge_copyin_directory_release(); // no partial bank, no leaked owners
+            return;
+        }
+    }
+    ::diagnostic_event("copyin_startup_handles", kCopyinHandleLimit);
+    ::diagnostic_event("copyin_startup_elapsed_ms", static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count()));
+}
+static void bridge_copyin_directory_release()
+{
+    for (auto& handle : g_copyin_handles) {
+        if (handle.fd < 0) continue;
+        errno = 0;
+        const int raw = sceKernelClose(handle.fd);
+        const int err = l13_sink::error(raw, errno);
+        handle.fd = -1;
+        if (raw != 0 || err) bridge_copyin_file_failure(4, handle.path, kCopyinSinkFlags, raw, err, 2);
+    }
+    if (g_copyin_parent_fd >= 0) {
+        errno = 0;
+        const int raw = sceKernelClose(g_copyin_parent_fd);
+        const int err = l13_sink::error(raw, errno);
+        g_copyin_parent_fd = -1;
+        if (raw != 0 || err) bridge_copyin_file_failure(4, kProbeParent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, raw, err, 2);
+    }
+}
+static uint64_t bridge_copyin_now_ms()
+{
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+static void l13_format_probe_sink(char *out, uint64_t addr, uint32_t nonce)
+{
+    static const char prefix[] = "/data/plugins/modbridge-copyin-p";
+    static const char hex[] = "0123456789abcdef";
+    size_t o = 0;
+    for (; prefix[o]; ++o) out[o] = prefix[o];
+    for (int shift = 60; shift >= 0; shift -= 4) out[o++] = hex[(addr >> shift) & 15u];
+    out[o++] = '-';
+    for (int shift = 60; shift >= 0; shift -= 4) out[o++] = hex[(g_copyin_generation >> shift) & 15u];
+    out[o++] = '-';
+    for (int shift = 28; shift >= 0; shift -= 4) out[o++] = hex[(g_copyin_pid >> shift) & 15u];
+    out[o++] = '-';
+    for (int shift = 28; shift >= 0; shift -= 4) out[o++] = hex[(nonce >> shift) & 15u];
+    out[o] = '\0';
+}
+
+// Control D is an explicit diagnostic entry only; module_start never runs it.
+// Its address and 64-byte length are distinct from a pool-block probe.
+static constexpr uint64_t kIoCtrlDCandidateAddr = 0x400000ull + 0x7dd2a40ull;
+static constexpr uint64_t kIoCtrlDCandidateLen = 64u;
+static uint32_t bridge_io_ld32(const unsigned char *p)
+{
+    return uint32_t(p[0]) | (uint32_t(p[1]) << 8) |
+           (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
+}
+static void bridge_io_canary_build(unsigned char out[32], uint64_t t_ms) noexcept
+{
+    out[0] = 'M'; out[1] = 'B'; out[2] = 'I'; out[3] = 'O';
+    out[4] = 1; out[5] = 0; out[6] = 0; out[7] = 0;
+    for (int i = 0; i < 8; ++i) out[8 + i] = static_cast<unsigned char>(t_ms >> (8 * i));
+    for (int i = 0; i < 16; ++i)
+        out[16 + i] = static_cast<unsigned char>((t_ms >> (8 * (i % 8))) ^ (0x5au + i));
+}
+struct BridgeProbeTelemetry { uint32_t code; uint32_t rc; uint32_t err; uint32_t sink; };
+static BridgeProbeTelemetry g_last_probe_telemetry{0u, 0u, 0u, 0u};
+static uint8_t g_write_copyin_capture[3][0x1000];
+static uint64_t g_write_copyin_capture_addr[3];
+static uint32_t g_write_copyin_capture_len[3];
+static bool g_write_copyin_capture_valid[3];
+static uint32_t g_write_copyin_capture_next = 0;
+extern "C" int bridge_copyin_range_faulted(uint64_t addr, uint64_t len)
+{
+    return g_copyin_faults.overlaps(addr, len) ? 1 : 0;
+}
+extern "C" int bridge_write_copyin_capture(uint64_t addr, const uint8_t **out_bytes, uint32_t *out_len)
+{
+    if (out_bytes == nullptr || out_len == nullptr) return 0;
+    *out_bytes = nullptr;
+    *out_len = 0;
+    for (uint32_t i = 0; i < 3; ++i) {
+        if (!g_write_copyin_capture_valid[i] || addr < g_write_copyin_capture_addr[i]) continue;
+        const uint64_t offset = addr - g_write_copyin_capture_addr[i];
+        if (offset >= g_write_copyin_capture_len[i]) continue;
+        const uint32_t remaining = g_write_copyin_capture_len[i] - static_cast<uint32_t>(offset);
+        if (bridge_copyin_range_faulted(addr, remaining)) return 0;
+        *out_bytes = g_write_copyin_capture[i] + offset;
+        *out_len = remaining;
+        return 1;
+    }
+    return 0;
+}
+static int bridge_copyin_result(uint32_t code, int64_t raw, int err, uint64_t landed)
+{
+    g_last_probe_telemetry = {code, static_cast<uint32_t>(raw), static_cast<uint32_t>(err), static_cast<uint32_t>(landed)};
+    ::diagnostic_event("pool_copyin_probe_fresh", code);
+    ::diagnostic_event("pool_copyin_probe_rc", static_cast<uint32_t>(raw));
+    ::diagnostic_event("pool_copyin_probe_errno", static_cast<uint32_t>(err));
+    ::diagnostic_event("pool_copyin_probe_sink", static_cast<uint32_t>(landed));
+    ::diagnostic_event("pool_copyin_probe_stop", static_cast<uint32_t>(landed));
+    return code == 1 ? 1 : (code == 0 ? 0 : -1);
+}
+
+// Scheduling deadline only: no new operation begins after it. Kernel calls,
+// diagnostics and mandatory descriptor cleanup cannot be preempted here.
+extern "C" int bridge_kernel_write_copyin_probe_until(uint64_t addr, uint64_t len,
+                                                       uint64_t deadline_ms)
+{
+    if (!l13_sink::valid_range(addr, len)) return bridge_copyin_result(3, 0, EINVAL, 0);
+    if (bridge_copyin_range_faulted(addr, len)) return bridge_copyin_result(0, 0, EFAULT, 0);
+    for (uint32_t i = 0; i < 3; ++i) {
+        if (g_write_copyin_capture_valid[i] && addr < g_write_copyin_capture_addr[i] + g_write_copyin_capture_len[i] &&
+            g_write_copyin_capture_addr[i] < addr + len) g_write_copyin_capture_valid[i] = false;
+    }
+    if (bridge_copyin_now_ms() >= deadline_ms) return bridge_copyin_result(2, 0, ETIMEDOUT, 0);
+    if (g_copyin_parent_fd < 0) return bridge_copyin_result(2, -1, ENOENT, 0);
+    // No path lookup after startup: each fresh attempt consumes a preopened
+    // exclusive sink exactly once. No cached prologue or recycled file offset.
+    if (g_copyin_probe_nonce >= kCopyinHandleLimit) return bridge_copyin_result(2, 0, ENOSPC, 0);
+    auto& handle = g_copyin_handles[g_copyin_probe_nonce++];
+    if (handle.fd < 0) return bridge_copyin_result(2, -1, ENOENT, 0);
+    const int fd = handle.fd;
+    const char *probe_sink = handle.path;
+    bridge_copyin_path_diagnostic(probe_sink);
+    ::diagnostic_event("pool_copyin_probe_addr_lo", static_cast<uint32_t>(addr));
+    ::diagnostic_event("pool_copyin_probe_addr_hi", static_cast<uint32_t>(addr >> 32));
+    ::diagnostic_event("pool_copyin_probe_len", static_cast<uint32_t>(len));
+    ::diagnostic_event("pool_copyin_open_flags", static_cast<uint32_t>(kCopyinSinkFlags));
+    ::diagnostic_event("pool_copyin_open_mode", 0600u);
+    ::diagnostic_event("copyin_retained_fd", static_cast<uint32_t>(fd));
+    bridge_copyin_credentials(2u);
+    int err = 0;
+    uint64_t landed = 0;
+    int64_t raw = 0;
+    bool faulted = false;
+    while (landed < len) {
+        if (bridge_copyin_now_ms() >= deadline_ms) { err = ETIMEDOUT; break; }
+        const uint64_t cursor = addr + landed;
+        const uint64_t page_left = 0x1000u - (cursor & 0xfffu);
+        const uint64_t chunk = len - landed < page_left ? len - landed : page_left;
+        errno = 0;
+        raw = sceKernelWrite(fd, reinterpret_cast<const void *>(cursor), static_cast<size_t>(chunk));
+        err = l13_sink::error(raw, errno);
+        if (err != 0 || raw < 0) {
+            if (err == EFAULT) {
+                faulted = true;
+                g_copyin_faults.record(addr, len);
+                ::diagnostic_event("pool_copyin_probe_fault_off", static_cast<uint32_t>(landed));
+                ::diagnostic_event("pool_copyin_fault_addr_lo", static_cast<uint32_t>(cursor));
+                ::diagnostic_event("pool_copyin_fault_addr_hi", static_cast<uint32_t>(cursor >> 32));
+            }
+            break;
+        }
+        if (raw == 0 || static_cast<uint64_t>(raw) > chunk) { err = EIO; break; }
+        landed += static_cast<uint64_t>(raw);
+        if (static_cast<uint64_t>(raw) != chunk) {
+            ::diagnostic_event("pool_probe_op_rc", static_cast<uint32_t>(raw));
+            ::diagnostic_event("pool_probe_stop_addr_lo", static_cast<uint32_t>(addr + landed));
+            ::diagnostic_event("pool_probe_stop_addr_hi", static_cast<uint32_t>((addr + landed) >> 32));
+            ::diagnostic_event("pool_probe_op_pagealign", ((addr + landed) & 0x3fffu) == 0 ? 1u : 0u);
+        }
+    }
+    const uint32_t slot = g_write_copyin_capture_next;
+    g_write_copyin_capture_valid[slot] = false;
+    const uint64_t expected = len < 0x1000u ? len : 0x1000u;
+    int64_t got = -1;
+    if (faulted || landed != len || err != 0) {
+        if (err != ETIMEDOUT) bridge_copyin_file_failure(2, probe_sink, kCopyinSinkFlags, raw, err, 2);
+    } else if (bridge_copyin_now_ms() >= deadline_ms) {
+        err = ETIMEDOUT;
+    } else {
+        errno = 0;
+        // Pread does not depend on or change the write cursor. The handle was
+        // opened O_RDWR at startup and is never replaced by a delayed reopen.
+        got = sceKernelPread(fd, g_write_copyin_capture[slot], static_cast<size_t>(expected), 0);
+        err = l13_sink::error(got, errno);
+        if (err != 0 || got != static_cast<int64_t>(expected)) {
+            if (!err) err = EIO;
+            bridge_copyin_file_failure(3, probe_sink, kCopyinSinkFlags, got, err, 2);
+        }
+    }
+    errno = 0;
+    const int close_rc = sceKernelClose(fd);
+    const int close_err = l13_sink::error(close_rc, errno);
+    handle.fd = -1;
+    if (close_rc != 0 || close_err) bridge_copyin_file_failure(4, probe_sink, kCopyinSinkFlags, close_rc, close_err, 2);
+    if (faulted) return bridge_copyin_result(0, raw, err, landed);
+    if (landed != len || err != 0) return bridge_copyin_result(2, raw, err, landed);
+    if (close_rc != 0 || close_err) return bridge_copyin_result(2, close_rc, close_err, landed);
+    if (bridge_copyin_now_ms() >= deadline_ms) return bridge_copyin_result(2, got, ETIMEDOUT, landed);
+    g_write_copyin_capture_addr[slot] = addr;
+    g_write_copyin_capture_len[slot] = static_cast<uint32_t>(got);
+    g_write_copyin_capture_valid[slot] = true;
+    g_write_copyin_capture_next = (slot + 1u) % 3u;
+    return bridge_copyin_result(1, raw, 0, landed);
+}
+extern "C" int bridge_kernel_write_copyin_probe(uint64_t addr, uint64_t len)
+{
+    return bridge_kernel_write_copyin_probe_until(addr, len, UINT64_MAX);
+}
+
+========================================================================
+PRODUCTION ERROR NORMALIZATION / FAULT LEDGER
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units/CopyinSink.hpp
+Full-source SHA256: 2018c9bdc63b8f2001aeadcc44ab698d0d5c54c08652e5fc0c78f45c0fa65d98
+Lines 1-42
+========================================================================
+#pragma once
+#include <cstdint>
+#include <cerrno>
+
+// Shared by the production bridge and host tests. Error recognition precedes
+// count arithmetic, so zero-extended SCE errors can never become byte counts.
+namespace l13_sink {
+inline int error(int64_t raw, int saved_errno) noexcept
+{
+    const uint32_t bits = static_cast<uint32_t>(raw);
+    if (raw >= INT32_MIN && raw <= UINT32_MAX &&
+        (bits & 0xffff0000u) == 0x80020000u)
+        return static_cast<int>(bits & 0xffffu);
+    if (raw == -1) return saved_errno;
+    if (raw < -1 && raw >= -INT32_MAX) return static_cast<int>(-raw);
+    return raw < 0 ? EIO : 0;
+}
+inline bool valid_range(uint64_t addr, uint64_t len) noexcept
+{
+    return len != 0 && len <= 0x1000000u && addr <= UINT64_MAX - len;
+}
+struct FaultLedger {
+    struct Range { uint64_t lo, hi; } ranges[64]{};
+    uint32_t count = 0;
+    bool saturated = false;
+    void record(uint64_t addr, uint64_t len) noexcept
+    {
+        if (!valid_range(addr, len)) { saturated = true; return; }
+        for (uint32_t i = 0; i < count; ++i)
+            if (ranges[i].lo <= addr && ranges[i].hi >= addr + len) return;
+        if (count == 64) { saturated = true; return; }
+        ranges[count++] = {addr, addr + len};
+    }
+    bool overlaps(uint64_t addr, uint64_t len) const noexcept
+    {
+        if (saturated || !valid_range(addr, len)) return true;
+        for (uint32_t i = 0; i < count; ++i)
+            if (addr < ranges[i].hi && ranges[i].lo < addr + len) return true;
+        return false;
+    }
+};
+} // namespace l13_sink
+
+========================================================================
+PRODUCTION STARTUP CLEANUP SCOPE
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units/CopyinStartup.hpp
+Full-source SHA256: f335316849add3381deefe4b5f1169dc5350b5a39fc4fd983ac6c1fde309eb3c
+Lines 1-16
+========================================================================
+#pragma once
+
+namespace l13_sink {
+// module_start failures never set runtime_active, so module_stop will not call
+// the bridge stop function. Release here unless an owner can still use the fd.
+template <typename Owner, typename Release, typename Start>
+auto with_startup_cleanup(Owner &owner, Release release, Start start) -> decltype(start())
+{
+    struct Cleanup {
+        Owner &owner;
+        Release &release;
+        ~Cleanup() { if (!owner) release(); }
+    } cleanup{owner, release};
+    return start();
+}
+} // namespace l13_sink
+
+========================================================================
+PRODUCTION BRIDGE SHUTDOWN
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units/runtime_start_bridge_r14_diag_spanpub.cpp
+Full-source SHA256: d05a307728cee0105b721934fdfed0ba739774536b89d4ad76d7fd5d4b358f00
+Lines 1464-1489
+========================================================================
+extern "C" int modbridge_runtime_stop(void)
+{
+    auto &slot = owner_slot();
+    if (!slot)
+    {
+        bridge_copyin_directory_release();
+        return 0;  // nothing started; nothing to join
+    }
+    bool stopped = false;
+    try
+    {
+        // Loader control thread (module_stop), never the init thread.
+        // Emits at most one 'stopped' ack line, then destroys the owner.
+        stopped = modbridge::native::StopRuntimeWithAck(slot);
+    }
+    catch (...)
+    {
+        slot.reset();
+        // RuntimeOwner destruction stops/joins the initializer (or terminates
+        // rather than returning). Only after that may its probe descriptors close.
+        bridge_copyin_directory_release();
+        return MRS_ERR_STOP_EXN;
+    }
+    if (stopped || !slot) bridge_copyin_directory_release();
+    return stopped ? 0 : 1;
+}
+
+========================================================================
+STARTUP BANK FILLED BEFORE OWNER START
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units/runtime_start_bridge_r14_diag_spanpub.cpp
+Full-source SHA256: d05a307728cee0105b721934fdfed0ba739774536b89d4ad76d7fd5d4b358f00
+Lines 1560-1578
+========================================================================
+              // r14 (L1): FIRST op of capture(), holding the FROZEN snapshot
+              // the whole chain will reason over. Register every readable
+              // record intersecting the anchored extent from THESE bytes —
+              // never a fresh sysctl (the r13 pre-capture call is retired).
+              bridge_register_from_frozen_snapshot(mappings, count);
+              // spanpub (launch10 merged): publish the SAME frozen snapshot
+              // for the seed-admission path (heap-inclusive, envelope-honest)
+              // — same array, same moment: the same-capture rule holds.
+              bridge_spanpub_publish(mappings, count, kCandidateBase, kImageExtentVaddr);
+              // L16 lifecycle setup: fully open owned sinks before restoration.
+              // No target reads occur here; admission still runs VirtualQuery
+              // first and requests fresh copyin only when it is needed.
+              bridge_copyin_directory_prepare();
+              const lmf::LiveModuleOsOps &base =
+                  *static_cast<const lmf::LiveModuleOsOps *>(ctx);
+              // First: the original header scan (unchanged behavior).
+              if (base.scan_image_base != nullptr &&
+                  base.scan_image_base(nullptr, mappings, count, out) == 0 &&
+                  out->chosen_index >= 0 && out->chosen_base != 0) {
+
+========================================================================
+OWNER CREATED/STARTED AFTER BANK PREPARATION
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units/runtime_start_bridge_r14_diag_spanpub.cpp
+Full-source SHA256: d05a307728cee0105b721934fdfed0ba739774536b89d4ad76d7fd5d4b358f00
+Lines 1692-1730
+========================================================================
+
+        // ---- Stage 2: NativeProgramContext build + validation. Throws on
+        // refused/invalid facts or missing regular files (both paths must
+        // exist NOW, while /data is still reachable in module_start).
+        try
+        {
+            RC::Platform::NativeProgramContext context =
+                RC::Platform::MakeNativeProgramContext(std::move(converted.facts));
+
+            // ---- Stage 3: THE composition chain, exactly as
+            // INTEGRATION-CHECKLIST STEP 6 orders it:
+            //   InstallDefaultEngineBindings() once,
+            //   RuntimeAckConfig born from mod_root (S1/S2/S3),
+            //   PrepareActivatedUE4SSRuntime (opens the single RuntimeAckSink
+            //     and builds the NativeModSource from the activation),
+            //   owner->start() (serialized init thread; returns immediately).
+            try
+            {
+                slot = modbridge::native::StartActivatedRuntimeWithAck(
+                    std::move(context), std::move(mods), std::string_view{title_id},
+                    mod_root);
+                if (!slot)
+                {
+                    copy_detail(detail, detail_capacity,
+                                "StartActivatedRuntimeWithAck returned null owner");
+                    return MRS_ERR_START;
+                }
+                copy_detail_or_empty(detail, detail_capacity);
+                return MRS_OK;
+            }
+            catch (const std::exception &error)
+            {
+                copy_detail(detail, detail_capacity, error.what());
+                return MRS_ERR_START;
+            }
+            catch (...)
+            {
+                copy_detail(detail, detail_capacity, "unknown exception in prepare/start");
+                return MRS_ERR_START;
+
+========================================================================
+ACTUAL SELECTED RUNTIME OWNER — START/WORKER/JOIN/DESTRUCTOR
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-runtime-1/source/bootstrap/runtime_owner.cpp
+Full-source SHA256: 54c56c49d0ad89fd6456f58d99f765027f6e16e0bfdbaf8b8e1e044f268aa629
+Lines 1-118
+========================================================================
+#include "runtime_owner.hpp"
+#include <stdexcept>
+
+namespace modbridge::native
+{
+struct RuntimeOwner::Signals
+{
+    mutable std::mutex mutex;
+    RuntimeStatus status;
+    std::thread::id initializer;
+};
+RuntimeOwner::RuntimeOwner(std::unique_ptr<RuntimeBackend> backend, std::shared_ptr<RuntimeAckSink> ack)
+    : backend_(std::move(backend)), signals_(std::make_shared<Signals>()), ack_(std::move(ack))
+{
+    if (!backend_) throw std::invalid_argument("Native runtime backend is required");
+}
+RuntimeOwner::~RuntimeOwner()
+{
+    // Destroying the object on its own worker would free live program state.
+    // There is deliberately no detached-thread fallback.
+    if (!stop()) std::terminate();
+}
+bool RuntimeOwner::start()
+{
+    std::lock_guard operation(operations_);
+    {
+        std::lock_guard lock(signals_->mutex);
+        if (signals_->status.state != RuntimeState::Prepared) return false;
+        signals_->status.state = RuntimeState::Starting;
+    }
+    try { thread_ = std::thread(&RuntimeOwner::initialize, this); }
+    catch (const std::exception& error)
+    {
+        std::lock_guard lock(signals_->mutex);
+        signals_->status = {RuntimeState::Failed, error.what()};
+        // RUNTIME-ACK point 4: the session failed before any engine work;
+        // record and continue, never propagate from the acknowledgment.
+        if (ack_) ack_->failed(1, error.what());
+        return false;
+    }
+    return true;
+}
+bool RuntimeOwner::stop()
+{
+    // Check before operations_: another caller may already hold it while
+    // joining us. The worker must never wait behind its own joiner.
+    {
+        std::lock_guard lock(signals_->mutex);
+        if (signals_->initializer == std::this_thread::get_id()) return false;
+    }
+    std::lock_guard operation(operations_);
+    {
+        std::lock_guard lock(signals_->mutex);
+        if (signals_->status.state != RuntimeState::Failed &&
+            signals_->status.state != RuntimeState::Stopped)
+            signals_->status.state = RuntimeState::Stopping;
+    }
+    backend_->request_stop();
+    if (thread_.joinable()) thread_.join();
+    {
+        std::lock_guard lock(signals_->mutex);
+        signals_->initializer = {};
+        if (signals_->status.state != RuntimeState::Failed)
+            signals_->status.state = RuntimeState::Stopped;
+        // RUNTIME-ACK point 5: after stop() has joined the init thread, the
+        // cooperative stop is the session's final acknowledged state; only
+        // then is the retained descriptor released. The sink emits stopped
+        // at most once per session (the init thread may complete the
+        // Stopping->Stopped transition first; repeated stop adds nothing),
+        // and a failed session keeps its failed line last.
+        if (ack_ && signals_->status.state == RuntimeState::Stopped)
+        {
+            ack_->stopped();
+            ack_->close();
+        }
+    }
+    return true;
+}
+RuntimeStatus RuntimeOwner::status() const
+{
+    std::lock_guard lock(signals_->mutex);
+    return signals_->status;
+}
+void RuntimeOwner::initialize() noexcept
+{
+    {
+        std::lock_guard lock(signals_->mutex);
+        signals_->initializer = std::this_thread::get_id();
+    }
+    try
+    {
+        std::weak_ptr<Signals> weak = signals_;
+        backend_->initialize([weak] {
+            if (const auto signals = weak.lock())
+            {
+                std::lock_guard lock(signals->mutex);
+                if (signals->status.state == RuntimeState::Starting)
+                    signals->status.state = RuntimeState::EngineInitialized;
+            }
+        });
+        std::lock_guard lock(signals_->mutex);
+        if (signals_->status.state == RuntimeState::Stopping)
+            signals_->status.state = RuntimeState::Stopped;
+        else
+        {
+            signals_->status = {RuntimeState::Failed, "Native runtime init returned without a stop request"};
+            // RUNTIME-ACK point 4: init returned on its own without readiness.
+            if (ack_) ack_->failed(1, "Native runtime init returned without a stop request");
+        }
+    }
+    catch (const std::exception& error)
+    {
+        std::lock_guard lock(signals_->mutex);
+        signals_->status = {RuntimeState::Failed, error.what()};
+        // RUNTIME-ACK point 4: genuine startup error, including a typed
+        // deadline/cancellation converted to an error by the backend.
+        if (ack_) ack_->failed(1, error.what());
+    }
+
+========================================================================
+SELECTED SUPPLIER START/STOP
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-query-s2-arm/integration-patch/new-units/runtime_ack_supplier.cpp
+Full-source SHA256: b2c8dda78ec63fb0da60e4bb67f6c07e7fc9b6286e625d1cbc050cbb9f8d8a5a
+Lines 1-97
+========================================================================
+// runtime_ack_supplier — module_start RuntimeAckConfig supplier (composition-4
+// extra unit). See runtime_ack_supplier.hpp for the contract. Facts:
+//  - getpid(): precedent inside this very closure is composition-2's
+//    lmf-sce-ops (live_module_os_ops_sce.cpp:108,210); measured in the frozen
+//    import contract (WIRING-SPEC S2).
+//  - clock_gettime(CLOCK_MONOTONIC) -> milliseconds: byte-for-byte the
+//    semantics of the vendored component's own posix_now_ms
+//    (worker-installer-ps5io/vendored/modforge_activation.c); measured in the
+//    frozen import contract (WIRING-SPEC S2).
+//  - status_root MUST be the exact mfa_config::root string (S3): the vendored
+//    mfa_status_open joins runtime-status.txt under it, which is precisely the
+//    path RUNTIME-ACK.md section 1 defines and the e2e installer records read.
+//    Never the activation_root.
+
+#include "runtime_ack_supplier.hpp"
+
+#include <ctime>
+#include <unistd.h>
+#include <utility>
+
+#ifndef NATIVE_ACK_SUPPLIER_HOST_TEST
+#include "ue4ss_backend.hpp"
+#include <NativeQueryHarness.hpp>
+#endif
+
+namespace modbridge::native
+{
+namespace
+{
+// Same shape as the vendored posix_now_ms (CLOCK_MONOTONIC,
+// sec*1000 + nsec/1000000). Degraded 0 still records a value in the header.
+auto now_ms_monotonic() noexcept -> std::uint64_t
+{
+    timespec ts{};
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+    {
+        return 0;
+    }
+    return static_cast<std::uint64_t>(ts.tv_sec) * 1000u
+         + static_cast<std::uint64_t>(ts.tv_nsec) / 1000000u;
+}
+}
+
+auto MakeRuntimeAckConfig(const char* mod_root) -> RuntimeAckConfig
+{
+    RuntimeAckConfig runtime_ack;
+    if (mod_root != nullptr && *mod_root != '\0')
+    {
+        runtime_ack.status_root = mod_root;  // the EXACT mfa_config::root string
+    }
+    runtime_ack.pid = static_cast<long>(getpid());
+    runtime_ack.now_ms = now_ms_monotonic();
+    return runtime_ack;
+}
+
+auto StopRuntimeWithAck(std::unique_ptr<RuntimeOwner>& owner) -> bool
+{
+    if (!owner)
+    {
+        return false;
+    }
+    const bool stopped = owner->stop();
+    owner.reset();  // destructor emits at most one further 'stopped' line (none after stop)
+    return stopped;
+}
+
+#ifndef NATIVE_ACK_SUPPLIER_HOST_TEST
+auto StartActivatedRuntimeWithAck(RC::Platform::NativeProgramContext context,
+                                  ActivatedMods activation,
+                                  std::string_view expected_title,
+                                  const char* mod_root)
+    -> std::unique_ptr<RuntimeOwner>
+{
+    // S1: the ONLY RuntimeAckConfig birth; consumed by const& below.
+    RuntimeAckConfig runtime_ack = MakeRuntimeAckConfig(mod_root);
+
+    // worker-query-harness-integration S2-ARM.md section 5 prerequisite 1:
+    // install the four engine seams exactly once, BEFORE RuntimeOwner::start()
+    // spawns the serialized init thread. Host builds refuse the default
+    // binding outright; on target it binds IsGameThreadInitialized /
+    // IsInGameThreadRaw / GetGameThreadIdRaw / UObjectArray::GetNumElements.
+    RC::Platform::QueryHarness::Global().InstallDefaultEngineBindings();
+
+    // The 4-arg ack-enabled prepare (composition-3 object closure): opens the
+    // single RuntimeAckSink on <status_root>/runtime-status.txt inside
+    // module_start after the activation is validated (WIRING-SPEC S3 timing).
+    auto owner = PrepareActivatedUE4SSRuntime(std::move(context),
+                                              std::move(activation),
+                                              expected_title,
+                                              runtime_ack);
+    // entry_guard makes double start impossible; false would mean a refused
+    // start already reflected in RuntimeStatus - the caller owns that check.
+    owner->start();
+    return owner;
+}
+#endif
+}
+
+========================================================================
+ACTIVE DELAYED CALLER AND CLOCK
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units/UnrealInitializer.cpp
+Full-source SHA256: bed8c018338336f546ae5f7a978cce8adae775e8d9655dd66ec114397a1b42da
+Lines 810-858
+========================================================================
+            auto now_ms() const -> uint64_t
+            {
+                return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            }
+            auto wait_ms(uint64_t duration) -> void
+            {
+                Output::send(STR("[Seeds][L14] admission not ready; retry in {}ms within shared deadline\n"), duration);
+                WaitForStartupRetry(std::chrono::milliseconds(duration));
+            }
+            auto known_fault(uint64_t address, size_t length) -> bool
+            {
+                return bridge_copyin_range_faulted(address, length) != 0;
+            }
+            auto query(uint64_t address) -> admission::Query
+            {
+                CheckStartupWait();
+                L13VqInfo info{};
+                const int result = sceKernelVirtualQuery(reinterpret_cast<const void*>(address), 0, &info, sizeof(info));
+                if (result != 0)
+                {
+                    // No documented exact-unmapped return code is established
+                    // for this firmware. An API/policy error proves no mapping
+                    // fact, so it remains inconclusive and can fall to copyin.
+                    Output::send(STR("[Seeds][L14] VirtualQuery address=0x{:X} rc=0x{:X}: unavailable/inconclusive\n"),
+                                 address, static_cast<uint32_t>(result));
+                    return {admission::QueryKind::Unavailable, 0, 0, 0, 0, result};
+                }
+                return {admission::QueryKind::Available, reinterpret_cast<uint64_t>(info.start),
+                        reinterpret_cast<uint64_t>(info.end), static_cast<uint32_t>(info.protection), info.flags, result};
+            }
+            auto log_region(uint64_t address, size_t length, const admission::Query& query) -> void
+            {
+                Output::send(STR("[Seeds][L14] VirtualQuery needed=[0x{:X},0x{:X}) region=[0x{:X},0x{:X}) protection=0x{:X} flags=0x{:X}\n"),
+                             address, address + length, query.start, query.end, query.protection, query.flags);
+            }
+            auto capture(uint64_t address, size_t, const uint8_t** bytes, size_t* length) -> bool
+            {
+                uint32_t available = 0;
+                const int result = bridge_write_copyin_capture(address, bytes, &available);
+                *length = available;
+                return result == 1;
+            }
+            auto probe(uint64_t address, size_t length, admission::Budget& budget) -> int
+            {
+                CheckStartupWait();
+                ++oracle_calls;
+                return bridge_kernel_write_copyin_probe_until(address, length, budget.deadline_ms);
+            }
+
+========================================================================
+ADMISSION BUDGET CREATED AFTER STARTUP
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units/UnrealInitializer.cpp
+Full-source SHA256: bed8c018338336f546ae5f7a978cce8adae775e8d9655dd66ec114397a1b42da
+Lines 990-1009
+========================================================================
+            // This one admission deadline also covers metadata preparation,
+            // settings IO, all needed entry proofs and every retry sleep.
+            // The legacy per-scan setting must never multiply this budget.
+            (void)validation_budget;
+            L13AdmissionOps admission_ops;
+            admission::Budget admission_budget(admission_ops.now_ms());
+
+            L14TotalAdmissionLog total_admission{admission_ops,admission_budget};
+            require_present(SeedTableNS::kFNameCtorWchar);
+            const uint64_t pool_runtime = base + SeedTableNS::kFNamePoolLabel;
+            const auto setting = read_pool_admission("/data/plugins/UE4SS-settings.ini");
+            admission_ops.shadow_enabled = setting.mode != PoolAdmissionMode::Oracle;
+            Output::send(STR("[Seeds][L14] pool admission: one total {}ms budget; mode={}; image-segment proof with VirtualQuery cross-check; heap VirtualQuery first; collect-all independent checks\n"),
+                admission::kAdmissionBudgetMs,ensure_str(pool_admission_mode_name(setting.mode)));
+            admission::Session admission_session;
+            rc::fnamechecks::Evaluation evaluation;
+            const auto result=admission::retry(admission_ops,admission_budget,[&]() -> admission::Result {
+                CheckStartupWait();
+                evaluation=rc::fnamechecks::evaluate(admission_ops,admission_budget,admission_session,pool_runtime);
+                return evaluation.result;
+
+========================================================================
+ORIGINAL MOD PROLOGUE / ROUNDTRIP CALLER
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units/UnrealInitializer.cpp
+Full-source SHA256: bed8c018338336f546ae5f7a978cce8adae775e8d9655dd66ec114397a1b42da
+Lines 1039-1080
+========================================================================
+            // This dedicated gate only compares OWNED live kernel-copyin bytes.
+            L15BindingLog binding_log{admission_ops,admission_budget};
+            const auto signature=rc::fnameabi::signature(admission_ops,admission_budget,ctor_runtime,
+                rc::fnameprofile::kPrefix,sizeof(rc::fnameprofile::kPrefix));
+            if(!signature.ok) seed_refused(signature.reason);
+            Output::send(STR("[Seeds][L15] FName constructor live prologue matched: 32 owned bytes at 0x{:X}; native ABI out/UTF16/mode; no-length overload\n"),ctor_runtime);
+            CheckStartupWait();
+            if(admission_budget.expired(admission_ops.now_ms()))seed_refused("FName constructor shared admission deadline expired before first call");
+            const auto native_ctor=std::bit_cast<rc::fnameabi::Ctor>(ctor_runtime);
+            const auto probe=rc::fnameabi::invoke(native_ctor,u"ByteProperty",static_cast<uint32_t>(FNAME_Find));
+            if(!probe.ok) seed_refused(probe.reason);
+            const uint32_t probe_id=probe.value.index;
+            const auto roundtrip=rc::fnameabi::roundtrip(admission_ops,admission_budget,admission_session,
+                pool_runtime,words.current_block,words.current_byte_offset,probe.value,u"ByteProperty");
+            if(!roundtrip.ok) {
+                Output::send(STR("[Seeds][L15] FName output refused: pool ToString did not verify ByteProperty; id=0x{:X} number={}\n"),probe.value.index,probe.value.number);
+                seed_refused(roundtrip.reason);
+            }
+            Output::send(STR("[Seeds][L15] FName output verified: pool ToString=ByteProperty, UTF16 input, id=0x{:X}, number=0, native return register ignored\n"),probe_id);
+            if (const auto probe_check = rc_seed::check_probe_id(probe_id, words.byte_property_id); !probe_check.ok)
+            {
+                FName::ConstructorInternal.reset_address();
+                seed_refused(fmt::format("slot 2 FName ctor behavioral probe at 0x{:X} (probe id 0x{:X} vs pool id 0x{:X}): {}",
+                                         ctor_runtime, probe_id, words.byte_property_id, probe_check.failure));
+            }
+            CheckStartupWait();
+            if(admission_budget.expired(admission_ops.now_ms()))seed_refused("FName constructor shared admission deadline expired before binding");
+            g_native_fname_ctor=native_ctor;
+            FName::ConstructorInternal.assign_address(&native_fname_thunk);
+            bSeedBoundFNameCtor = true;
+            binding_log.outcome="verified-and-bound";
+            Output::send(STR("[Seeds] slot 2 FName ctor bound at {} and behaviorally verified (ByteProperty probe id == pool id 0x{:X}); detour verification skipped\n"),
+                         reinterpret_cast<void*>(ctor_runtime), words.byte_property_id);
+
+            // ---- Phase 5: static_construct_object_internal (code constant; no
+            // data-side validation exists — assigned at the consumer, bypassing
+            // the mapped pipeline's permits_code admission per SLOTS-FEASIBILITY
+            // section 4b) ----
+            require_present(SeedTableNS::kStaticConstructObject);
+            const uint64_t sco_runtime = base + SeedTableNS::kStaticConstructObject.label;
+            // Read-path guard: SCO is a code constant, call-only by design;
+            // identity/ABI stay unverified precisely because text reads are
+
+========================================================================
+LEGACY DIAGNOSTIC CALLER — NOT USED BY MODULE_START
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units/runtime_start_bridge_r14_diag_spanpub.cpp
+Full-source SHA256: d05a307728cee0105b721934fdfed0ba739774536b89d4ad76d7fd5d4b358f00
+Lines 1337-1346
+========================================================================
+    // ---- Control D: candidate-memory copy (only when B verified) ----
+    if (b_code == 1u) {
+        // The probe emits its own pool_copyin_probe_* set; the io_ctrl_d_*
+        // mirrors make the batched evidence set self-contained.
+        (void)bridge_kernel_write_copyin_probe(kIoCtrlDCandidateAddr, kIoCtrlDCandidateLen);
+        ::diagnostic_event("io_ctrl_d", g_last_probe_telemetry.code);
+        ::diagnostic_event("io_ctrl_d_rc", g_last_probe_telemetry.rc);
+        ::diagnostic_event("io_ctrl_d_errno", g_last_probe_telemetry.err);
+        ::diagnostic_event("io_ctrl_d_sink", g_last_probe_telemetry.sink);
+    }
+
+========================================================================
+ADMISSION SHARED BUDGET / RETRY POLICY
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units/PoolAdmissionEngine.hpp
+Full-source SHA256: 4558d6e2a897ceaad71b73cee691778419e5bc9785ce9965a9a7acdbbb0e4dc3
+Lines 1-196
+========================================================================
+#pragma once
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include "ImageCoverage.hpp"
+
+// Production policy shared by UnrealInitializer and host tests. Ops supplies
+// only OS/clock/read/log adapters; ordering, range proof and retry live here.
+namespace rc::pooladmission {
+constexpr uint64_t kAdmissionBudgetMs = 60000;
+constexpr uint64_t kRetryIntervalMs = 5000;
+struct Budget {
+    uint64_t start_ms, deadline_ms;
+    explicit Budget(uint64_t now, uint64_t duration = kAdmissionBudgetMs)
+        : start_ms(now), deadline_ms(duration > UINT64_MAX-now ? UINT64_MAX : now+duration) {}
+    bool expired(uint64_t now) const { return now >= deadline_ms; }
+    uint64_t remaining(uint64_t now) const { return expired(now) ? 0 : deadline_ms-now; }
+};
+enum class QueryKind { Available, Unavailable, Unmapped };
+struct Query {
+    QueryKind kind = QueryKind::Unavailable;
+    uint64_t start = 0, end = 0;
+    uint32_t protection = 0, flags = 0;
+    int raw_rc = 0;
+};
+enum class Verdict { Readable, Unavailable, HardNegative, Expired, Invalid };
+enum class Source { None, VirtualQuery, CopyinCapture, ImageSegments };
+struct Result {
+    Verdict verdict = Verdict::Unavailable;
+    Source source = Source::None;
+    const char* note = "readability unavailable";
+    uint64_t fault_address = 0;
+    size_t fault_length = 0;
+};
+struct Range { uint64_t address = 0; size_t length = 0; };
+inline bool valid_range(uint64_t address, size_t length) {
+    return address != 0 && length != 0 && length <= UINT64_MAX-address;
+}
+inline bool overlaps(Range a, Range b) {
+    return a.address < b.address+b.length && b.address < a.address+a.length;
+}
+struct Session {
+    // Fail closed if bounded evidence storage fills: never forget a fault.
+    Range faults[16]{}; size_t fault_count = 0; bool all_excluded = false;
+    Range probes[16]{}; size_t probe_count = 0;
+    bool shadow_attempted = false;
+    bool excluded(Range range) const {
+        if (all_excluded) return true;
+        for (size_t i=0;i<fault_count;++i) if (overlaps(faults[i],range)) return true;
+        return false;
+    }
+    void exclude(Range range) {
+        if (fault_count == 16) all_excluded = true;
+        else faults[fault_count++] = range;
+    }
+    bool probe_once(Range range) {
+        for (size_t i=0;i<probe_count;++i)
+            if (probes[i].address==range.address && probes[i].length==range.length) return false;
+        if (probe_count==16) return false;
+        probes[probe_count++] = range;
+        return true;
+    }
+};
+inline Result expired() { return {Verdict::Expired, Source::None, "one total admission deadline exhausted"}; }
+
+template<class Ops>
+Result coverage(Ops& ops, Budget& budget, uint64_t address, size_t length) {
+    if (!valid_range(address,length)) return {Verdict::Invalid,Source::None,"invalid or overflowing exact range"};
+    const uint64_t end=address+length;
+    uint64_t cursor=address;
+    for (unsigned regions=0; cursor<end && regions<128; ++regions) {
+        if (budget.expired(ops.now_ms())) return expired();
+        const auto query=ops.query(cursor);
+        if (budget.expired(ops.now_ms())) return expired();
+        if (query.kind==QueryKind::Unmapped)
+            return {Verdict::HardNegative,Source::None,"VirtualQuery proved unmapped"};
+        if (query.kind!=QueryKind::Available)
+            return {Verdict::Unavailable,Source::None,"VirtualQuery unavailable"};
+        ops.log_region(address,length,query);
+        // EXACT means the result must contain this byte, not merely overlap
+        // some later part of the range. Malformed replies prove nothing.
+        if (query.start>cursor || query.end<=cursor || query.end<=query.start)
+            return {Verdict::Unavailable,Source::None,"VirtualQuery returned non-containing or degenerate region"};
+        if ((query.protection & 1u)==0)
+            return {Verdict::HardNegative,Source::None,"VirtualQuery proved no CPU-read protection", query.start, static_cast<size_t>(query.end-query.start)};
+        if ((query.flags & 0x10u)==0)
+            return {Verdict::HardNegative,Source::None,"VirtualQuery proved uncommitted reservation", query.start, static_cast<size_t>(query.end-query.start)};
+        cursor=query.end<end ? query.end : end;
+    }
+    if (cursor!=end) return {Verdict::Unavailable,Source::None,"VirtualQuery region limit reached"};
+    return {Verdict::Readable,Source::VirtualQuery,"exact needed range mapped and CPU-readable"};
+}
+
+template<class Ops>
+Result read(Ops& ops, Budget& budget, Session& session, uint64_t address, size_t length, uint8_t* destination) {
+    if (!destination || !valid_range(address,length))
+        return {Verdict::Invalid,Source::None,"invalid or overflowing exact range"};
+    if (budget.expired(ops.now_ms())) return expired();
+    const Range range{address,length};
+    // Stored fault provenance is checked before any new proof; a later VQ
+    // or prefix capture cannot erase a fault observed during this admission.
+    if (session.excluded(range) || ops.known_fault(address,length)) {
+        session.exclude(range);
+        return {Verdict::HardNegative,Source::None,"range excluded by recorded fault"};
+    }
+    auto result=coverage(ops,budget,address,length);
+    if (result.verdict==Verdict::HardNegative) {
+        session.exclude(valid_range(result.fault_address,result.fault_length) ?
+                        Range{result.fault_address,result.fault_length} : range);
+        return result;
+    }
+    if (result.verdict==Verdict::Expired || result.verdict==Verdict::Invalid) return result;
+    if (result.verdict==Verdict::Readable) {
+        if (budget.expired(ops.now_ms())) return expired();
+        ops.read_direct(address,length,destination);
+        if (budget.expired(ops.now_ms())) return expired();
+        return result; // optional oracle cross-check is disabled by default
+    }
+    if (budget.expired(ops.now_ms())) return expired();
+    const uint8_t* bytes=nullptr; size_t captured=0;
+    if (ops.capture(address,length,&bytes,&captured) && bytes && captured>=length) {
+        if (budget.expired(ops.now_ms())) return expired();
+        std::memcpy(destination,bytes,length);
+        return {Verdict::Readable,Source::CopyinCapture,"exact needed bytes from owned copyin capture"};
+    }
+    if (session.probe_once(range)) {
+        if (budget.expired(ops.now_ms())) return expired();
+        const int probe=ops.probe(address,length,budget);
+        if (probe==0 || ops.known_fault(address,length)) {
+            session.exclude(range);
+            return {Verdict::HardNegative,Source::None,"copyin fault; range excluded and shadow barred"};
+        }
+        if (budget.expired(ops.now_ms())) return expired();
+        if (ops.capture(address,length,&bytes,&captured) && bytes && captured>=length) {
+            if (budget.expired(ops.now_ms())) return expired();
+            std::memcpy(destination,bytes,length);
+            return {Verdict::Readable,Source::CopyinCapture,"exact needed bytes from owned copyin capture"};
+        }
+    }
+    // The fallback is diagnostic corroboration only. Matching disk-image
+    // identity never supplies live heap bytes or grants a direct read.
+    if (!session.shadow_attempted && ops.shadow_enabled) {
+        if (budget.expired(ops.now_ms())) return expired();
+        session.shadow_attempted=true;
+        ops.shadow(budget);
+        if (budget.expired(ops.now_ms())) return expired();
+    }
+    return {Verdict::Unavailable,Source::None,"VQ/copyin inconclusive; shadow identity cannot prove heap readability"};
+}
+
+// Image metadata requires segment evidence first. VQ can veto the segment;
+// only an unavailable API (not a malformed containing region) is optional.
+template<class Ops>
+Result read_image(Ops& ops, Budget& budget, Session& session, uint64_t address, size_t length, uint8_t* destination) {
+    if (!destination || !valid_range(address,length))
+        return {Verdict::Invalid,Source::None,"invalid image range"};
+    const auto segment=ops.image_range(address,length);
+    ops.log_image(address,length,segment);
+    if (budget.expired(ops.now_ms())) return expired();
+    const Range range{address,length};
+    if(session.excluded(range)||ops.known_fault(address,length)) {
+        session.exclude(range);
+        return {Verdict::HardNegative,Source::None,"image range excluded by recorded fault"};
+    }
+    // Query even when the segment is missing: diagnostics must distinguish
+    // an absent module segment from an OS mapping failure, without reading.
+    auto cross=coverage(ops,budget,address,length);
+    if(cross.verdict==Verdict::HardNegative){
+        session.exclude(valid_range(cross.fault_address,cross.fault_length)?Range{cross.fault_address,cross.fault_length}:range);
+        return cross;
+    }
+    if(cross.verdict==Verdict::Expired||cross.verdict==Verdict::Invalid)return cross;
+    if(!segment.readable)return {Verdict::Unavailable,Source::None,segment.note};
+    if(cross.verdict!=Verdict::Readable && std::strcmp(cross.note,"VirtualQuery unavailable")!=0)
+        return cross;
+    if(budget.expired(ops.now_ms()))return expired();
+    ops.read_direct(address,length,destination);
+    if(budget.expired(ops.now_ms()))return expired();
+    return {Verdict::Readable,Source::ImageSegments,cross.verdict==Verdict::Readable?
+        "segment proven; VirtualQuery corroborated":"segment proven; VirtualQuery unavailable"};
+}
+
+template<class Ops,class Attempt>
+Result retry(Ops& ops, Budget& budget, Attempt attempt) {
+    for (;;) {
+        if (budget.expired(ops.now_ms())) return expired();
+        auto result=attempt();
+        if (budget.expired(ops.now_ms())) return expired();
+        if (result.verdict!=Verdict::Unavailable) return result;
+        const uint64_t remaining=budget.remaining(ops.now_ms());
+        if (!remaining) return expired();
+        ops.wait_ms(remaining<kRetryIntervalMs ? remaining : kRetryIntervalMs);
+    }
+}
+} // namespace rc::pooladmission
+
+========================================================================
+OUTER TIMEOUT — COOPERATIVE, NOT OS PREEMPTION
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/include/Unreal/StartupWaitControl.hpp
+Full-source SHA256: 03d5d355318aaf8f0f1fcbe3276549e2004ea933ad96da682cce3c62d0820ee7
+Lines 1-103
+========================================================================
+#pragma once
+
+#include <algorithm>
+#include <chrono>
+#include <functional>
+#include <stdexcept>
+
+namespace RC::Unreal::UnrealInitializer
+{
+    enum class StartupWaitStatus
+    {
+        Continue,
+        Cancelled,
+        DeadlineExceeded,
+    };
+
+    class StartupCancelled final : public std::runtime_error
+    {
+    public:
+        StartupCancelled() : std::runtime_error{"Unreal initialization cancelled"} {}
+    };
+
+    class StartupDeadlineExceeded final : public std::runtime_error
+    {
+    public:
+        StartupDeadlineExceeded() : std::runtime_error{"Unreal initialization startup deadline exceeded"} {}
+    };
+
+    // Optional cooperative bound for startup readiness waits. The owner creates
+    // one immutable control before Initialize and shares its absolute deadline
+    // across all retries. Cancellation/deadline checks run between opaque
+    // engine calls; they cannot interrupt an engine call already in progress.
+    struct StartupWaitControl
+    {
+        using Clock = std::chrono::steady_clock;
+        std::function<bool()> IsCancelled;
+        Clock::time_point Deadline{};
+        std::chrono::milliseconds PollInterval{10};
+
+        auto StatusAt(Clock::time_point now) const -> StartupWaitStatus
+        {
+            if (IsCancelled && IsCancelled())
+            {
+                return StartupWaitStatus::Cancelled;
+            }
+            return now >= Deadline ? StartupWaitStatus::DeadlineExceeded : StartupWaitStatus::Continue;
+        }
+
+        auto ThrowIfStoppedAt(Clock::time_point now) const -> void
+        {
+            switch (StatusAt(now))
+            {
+            case StartupWaitStatus::Continue:
+                return;
+            case StartupWaitStatus::Cancelled:
+                throw StartupCancelled{};
+            case StartupWaitStatus::DeadlineExceeded:
+                throw StartupDeadlineExceeded{};
+            }
+        }
+
+        auto RetrySleepForAt(Clock::time_point now, Clock::duration requested) const -> Clock::duration
+        {
+            if (StatusAt(now) != StartupWaitStatus::Continue || requested <= Clock::duration::zero())
+            {
+                return Clock::duration::zero();
+            }
+
+            auto sleep = requested;
+            if (PollInterval > std::chrono::milliseconds::zero())
+            {
+                sleep = std::min(sleep, std::chrono::duration_cast<Clock::duration>(PollInterval));
+            }
+            return std::min(sleep, Deadline - now);
+        }
+
+        template <typename Now, typename Sleep>
+        auto WaitForRetry(std::chrono::milliseconds requested, Now&& now, Sleep&& sleep) const -> void
+        {
+            const auto retry_deadline = now() + std::chrono::duration_cast<Clock::duration>(requested);
+            while (true)
+            {
+                const auto current = now();
+                ThrowIfStoppedAt(current);
+                const auto remaining = retry_deadline - current;
+                if (remaining <= Clock::duration::zero())
+                {
+                    return;
+                }
+
+                const auto slice = RetrySleepForAt(current, remaining);
+                if (slice <= Clock::duration::zero())
+                {
+                    ThrowIfStoppedAt(current);
+                    return;
+                }
+                sleep(slice);
+            }
+        }
+    };
+
+    inline constexpr std::chrono::minutes DefaultStartupWaitTimeout{5};
+}
+
+========================================================================
+ACTUAL HOST IO MOCKS AND ALL 34 CASES
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/test_retained.cpp
+Full-source SHA256: ef599643ebcf75bff7fa136175106db1e0f5f26738770761b24109029f9bc02c
+Lines 1-144
+========================================================================
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <cerrno>
+#include <chrono>
+#include <string>
+#include <vector>
+#include <utility>
+#include <fcntl.h>
+#include <unistd.h>
+#include <cstdlib>
+#include <algorithm>
+#include <memory>
+#include <cstdarg>
+static std::vector<std::pair<std::string,uint32_t>> events;
+extern "C" void diagnostic_event(const char *s,uint32_t v){events.emplace_back(s,v);}
+static std::string dir;
+static bool restored=false;
+static int late_opens=0,create_calls=0,write_calls=0,pread_calls=0;
+static int create_error=0,fail_create_at=0,read_error=0,close_error=0;
+static size_t read_cap=0;
+static unsigned delay_us=0;
+static uint64_t startup_clock_jump=0;
+static uint64_t clock_offset_ms=0;
+struct TestClock { static auto now(){return std::chrono::steady_clock::now()+std::chrono::milliseconds(clock_offset_ms);} };
+static std::vector<int> live_fds;
+static std::vector<int64_t> scripted_writes;
+static uint8_t backing[0x3000];
+static constexpr uint64_t guest=0x22c0000000ull;
+static std::string translate(const char*p){return dir+"/"+std::string(p).substr(std::string(p).find_last_of('/')+1);}
+static uid_t test_getuid(){return restored?42:0;}
+static uid_t test_geteuid(){return restored?42:0;}
+static gid_t test_getgid(){return restored?43:0;}
+static gid_t test_getegid(){return restored?43:0;}
+#define getuid test_getuid
+#define geteuid test_geteuid
+#define getgid test_getgid
+#define getegid test_getegid
+#include "sink_extract.inc"
+#undef getuid
+#undef geteuid
+#undef getgid
+#undef getegid
+extern "C" int sceKernelIsInSandbox(){return restored?1:0;}
+extern "C" int sysctlbyname(const char*,void*p,size_t*n,const void*,size_t){
+    if(restored){errno=EPERM;return -1;} if(*n!=sizeof(int))return -1;
+    *static_cast<int*>(p)=0;*n=sizeof(int);return 0;
+}
+extern "C" int sceKernelOpen(const char*p,int flags,uint16_t mode){
+    if(restored){++late_opens;return int32_t(0x80020001u);}
+    if(flags&O_CREAT){++create_calls;if(startup_clock_jump && create_calls==2)clock_offset_ms+=startup_clock_jump;
+        if(create_error && (!fail_create_at||create_calls==fail_create_at))return create_error;}
+    const int fd=std::string(p)=="/data/plugins"? ::open(dir.c_str(),flags,mode) : ::open(translate(p).c_str(),flags,mode);
+    if(fd>=0)live_fds.push_back(fd);
+    return fd;
+}
+extern "C" int _openat(int fd,const char*p,int flags,...){
+    if(restored){++late_opens;errno=EPERM;return -1;}
+    va_list ap;va_start(ap,flags);int mode=va_arg(ap,int);va_end(ap);
+    const int result=::openat(fd,p,flags,mode);if(result>=0)live_fds.push_back(result);return result;
+}
+extern "C" int sceKernelClose(int fd){
+    live_fds.erase(std::remove(live_fds.begin(),live_fds.end(),fd),live_fds.end());
+    const int rc=::close(fd);if(close_error){errno=EIO;return -1;}return rc;
+}
+extern "C" int64_t sceKernelWrite(int fd,const void*p,size_t n){
+    const uint64_t a=reinterpret_cast<uint64_t>(p);++write_calls;if(delay_us)usleep(delay_us);
+    int64_t result=write_calls<=int(scripted_writes.size())?scripted_writes[write_calls-1]:int64_t(n);
+    if(result<=0||uint64_t(result)>n)return result;
+    if(a>=guest&&a-guest+uint64_t(result)<=sizeof(backing))return ::write(fd,backing+(a-guest),size_t(result));
+    errno=EFAULT;return -1;
+}
+extern "C" int64_t sceKernelRead(int fd,void*p,size_t n){return ::read(fd,p,read_cap?std::min(n,read_cap):n);}
+extern "C" int64_t sceKernelPread(int fd,void*p,size_t n,int64_t off){
+    ++pread_calls;if(read_error)return read_error;
+    return ::pread(fd,p,read_cap?std::min(n,read_cap):n,off);
+}
+static int failures=0;
+static void check(bool v,const char*name){std::printf("%s %s\n",v?"PASS":"FAIL",name);if(!v)++failures;}
+static uint32_t event(const char*s){for(auto i=events.rbegin();i!=events.rend();++i)if(i->first==s)return i->second;return 0xdeadbeef;}
+static void reset(){
+    close_error=0;bridge_copyin_directory_release();restored=false;create_error=0;fail_create_at=0;
+    events.clear();clock_offset_ms=0;startup_clock_jump=0;g_copyin_faults={};g_copyin_probe_nonce=0;create_calls=0;
+    bridge_copyin_directory_prepare();restored=true;
+    late_opens=0;write_calls=0;pread_calls=0;scripted_writes.clear();read_error=0;read_cap=0;delay_us=0;
+    for(auto&v:g_write_copyin_capture_valid)v=false;
+}
+namespace modbridge { namespace native {
+static int stop_mode=0;static bool quiesced=false;
+struct TestOwner { ~TestOwner(){quiesced=true;} };
+static bool StopRuntimeWithAck(std::unique_ptr<TestOwner>& slot) {
+    if(stop_mode==1)throw 7;
+    slot.reset();return stop_mode==0;
+}
+} }
+static std::unique_ptr<modbridge::native::TestOwner>& owner_slot(){static std::unique_ptr<modbridge::native::TestOwner> owner;return owner;}
+static constexpr int MRS_ERR_STOP_EXN=5;
+#include "stop_extract.inc"
+int main(){
+    char temp[]="/tmp/l16-retained-tests-XXXXXX";dir=mkdtemp(temp);for(size_t i=0;i<sizeof(backing);++i)backing[i]=uint8_t(i);
+    reset();check(bridge_kernel_write_copyin_probe(guest,32)==1,"retained actual sink passes when late create is EPERM");
+    const uint8_t* bytes=nullptr;uint32_t count=0;
+    check(bridge_write_copyin_capture(guest,&bytes,&count)==1&&count==32&&bytes[31]==31,"fresh positional readback yields exact source bytes");
+    check(late_opens==0,"probe performs no late path create or reopen");
+    check(std::find(events.begin(),events.end(),std::make_pair(std::string("copyin_uid"),uint32_t(0)))!=events.end(),"startup credential snapshot preserves uid zero observation");
+    backing[0]=0x7a;check(bridge_kernel_write_copyin_probe(guest,32)==1&&bridge_write_copyin_capture(guest,&bytes,&count)==1&&bytes[0]==0x7a,"second fresh attempt captures changed live bytes not old cache");backing[0]=0;
+    check(event("copyin_cred_phase")==2&&event("copyin_euid")==42&&event("copyin_sandbox_raw")==1,"delayed credentials logged after restoration");
+    check(event("copyin_jail_available")==0&&event("copyin_jail_errno")==1,"unsupported jail query reported unknown not false");
+    reset();scripted_writes={3,5,6};check(bridge_kernel_write_copyin_probe(guest,14)==1,"partial write loop completes exact length");
+    check(bridge_write_copyin_capture(guest+6,&bytes,&count)==1&&count==8&&bytes[0]==6,"interior capture remains exact");
+    reset();scripted_writes={64,int64_t(int32_t(0x8002000eu))};check(bridge_kernel_write_copyin_probe(guest,128)==0,"partial then signed SCE EFAULT refuses");
+    check(event("pool_copyin_probe_sink")==64&&pread_calls==0&&bridge_write_copyin_capture(guest,&bytes,&count)==0,"fault does not publish transferred prefix");
+    const int prior=write_calls;check(bridge_kernel_write_copyin_probe(guest,6)==0&&write_calls==prior,"known fault prevents subsequent copyin");
+    reset();scripted_writes={int64_t(0x8002000eu)};check(bridge_kernel_write_copyin_probe(guest,32)==0,"unsigned SCE EFAULT normalized");
+    reset();scripted_writes={0};check(bridge_kernel_write_copyin_probe(guest,32)==-1&&write_calls==1,"zero write refuses without loop");
+    reset();scripted_writes={33};check(bridge_kernel_write_copyin_probe(guest,32)==-1&&pread_calls==0,"oversized count refuses");
+    reset();close_error=1;check(bridge_kernel_write_copyin_probe(guest,32)==-1&&bridge_write_copyin_capture(guest,&bytes,&count)==0,"close error prevents success publication");
+    check(event("copyin_file_op")==4&&event("copyin_file_errno")==EIO,"close failure logs path flags error and credentials");
+    reset();read_cap=4;check(bridge_kernel_write_copyin_probe(guest,32)==-1&&bridge_write_copyin_capture(guest,&bytes,&count)==0,"short readback never publishes stale data");
+    reset();read_error=int32_t(0x80020001u);check(bridge_kernel_write_copyin_probe(guest,32)==-1,"pread SCE EPERM refuses");
+    check(event("copyin_file_op")==3&&event("copyin_file_errno")==1&&event("pool_copyin_path_len")>0,"file failure includes operation path flags and credentials");
+    reset();check(bridge_kernel_write_copyin_probe_until(guest,32,0)==-1&&write_calls==0&&late_opens==0,"expired shared deadline starts no file operation");
+    reset();delay_us=10000;check(bridge_kernel_write_copyin_probe_until(guest,32,bridge_copyin_now_ms()+5)==-1&&pread_calls==0,"late write cannot publish or start readback");
+    reset();check(bridge_kernel_write_copyin_probe(UINT64_MAX-7,32)==-1&&write_calls==0,"overflow refuses before source read");
+    reset();for(int i=0;i<64;++i)if(bridge_kernel_write_copyin_probe(guest,32)!=1){check(false,"bounded bank handles each of 64 attempts");break;}
+    const int before_cap=write_calls;check(bridge_kernel_write_copyin_probe(guest,32)==-1&&write_calls==before_cap,"exhausted bank refuses no late creation");
+    reset();const int before_stop=int(live_fds.size());bridge_copyin_directory_release();check(before_stop>1&&live_fds.empty(),"stop closes parent and unused probe handles");
+    restored=false;create_error=int32_t(0x80020002u);events.clear();bridge_copyin_directory_prepare();restored=true;
+    check(bridge_kernel_write_copyin_probe(guest,32)==-1&&live_fds.empty(),"failed startup allocation refuses without leaked handles");
+    check(event("copyin_file_errno")==2&&event("pool_copyin_open_flags")&O_CREAT,"startup ENOENT logs exact creation flags");
+    reset();bridge_copyin_directory_release();restored=false;create_calls=0;create_error=int32_t(0x80020002u);fail_create_at=3;
+    bridge_copyin_directory_prepare();check(live_fds.empty(),"partial bank acquisition closes all owned descriptors");
+    reset();bool owner=false;l13_sink::with_startup_cleanup(owner,bridge_copyin_directory_release,[](){return 2;});check(live_fds.empty(),"failed owner startup cleanup closes complete bank");
+    reset();try{l13_sink::with_startup_cleanup(owner,bridge_copyin_directory_release,[]()->int{throw 7;});}catch(int){}check(live_fds.empty(),"exception cleanup closes complete bank");
+    reset();const int owned=int(live_fds.size());l13_sink::with_startup_cleanup(owner,bridge_copyin_directory_release,[&](){owner=true;return 0;});check(int(live_fds.size())==owned,"successful runtime keeps descriptors until stop");
+    reset();bridge_copyin_directory_release();restored=false;create_calls=0;startup_clock_jump=6000;
+    bridge_copyin_directory_prepare();check(live_fds.empty()&&create_calls==2,"startup allocation budget expires before next create and closes bank");
+    owner=false;
+    reset();owner_slot().reset(new modbridge::native::TestOwner);modbridge::native::quiesced=false;modbridge::native::stop_mode=1;
+    check(modbridge_runtime_stop()==5&&modbridge::native::quiesced&&live_fds.empty(),"stop exception releases descriptors after owner destruction");
+    reset();owner_slot().reset(new modbridge::native::TestOwner);modbridge::native::quiesced=false;modbridge::native::stop_mode=2;
+    check(modbridge_runtime_stop()==1&&modbridge::native::quiesced&&live_fds.empty(),"negative stop with destroyed owner releases descriptors");
+    bridge_copyin_directory_release();std::printf("failures=%d\n",failures);return failures?1:0;
+}
+
+========================================================================
+HOST EXTRACTION/RUNNER AND FLAGS
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/run_tests.py
+Full-source SHA256: 6202bde3b2c5b7b30af1112f469be2fc80e090dc33af9053d3200148afc33717
+Lines 1-18
+========================================================================
+#!/usr/bin/env python3
+from pathlib import Path
+import subprocess,json,hashlib,sys
+root=Path(__file__).resolve().parents[1]
+text=(root/'units/runtime_start_bridge_r14_diag_spanpub.cpp').read_text()
+a=text.index('// ---- HOST-TEST-EXTRACT-BEGIN');b=text.index('// Legacy explicit diagnostics only.',a)
+(root/'tests/sink_extract.inc').write_text(text[a:b].replace('std::chrono::steady_clock::now()', 'TestClock::now()'))
+c=text.index('extern \"C\" int modbridge_runtime_stop(void)');d=text.index('extern \"C\" int modbridge_runtime_start_with_activation',c)
+(root/'tests/stop_extract.inc').write_text(text[c:d])
+rows=[]
+for name,extra in [('plain',[]),('san',['-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer'])]:
+ cmd=['c++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-function','-O1',*extra,'-I',str(root/'units'),str(root/'tests/test_retained.cpp'),'-o',str(root/'tests'/name)]
+ c=subprocess.run(cmd,capture_output=True,text=True)
+ r=subprocess.run([str(root/'tests'/name)],capture_output=True,text=True,timeout=30) if c.returncode==0 else c
+ print(name,r.returncode);print(r.stdout);print(r.stderr)
+ rows.append({'name':name,'compile_argv':cmd,'compile_exit':c.returncode,'exit':r.returncode,'stdout':r.stdout,'stderr':r.stderr,'cases':r.stdout.count('PASS ')})
+(root/'receipts'/('HOST-'+(sys.argv[1] if len(sys.argv)>1 else 'GREEN')+'.json')).write_text(json.dumps({'source_sha256':hashlib.sha256(text.encode()).hexdigest(),'runs':rows},indent=2))
+sys.exit(1 if any(r['exit'] for r in rows) else 0)
+
+========================================================================
+ACTUAL OWNER TESTS
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/test_owner_stop.cpp
+Full-source SHA256: 3ca6b53e3c4e5cf164abd001ea841304324e0b1c8ffad4b7e69947263f080313
+Lines 1-73
+========================================================================
+// Four independent cleanup cases using the actual selected RuntimeOwner source.
+// Kernel adapters and bridge/supplier bodies are generated from their inputs
+// by run_owner_stop.py; production sources and the main fixture stay untouched.
+#include "kernel_adapters.inc"
+#include "runtime_owner.hpp"
+
+// A null acknowledgement sink is used. These link shims are never its I/O path.
+extern "C" int mfa_status_open(mfa_status*, const char*, long, uint64_t) { return -1; }
+extern "C" int mfa_status_write(mfa_status*, const char*, int, const char*) { return -1; }
+extern "C" void mfa_status_close(mfa_status*) {}
+
+struct WorkerState {
+    std::atomic_bool stopping{false};
+    std::atomic_bool done{false};
+};
+
+struct ReviewBackend final : modbridge::native::RuntimeBackend {
+    std::shared_ptr<WorkerState> state;
+    explicit ReviewBackend(std::shared_ptr<WorkerState> value) : state(std::move(value)) {}
+    void initialize(std::function<void()> ready) override {
+        ready();
+        while (!state->stopping.load()) std::this_thread::yield();
+        state->done.store(true);
+    }
+    void request_stop() noexcept override { state->stopping.store(true); }
+};
+
+namespace modbridge::native {
+#include "supplier_stop.inc"
+static int stop_mode = 0;
+static bool StopRuntimeWithAck(std::unique_ptr<RuntimeOwner>& owner) {
+    if (stop_mode == 1) throw 7; // actual destructor must stop/join in bridge catch
+    const bool stopped = RealStopRuntimeWithAck(owner);
+    return stop_mode == 2 ? false : stopped;
+}
+}
+
+static std::unique_ptr<modbridge::native::RuntimeOwner>& owner_slot() {
+    static std::unique_ptr<modbridge::native::RuntimeOwner> owner;
+    return owner;
+}
+static constexpr int MRS_ERR_STOP_EXN = 5;
+#include "stop_extract.inc"
+
+int main(int argc, char** argv) {
+    if (argc != 2) return 2;
+    dir = argv[1];
+    std::filesystem::create_directory(dir);
+    for (int mode = 0; mode < 3; ++mode) {
+        review_done = nullptr;
+        reset();
+        auto state = std::make_shared<WorkerState>();
+        review_done = &state->done;
+        close_before_join = 0;
+        owner_slot() = std::make_unique<modbridge::native::RuntimeOwner>(
+            std::make_unique<ReviewBackend>(state));
+        const bool started = owner_slot()->start();
+        modbridge::native::stop_mode = mode;
+        const int result = modbridge_runtime_stop();
+        check(started && state->done.load() && !owner_slot() && live_fds.empty() &&
+                  close_before_join == 0 && result == (mode == 0 ? 0 : mode == 1 ? 5 : 1),
+              mode == 0 ? "actual selected owner normal stop joins before releasing bank" :
+              mode == 1 ? "actual selected owner destruction after injected stop exception joins before releasing bank" :
+                          "actual selected owner destroyed despite negative stop releases bank after join");
+        review_done = nullptr;
+    }
+    reset();
+    check(modbridge_runtime_stop() == 0 && live_fds.empty(),
+          "empty-owner actual stop path releases bank");
+    std::filesystem::remove_all(dir);
+    std::printf("failures=%d\n", failures);
+    return failures ? 1 : 0;
+}
+
+========================================================================
+ACTUAL OWNER TEST RUNNER AND ADAPTER EXTRACTION
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/run_owner_stop.py
+Full-source SHA256: 8bbb6e61e772f160f27e824f689f8a9d4bd11d50925e6289274294d614d4c190
+Lines 1-107
+========================================================================
+#!/usr/bin/env python3
+"""Run exactly four real-owner cleanup cases, retaining source/command receipts."""
+from datetime import datetime, timezone
+from pathlib import Path
+import hashlib
+import json
+import subprocess
+import sys
+import uuid
+
+HERE = Path(__file__).resolve().parent
+CANDIDATE = HERE.parents[2]
+WORKSPACE = CANDIDATE.parents[1]
+BRIDGE = CANDIDATE / "units/runtime_start_bridge_r14_diag_spanpub.cpp"
+FIXTURE = CANDIDATE / "tests/test_retained.cpp"
+OWNER = WORKSPACE / "outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-runtime-1/source/bootstrap/runtime_owner.cpp"
+SUPPLIER = WORKSPACE / "outputs/2026-10-04-zcode-team/worker-query-s2-arm/integration-patch/new-units/runtime_ack_supplier.cpp"
+ACTIVATION_INCLUDE = WORKSPACE / ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/activation"
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def section(text, start, end):
+    begin = text.index(start)
+    return text[begin:text.index(end, begin)]
+
+
+def execute(argv):
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+    return {"argv": argv, "exit": result.returncode,
+            "stdout": result.stdout, "stderr": result.stderr}
+
+
+def main():
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid.uuid4().hex[:8]
+    run_dir = HERE / "runs" / run_id
+    run_dir.mkdir(parents=True)
+    bridge = BRIDGE.read_text()
+    fixture = FIXTURE.read_text()
+    sink = section(bridge, "// ---- HOST-TEST-EXTRACT-BEGIN", "// Legacy explicit diagnostics only.")
+    sink = sink.replace("std::chrono::steady_clock::now()", "TestClock::now()")
+    stop = section(bridge, 'extern "C" int modbridge_runtime_stop(void)',
+                   'extern "C" int modbridge_runtime_start_with_activation')
+    supplier = section(SUPPLIER.read_text(), "auto StopRuntimeWithAck(",
+                       "\n#ifndef NATIVE_ACK_SUPPLIER_HOST_TEST")
+    supplier = supplier.replace("StopRuntimeWithAck", "RealStopRuntimeWithAck", 1)
+    adapters = fixture[:fixture.index("namespace modbridge { namespace native {")]
+    adapters = "#include <atomic>\nstatic std::atomic_bool* review_done=nullptr;static int close_before_join=0;\n" + adapters
+    needle = "live_fds.erase(std::remove"
+    if adapters.count(needle) != 1:
+        raise ValueError("close adapter changed: expected one instrumentation site")
+    adapters = adapters.replace(needle,
+        "if(review_done&&!review_done->load())++close_before_join;\n    " + needle, 1)
+    generated = {"sink_extract.inc": sink, "stop_extract.inc": stop,
+                 "supplier_stop.inc": supplier, "kernel_adapters.inc": adapters}
+    for name, text in generated.items():
+        (run_dir / name).write_text(text)
+
+    inputs = [BRIDGE, FIXTURE, OWNER, OWNER.parent / "runtime_owner.hpp", SUPPLIER,
+              ACTIVATION_INCLUDE / "modforge_activation.h", HERE / "test_owner_stop.cpp",
+              Path(__file__).resolve()]
+    receipt = {"scope": "four actual selected RuntimeOwner cleanup cases; local host only",
+               "run_id": run_id, "console_contact": False,
+               "production_or_main_fixture_modified": False,
+               "source_sha256": sha(BRIDGE),
+               "inputs": [{"path": str(path), "sha256": sha(path)} for path in inputs],
+               "generated": [{"path": str(run_dir / name), "sha256": sha(run_dir / name)}
+                             for name in generated],
+               "seams": ["Sony I/O adapts to real host descriptors",
+                         "clock-only substitution in extracted sink region",
+                         "close adapter records any close before actual worker completion",
+                         "supplier symbol renamed with body unchanged; wrapper injects exception or negative result",
+                         "null acknowledgement sink; unused mfa_status link shims"],
+               "runs": []}
+    for name, extra in [("plain", []), ("san", ["-fsanitize=address,undefined",
+                        "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"])]:
+        binary = run_dir / name
+        compile_argv = ["c++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
+                        "-Wno-unused-function", "-O1", *extra,
+                        "-I", str(run_dir), "-I", str(CANDIDATE / "units"),
+                        "-I", str(OWNER.parent), "-I", str(ACTIVATION_INCLUDE),
+                        str(HERE / "test_owner_stop.cpp"), str(OWNER), "-pthread",
+                        "-o", str(binary)]
+        compiled = execute(compile_argv)
+        executed = execute([str(binary), str(run_dir / (name + "-sinks"))]) if compiled["exit"] == 0 else None
+        passed = (compiled["exit"] == 0 and executed["exit"] == 0 and
+                  executed["stdout"].count("PASS ") == 4 and
+                  "failures=0" in executed["stdout"] and not executed["stderr"])
+        row = {"name": name, "compile": compiled, "run": executed,
+               "assertions": executed["stdout"].count("PASS ") if executed else 0,
+               "pass": bool(passed), "binary_sha256": sha(binary) if binary.exists() else None}
+        receipt["runs"].append(row)
+        print(json.dumps({"name": name, "compile_exit": compiled["exit"],
+                          "run_exit": executed["exit"] if executed else None,
+                          "assertions": row["assertions"], "pass": bool(passed)}))
+    receipt["pass"] = all(row["pass"] for row in receipt["runs"])
+    output = json.dumps(receipt, indent=2) + "\n"
+    (run_dir / "RECEIPT.json").write_text(output)
+    (HERE / "LATEST-RECEIPT.json").write_text(output)
+    print("receipt=" + str(run_dir / "RECEIPT.json"))
+    return 0 if receipt["pass"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+========================================================================
+ACTUAL OWNER RECEIPT
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b/RECEIPT.json
+Full-source SHA256: 9582a2c0488043f8339107cbffe4aae1ffab42c6951d0f4637adf9584f9ee362
+Lines 1-156
+========================================================================
+{
+  "scope": "four actual selected RuntimeOwner cleanup cases; local host only",
+  "run_id": "20261007T173323Z-93ce425b",
+  "console_contact": false,
+  "production_or_main_fixture_modified": false,
+  "source_sha256": "d05a307728cee0105b721934fdfed0ba739774536b89d4ad76d7fd5d4b358f00",
+  "inputs": [
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units/runtime_start_bridge_r14_diag_spanpub.cpp",
+      "sha256": "d05a307728cee0105b721934fdfed0ba739774536b89d4ad76d7fd5d4b358f00"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/test_retained.cpp",
+      "sha256": "ef599643ebcf75bff7fa136175106db1e0f5f26738770761b24109029f9bc02c"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-runtime-1/source/bootstrap/runtime_owner.cpp",
+      "sha256": "54c56c49d0ad89fd6456f58d99f765027f6e16e0bfdbaf8b8e1e044f268aa629"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-runtime-1/source/bootstrap/runtime_owner.hpp",
+      "sha256": "5428f8c322c3aaf9761188f53255fea6cb5aedabb5f60bd7c26ba89953dcbd2a"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-query-s2-arm/integration-patch/new-units/runtime_ack_supplier.cpp",
+      "sha256": "b2c8dda78ec63fb0da60e4bb67f6c07e7fc9b6286e625d1cbc050cbb9f8d8a5a"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/activation/modforge_activation.h",
+      "sha256": "4d79eb0529ba05f631405c758195e710fb979289ed2010cd9a9ef05a7549d7e6"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/test_owner_stop.cpp",
+      "sha256": "3ca6b53e3c4e5cf164abd001ea841304324e0b1c8ffad4b7e69947263f080313"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/run_owner_stop.py",
+      "sha256": "8bbb6e61e772f160f27e824f689f8a9d4bd11d50925e6289274294d614d4c190"
+    }
+  ],
+  "generated": [
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b/sink_extract.inc",
+      "sha256": "378c1a1fc0c1c619a7db724a7e04a11795adfdd4f3ff6734337e6eb0b7ee982b"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b/stop_extract.inc",
+      "sha256": "2f077eff2fc67b0c04ecec6644434b732fe296023372bd14a9fb4ee8942cc0e4"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b/supplier_stop.inc",
+      "sha256": "af4b8a73c902a0dc6d1e1019653ba9b74fa52225d0956bbb5f18f66e2366712c"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b/kernel_adapters.inc",
+      "sha256": "5215d4db171392c6aa8837cd131fd1d1984c94a880e7451f1f8289cf8998ae9c"
+    }
+  ],
+  "seams": [
+    "Sony I/O adapts to real host descriptors",
+    "clock-only substitution in extracted sink region",
+    "close adapter records any close before actual worker completion",
+    "supplier symbol renamed with body unchanged; wrapper injects exception or negative result",
+    "null acknowledgement sink; unused mfa_status link shims"
+  ],
+  "runs": [
+    {
+      "name": "plain",
+      "compile": {
+        "argv": [
+          "c++",
+          "-std=c++17",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-Wno-unused-function",
+          "-O1",
+          "-I",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b",
+          "-I",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units",
+          "-I",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-runtime-1/source/bootstrap",
+          "-I",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/activation",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/test_owner_stop.cpp",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-runtime-1/source/bootstrap/runtime_owner.cpp",
+          "-pthread",
+          "-o",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b/plain"
+        ],
+        "exit": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "run": {
+        "argv": [
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b/plain",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b/plain-sinks"
+        ],
+        "exit": 0,
+        "stdout": "PASS actual selected owner normal stop joins before releasing bank\nPASS actual selected owner destruction after injected stop exception joins before releasing bank\nPASS actual selected owner destroyed despite negative stop releases bank after join\nPASS empty-owner actual stop path releases bank\nfailures=0\n",
+        "stderr": ""
+      },
+      "assertions": 4,
+      "pass": true,
+      "binary_sha256": "b6021215bacaa654a3e6cdc3894cbe75b78b0906889a72804c910d5889775162"
+    },
+    {
+      "name": "san",
+      "compile": {
+        "argv": [
+          "c++",
+          "-std=c++17",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-Wno-unused-function",
+          "-O1",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-fno-omit-frame-pointer",
+          "-I",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b",
+          "-I",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units",
+          "-I",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-runtime-1/source/bootstrap",
+          "-I",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/activation",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/test_owner_stop.cpp",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-runtime-1/source/bootstrap/runtime_owner.cpp",
+          "-pthread",
+          "-o",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b/san"
+        ],
+        "exit": 0,
+        "stdout": "",
+        "stderr": ""
+      },
+      "run": {
+        "argv": [
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b/san",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b/san-sinks"
+        ],
+        "exit": 0,
+        "stdout": "PASS actual selected owner normal stop joins before releasing bank\nPASS actual selected owner destruction after injected stop exception joins before releasing bank\nPASS actual selected owner destroyed despite negative stop releases bank after join\nPASS empty-owner actual stop path releases bank\nfailures=0\n",
+        "stderr": ""
+      },
+      "assertions": 4,
+      "pass": true,
+      "binary_sha256": "e3401cd204f984f4457145535faedd9e1477a421656b3f4d8f28f26915200f8f"
+    }
+  ],
+  "pass": true
+}
+
+========================================================================
+ACTUAL RETAINED-HANDLE RECEIPT
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/receipts/HOST-GREEN.json
+Full-source SHA256: f52cc1cae954a3016991e7f3f6bd29eff687d8675c80df5063b2b7d6036320c6
+Lines 1-52
+========================================================================
+{
+  "source_sha256": "d05a307728cee0105b721934fdfed0ba739774536b89d4ad76d7fd5d4b358f00",
+  "runs": [
+    {
+      "name": "plain",
+      "compile_argv": [
+        "c++",
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-unused-function",
+        "-O1",
+        "-I",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/test_retained.cpp",
+        "-o",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/plain"
+      ],
+      "compile_exit": 0,
+      "exit": 0,
+      "stdout": "PASS retained actual sink passes when late create is EPERM\nPASS fresh positional readback yields exact source bytes\nPASS probe performs no late path create or reopen\nPASS startup credential snapshot preserves uid zero observation\nPASS second fresh attempt captures changed live bytes not old cache\nPASS delayed credentials logged after restoration\nPASS unsupported jail query reported unknown not false\nPASS partial write loop completes exact length\nPASS interior capture remains exact\nPASS partial then signed SCE EFAULT refuses\nPASS fault does not publish transferred prefix\nPASS known fault prevents subsequent copyin\nPASS unsigned SCE EFAULT normalized\nPASS zero write refuses without loop\nPASS oversized count refuses\nPASS close error prevents success publication\nPASS close failure logs path flags error and credentials\nPASS short readback never publishes stale data\nPASS pread SCE EPERM refuses\nPASS file failure includes operation path flags and credentials\nPASS expired shared deadline starts no file operation\nPASS late write cannot publish or start readback\nPASS overflow refuses before source read\nPASS exhausted bank refuses no late creation\nPASS stop closes parent and unused probe handles\nPASS failed startup allocation refuses without leaked handles\nPASS startup ENOENT logs exact creation flags\nPASS partial bank acquisition closes all owned descriptors\nPASS failed owner startup cleanup closes complete bank\nPASS exception cleanup closes complete bank\nPASS successful runtime keeps descriptors until stop\nPASS startup allocation budget expires before next create and closes bank\nPASS stop exception releases descriptors after owner destruction\nPASS negative stop with destroyed owner releases descriptors\nfailures=0\n",
+      "stderr": "",
+      "cases": 34
+    },
+    {
+      "name": "san",
+      "compile_argv": [
+        "c++",
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-unused-function",
+        "-O1",
+        "-fsanitize=address,undefined",
+        "-fno-sanitize-recover=all",
+        "-fno-omit-frame-pointer",
+        "-I",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/test_retained.cpp",
+        "-o",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/san"
+      ],
+      "compile_exit": 0,
+      "exit": 0,
+      "stdout": "PASS retained actual sink passes when late create is EPERM\nPASS fresh positional readback yields exact source bytes\nPASS probe performs no late path create or reopen\nPASS startup credential snapshot preserves uid zero observation\nPASS second fresh attempt captures changed live bytes not old cache\nPASS delayed credentials logged after restoration\nPASS unsupported jail query reported unknown not false\nPASS partial write loop completes exact length\nPASS interior capture remains exact\nPASS partial then signed SCE EFAULT refuses\nPASS fault does not publish transferred prefix\nPASS known fault prevents subsequent copyin\nPASS unsigned SCE EFAULT normalized\nPASS zero write refuses without loop\nPASS oversized count refuses\nPASS close error prevents success publication\nPASS close failure logs path flags error and credentials\nPASS short readback never publishes stale data\nPASS pread SCE EPERM refuses\nPASS file failure includes operation path flags and credentials\nPASS expired shared deadline starts no file operation\nPASS late write cannot publish or start readback\nPASS overflow refuses before source read\nPASS exhausted bank refuses no late creation\nPASS stop closes parent and unused probe handles\nPASS failed startup allocation refuses without leaked handles\nPASS startup ENOENT logs exact creation flags\nPASS partial bank acquisition closes all owned descriptors\nPASS failed owner startup cleanup closes complete bank\nPASS exception cleanup closes complete bank\nPASS successful runtime keeps descriptors until stop\nPASS startup allocation budget expires before next create and closes bank\nPASS stop exception releases descriptors after owner destruction\nPASS negative stop with destroyed owner releases descriptors\nfailures=0\n",
+      "stderr": "",
+      "cases": 34
+    }
+  ]
+}
+========================================================================
+OLD-ABI NEGATIVE TEST SOURCE
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/test_adapter.cpp
+Full-source SHA256: a1a47ed798d8a6aa93087267ef0870188e14054326892a2f63ed121d57419cd7
+Lines 1-50
+========================================================================
+#include "NativeFNameAdapter.hpp"
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <bit>
+#include <sys/wait.h>
+#include <unistd.h>
+namespace a = rc::fnameabi;
+static unsigned calls;
+static uint32_t expected_mode;
+static void ctor(a::Name* out, const char16_t* text, uint32_t mode) {
+    assert(reinterpret_cast<uintptr_t>(out)%8==0);
+    assert(out->index==0 && out->number==0);
+    assert(text[0]==u'B' && text[1]==u'y' && text[11]==u'y' && text[12]==0);
+    assert(mode==expected_mode); ++calls; out->index=3;
+}
+#if !defined(SKIP_LEGACY_NEGATIVE)
+static void legacy_detector(a::Name*,const char16_t* text,uint32_t) {
+    // Wrong ABI is exercised in an isolated child. Do not dereference bad args.
+    if (!text) _Exit(77);
+    _Exit(0);
+}
+#endif
+int main() {
+    static_assert(sizeof(a::Name)==8 && alignof(a::Name)==8);
+    static_assert(sizeof(char16_t)==2);
+    auto n=a::invoke(ctor,u"ByteProperty",0);
+    assert(n.ok && n.value.index==3 && n.value.number==0 && calls==1);
+    auto w=a::invoke(ctor,L"ByteProperty",0);
+    assert(w.ok && w.value.index==3 && calls==2);
+    expected_mode=1;auto add=a::invoke(ctor,u"ByteProperty",1);
+    assert(add.ok && add.value.index==3 && calls==3);expected_mode=0;
+    assert(!a::invoke(ctor,u"ByteProperty",2).ok && calls==3);
+    char16_t buf[16]{};
+    assert(a::utf16(U"A\U0001F600",buf,16) && buf[0]==u'A' && buf[1]==0xd83d && buf[2]==0xde00 && buf[3]==0);
+    assert(a::utf16(u"A\U0001F600",buf,16) && buf[1]==0xd83d && buf[2]==0xde00);
+    const char32_t invalid[]={0x110000,0}; assert(!a::utf16(invalid,buf,16));
+    const char16_t surrogate[]={0xd800,0}; assert(!a::utf16(surrogate,buf,16));
+    assert(!a::utf16(u"long",buf,3));
+    assert(!a::invoke(nullptr,u"ByteProperty",0).ok && calls==3);
+#if !defined(SKIP_LEGACY_NEGATIVE)
+    pid_t p=fork();assert(p>=0);
+    if(!p) { using Old=a::Name(*)(const char16_t*,uint32_t);
+        auto wrong=std::bit_cast<Old>(&legacy_detector);(void)wrong(u"ByteProperty",0);_Exit(0); }
+    int status=0;assert(waitpid(p,&status,0)==p);
+    assert((WIFEXITED(status)&&WEXITSTATUS(status)==77)||WIFSIGNALED(status));
+#endif
+    std::puts("PASS: native output ABI; zero/alignment; mode; UTF16 and UTF32; invalid/overflow; legacy rejected");
+}
+
+========================================================================
+ADAPTER RECEIPT
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/receipts/HOST-TESTS.json
+Full-source SHA256: 282e643aad264bc168164c1f415b94f29361a890beae1ec35930e78869f78cb3
+Lines 1-102
+========================================================================
+{
+  "runs": [
+    {
+      "test": "adapter",
+      "sanitizer": false,
+      "legacy_negative": true,
+      "compile_argv": [
+        "clang++",
+        "-std=c++20",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-I",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/test_adapter.cpp",
+        "-o",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/adapter-test"
+      ],
+      "compile_exit": 0,
+      "compile_stderr": "",
+      "run_exit": 0,
+      "stdout": "PASS: native output ABI; zero/alignment; mode; UTF16 and UTF32; invalid/overflow; legacy rejected\n",
+      "stderr": ""
+    },
+    {
+      "test": "adapter",
+      "sanitizer": true,
+      "legacy_negative": false,
+      "compile_argv": [
+        "clang++",
+        "-std=c++20",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-I",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units",
+        "-fsanitize=address,undefined",
+        "-DSKIP_LEGACY_NEGATIVE=1",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/test_adapter.cpp",
+        "-o",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/adapter-san"
+      ],
+      "compile_exit": 0,
+      "compile_stderr": "",
+      "run_exit": 0,
+      "stdout": "PASS: native output ABI; zero/alignment; mode; UTF16 and UTF32; invalid/overflow; legacy rejected\n",
+      "stderr": ""
+    },
+    {
+      "test": "checks",
+      "sanitizer": false,
+      "legacy_negative": false,
+      "compile_argv": [
+        "clang++",
+        "-std=c++20",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-I",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/test_checks.cpp",
+        "-o",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/checks-test"
+      ],
+      "compile_exit": 0,
+      "compile_stderr": "",
+      "run_exit": 0,
+      "stdout": "PASS: 13 signature cases; 7 pool roundtrip cases (ASCII/UTF16/id/number/text/length/fault)\n",
+      "stderr": ""
+    },
+    {
+      "test": "checks",
+      "sanitizer": true,
+      "legacy_negative": false,
+      "compile_argv": [
+        "clang++",
+        "-std=c++20",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-I",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/units",
+        "-fsanitize=address,undefined",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/test_checks.cpp",
+        "-o",
+        "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/tests/checks-san"
+      ],
+      "compile_exit": 0,
+      "compile_stderr": "",
+      "run_exit": 0,
+      "stdout": "PASS: 13 signature cases; 7 pool roundtrip cases (ASCII/UTF16/id/number/text/length/fault)\n",
+      "stderr": ""
+    }
+  ],
+  "source_hashes": {
+    "tests/test_adapter.cpp": "a1a47ed798d8a6aa93087267ef0870188e14054326892a2f63ed121d57419cd7",
+    "tests/test_checks.cpp": "3040d28576807a60a7401734ffcbb92f7d86564ca528125be8419f81e305f311",
+    "units/NativeFNameAdapter.hpp": "6bdcdcac7bad3d19afa6aaed75a7b935299900e80e4d70b746828571f50faafb",
+    "units/NativeFNameChecks.hpp": "a4f0155469db87b79524ed79cb4ca54678488d10db066f70ae5a3211b10dfbcc"
+  },
+  "sanitizer_policy": "ASan and all UBSan checks enabled. Deliberate legacy wrong-function-call negative runs only in isolated normal-build child; sanitized build omits that UB experiment."
+}
+
+========================================================================
+FINAL ARTIFACT RECEIPT
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-full-build/FINAL-RECEIPT.json
+Full-source SHA256: 822b1247c319005ba25e51edfd3d36f2a00eb05ef98013e7147e29f8ee8b753c
+Lines 1-104
+========================================================================
+{
+  "scope": "Mac-only; no new console connection or operation; previous owned klog tap stopped locally",
+  "console_status": "l16 untested; l15 pool admission already console-proven; constructor/pad/menu/spawn remain unproved",
+  "upload": "HOLD awaiting explicit user approval",
+  "artifact": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-full-build/prx-candidate-l16-2/modbridge_supplier_composition.prx",
+  "bytes": 30932967,
+  "sha256": "34e43b25cb99333e472146ebd518a0d9d8418e8fe762f90084cd88c0c190c121",
+  "magic": "4f153d1d",
+  "sdk": "0x11000000",
+  "twin_prx_identical": true,
+  "twin_bridge_combined_bare_identical": true,
+  "bridge_source_sha256": "d05a307728cee0105b721934fdfed0ba739774536b89d4ad76d7fd5d4b358f00",
+  "bridge_object_sha256": "167b86d867f32688639852efe3544707b2786cebb2df4522691b058a6b8ec976",
+  "gate": "GO (offline gate)",
+  "gate_checks": [
+    [
+      "W1",
+      "PASS"
+    ],
+    [
+      "W2",
+      "PASS"
+    ],
+    [
+      "W3",
+      "PASS"
+    ],
+    [
+      "I1",
+      "PASS"
+    ],
+    [
+      "D1",
+      "PASS"
+    ],
+    [
+      "F1",
+      "PASS"
+    ],
+    [
+      "S1",
+      "PASS"
+    ],
+    [
+      "P1",
+      "PASS"
+    ],
+    [
+      "M0",
+      "PASS"
+    ],
+    [
+      "M1",
+      "PASS"
+    ],
+    [
+      "I1+",
+      "PASS"
+    ]
+  ],
+  "static_package_checks": 20,
+  "strong_import_count": 205,
+  "import_delta_vs_l15": {
+    "added": [
+      "getegid",
+      "geteuid",
+      "getgid",
+      "getuid",
+      "sceKernelIsInSandbox",
+      "sceKernelPread",
+      "sysctlbyname"
+    ],
+    "removed": [
+      "_openat",
+      "sceKernelRead"
+    ],
+    "identity_changes": []
+  },
+  "new_import_resolution_on_console": false,
+  "host_handle_runs": [
+    [
+      "plain",
+      34,
+      0
+    ],
+    [
+      "san",
+      34,
+      0
+    ]
+  ],
+  "fname_host_runs": 4,
+  "admission_host_cases": 8,
+  "startup_handle_limit": 64,
+  "startup_scheduling_budget_ms": 5000,
+  "shared_admission_budget_ms": 60000,
+  "deadline_limitation": "Does not preempt an entered OS/native call, diagnostics or mandatory cleanup",
+  "production_delta_vs_l15": "one bridge TU only; initializer/FName/pad/mod content preserved",
+  "review": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/FINAL-REVIEW.md",
+  "pre_review_candidates": "moved aside by runner; excluded from final evidence",
+  "inherited_odr_advisories": "recorded in odr-l11.json; no new runtime unit change beyond packaging bridge",
+  "real_owner_cleanup_receipt": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-local-handles/reports/review/owner-stop/runs/20261007T173323Z-93ce425b/RECEIPT.json",
+  "real_owner_cleanup_cases": "4/4 plain and4/4 fatal ASan/UBSan, real owner thread joined before descriptor close"
+}
+
+========================================================================
+COMPLETE OWNER FUNCTION REGION (supersedes the earlier bounded excerpt)
+Provenance: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-runtime-1/source/bootstrap/runtime_owner.cpp
+Lines 1-129
+========================================================================
+#include "runtime_owner.hpp"
+#include <stdexcept>
+
+namespace modbridge::native
+{
+struct RuntimeOwner::Signals
+{
+    mutable std::mutex mutex;
+    RuntimeStatus status;
+    std::thread::id initializer;
+};
+RuntimeOwner::RuntimeOwner(std::unique_ptr<RuntimeBackend> backend, std::shared_ptr<RuntimeAckSink> ack)
+    : backend_(std::move(backend)), signals_(std::make_shared<Signals>()), ack_(std::move(ack))
+{
+    if (!backend_) throw std::invalid_argument("Native runtime backend is required");
+}
+RuntimeOwner::~RuntimeOwner()
+{
+    // Destroying the object on its own worker would free live program state.
+    // There is deliberately no detached-thread fallback.
+    if (!stop()) std::terminate();
+}
+bool RuntimeOwner::start()
+{
+    std::lock_guard operation(operations_);
+    {
+        std::lock_guard lock(signals_->mutex);
+        if (signals_->status.state != RuntimeState::Prepared) return false;
+        signals_->status.state = RuntimeState::Starting;
+    }
+    try { thread_ = std::thread(&RuntimeOwner::initialize, this); }
+    catch (const std::exception& error)
+    {
+        std::lock_guard lock(signals_->mutex);
+        signals_->status = {RuntimeState::Failed, error.what()};
+        // RUNTIME-ACK point 4: the session failed before any engine work;
+        // record and continue, never propagate from the acknowledgment.
+        if (ack_) ack_->failed(1, error.what());
+        return false;
+    }
+    return true;
+}
+bool RuntimeOwner::stop()
+{
+    // Check before operations_: another caller may already hold it while
+    // joining us. The worker must never wait behind its own joiner.
+    {
+        std::lock_guard lock(signals_->mutex);
+        if (signals_->initializer == std::this_thread::get_id()) return false;
+    }
+    std::lock_guard operation(operations_);
+    {
+        std::lock_guard lock(signals_->mutex);
+        if (signals_->status.state != RuntimeState::Failed &&
+            signals_->status.state != RuntimeState::Stopped)
+            signals_->status.state = RuntimeState::Stopping;
+    }
+    backend_->request_stop();
+    if (thread_.joinable()) thread_.join();
+    {
+        std::lock_guard lock(signals_->mutex);
+        signals_->initializer = {};
+        if (signals_->status.state != RuntimeState::Failed)
+            signals_->status.state = RuntimeState::Stopped;
+        // RUNTIME-ACK point 5: after stop() has joined the init thread, the
+        // cooperative stop is the session's final acknowledged state; only
+        // then is the retained descriptor released. The sink emits stopped
+        // at most once per session (the init thread may complete the
+        // Stopping->Stopped transition first; repeated stop adds nothing),
+        // and a failed session keeps its failed line last.
+        if (ack_ && signals_->status.state == RuntimeState::Stopped)
+        {
+            ack_->stopped();
+            ack_->close();
+        }
+    }
+    return true;
+}
+RuntimeStatus RuntimeOwner::status() const
+{
+    std::lock_guard lock(signals_->mutex);
+    return signals_->status;
+}
+void RuntimeOwner::initialize() noexcept
+{
+    {
+        std::lock_guard lock(signals_->mutex);
+        signals_->initializer = std::this_thread::get_id();
+    }
+    try
+    {
+        std::weak_ptr<Signals> weak = signals_;
+        backend_->initialize([weak] {
+            if (const auto signals = weak.lock())
+            {
+                std::lock_guard lock(signals->mutex);
+                if (signals->status.state == RuntimeState::Starting)
+                    signals->status.state = RuntimeState::EngineInitialized;
+            }
+        });
+        std::lock_guard lock(signals_->mutex);
+        if (signals_->status.state == RuntimeState::Stopping)
+            signals_->status.state = RuntimeState::Stopped;
+        else
+        {
+            signals_->status = {RuntimeState::Failed, "Native runtime init returned without a stop request"};
+            // RUNTIME-ACK point 4: init returned on its own without readiness.
+            if (ack_) ack_->failed(1, "Native runtime init returned without a stop request");
+        }
+    }
+    catch (const std::exception& error)
+    {
+        std::lock_guard lock(signals_->mutex);
+        signals_->status = {RuntimeState::Failed, error.what()};
+        // RUNTIME-ACK point 4: genuine startup error, including a typed
+        // deadline/cancellation converted to an error by the backend.
+        if (ack_) ack_->failed(1, error.what());
+    }
+    catch (...)
+    {
+        std::lock_guard lock(signals_->mutex);
+        signals_->status = {RuntimeState::Failed, "Native runtime initialization failed with an unknown exception"};
+        if (ack_) ack_->failed(1, "Native runtime initialization failed with an unknown exception");
+    }
+    // Completed thread IDs may later be reused by an unrelated caller.
+    std::lock_guard lock(signals_->mutex);
+    signals_->initializer = {};
+}
+

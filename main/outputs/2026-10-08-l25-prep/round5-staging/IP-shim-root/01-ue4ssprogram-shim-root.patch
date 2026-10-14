@@ -1,0 +1,29 @@
+--- a/src/UE4SSProgram.cpp
++++ b/src/UE4SSProgram.cpp
+@@ -929,7 +929,25 @@
+ #ifdef __PROSPERO__
+         if (m_native_context.mod_source)
+         {
+-            m_mods_directories = {std::filesystem::path("ue4ss/Mods")};
++            // [IP] Claude round-10 item 3 (shim root wiring): the native mods
++            // directory must be ABSOLUTE so the LuaPathShim root derivation in
++            // LuaMod::prepare_mod (which lexically strips the trailing
++            // /ue4ss[/Mods] from get_mods_directory()) yields the REAL
++            // modbridge root and the writable-area feature (agent IB) becomes
++            // testable at runtime. The root is RUNTIME-CARRIED, never derived
++            // here: the module_start composition activates with its mod root
++            // and the runtime bridge copies that string verbatim into
++            // NativeProgramContext::configured_working_directory
++            // (runtime_start_bridge.cpp, Resolution B). Rule 10: no title-id
++            // anywhere in this derivation — whatever root the composition
++            // activated with is used as-is. Pure lexical join (no OS call:
++            // weakly_canonical/current_path THROW on this target, launch-2
++            // evidence). An empty configured root (older composition) keeps
++            // the legacy relative "ue4ss/Mods" so the shim still disables
++            // itself loudly (reason=no-root) instead of guessing.
++            const std::filesystem::path shim_native_root = m_native_context.configured_working_directory;
++            m_mods_directories = {shim_native_root.empty() ? std::filesystem::path("ue4ss/Mods")
++                                                           : (shim_native_root / "ue4ss" / "Mods")};
+             return;
+         }
+ #endif

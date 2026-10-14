@@ -1,0 +1,47 @@
+{
+  "marker": "modbridge.execwriteprobe.claim",
+  "schema": 1,
+  "worker": "worker-writability-probe-build",
+  "date": "2026-10-04",
+  "scope": "PRE-BUILD ONLY: the modbridge_exec_write_probe PRX skeleton for the worker-exec-writability design. Machinery (record sinks, VMMAP-persist-first per-attempt sequence, transition table, attempt budget, restore discipline, fail-open) is built and host-tested; the design worker injects the actual mprotect transitions (far-from-hooks page, X->RX first, then X->RWX) via TRANSITIONS.json + rebuild. No evidence analysis is claimed here; the probe has never executed on console.",
+  "deliverables": [
+    "CLAIM.json (this file, written first)",
+    "src/exec_write_probe.c + exec_write_probe.h (per-attempt machinery: vmmap persist -> mprotect attempt -> rc/errno record -> gated read/write test with recovery -> restore -> post-restore record; budget cap 8; fail-open)",
+    "src/module_entry.c (variant: dual sink — dedicated jsonl + /data/plugins/UE4SS.log write-through mirror)",
+    "src/record_sink.c (vendored, ONE labeled delta: record marker string) + byte-identical vendored lineage files",
+    "TRANSITIONS.json (EMPTY placeholder table — the design's injection point)",
+    "build_exec_write_probe.py (determinism double-build; SKELETON + ARMED variants)",
+    "check_xwp_artifact.py (check_diag_artifact-pattern gates)",
+    "tests/ host suite with MOCKED mprotect (12 scripted scenarios)",
+    "FILL-IN-FOR-DESIGN-WORKER.md (exact table location + injection procedure)",
+    "REPORT.md (last)"
+  ],
+  "mprotect_contract_verification": {
+    "frozen_191_contract": ".superpowers/native-dependency-spike/native-full-runtime-aligned-entry-1/import-contract.json",
+    "verified_counts": {"required_strong": 191, "required_weak": 6},
+    "sceKernelMprotect_strong_row_present": false,
+    "kernel_mprotect_in_contract": true,
+    "kernel_mprotect_form": "weak_unresolved_names entry only: binding WEAK, symbol_type NOTYPE, status absent, evidence []",
+    "LOUD_FLAG": "NO mprotect-class identity exists as a console-proven import row in the frozen 191 contract. sceKernelMprotect appears ONLY in (a) igf7's dropped_identities.derived_strong list (never carried) and (b) SharpProspero StubCatalog (packaging tooling knows the libkernel stub spelling). kernel_mprotect appears ONLY as a WEAK/absent/unresolved name, and the lineage Packager REJECTS all weak imports (Program.cs allowedWeak is empty). The only mprotect mechanism ever RUN on console is the igf5 raw-syscall-74 shim (igcar_sys_mprotect), which is the suspected console+game crash and is FORBIDDEN by the igf6/igf7 inverted syscall gate.",
+    "resolution": "SKELETON build carries EXACTLY the 7 console-proven verbatim rows (zero new identities; mprotect unreachable — local stub records 'import_absent'). ARMED build (design stage 2) adds ONE derived row 'sceKernelMprotect' (the closest tooling-proven spelling) in the exact frozen row format, loudly flagged NOT-console-proven; first new identity in the lineage."
+  },
+  "safety_rails_baked_in": [
+    "Zero mprotect calls possible in the SKELETON build: compile-time unarmed, local stub always refuses",
+    "ARMED build: every row needs design-confirmed=1 AND non-empty table; anything else is recorded-and-skipped",
+    "NO foreign memory access before a fresh same-invocation VMMAP scan covers the exact address AND the observed prot equals the design's from_prot (mismatch = record + refuse)",
+    "Attempt budget hard cap 8 across all rows; budget exhaustion recorded",
+    "Every attempt bracketed: pre-state VMMAP entry persisted to the jsonl BEFORE the attempt; rc/errno recorded after; restore attempted ALWAYS (even on failure); post-restore VMMAP re-read recorded",
+    "Zero raw syscall instructions (igf6/igf7 inverted syscall gate retained); forbidden identities incl. igcar_sys_mprotect asserted absent",
+    "module_start returns 0 on every path (fail-open); re-entry guarded to 0; only a dead jsonl channel mirrors a notice to the UE4SS.log sink",
+    "All artifacts proposal-only; nothing native executed; game launch stays user-coordinated"
+  ],
+  "claims": {
+    "built_and_host_tested": true,
+    "determinism_double_build": "run1/run2 byte-equality asserted per variant (final PRX, inner ELF, combined object, import contract)",
+    "native_executed": false,
+    "in_game_results": false,
+    "console_proven_imports_only_skeleton": true,
+    "armed_variant_staged": "ARMED (8th derived import, EMPTY table) is built for the design's load-resolution sanity stage; it performs zero mprotect calls with an empty table",
+    "internal_module_name_caveat": "The frozen lineage Packager.dll (used IN PLACE, never rebuilt) hardcodes internal moduleName 'modbridge_ingame_facts'; the deliverable FILE is modbridge_exec_write_probe.prx. Staging implication documented in FILL-IN-FOR-DESIGN-WORKER.md."
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "worker": "worker-capture-22k-fixture",
+  "utc": "2026-10-05",
+  "scope": "Fixture-only worker: exercise the >capture-capacity class (run1's truncated-honest 22,761-entry walk vs the 16,384 snapshot, G7) against the FOLDED v4 validator. Staged copy of final-units/SeedValidation.hpp; originals untouched; no engine/bridge/initializer source edited; proposal-only evidence for launch-12.",
+  "evidence_base": [
+    "outputs/2026-10-04-zcode-team/worker-verdict-first-real/ (G7: run1 vmentry=22761 > pinned 16384 with walk_stop=0, truncated-honest; run3 vmentry=10028 complete; G9: spanpub env_low/high is a 64-bit split and spanpub_cap=1 saturated at 16 on both boots)",
+    "outputs/2026-10-04-zcode-controller/launch10-build/final-units/SeedValidation.hpp (the folded v4: publish_readable_spans + check_pool_shape(current_block, none_id, blocks0, spans, count, capture_envelope_end))",
+    "outputs/2026-10-04-zcode-controller/launch10-build/final-units/runtime_start_bridge_r14_diag_spanpub.cpp (kBridgeVmmapEntries=16384 static bss :240; bridge_vmmap_walk prefix storage; bridge_spanpub_publish bounded copy + envelope :714-744; bridge_capture_envelope :767)",
+    "outputs/2026-10-04-zcode-team/worker-fname-validator-v4/ (the v4 suite pattern this fixture extends, 69/69)",
+    "outputs/2026-10-04-zcode-team/worker-fname-heap-runtime-bounds/DIFF.md section 3 (REQUIRED core-capture hunk: kMaxVmMappings 1024->16384 hpp:85; OsVmMapping mappings[] -> static bss cpp:203, 16,384x24B = 384 KiB, 'stack would be unsafe on a game-hijacked thread')"
+  ],
+  "claim": "The folded v4 envelope logic handles the >capacity shape exactly as designed: on a 22,761-record walk truncated to the 16,384-record snapshot prefix, (a) a blocks0 inside a published span BELOW the cut ADMITS (coverage proof holds), (b) a blocks0 inside any span ABOVE the cut refuses 'snapshot truncated: cannot prove heap coverage at or past the captured envelope (omitted mapping, not proven unmapped)' with bounds_source=capture-truncated — NEVER the 'not covered/unmapped' verdict — and (c) the published span table reflects ONLY the first 16,384 records: envelope_end = max captured record end (the cut), strictly below the true heap top. Publishing the full walk flips all three above-cut blocks0 to ADMIT: the refusal is a capture-coverage property, and the capacity bump is the matching lever.",
+  "verification": {
+    "suite": "host-test/test_capture22k_host.cpp sha256 6b16f025ee578eda1769172056dc6c3ebcbf2d1cd68ece760e36afcce7045197",
+    "header_under_test": "staging/SeedValidation.hpp sha256 f09ec9b319985cf86a5899894a30fc8d20a905072008ac8d4a35efbcaec3a5de (== final-units)",
+    "compile": "clang++ -std=c++20 -Wall -Wextra -I staging, rc=0, zero warnings (receipts/fixture-compile.stderr, 0 bytes)",
+    "result": "34 passed, 0 failed, exit 0; deterministic rerun byte-identical",
+    "receipts": [
+      "receipts/fixture-capture22k.txt (sha256 bf3040be149a5029d6df4ef8e4a083f3661c34e783d50aa91ae79b571b5aeb58)",
+      "receipts/fixture-capture22k-rerun.txt",
+      "receipts/PASS-capture22k-fixtures.json",
+      "receipts/sha256-staging.txt",
+      "receipts/sha256-artifacts.txt"
+    ]
+  },
+  "labeling_law": "The 22,761-record walk is SYNTHETIC. Real pinned facts: capacity 16,384 (kBridgeVmmapEntries, static bss), run1 total 22,761 with walk_stop=0, run3 total 10,028, spanpub_cap=1 on both boots. The address layout past the pinned image low map is plausible-not-captured; NO real Blocks[0] pointer value exists (worker-blocks0-provenance verdict). The fixture asserts RELATIONS (envelope vs cut vs spans), not a predicted real map.",
+  "launch_behavior_gt_16384": {
+    "diagnostics": "bridge_vmentry_entries=<all parsed, e.g. 22761>; bridge_vm_walk_stop=0 (sysctl payload clean; the cut is the SNAPSHOT capacity, not a malformed tail); bridge_spanpub_count=16; bridge_spanpub_total=<qualifying within the prefix>; bridge_spanpub_cap=1; bridge_spanpub_env_low/env_high = the CUT as a 64-bit split (G9 parity)",
+    "admission": "blocks0 below the cut AND inside a published span -> normal [Seeds] pool admission; blocks0 at/above the cut -> check_pool_shape refuses 'snapshot truncated...' every 50 ms poll until the validation budget expires, then terminal seed_refused throw (exact literal in CAPTURE-CAPACITY.md); never a frozen-envelope fallback, never 'unmapped' for the above-cut class",
+    "norm": "run3 (10,028 <= 16,384) is the production norm: complete capture, admission possible anywhere the walk reached"
+  },
+  "for_launch_12": "If the truncated refusal fires live: the honest refusal is by design (never replay it). The known lever is capacity: verify the pool worker's REQUIRED core hunk is folded (kMaxVmMappings 16384 + static bss), then consider 16,384 -> 32,768. Stack-vs-bss law (pool worker core hunk, DIFF.md section 3): capacity arrays MUST be process-lifetime static bss — 32,768 x 24 B OsVmMapping = 768 KiB (lmf side), 32,768 x 24 B VmSpanRecord g_spanpub_records = 768 KiB (bridge spanpub side), and the raw kinfo_vmentry buffer g_bridge_vmmap at 32,768 x 1160 B ~ 36.3 MiB BSS (18.1 MiB today, r4 comment '~19 MiB'). Stack placement would be unsafe on a game-hijacked thread. Any bump is a new bounded revision with distinct IDs; verify the PRX BSS budget before folding."
+}

@@ -1,0 +1,34 @@
+--- a/src/UE4SSProgram.cpp
++++ b/src/UE4SSProgram.cpp
+@@ -29,6 +29,7 @@
+ #include <Helpers/Utf16Utf8.hpp>
+ #include <NativeLayoutBinding.hpp>
+ #include <NativeLayoutDeclarations.hpp>
++#include <AutoProfileGenerator.hpp>
+ #endif
+ #include <format>
+ #include <fstream>
+@@ -1143,6 +1144,23 @@
+         {
+             Output::send(STR("[NativeLayout] declaration_provider=compiled source={} profile_digest={}\n"),
+                          ensure_str(std::string{compiled->selection_source}), ensure_str(std::string{compiled->profile_digest}));
++            // cap02 SHADOW (log-only, non-arming): re-render the engine-level
++            // layout pack from this pair's own header and byte-compare it with
++            // the compiled texts. A drift check only: the compiled texts below
++            // stay the armed layout whatever the verdict, and any exception in
++            // the shadow is caught and logged so activation is never aborted.
++            try
++            {
++                const auto sh = rc::autoprofile::shadow_check(compiled->members, compiled->vtables);
++                Output::send(STR("[AutoProfile] shadow parsed={} verdict={} pack={} pack_digest={} member_rows={} vtable_rows={} detail={}\n"),
++                             sh.parsed ? 1 : 0, ensure_str(sh.matched ? "MATCH" : "DIVERGE"),
++                             ensure_str(std::string{sh.pack_id}), ensure_str(std::string{sh.digest}),
++                             sh.member_rows, sh.vtable_rows, ensure_str(std::string{sh.reason}));
++            }
++            catch (...)
++            {
++                Output::send(STR("[AutoProfile] shadow parsed=0 verdict=DIVERGE detail=exception in shadow (ignored; compiled layout still armed)\n"));
++            }
+             Platform::NativeLayouts::StageNativeLayoutTexts(compiled->members, compiled->vtables);
+         }
+         else if (m_native_context.mod_source)

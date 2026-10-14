@@ -1,0 +1,9 @@
+# Bounded metadata group planner
+
+Revalidate explicitly supplied type8 `.bin`, intake receipt and chunk ID with the exact hash-pinned manifest-v1 source bytes. Read hash-pinned saved catalogue metadata only; never open UCAS or group payloads. Select 1–16 explicit full map hashes and/or raw12-byte group IDs. Resolve maps through manifest index arrays, preserve full member hashes, offsets/spans and both size fields. Deduplicate selected groups; refuse more than4MiB per compressed group or8MiB total.
+
+CLI accepts payload/receipt/chunk ID, catalogue/path SHA, repeated map/group selections, optional exact owner triples (TOC SHA/container/row) keyed by group ID, and optional new output inside group-plan. Missing owners are INPUT_REQUIRED; ambiguous owners require OWNER_SELECTION_REQUIRED. Explicit owner mismatch and logical length!=compressed_size refuse. Accept only exact raw09 v8 catalogue rows; internalC9/legacy0C never normalize. Geometry remains discovery-only pending original full TOC/payload admission.
+
+Stable capped readers bind catalogue/dependency identities before/after; execute only already SHA-verified manifest reader bytes. Recheck all bound inputs after planning. Limit catalogue/output8MiB. Preserve original inputs and refuse overwrite/clobber. Do not recompute group IDs or member code hashes. Always ID_DERIVATION_UNCHECKED; report writer-layout candidate separately, including refusal of disordered member order. Compression sizes unequal require group CODEC_REQUIRED independently of transport methods.
+
+TDD: bounded synthetic manifest/TOC/intake fixture, exact map selection, raw types, missing/ambiguous/explicit owner, compressed-length mismatch, independent codec layers, disordered membership, selection/size bounds, source drift/pin, output refusal. One scoped red/green suite and one synthetic CLI replay; no existing-suite rerun or real payload.

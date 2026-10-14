@@ -1,0 +1,68 @@
+# Native PS5 diagnostic payload — design and build check
+
+September 29, 2026. Small subsystem internally reviewed under the user's authorization for unattended reversible local progress. Implemented as an offline native build candidate, with runtime execution unmeasured. This artifact advances the native-host evidence needed by the universal translator; it does not establish a console application, mod compatibility, translation backend, or game runtime.
+
+## Purpose and boundary
+
+Produce an actual x86-64 PS5 ELF candidate that reports compile-time ABI facts and, if a compatible loader later invokes it, a few read-only observations about its own process. Initial development used only local fixtures. The user later supplied console ps5-host-not-configured.invalid, Payload Manager 0.5.2 and Stellar Blade update 01.014.001; a bounded manager version GET confirmed its reported menu version. Underlying loader identity, firmware behavior and actual game fingerprints remain unavailable. Hardware execution and every in-game capability remain unverified. The September 30 loader ABI review identifies candidate corrections needed before execution.
+
+The payload must not change kernel state, credentials, privilege bits or process protection; load executable modules; inject/hook code; scan game processes; change mounts; read or write game files; open files; create sockets; or make network connections. It may write a bounded report to inherited standard output and return its result to its caller. Inherited output may be redirected by the external loader; the payload does not choose a transport or endpoint. No default SDK runtime startup is permitted.
+
+## Source finding that changes the build choice
+
+The community SDK's [startup](https://github.com/ps5-payload-dev/sdk/blob/f7fd02e6e195902a449b5e664917be8c01888b34/crt/crt.c) calls `__patch_init` before application code. The [patch implementation](https://github.com/ps5-payload-dev/sdk/blob/f7fd02e6e195902a449b5e664917be8c01888b34/crt/patch.c) changes current-process syscall permission ranges and credential capability/attribute bits. A harmless-looking `main` linked to that default runtime would violate this scope.
+
+Recommended: a freestanding C11 payload with a custom callable `_start`, using the SDK's argument layout and cross-linker script but no SDK CRT, libc, C++ runtime, kernel helpers or SCE import stubs. The [argument layout](https://github.com/ps5-payload-dev/sdk/blob/f7fd02e6e195902a449b5e664917be8c01888b34/crt/payload.h) supplies a `sys_dynlib_dlsym` resolver. The SDK's [entry assembly](https://github.com/ps5-payload-dev/sdk/blob/f7fd02e6e195902a449b5e664917be8c01888b34/crt/_start.S) demonstrates a callable entry that aligns/restores its own stack and returns. This is a candidate ABI, not verified compatibility with the user's loader. If the resolver or output function is absent, fail without privilege escalation or alternative device contact.
+
+Alternatives considered: default SDK startup is rejected for its automatic mutations; a desktop-only diagnostic cannot establish native payload buildability. A freestanding candidate separates the narrowly useful build evidence from runtime assumptions.
+
+## Report behavior
+
+The diagnostic resolves only `getpid`, `getuid`, `geteuid`, `getpagesize`, and `write`, using the kernel handles already referenced by SDK startup (`0x1`, then `0x2001`). Those symbols appear in the [kernel stub source](https://github.com/ps5-payload-dev/sdk/blob/f7fd02e6e195902a449b5e664917be8c01888b34/sce_stubs/libkernel_web.c). Resolution and function calls are separate observations: a resolved name does not prove successful or meaningful execution. Failure of one getter preserves the other results. It does not trigger direct syscall fallbacks, kernel reads, credential changes or module loading.
+
+`record_kind` is `native_probe_report`, schema version 1. Report build target/compiler identity, pointer/long/int sizes, endian/architecture macro facts, candidate entry ABI name, and observed getter values with per-observation `observed`, `unavailable`, or `unmeasured` status. Record resolver failures as numeric errors without interpreting them as lack of all platform support. Do not collect hardware serial numbers, account information, kernel addresses, game memory or environment variables.
+
+Firmware, loader/version, title/update, filesystem/TLS/UI support, C++ runtime behavior, module loading, executable-memory behavior and every in-game/runtime/translation capability stay `unknown`. The diagnostic does not promote existing core capability records. Actual entry invocation is an observation scoped to this program; it is not evidence of game attachment or 13.60 compatibility. Offline test fixtures are labeled `desktop_fixture` and never presented as a console run.
+
+Use a fixed 4096-byte report buffer and integer/string serialization without libc, allocation, floating-point formatting, TLS, exceptions, constructors or threads. Output uses only inherited fd 1, at most eight write attempts and at most 4096 bytes. Zero/negative writes and unfinished output fail explicitly. This bounds output volume and retries, not the latency of an externally configured blocking output descriptor. No stdin wait or retry loop can keep the payload alive indefinitely. The callable entry restores its own stack and returns; an optional caller-provided result slot is used only according to the candidate SDK ABI.
+
+## Host and dependency evidence
+
+Observed host: macOS 15.7.8, Darwin ARM64, Apple Clang 17, Make, Python 3, curl, tar and unzip. No `llvm-config`, ELF LLD, wget, CMake, Meson or pkg-config was found in PATH. Standard LLVM/LLD Homebrew locations checked were absent. Free space was 111,895,912,448 bytes at inspection. These are local observations, not required user installations.
+
+The [SDK README](https://github.com/ps5-payload-dev/sdk/blob/f7fd02e6e195902a449b5e664917be8c01888b34/README.md) documents macOS, and its [macOS workflow](https://github.com/ps5-payload-dev/sdk/blob/f7fd02e6e195902a449b5e664917be8c01888b34/.github/workflows/macos-latest.yml) cross-builds SDK/samples on Mac. The SDK is not Linux-only. Its [compiler wrapper](https://github.com/ps5-payload-dev/sdk/blob/f7fd02e6e195902a449b5e664917be8c01888b34/host/bin/prospero-clang) targets `x86_64-sie-ps5`; custom builds must use both `-nodefaultlibs` and `-nostartfiles` so no explicit default libraries/startup are appended. Alternatively, invoke the pinned LLVM compiler and ELF linker directly with the SDK script. The explicit entry is `_start`; no deployment/test target is provided.
+
+| Public dependency | Fixed source | Expected SHA-256 | Use |
+|---|---|---|---|
+| SDK v0.43, 8,814,217 bytes | [Release archive](https://github.com/ps5-payload-dev/sdk/releases/download/v0.43/ps5-payload-sdk.zip), [official fixed release metadata](https://api.github.com/repos/ps5-payload-dev/sdk/releases/tags/v0.43) | `a9cc9929f21b2b2c5d5b309f3bab4997067c45281c0622cf4838b1aecba66fcb` | Candidate payload argument header, linker script and wrappers; no default runtime linkage. |
+| LLVM 21.1.8 ARM64 macOS, 1,503,047,352 bytes | [Release archive](https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.8/LLVM-21.1.8-macOS-ARM64.tar.xz), [official fixed release metadata](https://api.github.com/repos/llvm/llvm-project/releases/tags/llvmorg-21.1.8) | `b95bdd32a33a81ee4d40363aaeb26728a26783fcef26a4d80f65457433ea4669` | Compiler, ELF LLD, llvm-config and inspection tools. Current SDK wrappers explicitly support LLVM 21. |
+
+Expected digests came from the official GitHub release asset metadata, and must match before extraction/execution. SDK source baseline reviewed is commit `f7fd02e6e195902a449b5e664917be8c01888b34`. The release contents must be rechecked for the relevant header/wrapper behavior; do not silently combine incompatible source/release ABI assumptions.
+
+Provenance clarification: that historical SDK source-review pin is a post-release revision. SDK v0.43 resolves separately to `d9c9519116944a7f1c22d262012c53b80b3520b7`. The [SDK provenance correction](2026-09-30-native-sdk-host-route.md#release-identity-correction-and-impact) records byte-identical relevant header/linker/startup sources; original URLs, hashes and artifact identities remain unchanged.
+
+Implemented release check: archive `target/include/ps5/payload.h` matches the [v0.43 public header](https://github.com/ps5-payload-dev/sdk/blob/v0.43/include/ps5/payload.h), SHA-256 `752279ee971eee0dc1eda7286a0008caaf7cd34a99c7501d054d40866c0b8fdf`. It uses `intptr_t` and system headers, unlike the internal `crt/payload.h`'s `long`; both have the same reviewed LP64 layout. The standalone derived header avoids those external includes. The archive script matches the cited source, SHA-256 `3bacf56a21602a1298752023a4c5b0c305954ddf6cdbce1464476fc9da9d9093`. The build uses raw Clang/LLD, with no compiler wrapper or default startup.
+
+Everything downloaded or extracted stays beneath worktree `work/native-probe-deps/`, excluded locally through the worktree's own Git exclude file, or beneath the probe's ignored build directory. No system package manager, global install, home-directory toolchain, persistent PATH edit or shell-profile change. Check Darwin/ARM64 and at least 12 GiB free space before downloading; verify content length/digest and inspect archive names before extraction. Reject absolute/traversing member paths or symlink destinations that escape the extraction root. Prefer extracting only compiler/linker/inspection executables, their in-tree support libraries and licenses; inspect their dynamic dependencies before execution. If selective extraction fails to provide a self-contained toolchain, a complete verified local extraction is allowed under the same boundary. Cleanup removes only the known project-local dependency/build directory, never user paths. Preserve the source manifest and exact observed tool versions even if intermediates are removed.
+
+The SDK declares GPL-3.0-or-later except separately licensed files (FreeBSD headers generally BSD); preserve relevant notices and license texts. Use GPL-3.0-or-later for this independent probe and its SDK-derived entry/header/script material. LLVM is [Apache-2.0 with LLVM exceptions](https://github.com/llvm/llvm-project/blob/llvmorg-21.1.8/LICENSE.TXT). Preserve toolchain notices locally. Do not relabel SDK-derived material with the portable core's dependency licenses.
+
+## Files and implementation sequence after review
+
+Own only `outputs/ps5-mod-bridge/native-probe/` and this design/report. Its local Makefile is independent; no shared core, companion or Makefile edits.
+
+1. `third_party/manifest.json` and notices: fixed URLs/digests, SDK source/release identity and included material; verified project-local dependency setup. Fail explicitly if a required host tool cannot run.
+2. `payload_args.h`, `entry.S`, `probe.c`, `report.c` and `report.h`: custom callable entry, resolver whitelist/read-only collection, bounded pure report formatter. No default startup/static imports.
+3. `tests/report_tests.c`: synthetic getters/resolver/output test harness compiled for the development Mac and labeled fixtures. Cover missing/null resolver, unresolved/failed getters, numeric limits, partial/zero/failed writes and preservation of `unknown` capability states.
+4. Probe-local `Makefile` and `verify_elf.py`: offline cross-build/structural audit only. Produce `build/native-probe.elf`; no upload, socket, deployment or console execution command.
+5. `README.md` and `outputs/native-probe-report.md`: reproduce source/tests/build inspection, distinguish fixture output from real execution, and record unresolved loader/runtime inputs. Commit only explicit owned paths after coordinating the commit window.
+
+## Falsifiable acceptance check
+
+The offline check passes only when the pinned cross compiler/linker produce an ELF64 little-endian x86-64 position-independent artifact whose entry lies inside an executable load segment, with 16 KiB load alignment, no interpreter, no `DT_NEEDED`, no undefined imports, no initialization arrays, no dynamic relocations, no text relocations, and no linked SDK CRT/patch/kernel-helper symbols. Inspect its symbol table and disassembly for unwanted startup/mutation helpers and direct syscall instructions. Fail if it is Mach-O/ARM64 or a desktop executable. The verifier's negative fixture must reject a deliberately wrong-format desktop artifact and a synthetic forbidden-import/constructor artifact.
+
+A successful check establishes only that the freestanding candidate cross-builds and has the stated static properties. A source review must still inspect its resolver whitelist and absence of side effects; static scans alone cannot prove all behavior. No native ELF is run on this ARM64 Mac. No fixture can set console capabilities to `validated`.
+
+Review refinement: inspect executable `PT_LOAD` bytes and `PT_DYNAMIC` tables even when section metadata hides behavior; reject dynamic init/fini callbacks, packed RELR relocations and mismatched `_start` function identity. The unchanged SDK script's page-rounded RWE/RW segments overlap, so a successful alignment check does not establish loader permission mapping. That remains an explicit runtime prerequisite.
+
+If the verified toolchain cannot build/link the candidate, preserve probe sources, logs and manifest and report the exact build blocker. Do not replace it with a desktop binary or mark runtime support unavailable solely because local tools are missing. Console execution, calling-convention/resolver compatibility, inherited output and actual values remain unmeasured until the user provides and authorizes a verified loader environment.

@@ -1,0 +1,144 @@
+--- ../launch10-build/build_runtime_composition6_l10.py	2026-10-05 09:53:43
++++ build_runtime_composition6_l11.py	2026-10-05 12:46:23
+@@ -1,10 +1,32 @@
+-# LAUNCH-10 DRIVER EDITION (controller 2026-10-05)
+-# Base: worker-comp6-driver/build_runtime_composition6.py sha256 5af1e42b2666b9fb78546dbe8e4733b9bd0341aaa4cd5dc43481aad663e486c8
+-# Tagged edits (exactly three, all recorded):
+-#   1. compose_argv lmf-live-module-facts -> live_module_facts.geometryfix.cpp (geometry fix, sha below)
+-#   2. compose_argv unreal-unrealinitializer -> readpath-guard staging (validator+guards+armed table)
+-#   3. packaging BOOTSTRAP_UNITS diagnostic.c -> diagnostic-sink staging (sha gate in code)
+-# Bridge comes via CLI --bridge-source/--bridge-sha256 (geometrydiag r13; no edit needed).
++# LAUNCH-11 COMBINED DRIVER EDITION (worker-combined-editions pre-build, 2026-10-05). LOCAL ONLY.
++# Base: launch10-build/build_runtime_composition6_l10.py sha256 f41035724244d2be84360942a0b67b53fc07d7568341320dacc4f09f69839bb6
++# (the proven launch-10 pair ON DISK; note launch10-build/EDITION.json still records the
++#  pre-v4-fold driver sha 399d62c2... - the validator-v4 fold updated the driver afterwards;
++#  THIS base is the current on-disk file, whose COMPOSE6_FIXED_SHA pin b78fb031... matches
++#  the on-disk l10 fixed edition byte-for-byte).
++# Tagged deltas vs f4103572 (exactly five, all recorded; EVERYTHING else byte-carried,
++# including all l10 pins, the artifacts hook and the stage-aware packaging wrapper):
++#   L11-E1  COMPOSE6_FIXED / COMPOSE6_FIXED_SHA -> THIS dir's build_runtime_composition6_fixed_l11.py
++#           (6e943678... = l10 fixed b78fb031... + its L11 admission-notes comment block only).
++#   L11-E2  compose_argv unreal-unrealinitializer -> the LAUNCH11-PLAN A0 ARMED staging
++#           worker-luamod-rebase/staging/initializer-l10-r3/UnrealInitializer.cpp
++#           (8b0c7e99..., R3_MARSHAL_MODE=1 fallback). REQUIRED by plan D's pairing law:
++#           the merged luamod's __PROSPERO__ references to the R3 marshal bridges stay
++#           undefined unless the initializer defines them (armed fold). Recorded caveat
++#           in-line (pre-launch10-final-c staging; see the comment at the redirect).
++#   L11-E3  compose_argv luamod -> worker-l11-merge COMBINED staging (dc687602...), with the
++#           expected unit-object comparator 813b249d... as --require-symbol/pin comments
++#           (plan A2/D); enforced post-build by launch11_one_pass.py.
++#   L11-E4  PAD PLACEHOLDER comment block (plan A3, BLOCKING): the pad unit's admission
++#           entry - the pad worker's FOLD.md decides unit name/path; the loop fills it.
++#           No executable entry exists until then; launch11_one_pass.py refuses --full
++#           while admissions.pad_defer is PENDING.
++#   L11-E5  FOLD-1 asmhelper PLACEHOLDER comment (worker-fold1-preverify FOLD1-READY.md):
++#           default OFF (fold-0 staging byte-carried); admissible flip comparator 6604ce2d...;
++#           f5627427... REJECTED (renamed-probe basename discipline).
++# Bridge comes via CLI --bridge-source/--bridge-sha256 (launch10 EDITION r14-diag-spanpub
++# values; no edit needed). l10's three tagged edits (geometryfix lmf extra-unit, diagnostic
++# sink, stage-aware lineage wrapper + final-artifacts hook) are byte-carried unchanged.
+ #!/usr/bin/env python3
+ """composition-6 one-step rebuild driver (worker-comp6-driver).
+ 
+@@ -65,10 +87,11 @@
+ MY = TEAM / 'worker-comp6-driver'
+ RECEIPTS = MY / 'receipts'
+ 
+-COMPOSE6_FIXED = ROOT / 'outputs/2026-10-04-zcode-controller/launch10-build/build_runtime_composition6_fixed_l10.py'
+-# l10 tagged edit: fixed edition cdfe37d0 = frozen 8dd92a6f + the one-line
+-# linker_provided extension for the bridge span-publish accessors (documented there)
+-COMPOSE6_FIXED_SHA = 'b78fb031fa81efd454d1932596df20977b65c5032cd06c5a27163598329640d7'
++COMPOSE6_FIXED = ROOT / 'outputs/2026-10-04-zcode-controller/launch11-combined/build_runtime_composition6_fixed_l11.py'
++# L11-E1: fixed edition 6e943678 = l10 fixed b78fb031 (= frozen 8dd92a6f + the l10
++# linker_provided extension, byte-carried) + the L11 admission-notes comment block ONLY
++# (zero executable change; diff-verified). Re-measured on every run by check_sha.
++COMPOSE6_FIXED_SHA = '6e943678a927db37c4b65b16d58e269e4832a63cb81befd63827198aea675108'
+ PKG_FIXED = TEAM / 'worker-prx-link-gaps/package_prx.py'
+ PKG_FIXED_SHA = 'e6fbe6c5011b498e0c26ee88bdc6c84aacab204b6ccad5696a78353afef5c313'
+ 
+@@ -341,14 +364,80 @@
+         '--extend-undefined-baseline',
+         '--replace-bootstrap-unit', 'runtime_owner=outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-runtime-1/source/bootstrap/runtime_owner.cpp',
+         '--replace-bootstrap-unit', 'ue4ss_backend=outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-pad-runtime-1/build-1/source/ue4ss_backend.cpp',
++        # =================================================================================
++        # LAUNCH11 PAD PLACEHOLDER (L11-E4, plan A3 - BLOCKING; comments only, nothing is
++        # admitted yet). The pad-defer unit enters the BACKEND/BOOTSTRAP lineage (plan §0.5:
++        # eager pad activation sits in the backend ctor BEFORE program init -
++        # ue4ss_backend.cpp:21-26 / Handler::init throw UE4SSProgram.cpp:731-734 - so it is
++        # NEVER part of the luamod stack). The pad worker's FOLD.md decides the exact unit
++        # name, staging path and receipt class. When it lands, the loop fills EXACTLY ONE of
++        # these shapes (never guess; per A3 admission is via --file entries in the
++        # replace/extra receipt PLUS this argv entry):
++        #   '--replace-bootstrap-unit', '<unit-name-from-FOLD.md>=<staging-path-from-FOLD.md>',
++        # (if FOLD.md instead re-points the EXISTING ue4ss_backend bootstrap replacement,
++        #  edit the ue4ss_backend line above to the FOLD.md staging path; if it adds a
++        #  DISTINCT bootstrap unit, add the new entry here). Companion fills:
++        #  launch11_one_pass.py regen_receipts "LAUNCH11 PAD PLACEHOLDER" (--file lines) and
++        #  EDITIONS.json admissions.pad_defer (status + files + shas). Until then
++        #  launch11_one_pass.py refuses --full (A3: absent at compose time = STOP, or an
++        #  explicit RECORDED waiver - never a silent omission).
++        # =================================================================================
+         '--replace-receipt', str(args.replace_receipt),
+-        # controller 2026-10-04: initializer merged unit (seeds+FName+DoScan gates, Shape A)
+-        '--replace-runtime-unit', 'unreal-unrealinitializer=/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-build/final-units/UnrealInitializer.cpp',
+-        # l10 tagged edit (layout-drift freshen): recompile the three stale-inline
+-        # definer units from their UNCHANGED attested sources against current headers
+-        '--replace-runtime-unit', 'luamod=/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-notify-cancel-1/src/LuaMod.cpp',
++        # L11-E2 (LAUNCH11-PLAN A0 REQUIRED input): initializer -> the ARMED l10-r3 staging
++        # (worker-luamod-rebase/staging/initializer-l10-r3/UnrealInitializer.cpp,
++        # sha256 8b0c7e9905ce4a857ec1eca0de6c5437862118207922b101122b0819c50badc0;
++        # UE4SS_R3_MARSHAL_MODE=1 in-file fallback; SeedTable.h 59effe6e... +
++        # SeedValidation.hpp b8d851e9... in the same dir are rr-covered by
++        # launch11_one_pass.py regen_receipts). REQUIRED by plan D's pairing law: the merged
++        # luamod (dc687602...) odr-uses RC::Unreal::R3MarshalPumpPending and
++        # RC::Unreal::R3MarshalPublishGameThreadIdentity under __PROSPERO__; they resolve
++        # ONLY against this armed fold (the bridges are defined under
++        # `defined(__PROSPERO__) && UE4SS_R3_MARSHAL_MODE`; ARM-DISARM 2.3: mismatched
++        # folds fail the link loudly, never silently).
++        # RECORDED CAVEAT (worker-combined-editions; do NOT drop silently): this staging is
++        # PRE-launch10-final-c. Vs the shipped launch-10 unit
++        # (launch10-build/final-units/UnrealInitializer.cpp, 4a2b9400...) it LACKS the
++        # GMalloc V1/V2 validators, the v4 pool predicate and the read_bytes_at entry-0
++        # anchor. Composing on it is the LAUNCH11-PLAN's pinned A0 decision ("INTEGRATION
++        # .md §1 set (unchanged)"); switching to a v4+armed fold requires a NEW
++        # worker-delivered staging (diff + receipts + object comparator). The decision MUST
++        # be recorded in EDITIONS.json admissions.initializer_fold before --full (the
++        # runner enforces this; one conscious ack, never a silent default).
++        '--replace-runtime-unit', 'unreal-unrealinitializer=/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-luamod-rebase/staging/initializer-l10-r3/UnrealInitializer.cpp',
++        # L11-E3 (LAUNCH11-PLAN A1/A2): luamod -> the COMBINED staging (marshal-consumer
++        # base 04c9d916... + enqueue-ladder diff 3b19068a... + loadmap-defer-r2 diff
++        # d2ad2818..., stacked by worker-l11-merge; stack-order independence round-trip
++        # checked; this file's sha matches the plan's host derivation byte-for-byte).
++        # --require-symbol/pin comments (plan comparator discipline):
++        #   source sha256 PIN:        dc68760253ec141f2eec4696050b8a2dd9f01b7f2894829d5f543516fb44f7f4
++        #   expected unit OBJECT:     813b249d0ba3c16a641db53c3c4dc04b52442cccc553b88369d0ca50eb96f4a9
++        #     (the M-0 comparator "NEW", worker-l11-merge; measured under the unit's own
++        #      pinned argv with only source/-o/-MF redirected - exactly what the fixed
++        #      edition's SEC32-3 retained replacement does). ENFORCED by
++        #      launch11_one_pass.py post_build against the run receipt AND re-measured
++        #      object bytes; drift = STOP (plan D), never widen the comparator silently.
++        #   NEITHER single-fix object 8593884e... (enqueue-only) NOR 3eeba02f... (loadmap
++        #   r2-only) is valid for this combined unit - rollback comparators only (plan §4.1).
++        # The other three retained freshens (cppmod / asmhelper / settings) are l10
++        # byte-carried redirects below, unchanged.
++        '--replace-runtime-unit', 'luamod=/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp',
+         '--replace-runtime-unit', 'cppmod=/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/Mod/CppMod.cpp',
+         '--replace-runtime-unit', 'asmhelper-asmhelper=/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-walkguard-prep/staging/asmhelper-guard/ASMHelper.guarded.cpp',
++        # L11-E5 FOLD-1 asmhelper PLACEHOLDER (worker-fold1-preverify FOLD1-READY.md):
++        # DEFAULT OFF - the byte-carried line above is the fold-0 staging (object
++        # 81dd832bd59fab43a57c0feb0c9c15b756b2e62f74e667e320e666a2c66b4bb6, reproduced
++        # byte-identically under the current headers). A controller-ordered fold-1 flip =
++        # the basename-preserving one-token flip of THAT SAME file
++        # (#define RC_ASM_WALK_RX_GUARD 0 -> 1, keep argv 148 tokens); admissible object
++        # comparator 6604ce2d423c5d0dee4de6a089bd8141126e0fb02e7538ae08a4076d9b5af8d5
++        # (exactly one inline mprotect syscall, import-free; UND 60==60 set-identical,
++        # defined 784==784, RC::ASM exports 9==9 - the bridge UND-resolution gate sees NO
++        # import-surface change across fold modes). Comparator f5627427131f53ac...
++        # (walkguard-prep L10WGP-5 declared object) is REJECTED: reachable only from the
++        # renamed probe source ASMHelper.guarded.fold1flip.cpp (basename-discipline
++        # violation; would fail the compose receipts late). Fold-1 is NOT needed for the
++        # combined candidate's default; activation stays WST-5 verdict-gated and
++        # controller-owned.
+         '--replace-runtime-unit', 'settings=/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/SettingsManager.cpp',
+         # §3.2 bounded retained-unit replacement (attested; allow-list {"program"})
+         '--replace-runtime-unit', f'program={args.program_source}',

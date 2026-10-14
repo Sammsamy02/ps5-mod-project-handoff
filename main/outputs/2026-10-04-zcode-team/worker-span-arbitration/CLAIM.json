@@ -1,0 +1,26 @@
+{
+  "slug": "worker-span-arbitration",
+  "claimed_by": "ZCode team worker (GLM-5.3-Flash), offline, no subagents",
+  "claimed_at": "2026-10-04T13:20:00-05:00",
+  "task": "Arbitrate the >36-bit high-family spans from worker-mapping-recovery (49 spans 0x10001f0000-0x306ae60000, real vs systematic-displacement): (1) derive the SDK kinfo_vmentry layout and test both hypotheses against the corrupted-entry statistics including whether a stride/offset bug reproduces the exact corruption pattern and which entries stayed sane; (2) check in-tree FreeBSD/PS5 VM layout knowledge for >36-bit VA expectation; (3) VERDICT.md with falsifiable predictions for v3's clean dump.",
+  "inputs_readonly": [
+    "outputs/2026-10-04-zcode-controller/ZCODE-FORK-HANDOFF.md",
+    "outputs/2026-10-04-zcode-controller/console/ingame-v2-facts-2026-10-04.jsonl",
+    "outputs/2026-10-04-zcode-controller/console/ingame-v1-facts-2026-10-04.jsonl",
+    "outputs/2026-10-04-zcode-team/worker-mapping-recovery/ (CLAIM/ANALYSIS/REPORT/recovered-spans/vmmap-v3-records)",
+    "outputs/2026-10-04-zcode-team/worker-ingame-probe-v2/src/experiments.c, src/factstore.h",
+    "outputs/2026-10-04-zcode-team/worker-ingame-probe-v3/src/vmmap_walk.c, CLAIM.json",
+    ".superpowers/native-sdk-build-check/ps5-payload-sdk/target/include/sys/user.h"
+  ],
+  "deliverables": [
+    "VERDICT.md (real vs displacement with evidence; falsifiable v3 predictions; corrections to recovery-worker claims)",
+    "REPORT.md (last)"
+  ],
+  "headline_finding": "The 49 high-family spans are REAL kernel-reported spans, not displaced values. The corruption mechanism is identified exactly: v2 walked the KERN_PROC_VMMAP sysctl buffer with the fixed SDK stride sizeof(struct kinfo_vmentry)=1160, but the PS5 kernel packs each record at kve_structsize=144 bytes (path stripped). Buffer lengths are exact multiples of 144 (v2: 1442448=10017x144; v1: 1452672=10088x144), reader phase advances 1160 mod 144 = 8 bytes per slot, so the phase cycle repeats exactly every 18 slots (lcm: 144x145 = 20880 = 18x1160) - matching the observed exactly-periodic artifacts (53 structsize=0x90/type starts at global indices 17,35,...,953, step exactly 18). Aligned (phase-0) slots read real (start,end,prot) triples: the 2 trusted low spans and the 49 family spans. Displacement has no mechanism (the walk copies bytes verbatim, adds nothing) and is refuted by the prot/end-independence discriminant: all 46 prot-3 spans have prot=3 while (end>>32)&0xff in {16..34,48} (0/46 match); a 4-byte-phase alias would force equality.",
+  "constraints_honored": [
+    "no network, no console access, read-only inputs",
+    "no nested subagents",
+    "budget <=30 tool calls (23 used before writing)",
+    "writes only under outputs/2026-10-04-zcode-team/worker-span-arbitration/"
+  ]
+}

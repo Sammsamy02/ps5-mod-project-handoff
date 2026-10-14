@@ -1,0 +1,598 @@
+#include <ctime>
+#include <format>
+#include <string>
+#include <utility>
+
+#include <Constructs/Views/EnumerateView.hpp>
+#include <DynamicOutput/DynamicOutput.hpp>
+#include <File/File.hpp>
+#include <File/Macros.hpp>
+#include <GUI/Dumpers.hpp>
+#include <JMapGenerator/JMapGenerator.hpp>
+#include <USMapGenerator/Generator.hpp>
+#include <FlagsStringifier.hpp>
+#ifdef TEXT
+#undef TEXT
+#endif
+#include <SDKGenerator/TMapOverrideGen.hpp>
+#include <SDKGenerator/BuiltinSDKBackend.hpp>
+#include <SDKGenerator/SDKGenerator.hpp>
+#include <Timer/ScopedTimer.hpp>
+#include <Unreal/FAssetData.hpp>
+#include <Unreal/UAssetRegistry.hpp>
+#include <UE4SSProgram.hpp>
+#include <Unreal/AActor.hpp>
+#include <Unreal/NameTypes.hpp>
+#include <Unreal/Searcher/ObjectSearcher.hpp>
+#include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+#include <Unreal/CoreUObject/UObject/Class.hpp>
+#include <Unreal/UnrealInitializer.hpp>
+#include <chrono>
+#include <imgui.h>
+#include <glaze/glaze.hpp>
+
+namespace RC::GUI::Dumpers
+{
+    using namespace ::RC::Unreal;
+
+    // TODO: Move these structs (and the enum) to a proper place in the Unreal module.
+    //       They need to be controlled by the engine version select or before 2.0 releases.
+
+    // In KH3, there's an extra float either at the end of FMeshUVChannelInfo or at the end of FStaticMaterial, I can't tell which one.
+    enum
+    {
+        MAX_TEXCOORDS = 4,
+        MAX_STATIC_TEXCOORDS = 8
+    };
+    struct FMeshUVChannelInfo
+    {
+        bool bInitialized;
+
+        /** Whether this values was set manually or is auto generated. */
+        bool bOverrideDensities;
+
+        /**
+         * The UV density in the mesh, before any transform scaling, in world unit per UV.
+         * This value represents the length taken to cover a full UV unit.
+         */
+        float LocalUVDensities[MAX_TEXCOORDS];
+    };
+
+    struct FStaticMaterial_419AndBelow
+    {
+        using UMaterialInterface = ::RC::Unreal::UObject;
+        UMaterialInterface* MaterialInterface;
+
+        /*This name should be use by the gameplay to avoid error if the skeletal mesh Materials array topology change*/
+        FName MaterialSlotName;
+
+        /** Data used for texture streaming relative to each UV channels. */
+        FMeshUVChannelInfo UVChannelData;
+    };
+
+    struct FStaticMaterial_420AndAbove
+    {
+        using UMaterialInterface = ::RC::Unreal::UObject;
+        UMaterialInterface* MaterialInterface;
+
+        /*This name should be use by the gameplay to avoid error if the skeletal mesh Materials array topology change*/
+        FName MaterialSlotName;
+
+        /*This name should be use when we re-import a skeletal mesh so we can order the Materials array like it should be*/
+        FName ImportedMaterialSlotName;
+
+        /** Data used for texture streaming relative to each UV channels. */
+        FMeshUVChannelInfo UVChannelData;
+    };
+
+    static auto generate_actors_json_file(UClass* class_to_dump) -> StringType
+    {
+        glz::generic::array_t global_json_array{};
+
+        size_t actor_count{};
+        FindObjectSearcher(class_to_dump, AnySuperStruct::StaticClass()).ForEach([&](UObject* object) {
+            if (object->HasAnyFlags(RF_ClassDefaultObject))
+            {
+                return LoopAction::Continue;
+            }
+
+            auto actor = static_cast<AActor*>(object);
+
+            auto root_component = actor->GetValuePtrByPropertyNameInChain<UObject*>(FromCharTypePtr<TCHAR>(STR("RootComponent")));
+            if (!root_component || !*root_component)
+            {
+                return LoopAction::Continue;
+            }
+
+            glz::generic actor_json_object = glz::generic::object_t{};
+
+            actor_json_object["Name"] = to_string(fmt::format(STR("Row_{}"), actor_count));
+
+            static auto game_mode_base = UObjectGlobals::FindFirstOf(STR("GameModeBase"));
+            static auto class_property = game_mode_base->GetPropertyByNameInChain(FromCharTypePtr<TCHAR>(STR("GameStateClass")));
+            FString actor_class_string{};
+            class_property->ExportTextItem(actor_class_string, &actor->GetClassPrivate(), nullptr, nullptr, 0);
+            actor_json_object["Actor"] = to_string(fmt::format(STR("{}"), StringViewType{*actor_class_string}));
+
+            glz::generic root_component_json_object = glz::generic::object_t{};
+
+            FString root_component_class_string{};
+            class_property->ExportTextItem(root_component_class_string, &(*root_component)->GetClassPrivate(), nullptr, nullptr, 0);
+            root_component_json_object["SceneComponentClass"] = to_string(fmt::format(STR("{}"), StringViewType{*root_component_class_string}));
+
+            glz::generic location_json_object = glz::generic::object_t{};
+            auto location = (*root_component)->GetValuePtrByPropertyNameInChain<FVector>(FromCharTypePtr<TCHAR>(STR("RelativeLocation")));
+            location_json_object["X"] = location->X();
+            location_json_object["Y"] = location->Y();
+            location_json_object["Z"] = location->Z();
+            root_component_json_object["Location"] = std::move(location_json_object);
+
+            glz::generic rotation_json_object = glz::generic::object_t{};
+            auto rotation = (*root_component)->GetValuePtrByPropertyNameInChain<FRotator>(FromCharTypePtr<TCHAR>(STR("RelativeRotation")));
+            rotation_json_object["Pitch"] = rotation->GetPitch();
+            rotation_json_object["Yaw"] = rotation->GetYaw();
+            rotation_json_object["Roll"] = rotation->GetRoll();
+            root_component_json_object["Rotation"] = std::move(rotation_json_object);
+
+            glz::generic scale_json_object = glz::generic::object_t{};
+            auto scale = (*root_component)->GetValuePtrByPropertyNameInChain<FVector>(FromCharTypePtr<TCHAR>(STR("RelativeScale3D")));
+            scale_json_object["X"] = scale->X();
+            scale_json_object["Y"] = scale->Y();
+            scale_json_object["Z"] = scale->Z();
+            root_component_json_object["Scale"] = std::move(scale_json_object);
+
+            actor_json_object["RootComponent"] = std::move(root_component_json_object);
+            global_json_array.emplace_back(std::move(actor_json_object));
+
+            ++actor_count;
+            return LoopAction::Continue;
+        });
+
+        glz::generic json_root{std::move(global_json_array)};
+        if (auto result = glz::write<glz::opts{.prettify = true}>(json_root); result.has_value())
+        {
+            return ensure_str(result.value());
+        }
+        return {};
+    }
+
+    auto generate_object_as_json(UObject* object) -> StringType
+    {
+        if (!object)
+        {
+            Output::send<LogLevel::Error>(STR("Unable to dump object as JSON, object was invalid\n"));
+            return {};
+        }
+        glz::generic json{};
+        auto& meta = json["Meta"];
+        auto& values = json["Values"];
+        // Non-instance data.
+        {
+            auto& name_json = meta["NamePrivate"] = glz::generic::object_t{};
+            const auto name = object->GetNamePrivate();
+            name_json["String"] = to_string(name.ToString());
+            auto& name_components = name_json["Components"];
+            name_components["ComparisonIndex"] = name.GetComparisonIndex().ToUnstableInt();
+#ifdef WITH_CASE_PRESERVING_NAME
+            name_components["DisplayIndex"] = name.GetDisplayIndex().ToUnstableInt();
+#else
+            name_components["DisplayIndex"] = nullptr;
+#endif
+            name_components["Number"] = name.GetNumber();
+        }
+        meta["Address"] = fmt::format("{:016X}", std::bit_cast<uintptr_t>(object));
+        {
+            auto& class_private = meta["ClassPrivate"] = glz::generic::object_t{};
+            class_private["Address"] = fmt::format("{:016X}", std::bit_cast<uintptr_t>(object->GetClassPrivate()));
+            class_private["Name"] = fmt::format("{}", to_string(object->GetClassPrivate()->GetName()));
+        }
+        meta["Path"] = fmt::format("{}", to_string(object->GetPathName()));
+        {
+            auto& object_flags = meta["ObjectFlags"];
+            const auto raw_unsafe_object_flags = ObjectFlagsStringifier::get_raw_flags(object);
+            object_flags["Raw"] = raw_unsafe_object_flags;
+            auto& object_flags_array = object_flags["Flags"];
+            auto& array = object_flags_array.data.emplace<glz::generic::array_t>();
+            const ObjectFlagsStringifier flags_stringifier{object};
+            for (int32_t i = 0; i < flags_stringifier.flag_parts.size(); ++i)
+            {
+                array.emplace_back(flags_stringifier.flag_parts[i]);
+            }
+        }
+        meta["PlayerControlled"] = is_player_controlled(object);
+        {
+            auto& size = meta["Size"] = glz::generic::object_t{};
+            auto& size_excl = size["Exclusive"] = glz::generic::object_t{};
+            auto& size_incl = size["Inclusive"] = glz::generic::object_t{};
+            std::vector<UClass*> all_super_structs{};
+            auto uclass = object->IsA<UStruct>() ? static_cast<UClass*>(object) : object->GetClassPrivate();
+            size["Total"] = uclass->GetPropertiesSize();
+            while (uclass)
+            {
+                all_super_structs.emplace_back(uclass);
+                auto current_class = uclass;
+                uclass = uclass->GetSuperClass();
+                if (uclass == current_class)
+                {
+                    break;
+                }
+            }
+            for (auto it = all_super_structs.begin(); it != all_super_structs.end(); ++it)
+            {
+                auto super = *it;
+                auto super_size = super->GetPropertiesSize();
+                auto supers_super_it = it;
+                ++supers_super_it;
+                if (supers_super_it != all_super_structs.end())
+                {
+                    auto supers_super = *supers_super_it;
+                    super_size -= supers_super->GetPropertiesSize();
+                }
+                size_excl[fmt::format("{}", to_string(super->GetName()))] = super_size;
+                size_incl[fmt::format("{}", to_string(super->GetName()))] = super->GetPropertiesSize();
+            }
+        }
+        // Property values.
+        if (!object->IsA<UStruct>())
+        {
+            auto add_property_value = [&](FProperty* property) {
+                const auto value_container = property->ContainerPtrToValuePtr<void>(object);
+                if (property->IsA<FObjectProperty>())
+                {
+                    const auto object_ptr = *static_cast<UObject**>(value_container);
+                    values[to_string(property->GetName())] = to_string(object_ptr ? object_ptr->GetFullName() : STR("None"));
+                }
+                else
+                {
+                    FString property_text{};
+                    property->ExportTextItem(property_text, value_container, value_container, object, NULL);
+                    values[to_string(property->GetName())] = to_string(*property_text);
+                }
+            };
+            for (const auto property : TFieldRange<FProperty>(object->GetClassPrivate(), EFieldIterationFlags::IncludeDeprecated))
+            {
+                add_property_value(property);
+            }
+            for (UStruct* super_struct : TSuperStructRange(object->GetClassPrivate()))
+            {
+                for (FProperty* property : TFieldRange<FProperty>(super_struct, EFieldIterationFlags::IncludeDeprecated))
+                {
+                    add_property_value(property);
+                }
+            }
+        }
+        if (const auto written = glz::write<glz::opts{.prettify = true}>(json); written.has_value())
+        {
+            return ensure_str(written.value());
+        }
+        else
+        {
+            Output::send<LogLevel::Error>(STR("Error creating JSON: {}\n"), ensure_str(written.error().includer_error));
+            return {};
+        }
+    }
+
+    auto CurrentDumpNums = MapDumpFileName{};
+
+    auto call_generate_object_as_json(UObject* object) -> void
+    {
+        Output::send(STR("Dumping object ({}) as JSON...\n"), object ? object->GetName() : STR("None"));
+        const StringType file_buffer = generate_object_as_json(object);
+        if (!object || file_buffer.empty())
+        {
+            Output::send<LogLevel::Error>(STR("Was unable to dump object as JSON\n"));
+            return;
+        }
+        auto file = File::open(fmt::format(STR("{}\\IndividualObjectDumps\\{}.json"), UE4SSProgram::get_program().get_working_directory(), object->GetName()),
+                               File::OpenFor::Writing,
+                               File::OverwriteExistingFile::Yes,
+                               File::CreateIfNonExistent::Yes);
+        file.write_string_to_file(file_buffer);
+        Output::send(STR("Finished dumping object as JSON\n"));
+    }
+
+    using SDKGeneratorBackends = std::vector<std::pair<std::string, UEGenerator::SDKBackendSettings>>;
+
+    // Blueprint classes, structs and enums only exist in memory once their asset has been loaded, so a
+    // dump taken at the main menu sees almost none of them. Force-loading everything first makes the
+    // dump complete at the cost of a lot of memory and stability -- see the warning below -- so it is
+    // opt-in per dump rather than a setting.
+    //
+    // Runs 'dump' with every asset loaded, then releases them again. The release runs even if the dump
+    // throws, because leaving the game holding every asset is far worse than losing the dump.
+    template <typename Callable>
+    static auto run_with_all_assets_loaded(Callable&& dump) -> void
+    {
+        if (Unreal::Version::IsBelow(4, 17) || !Unreal::bFAssetDataAvailable)
+        {
+            Output::send<LogLevel::Warning>(STR("FAssetData is not available in this game, dumping without force-loading assets.\n"));
+            dump();
+            return;
+        }
+
+        Output::send(STR("Loading all assets...\n"));
+        double asset_loading_duration{};
+        {
+            ScopedTimer loading_timer{&asset_loading_duration};
+            UAssetRegistry::LoadAllAssets();
+        }
+        Output::send(STR("Loading all assets took {} seconds\n"), asset_loading_duration);
+
+        // Anything that force-loads assets leaves the game in a state it was never meant to be in;
+        // the game is likely to crash if play continues past this point.
+        struct AssetReleaseGuard
+        {
+            ~AssetReleaseGuard()
+            {
+                Output::send(STR("Unloading all forcefully loaded assets\n"));
+                UAssetRegistry::FreeAllForcefullyLoadedAssets();
+            }
+        } release_guard{};
+
+        dump();
+    }
+
+    // Converts a parsed backend description into the wide-string form the generator consumes.
+    static auto sdk_backend_from_ascii(const UEGenerator::SDKBackendSettings_ASCII& settings_ascii) -> UEGenerator::SDKBackendSettings
+    {
+        UEGenerator::SDKBackendSettings settings{};
+        settings.IncludePrefix = to_wstring(settings_ascii.IncludePrefix.value);
+        settings.HeaderFileExtension = to_wstring(settings_ascii.HeaderFileExtension.value);
+        settings.UnrealImplementationNamespace = to_wstring(settings_ascii.UnrealImplementationNamespace.value);
+        settings.SDKNamespace = to_wstring(settings_ascii.SDKNamespace.value);
+        for (const auto& setting : settings_ascii.ExcludedTypes.value)
+        {
+            settings.ExcludedTypes.emplace(to_wstring(setting));
+        }
+        for (const auto& [key, value] : settings_ascii.UnreflectedTypes.value)
+        {
+            settings.UnreflectedTypes.emplace(to_wstring(key), to_wstring(value));
+        }
+        return settings;
+    }
+
+    // Adds a backend under 'name', replacing any existing entry of the same name so that a backend
+    // found on disk overrides the compiled-in one instead of appearing twice in the list.
+    static auto add_or_replace_sdk_backend(SDKGeneratorBackends& backends, std::string name, UEGenerator::SDKBackendSettings settings) -> void
+    {
+        for (auto& [existing_name, existing_settings] : backends)
+        {
+            if (existing_name == name)
+            {
+                existing_settings = std::move(settings);
+                return;
+            }
+        }
+        backends.emplace_back(std::move(name), std::move(settings));
+    }
+
+    // Seeds 'backends' with the compiled-in UE4SS backend, then loads every backend description file
+    // from <working_dir>/UE4SS_SDK_Backends over the top of it. The entry at index 0 is the
+    // "no backend selected" placeholder and is always kept.
+    static auto load_sdk_generator_backends(SDKGeneratorBackends& backends) -> void
+    {
+        static constexpr auto glz_opts = glz::opts{
+                .format = glz::JSON,
+                .comments = false,              // Support reading in JSONC style comments
+                .error_on_unknown_keys = false, // Error when an unknown key is encountered
+                .skip_null_members = true,      // Skip writing out params in an object if the value is null
+                .prettify = true,               // Write out prettified JSON
+                .indentation_char = ' ',        // Prettified JSON indentation char
+                .indentation_width = 3,         // Prettified JSON indentation size
+                // Require all non nullable keys to be present in the object.
+                .error_on_missing_keys = false,
+                .quoted_num = false, // treat numbers as quoted or array-like types as having quoted numbers
+                .number = false,     // read numbers as strings and write these string as numbers
+                .raw = false,        // write out string like values without quotes
+        };
+
+        // Compiled-in backend first, so the generator is usable with nothing on disk.
+        {
+            UEGenerator::SDKBackendSettings_ASCII settings_ascii{};
+            std::string settings_buffer{UEGenerator::g_builtin_ue4ss_backend_json};
+            auto ec = glz::read<glz_opts>(settings_ascii, settings_buffer);
+            if (ec)
+            {
+                Output::send<LogLevel::Error>(STR("Error '{}' while reading the built-in SDK generator backend\n"),
+                                              to_wstring(glz::format_error(ec, settings_buffer)));
+            }
+            else
+            {
+                add_or_replace_sdk_backend(backends, std::string{UEGenerator::g_builtin_ue4ss_backend_name}, sdk_backend_from_ascii(settings_ascii));
+            }
+        }
+
+        const auto backends_path = std::filesystem::path{UE4SSProgram::get_program().get_working_directory()} / "UE4SS_SDK_Backends";
+        if (!std::filesystem::exists(backends_path))
+        {
+            return;
+        }
+
+        for (const auto& item : std::filesystem::directory_iterator(backends_path))
+        {
+            if (item.is_directory())
+            {
+                continue;
+            }
+
+            UEGenerator::SDKBackendSettings_ASCII settings_ascii{};
+            std::string settings_buffer{};
+            auto ec = glz::read_file_json<glz_opts, UEGenerator::SDKBackendSettings_ASCII>(settings_ascii, item.path().string(), settings_buffer);
+            if (ec)
+            {
+                Output::send<LogLevel::Error>(STR("Error '{}' while trying to read JSON: '{}'\n"),
+                                              to_wstring(glz::format_error(ec, settings_buffer)),
+                                              item.path().wstring());
+                continue;
+            }
+
+            add_or_replace_sdk_backend(backends, item.path().stem().string(), sdk_backend_from_ascii(settings_ascii));
+        }
+    }
+
+    auto render() -> void
+    {
+        if (!UnrealInitializer::IsInitialized())
+        {
+            return;
+        }
+
+        if (ImGui::Button("Dump all static actor meshes to file"))
+        {
+            TRY([] {
+                call_generate_static_mesh_file();
+            });
+
+            /*auto file = File::open(StringType{UE4SSProgram::get_program().get_working_directory()} + STR("\\ue4ss_static_mesh_data.json"), File::OpenFor::Writing,
+            File::OverwriteExistingFile::Yes, File::CreateIfNonExistent::Yes); file.write_string_to_file(generate_actors_json_file(dump_actor_class));*/
+        }
+
+        if (ImGui::Button("Dump all actors to file"))
+        {
+            TRY([] {
+                call_generate_all_actor_file();
+            });
+
+            /*auto file = File::open(StringType{UE4SSProgram::get_program().get_working_directory()} + STR("\\ue4ss_actor_data.json"), File::OpenFor::Writing,
+            File::OverwriteExistingFile::Yes, File::CreateIfNonExistent::Yes); file.write_string_to_file(generate_actors_json_file(AActor::StaticClass()));*/
+        }
+
+        /*ImGui::SameLine();*/
+
+        /*if (ImGui::Button("Test #1"))
+        {
+            auto func = UObjectGlobals::StaticFindObject<UFunction*>(nullptr, nullptr, STR("/Script/Engine.KismetSystemLibrary:LoadAsset"));
+            func->ForEachProperty([](FProperty* param) {
+                Output::send<LogLevel::Verbose>(STR("{}\n"), param->GetName());
+                if (auto as_struct_prop = CastField<FStructProperty>(param); as_struct_prop)
+                {
+                    Output::send<LogLevel::Verbose>(STR("Param is StructProperty: {}\n"), as_struct_prop->GetStruct()->GetFullName());
+                    if (as_struct_prop->GetStruct()->IsChildOf(UObjectGlobals::StaticFindObject<UClass*>(nullptr, nullptr, STR("/Script/Engine.LatentActionInfo"))))
+                    {
+                        Output::send<LogLevel::Verbose>(STR("StructProperty is LatentActionInfo\n"));
+                    }
+                }
+                return LoopAction::Continue;
+            });
+        }*/
+
+        static bool s_include_blueprint_types{true};
+        static bool s_skip_property_values{false};
+        static bool s_load_all_assets_first{false};
+
+        auto run_dump = [](auto&& dump) {
+            if (s_load_all_assets_first)
+            {
+                run_with_all_assets_loaded(dump);
+            }
+            else
+            {
+                dump();
+            }
+        };
+
+        if (ImGui::Button("Generate .usmap file\nUnrealMappingsDumper by OutTheShade"))
+        {
+            TRY([&] {
+                run_dump([] {
+                    OutTheShade::generate_usmap(s_include_blueprint_types);
+                });
+            });
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Generate .jmap file\njmap format by trumank"))
+        {
+            TRY([&] {
+                run_dump([] {
+                    JMapGenerator::generate_jmap(s_include_blueprint_types, s_skip_property_values);
+                });
+            });
+        }
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+        ImGui::Checkbox("Include Blueprint-generated types", &s_include_blueprint_types);
+        ImGui::Checkbox("Skip property values (.jmap, smaller output)", &s_skip_property_values);
+        ImGui::Checkbox("Load all assets first", &s_load_all_assets_first);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Applies to the .usmap, .jmap and BP SDK dumps below.\n"
+                              "Force-loads every asset so Blueprint types are present in the dump.\n"
+                              "Can need several GB of extra memory, and the game is likely to crash\n"
+                              "if you keep playing afterwards.");
+        }
+        ImGui::EndGroup();
+
+        if (ImGui::Button("Generate TMapOverride file\n"))
+        {
+            TRY([] {
+                UEGenerator::TMapOverrideGenerator::generate_tmapoverride();
+            });
+        }
+
+        if (ImGui::Button("Generate UHT Compatible Headers\n"))
+        {
+            TRY([] {
+                UE4SSProgram::get_program().generate_uht_compatible_headers();
+            });
+        }
+
+        if (ImGui::Button("Dump CXX Headers\n"))
+        {
+            TRY([] {
+                File::StringType working_dir{UE4SSProgram::get_program().get_working_directory()};
+                UE4SSProgram::get_program().generate_cxx_headers(working_dir + STR("\\CXXHeaderDump"));
+            });
+        }
+
+        if (ImGui::Button("Generate Lua Types\n"))
+        {
+            TRY([] {
+                File::StringType working_dir{UE4SSProgram::get_program().get_working_directory()};
+                UE4SSProgram::get_program().generate_lua_types(working_dir + STR("\\Mods\\shared\\types"));
+            });
+        }
+
+        static SDKGeneratorBackends s_sdk_generator_backends{{"Select Backend", {}}};
+        static bool s_has_cached_cxx_sdk_backends{};
+        static size_t s_selected_backend_index{};
+
+        if (!s_has_cached_cxx_sdk_backends)
+        {
+            s_has_cached_cxx_sdk_backends = true;
+            TRY([] {
+                load_sdk_generator_backends(s_sdk_generator_backends);
+            });
+        }
+
+        ImGui::SetNextItemWidth(260.0f);
+        if (ImGui::BeginCombo("##cxx_sdk_generator_backend_combo", s_sdk_generator_backends[s_selected_backend_index].first.c_str()))
+        {
+            for (const auto& [backend, i] : s_sdk_generator_backends | views::enumerate)
+            {
+                const auto is_selected = s_selected_backend_index == i;
+                if (ImGui::Selectable(backend.first.c_str(), is_selected))
+                {
+                    s_selected_backend_index = i;
+                }
+                if (is_selected)
+                {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(s_selected_backend_index == 0);
+        if (ImGui::Button("Generate BP SDK"))
+        {
+            TRY([&] {
+                run_dump([] {
+                    auto& selected_backend = s_sdk_generator_backends[s_selected_backend_index];
+                    UEGenerator::generate_sdk(std::filesystem::path{UE4SSProgram::get_program().get_working_directory()} / "UE4SS_SDK",
+                                              selected_backend.second);
+                });
+            });
+        }
+        ImGui::EndDisabled();
+    }
+} // namespace RC::GUI::Dumpers

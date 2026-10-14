@@ -1,0 +1,44 @@
+--- a/include/LuaType/LuaUObject.hpp
++++ b/include/LuaType/LuaUObject.hpp
+@@ -553,6 +553,41 @@
+                 return 1;
+             });
+ 
++#ifdef __PROSPERO__
++            // [IA world-fix 2026-10-10, Claude round-8 item 4]: 'GetName' is
++            // NOT a reflected UFunction anywhere in UObject's chain (round-4
++            // console log: "[UF] miss w=[n:29D61] c=[n:1E6C3] v=4" — the
++            // UWorld class chain walk visits 4 UFunctions, never 'GetName';
++            // UObject's methods are native C++), and no native binding
++            // existed (port OR upstream UE4SS), so the common mod idiom
++            // World/Actor:GetName() fell into UFunction dispatch
++            // (handle_unreal_property_value -> GetFunctionByNameInChain),
++            // missed, and handed Lua the non-callable special_invalid_ptr
++            // wrapper — "attempt to call a userdata value". That is exactly
++            // why zzdiag's [MAP] tracker logged 0 lines while
++            // FindFirstOf("World") itself worked ([FFO2] q='World' exact=2
++            // first=0x18005194C0). Fix: native binding, same proven
++            // rendering family as GetFullName directly above
++            // (GetNamePrivate().ToString() -> pool decoder -> hand UTF-16 ->
++            // UTF-8). Host builds keep upstream parity (no binding).
++            table.add_pair("GetName", [](const LuaMadeSimple::Lua& lua) -> int {
++                const auto& lua_object = lua.get_userdata<SelfType>();
++
++                if (lua_object.get_remote_cpp_object())
++                {
++                    const StringType object_name = lua_object.get_remote_cpp_object()->GetName();
++                    LuaFNameBridge::push_wide_to_lua(lua.get_lua_state(), object_name.data(), object_name.size());
++                }
++                else
++                {
++                    // Same nullptr contract as GetFullName above.
++                    lua.set_nil();
++                }
++
++                return 1;
++            });
++#endif
++
+             table.add_pair("GetFName", [](const LuaMadeSimple::Lua& lua) -> int {
+                 construct_fname(lua);
+                 return 1;

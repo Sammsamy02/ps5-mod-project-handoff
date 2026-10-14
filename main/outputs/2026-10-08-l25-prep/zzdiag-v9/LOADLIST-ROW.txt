@@ -1,0 +1,54 @@
+zzdiag v9 loadlist admission sidecar (agent-FA, 2026-10-08-l25-prep)
+===================================================================
+
+MFA admission is SIZE-EXACT: the loadlist row byte count must equal the
+on-console file size byte-for-byte (modforge MFA size-exact admission law;
+agent-I-mfa-audit.md). Last verified live composition is the v8 staging
+(STATE-L26-WAVE.md section 6 / /tmp/loadlist-v8.txt): zzdiag main.lua row
+held v8 at 1488 bytes. PULL THE LIVE loadlist FIRST and change ONLY the
+zzdiag main.lua row (1488 -> 3066).
+
+v9 file (this directory):
+  main.lua  3066 bytes  (under the 3 KB limit, 3072)
+  sha256    909be10dd1d356b293e22225e2f697dd4f7e1bd4543949218da13db86df0909a
+  (luac -p clean; re-measure after ANY edit: wc -c main.lua ; shasum -a 256 main.lua)
+
+Exact replacement loadlist rows (TAB between fields, verbatim):
+  file	lua_mod	ue4ss/Mods/zzdiag/Scripts/main.lua	3066
+  file	lua_mod	ue4ss/Mods/zzdiag/enabled.txt	0
+
+Reference full loadlist if the live console composition still matches the
+v8 staging (13 rows; only the zzdiag main.lua size differs, 1488 -> 3066):
+
+  modforge-loadlist	1
+  title	PPSA33286
+  engine	unreal
+  framework	ue4ss-ps5
+  mod	TownfallItemSpawner	1.0.0
+  file	config	ue4ss/UE4SS-settings.ini	1947
+  file	config	ue4ss/MemberVariableLayout.ini	588
+  file	config	ue4ss/VTableLayout.ini	216
+  file	config	ue4ss/PS5Pad.ini	3718
+  file	lua_mod	ue4ss/Mods/TownfallItemSpawner/Scripts/main.lua	21415
+  file	lua_mod	ue4ss/Mods/TownfallItemSpawner/enabled.txt	0
+  file	lua_mod	ue4ss/Mods/shared/UEHelpers/UEHelpers.lua	9962
+  file	lua_mod	ue4ss/Mods/zzdiag/Scripts/main.lua	3066
+  file	lua_mod	ue4ss/Mods/zzdiag/enabled.txt	0
+
+If any OTHER row differs from the reference above, keep the LIVE values
+and touch only the two zzdiag rows. Verify after upload:
+  curl -s ftp://ps5-host-not-configured.invalid:2121/data/modbridge/roots/PPSA33286/ue4ss/Mods/zzdiag/Scripts/main.lua | cmp main.lua -
+  curl -s ftp://ps5-host-not-configured.invalid:2121/data/modbridge/roots/PPSA33286/loadlist.txt
+
+Trigger: NONE needed. The dry run fires automatically once at +18 s after
+mod start (main menu; pump armed); a drain watchdog reports at +45 s if
+the game-thread queue never drained. T auto-probe reports db/pc state
+every 6 s. F7 re-runs the dry run manually (single, spaced presses).
+NEVER AddToViewport is called by design (Claude spec).
+
+Watch for (UE4SS log): "[DRY] D1".."[DRY] D9" PASS/FAIL lines, "[DRY] Q",
+"[DRY] WD no-drain", "[zz] T<n> db=<v|n|i|e> pc=<v|n|i|e>", "[zz] Z0 v9",
+"[zz] K1 f7"/"K2 q". Failure detail lines are 3-space-indented, <=24 chars.
+
+Removal after test: delete BOTH zzdiag rows and the two remote zzdiag
+files (RUNBOOK-MOD-MENU-UP.md phase 5 procedure).

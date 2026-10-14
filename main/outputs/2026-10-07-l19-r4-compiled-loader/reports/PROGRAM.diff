@@ -1,0 +1,25 @@
+--- baseline/UE4SSProgram.cpp
++++ units/UE4SSProgram.cpp
+@@ -20,6 +20,7 @@
+ #include <Input/PlatformInputSource.hpp>
+ #include <Helpers/Utf16Utf8.hpp>
+ #include <NativeLayoutBinding.hpp>
++#include <NativeLayoutDeclarations.hpp>
+ #endif
+ #include <format>
+ #include <fstream>
+@@ -968,7 +969,13 @@
+     auto UE4SSProgram::load_unreal_offsets_from_file() -> void
+     {
+ #ifdef __PROSPERO__
+-        if (m_native_context.mod_source)
++        if (const auto compiled = Platform::NativeLayouts::GetCompiledNativeLayoutDeclarations(); compiled)
++        {
++            Output::send(STR("[NativeLayout] declaration_provider=compiled source={} profile_digest={}\n"),
++                         ensure_str(std::string{compiled->selection_source}), ensure_str(std::string{compiled->profile_digest}));
++            Platform::NativeLayouts::StageNativeLayoutTexts(compiled->members, compiled->vtables);
++        }
++        else if (m_native_context.mod_source)
+         {
+             const auto members = m_native_context.mod_source->read("ue4ss/MemberVariableLayout.ini");
+             const auto virtuals = m_native_context.mod_source->read("ue4ss/VTableLayout.ini");

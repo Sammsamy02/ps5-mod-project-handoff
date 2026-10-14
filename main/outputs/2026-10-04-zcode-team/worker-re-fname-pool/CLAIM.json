@@ -1,0 +1,132 @@
+{
+  "_meta": {
+    "worker": "worker-re-fname-pool",
+    "date": "2026-10-04",
+    "target": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+    "sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+    "size": 194241424,
+    "tools": "capstone 5.0.7 + lief 1.0.0 (pure python, no numpy), recursive-descent disasm (tools/rdis.py)",
+    "address_space_note": "All addresses below are FILE VADDRs (runtime = file + 0x400000). LOAD0/1/3/7 file offset = vaddr + 0x4000; LOAD8 file offset = vaddr - 0x324000. Two earlier tool passes with wrong offset mapping produced the transient '0x9369ec0 base' artifact; corrected and re-verified. capstone linear-sweep drift also occurred twice; final claims come from recursive-descent disassembly started at verified prologues (int3-run boundaries)."
+  },
+  "elf_structure": [
+    {
+      "claim": "5 PT_LOADs confirmed; LOAD7 RW has filesz 0x1cc5f2 but memsz 0x4f7418: file-backed part ends at vaddr 0x93085f2, BSS extends to 0x9633418. Pool label 0x9365ec0 is in LOAD7 BSS (no file bytes; raw file bytes at that file offset belong to LOAD8's file data).",
+      "evidence": "lief phdr: LOAD v[0x913c000,0x93085f2) file=vaddr+0x4000 mem_end=0x9633418 (tools/vmap.py)",
+      "consequence": "Any tool that reads file bytes at file-vaddr 0x9365ec0 reads wrong data; the pool exists only at runtime (zero-filled BSS + init code)."
+    },
+    {
+      "claim": "ELF type 0xFE10 (ET_SCE_RELEXEC-style) with 1,663,596 relocations; no section headers; dynamic symbol names are Sony-scrambled (e.g. 'bzQExy189ZI#6#4'), so PLT names are not recoverable by name.",
+      "evidence": "lief parse: relocations_count=1663596, static/dynamic syms 2022; tools/plt_map.json"
+    },
+    {
+      "claim": "No relocation has addend or offset near the pool fields; no absolute 8-byte occurrence of pool file-vaddr or runtime address anywhere in the file.",
+      "evidence": "tools/scan_refs.json: relocation_hits=[] ; abs64 scans empty",
+      "consequence": "The pool is reached exclusively via rip-relative lea/mov in LOAD0 code."
+    }
+  ],
+  "pool_identity_and_layout": [
+    {
+      "claim": "Pool base file-vaddr 0x9365ec0 (runtime 0x9765ec0) is CONFIRMED as the FNamePool object code uses. 100+ rip-relative code references (lea) to exactly 0x9365ec0 exist, all inside the FName code cluster (TRUE vaddrs 0x23d0a2..0x247e8b).",
+      "evidence": "tools/scan_correct_base.json; sample: site TRUE 0x23d0a2 bytes 488d3d17ce1209 = lea rdi,[rip+0x912ce17] -> 0x9365ec0"
+    },
+    {
+      "claim": "Blocks[] array at pool+0x10, stride 8; block index = id>>16; entry byte offset = (id & 0xFFFF)*2; entry header is u16: len = hdr>>6, bIsWide = hdr&1 (probe hash bits 5:1 seen in code).",
+      "evidence": "FName::ToString-style function TRUE 0x243240 (runtime 0x643240): lea rcx,[0x9365ec0]; mov rax,[rcx + (id>>16)*8 + 0x10]; movzx r15d,word [rax + (id&0xFFFF)*2]; len = r15d>>6; wide = r15d&1"
+    },
+    {
+      "claim": "CurrentBlock: u32 at pool+0x8. Validity getter TRUE 0x23d570 returns true iff (CurrentBlock + 1) > (id>>16), i.e. CurrentBlock is the INDEX OF THE CURRENT (being-filled) BLOCK, 0-based, not a count.",
+      "evidence": "TRUE 0x23d570: 8b054e891209 mov eax,[rip->0x9365ec8]; c1ef10 shr edi,0x10; ffc0 inc eax; 39f8 cmp eax,edi; 0f97c0 seta al; c3"
+    },
+    {
+      "claim": "CurrentByteOffset: u32 at pool+0xC, bounded to [0, 0x20000).",
+      "evidence": "reserve fn TRUE 0x246090 (below): mov ebx,[rbx+0xC]; lea eax,[rbx+2]; cmp eax,0x20000; mov dword [rdi+0xC],r14d"
+    },
+    {
+      "claim": "Core-name id slots are at pool+0x14040 (NoneId), +0x14044 (BytePropertyId), then +0x14048 IntProperty, +0x1404C FloatProperty, ... step 4. Port kPoolLayout offsets 0x14040/0x14044 are CORRECT.",
+      "evidence": "pool init TRUE 0x23a5d0: stores results of store(name,len) at [rbx+0x14040], [rbx+0x14044], ... ; strings verified in rodata: 0x7b96c17='None' (len 4), 0x7abcd83='ByteProperty' (12), 0x7bfb4f8='IntProperty' (11), 0x7c184db='FloatProperty' (13)"
+    },
+    {
+      "claim": "Additional pool structure mapped: hash bucket table at pool+0x10040, 256 buckets x 0x40 bytes (init zeroed per bucket: [b+8..+0x28]=0, [b+0x28]=0); lookups do lea rdi,[pool + rax + 0x10040] then call TRUE 0x23c340; aux sub-buffer table pool+0x1004C..0x1404C: 256 entries x 0x40, each entry = {u32 tag=0xff; ptr to FMemory::Malloc(0x400,4) buffer at +4 (buffer zeroed); pool ptr at +0xC}; memset(pool+0x14040, 0, 0xafc) before ids are stored; fields at +0x16b40/+0x16b48(=0x20000000000)/+0x16b90/+0x16b98/+0x16fa8/+0x16fb0 also initialized.",
+      "evidence": "TRUE 0x23a5d0 sequence at runtime 0x63a618-0x63a6fb and 0x63a6fd-0x63a6b4; FindOrStore core TRUE 0x242470: 488dbc0840000100 lea rdi,[rax+rcx+0x10040]"
+    }
+  ],
+  "pool_init": [
+    {
+      "claim": "Pool init function = TRUE 0x23a5d0 (runtime 0x63a5d0), called from FindOrStore core TRUE 0x242470 under a lazy flag byte at pool-0x20 (file 0x9365ea0, runtime 0x9765ea0).",
+      "evidence": "TRUE 0x242470: 803ddb39120900 cmp byte [rip->0x9365ea0],0; 488d05f2391209 lea rax,[0x9365ec0]; e8... call 0x23a5d0; c605b739120901 mov byte [0x9365ea0],1"
+    },
+    {
+      "claim": "Init zeroes pool+8 .. pool+0x10040 with one memset: memset(pool+8, 0, 0x10008) => CurrentBlock=0, CurrentByteOffset=0, Blocks[0..8191]=null.",
+      "evidence": "TRUE 0x23a5f9: 488d7b08 lea rdi,[rbx+8]; ba08000100 mov edx,0x10008; 31f6 xor esi,esi; call memset PLT 0x7871e40"
+    },
+    {
+      "claim": "Blocks[0] IS ALLOCATED BY INIT: FMemory::Malloc(size=0x20000, alignment=2), result stored at [pool+0x10].",
+      "evidence": "TRUE 0x23a609: bf00000200 mov edi,0x20000; be02000000 mov esi,2; e808d4e7ff call 0x4b7a20 (FMemory::Malloc); ...; 48894310 mov [rbx+0x10],rax  (runtime store at 0x63a625)",
+      "significance": "Blocks[0] comes from the global GMalloc interface, NOT from a static image arena, NOT from mmap by the pool code itself."
+    },
+    {
+      "claim": "After Blocks[0], init builds the 256-bucket table at +0x10040, the 256 aux buffers at +0x1004C..+0x1404C (each Malloc(0x400,4)+memset), then interns core names (None, ByteProperty, IntProperty, FloatProperty, ...) into +0x14040.. .",
+      "evidence": "TRUE 0x23a618-0x23a890 loop bodies quoted in FNAME-POOL-RE.md"
+    }
+  ],
+  "reserve_path": [
+    {
+      "claim": "Entry reserve function = TRUE 0x246090 (runtime 0x646090). Block size = 0x20000 bytes. needed = ((len << (wide?1:0)) + 3) & ~1. Fit check: (needed-1) < (0x20000 - CurrentByteOffset).",
+      "evidence": "TRUE 0x2460ae: b800000200 mov eax,0x20000; 0x2460c3 sub eax,ebx; 0x2460cd 39c2 cmp edx,eax; 0x2460cf 724e jb fit_path; 0x2460d1 8d4302 lea eax,[rbx+2]; 0x2460d4 3d00000200 cmp eax,0x20000"
+    },
+    {
+      "claim": "New-block path: marks the sliver entry in the previous block by ANDing its u16 header with 0x3f (zeroes len, keeps wide/probe bits), then CurrentBlock++ (u32 at pool+8), CurrentByteOffset=0 (u32 at pool+0xC); if Blocks[CurrentBlock]==null it calls the same allocator: Malloc(0x20000, 2) and stores at [pool + CurrentBlock*8 + 0x10].",
+      "evidence": "TRUE 0x2460db: 488b44cf10 mov rax,[rdi+rcx*8+0x10]; 0x2460e0 668324183f and word [rax+rbx],0x3f; 0x2460e8 ffc1 inc ecx; 0x2460ea 894f08 mov [rdi+8],ecx; 0x2460ed c7470c00000000 mov [rdi+0xC],0; 0x2460f9 test rax,rax; 0x2460fc je alloc; 0x24613c-0x246154: mov edi,0x20000; mov esi,2; call 0x4b7a20; mov [rbx+rcx*8+0x10],rax"
+    },
+    {
+      "claim": "Fit path does NOT touch CurrentBlock: CurrentBlock stays 0 until the first block boundary is crossed. Therefore a freshly initialized pool (or an early-game pool whose names still fit in block 0) legitimately has CurrentBlock == 0.",
+      "evidence": "TRUE 0x24611f-0x24613b: add r14d,ebx; shr ebx,1; shl rbx,0x20; mov [rdi+0xC],r14d; or rbx,rcx; ret  (no store to [rdi+8])",
+      "validator_impact": "Port's check 'current_block < 1 => pool not initialized' is WRONG for this binary and will false-reject valid pools. Correct: block_index <= CurrentBlock (matches the engine's own getter at TRUE 0x23d570)."
+    },
+    {
+      "claim": "Reserve returns a 64-bit scratch handle (block_index in low 32, old_byteoffset>>1 in high 32); the caller (FindOrStore core) converts to the u32 FName id (block<<16 | offset/2).",
+      "evidence": "reserve tail TRUE 0x246122-0x24612f; FindOrStore TRUE 0x23d600 tail: mov eax,eax (id32)"
+    }
+  ],
+  "allocator_identity": [
+    {
+      "claim": "FMemory::Malloc = TRUE 0xb7a20: reads global GMalloc pointer slot at file 0x9350950 (runtime 0x9750950, LOAD7 BSS), lazily creates the allocator, then calls [vtable+0x30](size, align) - i.e. FMalloc interface slot 6 = Malloc.",
+      "evidence": "TRUE 0xb7a2a: 4c8d351f8f2909 lea r14,[rip->0x9350950]; 0xb7a36 mov rdi,[r14]; 0xb7a4c mov rax,[rdi]; 0xb7a52 ff5030 call [rax+0x30]"
+    },
+    {
+      "claim": "The concrete FMalloc is a STATIC BSS OBJECT at file 0x93089b8 (runtime 0x97089b8), constructed in place by TRUE 0x4afd40 (called with esi=0) and stored into the allocator global at file 0x930add8 by the factory getter TRUE 0xc080 / creator TRUE 0xbeba0. Creator may additionally wrap it in a 0x28-byte heap thread-safety wrapper (vtable file 0x7ec4030) if inner vtable+0xC0 (IsInternallyThreadSafe-like) returns false.",
+      "evidence": "creator TRUE 0xbeba0: call 0x40c080 (getter) ; mov [r13=&0x9350950],rax; test path calls operator-new(0x28) 0x7871e70, stores vtable 0x7ec4030, mov [r13],rbx. ctor write: TRUE 0xb660 48891d71f72f09 mov [rip->0x930add8],rbx with rbx=lea 0x93089b8; ctor TRUE 0xafd40 stores vtable 0x7ec2e28 then 0x7ec26e0, loops 76 pool-table entries of 0x78 bytes each with per-table mutex"
+    },
+    {
+      "claim": "Malloc implementation (final vtable 0x7ec26e0 slot 6, reloc addend -> TRUE 0xb48e0) is a BINNED allocator: fast path rejects size >= 0x20001 or align >= 0x11; per-thread cache via pthread_getspecific (TLS u32 at file 0x92dc288); size classes at 16-byte granularity (shr 4) with class table at file 0x9327000, freelist stride 0x20; slow path TRUE 0x4b1460. Shape matches FMallocBinned2-family (0x20000 small-pool limit, 16-byte max alignment, 76 pool tables of 0x78 bytes with per-table mutex).",
+      "evidence": "TRUE 0xb48ea: 4881fe01000200 cmp rsi,0x20001; 0xb48f4 83fa11 cmp edx,0x11; 0xb4902 mov eax,[rip->0x92dc288]; call 0x7872530 (pthread_getspecific); 0xb493f lea r8,[rip->0x9327000]; 0xb4946 shr rax,4; 0xb494f shl r9d,5; slow call 0x4b1460"
+    },
+    {
+      "claim": "Nothing in the static path returns image-resident memory for Blocks[0]: the pool hands the request to GMalloc, and the binned allocator serves from per-thread freelists / OS-backed pool pages. No static BSS buffer is ever lea'd as an allocation result anywhere in the traced chain.",
+      "evidence": "whole chain traced: 0x23a5d0 -> 0x4b7a20 -> [GMalloc 0x9350950] -> vtable+0x30 -> 0xb48e0 -> (freelist | 0x4b1460)"
+    }
+  ],
+  "fname_ctor": [
+    {
+      "claim": "Pinned FName ctor TRUE 0x23d590 is REAL: computes wchar length + OR-reduction flag (bit 32 = requires-widening/lowercase flag), handles NAME_number suffix parsing in the callee, and calls FindOrStore TRUE 0x23d600; result u64 stored to *this (id | number<<32).",
+      "evidence": "TRUE 0x23d590: 0fb738 movzx edi,word [rax]; ... 83f97f cmp ecx,0x7f; seta dil; shl rdi,0x20; bf01200000 mov edi,0x2001; bextr rsi,rsi,rdi; call 0x23d600; mov [rbx],rax"
+    }
+  ],
+  "validator_predicates_recommended": [
+    "Anchor: pool base file 0x9365ec0 / runtime 0x9765ec0; do NOT move it. The '0x9369ec0 correct-base' artifact was a tool offset bug and is retracted.",
+    "Blocks[0] (pool+0x10): must be nonzero once the bInitialized flag byte (pool-0x20, runtime 0x9765ea0) is 1. Its allocation is FMemory::Malloc(0x20000, align 2) from GMalloc: expect OS-heap-backed memory, >= 8-aligned (binned granularity is 16, so >=16-aligned in practice).",
+    "Do NOT require Blocks[0] to be outside the module image. Static evidence says OS-backed; the launch-9 observation pointed into the module BSS page range [0x970c000,0x9a34000) which overlaps LOAD7's memsz-only region - see UNRESOLVED. A 'readable + Blocks[0][0] header sane' predicate is safer than a region-class predicate.",
+    "CurrentBlock (u32 pool+8) semantics: index of the block currently being filled, 0-based; 0 is VALID after init (all early names live in block 0). Replace 'current_block >= 1' with 'id.block <= CurrentBlock' (exactly the engine getter TRUE 0x23d570 predicate).",
+    "CurrentByteOffset (u32 pool+0xC): must be < 0x20000; entry bounds check needed_bytes vs CurrentByteOffset only applies to the CURRENT block (id.block == CurrentBlock); completed blocks are full up to 0x20000 with a sliver-terminator header (& 0x3f) at their tail.",
+    "Entry identity check (cheap, strong): entry 0 of block 0 is 'None' stored by Init: u16 header at Blocks[0]+0 must satisfy hdr>>6 == 4 and (hdr&1) == 0 (ANSI), payload bytes +2..+6 == 'None'. This anchors base + Blocks[0] + stride-2 in one read.",
+    "id decomposition: block = id>>16, offset_units = id & 0xFFFF, byte offset = offset_units*2 (both engine ToString and Reserve agree).",
+    "NoneId/BytePropertyId at pool+0x14040/+0x14044 are real (init-verified strings); usable as secondary anchors, but note they live past the 256-bucket hash table at +0x10040 and the 256 aux entries ending at +0x1404C."
+  ],
+  "unresolved": [
+    "launch-9 runtime observation 'Blocks[0] in ~[0x970c000,0x9a34000)' sits INSIDE LOAD7's memsz-only (BSS) runtime range [runtime 0x97085f2 .. 0x9a33418). Static analysis says Blocks[0] comes from the binned GMalloc (OS-backed). Possible explanations: (a) the launcher's region classifier merged the module BSS mapping with an adjacent heap mapping into one 'heap-class' span; (b) PS5 kernel places a heap arena overlapping what our file-based BSS math predicts (e.g. if runtime base differs from +0x400000 at that moment); (c) the observation itself was approximate ('~'). Could not be decided statically; needs a fresh runtime sample of the actual qword at 0x9765ed0 with the region map.",
+    "Exact PS5 page source under the binned slow path (TRUE 0x4b1460) was not traced to individual sce syscalls (recursive disasm of that region was misaligned; boundary detection there is harder due to dense code). No static-arena path was found, but 'OS pages' is inferred from the Binned2-family shape, not proven line-by-line.",
+    "Whether the thread-safety wrapper (vtable 0x7ec4030) is actually installed at runtime depends on the inner allocator's vtable+0xC0 return - statically undecidable; either way Malloc semantics are forwarding.",
+    "Role of the 256 aux sub-buffers (0x400 bytes each) at pool+0x1004C..0x1404C was not chased (not needed for Blocks[0] question).",
+    "Ghidra 12.1.4 headless analysis (194MB) was still running at delivery time; all claims above are Tier-1 capstone/lief evidence. Corroboration pass was not performed."
+  ]
+}

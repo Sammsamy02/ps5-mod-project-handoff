@@ -1,0 +1,61 @@
+{
+  "worker": "worker-pad-defer",
+  "packet": "worker-pad-defer-1",
+  "utc_authored": "2026-10-05",
+  "status": "proposal-only staged fix; nothing folded, nothing executed on console",
+  "live_blocker": {
+    "evidence": "launch-10 run 3 (pid 355) and run 4 (pid 370), runtime_start_failed code=3",
+    "message": "PS5Pad input unavailable: phase=6, error=-2137915388",
+    "error_decoded": "0x80920004 = PS5_PAD_ERROR_ALREADY_OPENED (pad_sdl_ps5.h:21); -2137915388 == 0x80920004 exactly (two's complement verified)",
+    "phase_decoded": "PadPhase::Open (PS5PadSource.hpp:10-11; 7th enumerator, index 6)",
+    "throw_site": ".superpowers/native-dependency-spike/ue4ss-native-pad-config-1/src/NativePadInput.cpp:19-24 (byte-identical to the composition fold copy native-coherent-pad-runtime-1/build-1/source/NativePadInput.cpp, diff clean)",
+    "open_site": ".superpowers/native-dependency-spike/ue4ss-native-pad-provider-1/port/PS5PadSource.cpp:43-44 (backend.open == scePadOpen, wired PS5PadNative.cpp:16-22, eager activate at :20)",
+    "runs": "4 consecutive boots, identical refusal, no crash, game loads normally"
+  },
+  "claims": [
+    {
+      "id": "C1",
+      "claim": "The composition's own pad wiring makes exactly ONE scePadOpen attempt per boot (PS5PadSource::activate at PS5PadSource.cpp:43 via the single factory call in ConfigureRetainedPS5PadInput; Handler::init cannot re-open an unavailable source because Handler.cpp:59 returns before activate_input_source, and activate() is idempotent on an available source at PS5PadSource.cpp:27)",
+      "grade": "verified by code trace + lineage object evidence (worker-pad-chord-audit/PAD-DISPATCH-PATH.md hop trace; composition-5/6 nm/objdump symbol proof)",
+      "consequence": "duplicate-initialization hypothesis is DISPROVEN for our port: the ALREADY_OPENED refusal at +790-800ms was our FIRST and ONLY open attempt, so the handle was already held by another component of the host process (per-process exclusive open semantics); most plausibly the game's own pad stack, which is unobservable from our evidence"
+    },
+    {
+      "id": "C2",
+      "claim": "Availability failure is CACHED, not retried: poll() returns empty when !is_available() (PS5PadSource.cpp:69-71) and never re-attempts activation; only an explicit activate() retries (retry-safe by PS5PadSource.cpp:25-27)",
+      "grade": "verified by code trace + host test (recorded_source->activate() connects after the handle frees)"
+    },
+    {
+      "id": "C3",
+      "claim": "The original brief's fix (log-not-throw + accept the source) does NOT stop the refusal on this wiring: UE4SSProgram::validate_native_services (staged comp6 program source lines 740-743) throws 'Native supplied input source is unavailable or failed activation' when Handler::init fails, and Handler::init returns false for an unavailable source (Handler.cpp:59); additionally the second input gate (program lines 748-750) throws on ANY input-less boot because General.InputSource defaults to non-empty 'Default' (SettingsManager.hpp:42) and is not parsed from any ini on this target (worker-ue4ss-settings/SETTINGS-CONTENT.md)",
+      "grade": "verified by code trace on the exact composition sources (worker-comp6-driver/staging/comp6-program/UE4SSProgram.cpp = l10 'program' unit source)"
+    },
+    {
+      "id": "C4",
+      "claim": "The staged fix therefore (a) defers WITHOUT supplying: unavailable source -> two diagnostic_event records (pad_input_deferred phase, pad_input_deferred_error raw scePad error) and no input assignment, and (b) downgrades the PROSPERO input gate in the 'program' unit to a diagnostic except when EnableDebugKeyBindings (an explicit binding request, default false, unset in shipped ini) is set",
+      "grade": "host-proven for (a) by host-1-fix (real ConfigureRetainedPS5PadInput + real PS5PadSource, owned backend); (b) is compile-gated only (pinned program-unit argv) - its runtime behavior is NOT host-proven"
+    },
+    {
+      "id": "C5",
+      "claim": "No verified coexisting input route exists in the known SDK surface: the pinned declaration header (SDL_ps5joystick.h:89-98) declares only scePadInit/scePadOpen/scePadGetHandle/scePadReadState/scePadSet*/scePadClose; there is no open-mode/flag parameter (scePadOpen param is void*), no enumeration/peek API (no scePadGetHandleId anywhere in the worktree), and the pinned SDL backend itself fails on any negative open (SDL_ps5joystick.c:355-358). scePadGetHandle is declared but its semantics on this target (alias-of-open vs borrow-existing) are UNVERIFIED - no console probe exists; it is NOT used by this fix",
+      "grade": "verified absence in pinned surface; coexistence remains an open console-probe question"
+    },
+    {
+      "id": "C6",
+      "claim": "Cleanup discipline is preserved and host-asserted: an owned user service (our sceUserServiceInitialize returned 0) is terminated exactly once; a borrowed one (already-initialized 0x80960003) is never terminated; a handle that was never acquired is never closed",
+      "grade": "host-proven (host-1-fix cases a and b)"
+    },
+    {
+      "id": "C7",
+      "claim": "The ~0.8s composition figure is the EARLY-REFUSAL path only (module_start of the refusing composition); full successful-startup timing is unmeasured and no extrapolation is made",
+      "grade": "scoped per worker-real-timing/TIMING.md and user instruction"
+    }
+  ],
+  "honest_limits": [
+    "Run-4 (pid 370) empirical fact is taken from the coordinator message; run-4 jsonl was not independently re-parsed by this worker",
+    "The program-unit gate change is compile-gated, not behaviorally tested end-to-end (UE4SSProgram construction requires the full runtime)",
+    "The composition's lua mod will log 'Exception during mod startup: Input registration unavailable: no active input source' on input-less boots (LuaMod::start_mod catch, LuaMod.cpp:6440-6489 catches std::exception and does not rethrow) - the mod is dead but the runtime and inventory survive; this is code-read, not console-proven",
+    "NativePadInput.hpp is intentionally byte-unchanged; its comment ('assigns only after it reports available') remains accurate",
+    "Sanitized (ASan+UBSan) host binaries initially hung in the sanitizer exit/abort path on this host during development (3 development runs); the final recorded runs pass with the LINEAGE flags under ASAN_OPTIONS=detect_leaks=0 (per receipt 'flags' field); a watchdog wrapper (45 s, kill-and-abandon) is part of build_and_prove.py",
+    "No replace-unit admission exists yet: native-pad-input is NOT replaceable in the current l10 fixed edition (see FOLD.md); folding requires a new fixed-edition driver + rr attestation"
+  ]
+}
