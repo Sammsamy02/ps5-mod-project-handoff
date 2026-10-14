@@ -41,5 +41,6 @@ executables during transfer; an executable backup requires its explicit raw/decr
 mode and verified readback. Preserve the recovery discipline in the original project
 without carrying earlier user approvals forward to a new person.
 
-No collaborator was invited by this export; the owner can grant GitHub access to the
-successor's account. Private-repository creation does not choose an open-source license.
+No collaborator was invited by this export. Original project work is now licensed
+under GPL-3.0-only at the owner's request; see ../LICENSING.md for scope and retained
+third-party terms. The retired pre-cleanup archive must remain private.

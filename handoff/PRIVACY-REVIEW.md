@@ -30,7 +30,7 @@ was performed as part of this cleanup.
 The new source manifest records any redacted file with its current exported hash;
 historical build receipts still require regeneration before use as release proof.
 
-The repository's original work still has no newly selected project-wide open-source
-license. Existing upstream licenses and notices apply to their respective components.
-Public visibility alone does not replace those licenses or select a license for the
-original project work.
+After this privacy cleanup, the owner authorized open-source licensing on
+2026-10-14. Original project work is now GPL-3.0-only; see ../LICENSING.md. Existing
+upstream licenses and notices still apply to their respective components. Licensing
+does not change the requirement to keep the retired pre-cleanup archive private.

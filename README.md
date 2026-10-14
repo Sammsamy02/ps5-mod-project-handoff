@@ -1,4 +1,4 @@
-# PS5 Mod Project — private developer handoff
+# PS5 Mod Project — developer handoff
 
 Source snapshot prepared on 2026-10-14 for a successor developer. This combines the
 runtime port, preparation/install tools, Mod Bridge app, controller-first Nexus UI,
@@ -77,6 +77,9 @@ excluded evidence; they are not downloadable artifacts in this repository.
 files, sanitization, and origins without personal paths. Sanitized historical
 receipts must be regenerated before any release; do not bypass their hash checks.
 
-No new project-wide license was selected. Existing third-party licenses remain in
-force for their files; see `LICENSE` and `handoff/DEPENDENCIES.md`. Keep the repository
-private unless the owner separately authorizes redistribution and its licensing.
+## License
+
+Original project work is licensed under **GPL-3.0-only**. You may use, modify and
+share it under the terms in [LICENSE](LICENSE). Existing third-party licenses and
+notices remain in force for their components. See [LICENSING.md](LICENSING.md) for
+scope, attribution locations and redistribution notes.
