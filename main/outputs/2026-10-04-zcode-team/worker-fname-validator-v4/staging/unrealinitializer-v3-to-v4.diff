@@ -1,0 +1,136 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-build/final-units/UnrealInitializer.cpp	2026-10-05 08:37:07
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-fname-validator-v4/staging/UnrealInitializer.cpp	2026-10-05 09:55:06
+@@ -613,15 +613,25 @@
+     namespace SeedArming
+     {
+         // ---- launch10-c published-span accessors (worker-fname-heap-runtime-bounds)
++        // ---- v4 admission (worker-fname-validator-v4): the published spans
++        // ---- are the bridge's READABLE spans, IMAGE OR NON-IMAGE. Why the
++        // ---- v3 outside-image rule is gone (FNAME-POOL-RE.md R2, storage
++        // ---- separation): the ALLOCATOR OBJECT is a static image-BSS
++        // ---- FMallocBinned2-family object, but Blocks[0] is an ALLOCATED
++        // ---- BLOCK whose storage class is not pinned; the launch-9
++        // ---- REGION-CLASS observation placed Blocks[0]'s mapping in LOAD7's
++        // ---- BSS tail inside the image extent (no captured Blocks[0]
++        // ---- pointer value exists), so refusing image residency refused a
++        // ---- plausible live pool. Wrong-base protection is now the
++        // ---- entry-0 'None' content anchor below.
+         // ---- Defined by the bridge TU (runtime_start_bridge_r13.geometrydiag-spanpub.cpp)
+         // ---- in the SAME composed PRX; intra-module link, no new PRX imports or
+         // ---- exports. The bridge publishes, at module_start (before conversion —
+         // ---- the same walk that feeds bridge_register_readable_ranges), the
+-        // ---- non-image readable spans of its own kernel VMMAP snapshot:
+-        // ---- prot&READ, clipped to the outside of [base, base+0xbc602c8), at
+-        // ---- least one FName block capacity (0x20000), top-16 by size,
+-        // ---- ascending by address. These bounds replace the retired frozen
+-        // ---- kHeapLo/kHeapHi envelope for Blocks[0] admission.
++        // ---- readable spans of its own kernel VMMAP snapshot:
++        // ---- prot&READ, at least one FName block capacity (0x20000), top-16
++        // ---- by size, ascending by address. These bounds replace the retired
++        // ---- frozen kHeapLo/kHeapHi envelope for Blocks[0] admission.
+         extern "C" uint32_t bridge_readable_span_count();
+         extern "C" int bridge_readable_span_at(uint32_t index, uint64_t* lo, uint64_t* hi);
+         // Captured-envelope end (max record end over the WHOLE snapshot):
+@@ -715,6 +725,22 @@
+             return value;
+         }
+ 
++        // v4 entry-0 anchor read: bounded volatile byte-wise read at an
++        // absolute runtime address (same discipline as read_u32/read_u64;
++        // data-side only). Used for the Blocks[0] entry-0 'None' anchor —
++        // the address is ownership-covered by the published-span membership
++        // check that must already have passed.
++        static auto read_bytes_at(uint64_t runtime_addr, size_t needed) -> std::vector<uint8_t>
++        {
++            std::vector<uint8_t> bytes(needed, 0);
++            const auto* p = reinterpret_cast<const volatile uint8_t*>(runtime_addr);
++            for (size_t i = 0; i < needed; ++i)
++            {
++                bytes[i] = p[i];
++            }
++            return bytes;
++        }
++
+         static auto read_pool_words(uint64_t pool_runtime) -> PoolWords
+         {
+             const auto* pool = reinterpret_cast<const volatile uint8_t*>(pool_runtime);
+@@ -849,8 +875,14 @@
+             {
+                 seed_refused(fmt::format("slot 1 fname pool 0x{:X}: seed class {} (expected data-readable); refusing reads", pool_runtime, rc_seed::seed_class_name(cls)));
+             }
+-            // ---- launch10-c: snapshot the bridge-published non-image readable
+-            // spans (worker-fname-heap-runtime-bounds). The frozen
++            // ---- launch10-c: snapshot the bridge-published readable spans
++            // ---- v4 (worker-fname-validator-v4): IMAGE OR NON-IMAGE (the
++            // ---- allocator OBJECT is static image BSS; Blocks[0]'s storage
++            // ---- class is not pinned — the launch-9 region-class
++            // ---- observation put its mapping in LOAD7's BSS tail, no
++            // ---- captured pointer value exists; wrong-base protection is
++            // ---- the entry-0 'None' anchor below).
++            // (worker-fname-heap-runtime-bounds). The frozen
+             // kHeapLo/kHeapHi envelope is RETIRED from admission: it is
+             // vintage-transient non-image memory (GEOMETRY.md section 6), real
+             // at igf/igf2 and absent from the igf3 7-span walk, so a live heap
+@@ -864,7 +896,7 @@
+             const uint32_t spanpub_published = bridge_readable_span_count();
+             if (spanpub_published == 0)
+             {
+-                seed_refused(fmt::format("FName pool admission at 0x{:X}: span table unavailable (bridge published 0 non-image readable spans; Blocks[0] cannot be bounded; frozen envelope retired)", pool_runtime));
++                seed_refused(fmt::format("FName pool admission at 0x{:X}: span table unavailable (bridge published 0 readable spans; Blocks[0] cannot be bounded; frozen envelope retired)", pool_runtime));
+             }
+             rc_seed::AddressSpan published[rc_seed::kMaxPublishedSpans];
+             uint32_t published_count = 0;
+@@ -904,7 +936,13 @@
+             {
+                 CheckStartupWait();
+                 words = read_pool_words(pool_runtime);
+-                const auto shape = rc_seed::check_pool_shape(words.current_block, words.blocks0, published, published_count, capture_envelope, base);
++                // v4 shape admission: engine invariant none_id>>16 <=
++                // CurrentBlock (CurrentBlock is the 0-BASED index of the OPEN
++                // block — 0 is valid), Blocks[0] nonzero + 8-aligned, and
++                // membership in one PUBLISHED readable span (image or
++                // non-image). The already-read words feed the invariant; no
++                // extra reads.
++                const auto shape = rc_seed::check_pool_shape(words.current_block, words.none_id, words.blocks0, published, published_count, capture_envelope);
+                 if (shape.ok && words.none_id != 0 && words.byte_property_id != 0)
+                 {
+                     break;
+@@ -912,12 +950,28 @@
+                 if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - pool_wait_start).count() > validation_budget.count())
+                 {
+                     seed_refused(shape.ok ? fmt::format("FName pool at 0x{:X}: interned ids still zero after the wait budget (pool never initialized)", pool_runtime)
+-                                          : fmt::format("FName pool at 0x{:X}: {} (observed CurrentBlock {}, Blocks[0] 0x{:X}; published non-image readable spans {})",
++                                          : fmt::format("FName pool at 0x{:X}: {} (observed CurrentBlock {}, Blocks[0] 0x{:X}; published readable spans {})",
+                                                        pool_runtime, shape.failure, words.current_block, words.blocks0, published_count));
+                 }
+                 WaitForStartupRetry(std::chrono::milliseconds(50));
+             }
+ 
++            // ---- v4 entry-0 content anchor (FNAME-POOL-RE.md R3) ----
++            // With image residency no longer a refusal, wrong-base/wrong-pool
++            // protection is CONTENT: entry 0 of Blocks[0] is ANSI 'None'
++            // (header u16 with h>>6 == 4, h&1 == 0, payload "None"). Bounded
++            // 6-byte read through the same volatile byte discipline; the
++            // address is ownership-covered by the published-span membership
++            // check that just passed. Terminal on mismatch (content identity,
++            // same class as the entry matches below — never retried).
++            {
++                const auto anchor_bytes = read_bytes_at(words.blocks0, 2 + rc_seed::kNoneString.size());
++                if (const auto anchor = rc_seed::check_none_anchor(anchor_bytes.data(), anchor_bytes.size()); !anchor.ok)
++                {
++                    seed_refused(fmt::format("FName pool at 0x{:X}: Blocks[0] 0x{:X}: {}", pool_runtime, words.blocks0, anchor.failure));
++                }
++            }
++
+             const auto validate_entry = [&](uint32_t id, const rc_seed::Check& bounds, std::string_view expected) -> void {
+                 if (!bounds.ok)
+                 {
+@@ -935,7 +989,7 @@
+             validate_entry(words.byte_property_id,
+                            rc_seed::check_entry_bounds(words.byte_property_id, words.current_block, words.current_byte_offset, 2 + rc_seed::kBytePropertyString.size()),
+                            rc_seed::kBytePropertyString);
+-            Output::send(STR("[Seeds] FName pool validated at {} (CurrentBlock {}, Blocks[0] 0x{:X} inside a published non-image readable span of {}; 'None' id 0x{:X}, 'ByteProperty' id 0x{:X})\n"),
++            Output::send(STR("[Seeds] FName pool validated at {} (CurrentBlock {}, Blocks[0] 0x{:X} inside a published readable span (image or non-image) of {}; 'None' anchor ok; 'None' id 0x{:X}, 'ByteProperty' id 0x{:X})\n"),
+                          reinterpret_cast<void*>(pool_runtime), words.current_block, words.blocks0, published_count, words.none_id, words.byte_property_id);
+ 
+             // ---- Phase 4: bind the ctor + behavioral ByteProperty probe (FNAME-VERDICT section 5) ----

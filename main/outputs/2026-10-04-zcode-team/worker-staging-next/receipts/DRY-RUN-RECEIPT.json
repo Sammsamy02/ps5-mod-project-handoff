@@ -1,0 +1,64 @@
+{
+  "worker": "worker-staging-next",
+  "date": "2026-10-05",
+  "scope": "every check that is runnable WITHOUT console contact, executed and recorded host-side",
+  "dry_runs": [
+    {
+      "name": "patch 05r verification",
+      "commands": [
+        "patch -p1 --dry-run --directory <dir-with-candidate-main.c-as-main.c> < 05r-wallclock-deadline-and-readiness-cache.diff",
+        "patch -p1 (apply) + cmp vs worker-ploader-speedup/staged/main.c"
+      ],
+      "result": "3/3 hunks apply clean (exit 0, zero offsets/rejects); applied result byte-identical to staged/main.c (sha256 00bec52be7ac2c8960796b3192f96ecf0fafd5619fee9e54f1d0a9c8a18f99ce)",
+      "artifacts": "patch-verify/"
+    },
+    {
+      "name": "host build (retained PS5 toolchain)",
+      "commands": ["/usr/bin/make --no-print-directory all  (cwd ploader-build/, env PS5_PAYLOAD_SDK + LLVM_CONFIG as recorded from ploader-return-message-1/commands.json)"],
+      "result": "exit 0, empty stderr, compile line 'prospero-clang -Wall -g -O2 -o ploader.elf main.c' identical in shape to the precedent; artifact sha256 4c33923521ee8d8b810f8daaa719b935e9e92f6e8892deae43143fb9ec81d292 (144248 bytes)",
+      "artifacts": "ploader-build/{build.stdout,build.stderr,sha256.txt,ploader.elf,main.c,Makefile}"
+    },
+    {
+      "name": "9/9 host wait controls on the EXACT built source",
+      "commands": ["python3 ../worker-ploader-speedup/host-test/run_wait_controls.py ploader-build/main.c dry-runs/host-wait-controls-green"],
+      "result": "9 passed, 0 failed, exit 0; has_cache=true (05r memo present in built source)",
+      "artifacts": "dry-runs/host-wait-controls-green/"
+    },
+    {
+      "name": "structural checks vs precedent baseline ploader.elf",
+      "commands": ["llvm-readelf -h/-l/-S/-d/--dyn-syms + llvm-nm + strings on both binaries, full diffs"],
+      "result": "PASS — see receipts/STRUCTURAL-CHECKS.json: identical ELF class/segments/sections/dynamic/NEEDED/dynsyms; only symbol delta +b proven_stable_pid; FAIL string matches the cleanup-candidate lineage; no functional string lost; readelf PT_DYNAMIC warning identical in BOTH (SDK class property)",
+      "artifacts": "structural-checks/"
+    },
+    {
+      "name": "bundle loadlist vs tree consistency re-run (preflight-CLEAN bundle)",
+      "commands": ["python3 consistency check: every loadlist row size == actual bytes, sha == bundle.json, roles match; no stray/missing files; TAB/LF shape"],
+      "result": "CONSISTENT — 4/4 rows OK, total preload 31598 B, no strays, no missing; loadlist sha cbe301368f4a8108ccca16f9739a1c74a8e3242ebc875a9e40b8d21d3846746e (326 B)",
+      "artifacts": "dry-runs/loadlist-vs-tree.txt"
+    },
+    {
+      "name": "staging wrapper plan mode (ZERO console contact)",
+      "commands": ["run_stage_next.sh plan", "bash -n run_stage_next.sh"],
+      "result": "syntax OK; host preflight 'all pinned artifacts present and hash-clean'; full ordered step dump printed; exit 0; nothing sent",
+      "artifacts": "dry-runs/plan-output.txt"
+    },
+    {
+      "name": "readback fallback law (SHT-strip class) host-side positive/negative controls",
+      "commands": ["emulate the script's exact check against a constructed prefix view of the built payload"],
+      "result": "true prefix view ACCEPTED (len 98332, magic 7f454c46, body 64..end identical); corrupted-body and one-byte-short views correctly REFUSED",
+      "artifacts": "dry-runs/readback-law/"
+    },
+    {
+      "name": "stage-c refusal paths (BUILD-ID law)",
+      "commands": ["run_stage_next.sh stage-c (no args | nonexistent path | sha mismatch)"],
+      "result": "all three REFUSED with exit 2 at zero console writes",
+      "artifacts": "(terminal transcript only — refusals print to stderr)"
+    }
+  ],
+  "not_dry_runnable_host_side": [
+    "Gate A0 write probe, G0 reachability, real RETR/STOR, readback shas, ini freeze on the console — these are controller execution steps (run_stage_next.sh stage), never simulated here",
+    "phase C — blocked until composition lands (worker-preflight-runner fixture reproduction + worker-loop-driver runner gates)"
+  ],
+  "console_contact": false,
+  "target_executed": false
+}

@@ -1,0 +1,31 @@
+{
+  "worker": "worker-h1-xwp-pin",
+  "date": "2026-10-05",
+  "marker": "h1.xwp.pin/v1",
+  "task": "H-1 fix (worker-probe-pairing-prep/REPORT.md): console_batch.py pinned XWP_ARMED to the OLD launch-9 build igd1-6ebab07f2111 — a probe-window batch flow would stage the wrong bytes under the SAME console filename and self-verify PASS. Update the pin to the row-0 rebuild (worker-igw-row0-rebuild igd1-e030a09eb4d1), verify the constants against the artifact with the tool's own law BEFORE pinning, add the seq-1 build_id post-stage check, and extend selftest/fake-drive with wrong-build-refused / build-id-mismatch-refused / correct-staged coverage.",
+  "mode": "LOCAL ONLY. Zero console contact, zero launches, zero ini writes. The original worker-writability-probe-build/ dir was NOT touched; launch-10 artifacts NOT touched; worker-igw-row0-rebuild/ artifacts consumed read-only.",
+  "constants_verified_before_pinning": {
+    "method": "THE TOOL'S OWN LAW, run against the on-disk artifacts: gate_sha-equivalent shasum recompute + console_batch.py sht_prefix_end/snippet-semantics body-sha recompute + embedded build-id string search + determinism run1==run2 + the row0 dir's frozen check_xwp_artifact.py (rc=0, armed). NOT taken from the brief's claims alone.",
+    "fself": {"path": "worker-igw-row0-rebuild/modbridge_exec_write_probe_armed.prx", "sha256": "e1541af612f97bb450b5f61888ae0c2fc93dea72454723dc9e0ffafabd6002df", "bytes": 20013, "verified": true},
+    "bare_sdk": {"path": "worker-igw-row0-rebuild/determinism/run-armed-1/bare-sdk/modbridge_exec_write_probe.prx", "sha256": "cc544d6e8fe94c151ca9d49bd12613f87999e8be20dcb935ff824bb1ef37a6f9", "bytes": 69464, "verified": true},
+    "sht_strip_readback": {"bytes": 67832, "body_sha256_64_to_end": "e3f13d1994a1b4d27de05e31885d5a5cf9ea91daea3c57c2c229afd3696c295e", "verified": "sht_prefix_end(bare)==67832 and sha256(bare[64:67832])==e3f13d19…, recomputed for BOTH determinism runs (run1==run2)"},
+    "build_id": {"value": "igd1-e030a09eb4d1", "verified": "embedded verbatim in BOTH the fself wrapper and the bare-sdk ELF; recorded in build-receipt-armed.json; TRANSITIONS.json bytes seed (row0 CLAIM)"}
+  },
+  "changes": {
+    "pin": "XWP_ARMED in console_batch.py now pins the row-0 rebuild: prx e1541af6…/20013 B, bare cc544d6e…/69464 B, readback 67832 B / body e3f13d19…, build_id igd1-e030a09eb4d1. target_prx/module_line/log UNCHANGED (same console filename, same sink).",
+    "seq1_build_id_post_stage_check": "probe_evidence_verdict now extracts the seq-1 `entry` record as the staged build identity: build_id != pinned -> loud WRONG BUILD FAIL (H-1 refusal); fresh records with no seq-1 entry -> WARN 'staged build identity UNVERIFIED'; the observed identity is recorded in probe-verdicts.json (seq1_entry_build_id) per the runbook's record requirement.",
+    "tests": "selftest 462->474 checks (+12: seq-1 classifier cases + NEW selftest N pin-vs-artifact law verification incl. launch-9-bytes-refused); fake-console drive +11 checks (H-1 wrong-build staging refusal scenario driving the REAL ride.6 law step, ge.3b WRONG-BUILD FAIL driving the REAL game-evidence step, WARN-no-entry, green-path identity receipt); XWP_STAGES fixture corrected to the pinned seq-1-entry grammar."
+  },
+  "suites": {
+    "baseline_pre_edit": {"selftest": "462 ok, 0 failed", "fake_console_drive": "0 failed checks"},
+    "final": {"selftest": "474 ok, 0 failed (exit 0)", "fake_console_drive": "153 ok, 0 failed checks (exit 0)"},
+    "receipt": "SELFTEST-RECEIPT.txt (full captured output, both suites)"
+  },
+  "scope": "NO other flow's behavior changed: the only behavior-bearing edits are the XWP_ARMED constants (xwp staging path in stage-ridealongs/all) and the xwp-sink section of probe_evidence_verdict (ge.3b). fc1/cc1/qdrv1/observer sections untouched; dll7/dll8/e2e/qdrv1/observer/launch10/settings/rollback/restore flows untouched (their 250+ pre-existing fake-drive checks pass with unchanged expectations). Full diff: diff.patch (real unified diff vs a reconstructed pre-edit snapshot; every hunk corresponds 1:1 to a recorded edit, reverse-apply asserted count==1 per hunk).",
+  "honest_limits": [
+    "No console contact: the pin is host-side only; whether igd1-e030a09eb4d1 actually runs on target is a future probe-window fact (seq-1 entry record will prove it).",
+    "sceKernelMprotect remains NOT console-proven (row0 CLAIM honest limits carried, not widened).",
+    "The seq-1 check classifies evidence; it never certifies writability (existing law kept verbatim).",
+    "The pre-edit snapshot for diff.patch was reconstructed by reverse-applying the exact recorded edit pairs (baseline suites green on that state pre-edit); git HEAD predates the whole return session so no VCS baseline existed."
+  ]
+}

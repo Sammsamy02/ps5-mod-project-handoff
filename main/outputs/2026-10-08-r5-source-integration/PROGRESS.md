@@ -1,0 +1,1 @@
+Primary R5-only target composition frozen.165fresh target compilesPASS;164header consumers+1provider,205retained header-excluded units.370selected/387linkinputs; runtime UND210unchanged. No thread or stop overlay selected; no package/console promotion.

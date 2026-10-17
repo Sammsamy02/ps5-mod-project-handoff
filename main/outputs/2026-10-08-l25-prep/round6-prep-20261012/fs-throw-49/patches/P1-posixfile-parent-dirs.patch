@@ -1,0 +1,44 @@
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/File/FileType/PosixFile.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/File/FileType/PosixFile.cpp
+@@ -39,6 +39,23 @@
+             Internal::StaticStorage::internal_error = true;
+             throw std::system_error{error, std::generic_category(), operation};
+         }
++        // [FS-THROW-49 P1] PC parity for parent-directory creation. On PC,
++        // WinFile::create_all_directories catches the filesystem error INSIDE
++        // the file layer, sets internal_error and rethrows a File error
++        // (std::runtime_error). The throwing std::filesystem overload used here
++        // before let the error out without internal_error. Same result on
++        // success; on error: internal_error = true + a std::system_error (a
++        // std::runtime_error), exactly like io_error above.
++        auto create_parent_directories(const std::filesystem::path& parent, const char* operation) -> void
++        {
++            std::error_code ec;
++            std::filesystem::create_directories(parent, ec);
++            if (ec)
++            {
++                Internal::StaticStorage::internal_error = true;
++                throw std::system_error{ec, std::string{operation} + " '" + parent.string() + "'"};
++            }
++        }
+         auto validate_path(const std::filesystem::path& path) -> void
+         {
+             if (path.empty() || path.native().find('\0') != std::string::npos)
+@@ -264,7 +281,7 @@
+         else if (properties.create_if_non_existent == CreateIfNonExistent::Yes) flags |= O_CREAT;
+         PosixFile result;
+         result.m_path = path; result.m_properties = properties;
+-        if ((flags & O_CREAT) && !path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
++        if ((flags & O_CREAT) && !path.parent_path().empty()) create_parent_directories(path.parent_path(), "PosixFile create_directories");
+         result.m_fd = ::open(path.c_str(), flags, 0600);
+         if (result.m_fd < 0)
+         {
+@@ -387,7 +404,7 @@
+     {
+         require_serialization_path();
+         reject_source_alias(m_fd, m_serialization_path);
+-        if (!m_serialization_path.parent_path().empty()) std::filesystem::create_directories(m_serialization_path.parent_path());
++        if (!m_serialization_path.parent_path().empty()) create_parent_directories(m_serialization_path.parent_path(), "PosixFile cache create_directories");
+         TemporaryFile temporary;
+         for (unsigned attempt = 0; attempt < 32; ++attempt)
+         {

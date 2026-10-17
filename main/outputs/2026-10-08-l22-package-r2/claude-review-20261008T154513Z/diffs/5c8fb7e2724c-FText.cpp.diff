@@ -1,0 +1,49 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/FText.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l22-runtime/diagnostics/src/FText.cpp
+@@ -1,3 +1,4 @@
++#include <L22Diagnostics/Logging.hpp>
+ #include <bit>
+ #include <cstring>
+ #include <stdexcept>
+@@ -146,13 +147,41 @@
+ 
+     auto FText::construct_with_string(const FString&& String) -> void
+     {
++        try
++        {
+         *this = UKismetTextLibrary::Conv_StringToText(std::forward<const FString>(String));
++    
++        }
++        catch (const std::exception& error)
++        {
++            L22Diagnostics::error("FText construction", error.what());
++            throw;
++        }
++        catch (...)
++        {
++            L22Diagnostics::error("FText construction", "non-standard C++ exception");
++            throw;
++        }
+     }
+ 
+     FText::FText(const CharType* String)
+     {
++        try
++        {
+         FString Str = FString(FromCharTypePtr<TCHAR>(String));
+         construct_with_string(std::forward<const FString>(Str));
++    
++        }
++        catch (const std::exception& error)
++        {
++            L22Diagnostics::error("FText construction", error.what());
++            throw;
++        }
++        catch (...)
++        {
++            L22Diagnostics::error("FText construction", "non-standard C++ exception");
++            throw;
++        }
+     }
+ 
+     auto FText::ToFString() const -> FString

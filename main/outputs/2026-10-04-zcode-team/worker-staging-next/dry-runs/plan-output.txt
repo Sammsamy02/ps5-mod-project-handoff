@@ -1,0 +1,25 @@
+host preflight: all pinned artifacts present and hash-clean
+Ordered steps (each has its verification; ANY failure halts the pass):
+  0. G0 reachability: pldmgr 8084 /list_payloads (existing pattern; no alternates)
+  1. Gate A0 write probe, exactly once: STOR+RETR /data/modbridge/intake/.writeprobe
+  2. PRE-IMAGES (RETR only): $PLOADER_REMOTE, $INI_REMOTE, and each bundle target;
+     record sha256 + size (absence recorded honestly). No STOR has happened yet.
+  3. console .bak of the installed ploader payload: $PLOADER_REMOTE.$TAG.bak
+  4. phase A STOR wave 1 — the 4 bundle tree files to $R/ue4ss/... (exactly once each)
+  5. phase A STOR wave 2 — $R/loadlist.txt LAST (install-commit truth)
+  6. phase B STOR — new ploader payload to $PLOADER_REMOTE (exactly once)
+  7. READBACK verify EVERY uploaded file (RETR | shasum) against the pinned shas;
+     ploader payload: full byte identity expected (plain ELF, magic 7f454c46;
+     SHT-strip tail class accepted: len==98332 && body 64..end identical).
+     ANY mismatch -> ONE bounded restore from the saved pre-image, then refuse.
+  8. ploader.ini STILL byte-equal to its step-2 pre-image sha (external drift ->
+     refuse + reconcile by controller; this flow never writes the ini)
+  9. GO/NO-GO summary JSON in the run dir (rescue: written even after a halt)
+ 10. phase C (only with --ue4ss-prx/--ue4ss-sha): console_batch.py stage-launch10
+     (BUILD-ID law, .bak, SHT-strip readback law, Gate A1 magic 7f454c46)
+ 11. NOT in this tool (user/controller, game CLOSED): arm ploader via pldmgr
+     loadpayload, then USER launches. NEVER launch with phase C still pending.
+Untouchable by design: game files; $INI_REMOTE; $R/ue4ss/MemberVariableLayout.ini;
+  $R/ue4ss/VTableLayout.ini; $R/ue4ss/PS5Pad.ini; /data/plugins/* (except nothing —
+  phase C owns its one PRX name inside its own flow). No DELE anywhere in A/B.
+(plan mode: zero console contact — nothing above was sent)

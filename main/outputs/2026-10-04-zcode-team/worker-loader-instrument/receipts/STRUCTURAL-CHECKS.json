@@ -1,0 +1,63 @@
+{
+  "worker": "worker-loader-instrument",
+  "date": "2026-10-05",
+  "tool": "llvm-readelf / llvm-nm from retained LLVM 21.1.8 (same toolchain as the build)",
+  "raw_dumps": "structural-checks/{baseline,new}.{ehdr,phdr,sections,dynamic,dynsyms,nm,strings} plus structural-checks/dumps for .text/.rodata extraction",
+  "comparison": {
+    "reference": "ploader-return-message-1/baseline/ploader.elf (pinned unmodified Ploader v1.1.0, locally compiled in the SAME retained toolchain, sha256 720b1989880b8b55a5f3a92efae32ffdfc62de3d63f7b51bbca6809729683f72, 142896 bytes)",
+    "subject": "worker-loader-instrument/build-diagnostic/ploader.elf (diagnostic lineage rebuild, sha256 279c14532be884ef79009362eede432a58175ae7cc9c179b2ebf2c71af485353, 142904 bytes)",
+    "console_artifact_note": "The console ploader payload pre-image (sha256 edf612451dd0b22a70f18e6c2dab19075060ed91b13cc3ceb17f36816220a7ef, 142104 bytes, worker-staging-next runs/20261005-200504-stage-next/ploader.elf.pre.sha256) has NO local copy in the tree. The comparison is therefore the SAME artifact-class pattern worker-staging-next used: reference = the locally compiled pinned baseline. Console compatibility beyond class identity is not claimed."
+  },
+  "checks": [
+    {
+      "name": "ELF header class",
+      "result": "PASS",
+      "detail": "Both: ELF64 little-endian, ET_DYN, EM_X86_64, entry 0x0. Only delta: start-of-section-headers offset (file grew 142896 -> 142904). The known ps5-payload-sdk 'invalid PT_DYNAMIC size (0x1558)' llvm-readelf warning appears for BOTH files — class property, not a regression."
+    },
+    {
+      "name": "program headers",
+      "result": "PASS",
+      "detail": "BYTE-IDENTICAL phdr table: same 3 LOAD segments, same offsets/vaddrs/sizes/flags. Segment loads: text 0x4000+0xbcbe RWE, rodata 0x10000+0x5558 R, data 0x18000 filesz 0x1c memsz 0x7028 RW. max(p_offset+p_filesz)=0x1801C=98332 in both."
+    },
+    {
+      "name": "sections",
+      "result": "PASS",
+      "detail": "Identical section SET (31 entries, same names/order/types/flags). Deltas: .rodata +0x10 (the new 'rc=0x%08x' format string), init_array/fini_array addresses shifted +0x10, debug sections differ slightly (build-dir path metadata), .symtab/.strtab sizes unchanged. No section added or removed."
+    },
+    {
+      "name": "dynamic / imports sanity",
+      "result": "PASS",
+      "detail": "Identical NEEDED triple: libkernel_web.sprx, libSceLibcInternal.sprx, libSceNet.sprx. Only INIT_ARRAY/FINI_ARRAY address entries shifted +0x10 with rodata growth. NO new library dependency, NO import added/removed."
+    },
+    {
+      "name": "dynamic symbol table",
+      "result": "PASS",
+      "detail": "dyn-syms dumps byte-identical (33 dynsyms in both)."
+    },
+    {
+      "name": "symbol-level diff (llvm-nm)",
+      "result": "PASS",
+      "detail": "523 symbols in both, same set; only rodata-region address shifts (+0x10 after the format-string insertion). No symbol added/removed/renamed. (pt_detach is inlined at -O2 in both builds; its name survives only in .debug_str.)"
+    },
+    {
+      "name": "strings sanity",
+      "result": "PASS",
+      "detail": "Strings diff is exactly: removed old '[%s] FAIL (%ldms): %s', added new '[%s] FAIL (%ldms, rc=0x%08x): %s', plus layout-shifted debug/binary fragments. All key functional strings present: NID wzvqT4UqKX8 (sceKernelLoadStartModule), HoLVWNanBBc (getpid), 'sceKernelLoadStartModule', NEEDED library names, 'Finished'. NO functional string lost."
+    },
+    {
+      "name": "reproducibility vs prior receipt-bound artifact",
+      "result": "PASS",
+      "detail": ".text (48318 B) and .rodata (5130 B) of this rebuild are byte-identical to ploader-return-message-1/diagnostic/ploader.elf (009445ab). The 64 B whole-file delta is -g debug path metadata only."
+    },
+    {
+      "name": "file-log variant vs diagnostic (secondary)",
+      "result": "PASS",
+      "detail": "build-filelog/ploader.elf (9dccfef1, 143224 B): same 33 dynsyms (one address shift), same 3 NEEDED, new strings '/data/plugins/ploader-results.log' and 'ploader-diag-filelog built=Oct  5 2026 20:49:55' present. Source delta vs diagnostic is one static log_result() + one call site."
+    }
+  ],
+  "verdict": "STRUCTURALLY SOUND — same artifact class as the pinned baseline ploader.elf; every delta is exactly the one-line diagnostic format change (rodata growth, address shifts, debug metadata). Zero structural or import changes.",
+  "limits": [
+    "Static host-side checks only; no execution, no console contact, no compatibility claim with the console's installed ploader binary (edf61245) beyond class identity — that binary has no local copy.",
+    "The compiled-code diff is attested by byte-identical .text/.rodata against the receipt-bound prior artifact, not by disassembly."
+  ]
+}

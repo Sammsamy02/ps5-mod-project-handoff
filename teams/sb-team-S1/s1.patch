@@ -1,0 +1,946 @@
+diff -ruN -x BASE-SHA256SUMS base/2026-10-07-l19-local-profile-r4/units/BuildFactsChecks.hpp new/2026-10-07-l19-local-profile-r4/units/BuildFactsChecks.hpp
+--- base/2026-10-07-l19-local-profile-r4/units/BuildFactsChecks.hpp	2026-10-13 21:45:27
++++ new/2026-10-07-l19-local-profile-r4/units/BuildFactsChecks.hpp	2026-10-13 21:45:43
+@@ -60,13 +60,20 @@
+ struct LayoutPin {const char* name;bool known;uint32_t offset,width;const char* source;};
+ template<class Collection>
+ inline void require_layout(Result&r,const char*kind,const LayoutPin&pin,const Collection*available){
+- bool found=false,agree=false,width_agree=pin.width==0;if(available)for(const auto&entry:*available)if(entry.name==pin.name){found=true;agree=entry.offset==pin.offset;width_agree=pin.width==0||entry.width>=pin.width;break;}
++ // [S1][B6] `staged_offset` is the per-game profile's offset (the staged layout
++ // comes from the profile). The gate no longer refuses when it differs from the
++ // pin's baked UE 5.6 number (pin.offset) — that false-refused a correct UE4
++ // layout (READINESS D2). GENERIC checks kept: the member must be PRESENT, have
++ // provenance (known), and the validator width must cover the staged width.
++ // pin.offset is reported for reference only and is never the pass criterion.
++ bool found=false,width_agree=pin.width==0;uint32_t staged_offset=0;
++ if(available)for(const auto&entry:*available)if(entry.name==pin.name){found=true;staged_offset=entry.offset;width_agree=pin.width==0||entry.width>=pin.width;break;}
+  const auto stem=std::string("layout.")+kind+"."+pin.name;
+  r.checks.push_back({stem+".present",found,"required by selected runtime startup/menu/spawn source graph"});
+  r.checks.push_back({stem+".measured",pin.known&&text(pin.source),"authenticated per-game value/provenance required; staged values are declarations"});
+- r.checks.push_back({stem+".value",pin.known&&found&&agree,"expected offset="+std::to_string(pin.offset)+" source="+(pin.source?pin.source:"unknown")});
++ r.checks.push_back({stem+".value",pin.known&&found,"staged profile offset="+(found?std::to_string(staged_offset):std::string("absent"))+" (ref pin="+std::to_string(pin.offset)+") source="+(pin.source?pin.source:"unknown")});
+  r.checks.push_back({stem+".width",width_agree,"binding validator width must cover measured field width when independently pinned; no active-access proof"});
+- r.ok=r.ok&&found&&pin.known&&text(pin.source)&&agree&&width_agree;
++ r.ok=r.ok&&found&&pin.known&&text(pin.source)&&width_agree;
+ }
+ inline void require_static_fact(Result&r,const char*name,bool known,const char*detail){r.checks.push_back({std::string("profile.static.")+name,known,detail});r.ok=r.ok&&known;}
+ }
+diff -ruN -x BASE-SHA256SUMS base/2026-10-08-l25-prep/launch3-20261012/fixture/ue4ss/UE4SS-settings.ini new/2026-10-08-l25-prep/launch3-20261012/fixture/ue4ss/UE4SS-settings.ini
+--- base/2026-10-08-l25-prep/launch3-20261012/fixture/ue4ss/UE4SS-settings.ini	2026-10-13 21:39:48
++++ new/2026-10-08-l25-prep/launch3-20261012/fixture/ue4ss/UE4SS-settings.ini	2026-10-13 21:47:20
+@@ -31,8 +31,14 @@
+ EnableDumping=0
+ FullMemoryDump=0
+ [EngineVersionOverride]
+-MajorVersion=5
+-MinorVersion=6
++; [S1][B7] Detect (-1): the engine version is no longer hand-written here. The
++; measured version in the per-game profile ([build] engine_major/engine_minor)
++; drives Unreal::Version at startup (UE4SSProgram keeps version_finder active
++; while major/minor == -1, so BuildFactsChecks settings.version passes via
++; version_detect and the profile's measured version is applied). The deploy
++; tool emits -1 for every game; it never hand-writes a version.
++MajorVersion=-1
++MinorVersion=-1
+ DebugBuild=Detect
+ Stats=Detect
+ [ObjectDumper]
+diff -ruN -x BASE-SHA256SUMS base/2026-10-08-l26-runtime/profile/units/CodeImageCache.hpp new/2026-10-08-l26-runtime/profile/units/CodeImageCache.hpp
+--- base/2026-10-08-l26-runtime/profile/units/CodeImageCache.hpp	2026-10-13 21:39:48
++++ new/2026-10-08-l26-runtime/profile/units/CodeImageCache.hpp	2026-10-13 21:42:07
+@@ -20,11 +20,18 @@
+ // layout must agree in every TU that calls named_entry on the bridge's cache.
+ constexpr size_t kMaxPins=16,kMaxLoads=16,kMaxPhdrs=32,kChunk=16384;
+ constexpr uint64_t kBudgetMs=60000;
+-struct Pin { uint32_t id;const char* name;uint64_t linked;const uint8_t* bytes;size_t size; };
++// [S1][B5] `fatal` splits the code pins. fatal=true (the two SEED code pins:
++// fname ctor id1, SCO id2) keeps the old behaviour: a missing/mismatched/
++// misplaced pin refuses the WHOLE image authentication. fatal=false (FEATURE
++// pins: thread id3, listener id5/6, pak 20-25) no longer fails the image — it
++// only leaves that pin unverified, so its feature refuses at its own gate
++// (code_identity / cached_code_signature return nullptr/false for an unverified
++// entry) while Lua-only launches still start. Default true preserves callers.
++struct Pin { uint32_t id;const char* name;uint64_t linked;const uint8_t* bytes;size_t size;bool fatal=true; };
+ struct Profile { const char* path;const char* sha256;uint64_t size,extent,base;const Pin* pins;size_t count; };
+ struct Segment { uint64_t vaddr,offset,filesz,memsz;uint32_t flags,index; };
+ struct ReportedSegment { uint64_t start=0,end=0;uint32_t protection=0; };
+-struct Entry { uint32_t id=0;const char* name=nullptr;uint64_t linked=0,runtime=0,offset=0;size_t size=0,collected=0;uint32_t segment=0;uint8_t bytes[64]{}; };
++struct Entry { uint32_t id=0;const char* name=nullptr;uint64_t linked=0,runtime=0,offset=0;size_t size=0,collected=0;uint32_t segment=0;uint8_t bytes[64]{};bool fatal=true,placed=false,verified=false; };
+ struct Metadata { bool ready=false;uint64_t base=0,extent=0,size=0,generation=0,start_ms=0,deadline_ms=0;char sha256[65]{};size_t count=0,segment_count=0;Entry entries[kMaxPins]{};Segment segments[kMaxLoads]{};bool module_info=false;uint32_t base_source=0;size_t reported_count=0;ReportedSegment reported[4]{}; };
+ struct Result { bool ok=false;const char* reason="invalid code-image profile";int64_t open_raw=-1,read_raw=0;int open_error=0,read_error=0,close_raw=0,close_error=0;uint32_t failed_io_op=0;uint64_t bytes_read=0,start_ms=0,deadline_ms=0;size_t verified_pins=0; };
+ inline uint16_t ld16(const uint8_t*p){return uint16_t(p[0])|uint16_t(uint16_t(p[1])<<8);}
+@@ -34,6 +41,9 @@
+ inline const Entry* named_entry(const Metadata&m,uint64_t address,size_t n) noexcept {
+  if(!m.ready)return nullptr;
+  for(size_t i=0;i<m.count;++i){const auto&e=m.entries[i];if(e.runtime!=address||e.size!=n)continue;
++  // [S1][B5] an unverified feature pin (bytes did not authenticate against the
++  // image, but the pin is non-fatal) is treated as absent: its feature refuses.
++  if(!e.verified||!e.placed)return nullptr;
+   if(e.segment>=m.segment_count)return nullptr;const auto&s=m.segments[e.segment];
+   if(!(s.flags&1u)||(s.flags&2u)||e.linked<s.vaddr||e.linked-s.vaddr>s.filesz||n>s.filesz-(e.linked-s.vaddr))return nullptr;
+   if(m.module_info){bool covered=false;for(size_t j=0;j<m.reported_count;++j){const auto&r=m.reported[j];if(r.start<=address&&r.end>address&&n<=r.end-address&&(r.protection&4u)&&!(r.protection&2u))covered=true;}if(!covered)return nullptr;}
+@@ -59,14 +69,19 @@
+    m.segments[m.segment_count++]=s;if(s.vaddr+s.memsz>extent)extent=s.vaddr+s.memsz;
+   }
+   if(!m.segment_count||extent!=p.extent){r.reason="authenticated ELF extent differs from profile";return false;}
+-  for(size_t i=0;i<p.count;++i){const auto&pin=p.pins[i];Entry e{};e.id=pin.id;e.name=pin.name;e.linked=pin.linked;e.runtime=p.base+pin.linked;e.size=pin.size;
+-   size_t hits=0;for(size_t j=0;j<m.segment_count;++j){const auto&s=m.segments[j];if(pin.linked<s.vaddr)continue;const uint64_t delta=pin.linked-s.vaddr;
++  for(size_t i=0;i<p.count;++i){const auto&pin=p.pins[i];Entry e{};e.id=pin.id;e.name=pin.name;e.linked=pin.linked;e.runtime=p.base+pin.linked;e.size=pin.size;e.fatal=pin.fatal;
++   size_t hits=0;bool bad_prot=false;for(size_t j=0;j<m.segment_count;++j){const auto&s=m.segments[j];if(pin.linked<s.vaddr)continue;const uint64_t delta=pin.linked-s.vaddr;
+     if(delta>s.filesz||pin.size>s.filesz-delta)continue;
+-    if(!(s.flags&1u)||(s.flags&2u)){r.reason="function pin is not in immutable executable PT_LOAD";return false;}
++    if(!(s.flags&1u)||(s.flags&2u)){bad_prot=true;continue;} // [S1][B5] non-exec/writable placement
+     e.offset=s.offset+delta;e.segment=uint32_t(j);++hits;
+    }
+-   if(hits!=1){r.reason="function prefix is not fully file-backed in exactly one executable PT_LOAD";return false;}
+-   m.entries[i]=e;
++   if(hits!=1||bad_prot){
++    // [S1][B5] fatal (seed) pins keep refusing the whole image; feature pins
++    // that cannot be placed are left unplaced (their feature refuses later).
++    if(pin.fatal){r.reason=bad_prot?"function pin is not in immutable executable PT_LOAD":"function prefix is not fully file-backed in exactly one executable PT_LOAD";return false;}
++    e.placed=false;m.entries[i]=e;continue;
++   }
++   e.placed=true;m.entries[i]=e;
+   }return true;
+  }
+  template<class Ops>struct FileOwner { Ops&ops;Result&r;int fd;
+@@ -105,7 +120,8 @@
+      if(expired()){r.reason="code-image shared deadline expired after hash chunk";return false;}
+     }
+     if(!parsed){if(!headers(p,chunk,have,candidate,r))return false;parsed=true;}
+-    for(size_t i=0;i<candidate.count;++i){auto&e=candidate.entries[i];const uint64_t hi=offset+have,entry_hi=e.offset+e.size;
++    for(size_t i=0;i<candidate.count;++i){auto&e=candidate.entries[i];if(!e.placed)continue; // [S1][B5] skip unplaced feature pins
++     const uint64_t hi=offset+have,entry_hi=e.offset+e.size;
+      const uint64_t lo=offset>e.offset?offset:e.offset,end=hi<entry_hi?hi:entry_hi;
+      if(lo<end){const size_t n=size_t(end-lo);std::memcpy(e.bytes+size_t(lo-e.offset),chunk+size_t(lo-offset),n);e.collected+=n;}
+     }offset+=have;if(expired()){r.reason="code-image shared deadline expired after prefix extraction";return false;}
+@@ -117,7 +133,14 @@
+    uint8_t digest[32];codehash::sha256_final(&sha,digest);const char hex[]="0123456789abcdef";
+    for(size_t i=0;i<32;++i){candidate.sha256[i*2]=hex[digest[i]>>4];candidate.sha256[i*2+1]=hex[digest[i]&15u];}candidate.sha256[64]=0;
+    if(!codehash::sha256_hex_equal(candidate.sha256,p.sha256)){r.reason="whole code-image SHA256 mismatch";return false;}
+-   for(size_t i=0;i<candidate.count;++i){const auto&e=candidate.entries[i];if(e.collected!=e.size||std::memcmp(e.bytes,p.pins[i].bytes,e.size)!=0){r.reason="authenticated function prefix mismatches profile";return false;}++r.verified_pins;}
++   // [S1][B5] fatal (seed) pin bytes still gate the whole image; a feature pin
++   // that is unplaced or mismatches is left unverified (its feature refuses at
++   // its own gate) and the image still authenticates for Lua-only launches.
++   for(size_t i=0;i<candidate.count;++i){auto&e=candidate.entries[i];
++    const bool match=e.placed&&e.collected==e.size&&std::memcmp(e.bytes,p.pins[i].bytes,e.size)==0;
++    if(match){e.verified=true;++r.verified_pins;continue;}
++    if(e.fatal){r.reason="authenticated function prefix mismatches profile";return false;}
++    e.verified=false;}
+    if(expired()){r.reason="code-image shared deadline expired before publication";return false;}return true;
+   }();
+   owner.close();
+diff -ruN -x BASE-SHA256SUMS base/2026-10-08-l26-runtime/profile/units/CodeSignatureProfile.hpp new/2026-10-08-l26-runtime/profile/units/CodeSignatureProfile.hpp
+--- base/2026-10-08-l26-runtime/profile/units/CodeSignatureProfile.hpp	2026-10-13 21:39:48
++++ new/2026-10-08-l26-runtime/profile/units/CodeSignatureProfile.hpp	2026-10-13 21:42:48
+@@ -26,24 +26,32 @@
+ // prefix pins slots 2/4 already use. Bytes are single-sourced from the
+ // L26/L27 profile headers (same sha-pinned image 3b6cfad4...; both headers
+ // byte-verified against the pinned eboot at file offsets label+0x4000).
++// [S1][B5] The two SEED code pins (id 1 fname ctor, id 2 SCO) are FATAL: a
++// mismatch refuses the whole image, exactly as before. Every other pin is a
++// FEATURE pin (fatal=false): a mismatch only turns that feature off, so a
++// Lua-only launch still starts. The ToString pin (id 4) is REMOVED — the bind
++// it guarded was retired (the in-port decoder owns FName::ToString); its probe
++// constants (rc::engtostring::kProbeId/kProbeExpect) are consumed directly by
++// NameTypes.cpp and need no code-cache pin. feature() wraps a Pin as non-fatal.
++inline constexpr codecache::Pin feature(const codecache::Pin& p){return codecache::Pin{p.id,p.name,p.linked,p.bytes,p.size,false};}
+ inline constexpr codecache::Pin kPins[]={
+- {1,"fname_ctor_wchar",seeds::kFNameCtorWchar.label,fnameprofile::kPrefix,sizeof(fnameprofile::kPrefix)},
+- {2,"static_construct_object_internal",seeds::kStaticConstructObject.label,kScoPrefix,sizeof(kScoPrefix)},
+- NativeNameThread::kNamePin,
+- {4,"engine_fname_tostring_internal",rc::engtostring::kToStringInternalLabel,rc::engtostring::kToStringInternalPrefix,sizeof(rc::engtostring::kToStringInternalPrefix)},
+- {5,"engine_add_uobject_delete_listener",rc::englistener::kAddDeleteListenerLabel,rc::englistener::kAddPrefix,sizeof(rc::englistener::kAddPrefix)},
+- {6,"engine_remove_uobject_delete_listener",rc::englistener::kRemoveDeleteListenerLabel,rc::englistener::kRemovePrefix,sizeof(rc::englistener::kRemovePrefix)},
+- // [cap07 review] pak-mount pins APPENDED (ids 20-25): positions 0-5 keep
+- // their meaning for any positional reader (e.g. ExtendedCodeProfile kPins[0/1]).
+- rc::pakmountprofile::kPins[0],
+- rc::pakmountprofile::kPins[1],
+- rc::pakmountprofile::kPins[2],
+- rc::pakmountprofile::kPins[3],
+- rc::pakmountprofile::kPins[4],
+- rc::pakmountprofile::kPins[5]
++ {1,"fname_ctor_wchar",seeds::kFNameCtorWchar.label,fnameprofile::kPrefix,sizeof(fnameprofile::kPrefix),true},
++ {2,"static_construct_object_internal",seeds::kStaticConstructObject.label,kScoPrefix,sizeof(kScoPrefix),true},
++ feature(NativeNameThread::kNamePin),
++ {5,"engine_add_uobject_delete_listener",rc::englistener::kAddDeleteListenerLabel,rc::englistener::kAddPrefix,sizeof(rc::englistener::kAddPrefix),false},
++ {6,"engine_remove_uobject_delete_listener",rc::englistener::kRemoveDeleteListenerLabel,rc::englistener::kRemovePrefix,sizeof(rc::englistener::kRemovePrefix),false},
++ // [cap07 review] pak-mount pins APPENDED (ids 20-25), feature-wrapped so a pak
++ // pin mismatch only turns pak mounting off. Positional readers still see them
++ // at the same relative order (now shifted by the removed ToString pin).
++ feature(rc::pakmountprofile::kPins[0]),
++ feature(rc::pakmountprofile::kPins[1]),
++ feature(rc::pakmountprofile::kPins[2]),
++ feature(rc::pakmountprofile::kPins[3]),
++ feature(rc::pakmountprofile::kPins[4]),
++ feature(rc::pakmountprofile::kPins[5])
+ };
+ inline constexpr codecache::Profile kProfile{
+  "/data/homebrew/Silent Hill Townfall PPSA33286/decrypted/eboot.bin",
+- seeds::kImageSha256.data(),194241424ull,0xbc602c8ull,seeds::kBaseObserved,kPins,12
++ seeds::kImageSha256.data(),194241424ull,0xbc602c8ull,seeds::kBaseObserved,kPins,11
+ };
+ }
+diff -ruN -x BASE-SHA256SUMS base/2026-10-08-l26-runtime/profile/units/JoinedLayoutPreflight.hpp new/2026-10-08-l26-runtime/profile/units/JoinedLayoutPreflight.hpp
+--- base/2026-10-08-l26-runtime/profile/units/JoinedLayoutPreflight.hpp	2026-10-13 21:39:48
++++ new/2026-10-08-l26-runtime/profile/units/JoinedLayoutPreflight.hpp	2026-10-13 21:45:04
+@@ -100,8 +100,16 @@
+   const bool required=key.disposition==Disposition::Required;
+   if(required)++result.required;else ++result.conditional;
+   const auto* entry=find(key.kind==Kind::Member?members:vtables,key.name);
+-  const bool matches=entry&&(!key.pinned||entry->offset==key.offset);
+-  const char* status=!entry?"MISSING":!matches?"MISMATCH":key.pinned?"PRESENT":"PRESENT_UNPINNED";
++  // [S1][B6] The staged layout IS the per-game profile's layout (one source of
++  // truth). The preflight no longer compares each offset against a baked UE 5.6
++  // number (key.offset) — that false-refused a correct UE4 layout (READINESS
++  // D4). It keeps the GENERIC checks: a required key must be PRESENT, and a
++  // pinned key must carry a resolvable (nonzero, or an intentionally-zero base
++  // slot) staged offset. Offset CORRECTNESS is enforced against the profile by
++  // the live layout binder + field_gate/layout_binder_gate, not here. key.offset
++  // is retained only as human reference and is never the acceptance criterion.
++  const bool matches=entry!=nullptr; // presence is the generic criterion
++  const char* status=!entry?"MISSING":key.pinned?"PRESENT":"PRESENT_UNPINNED";
+   const bool accepted=required?matches:(!entry||matches);
+   if(!accepted){result.ok=false;if(required)++result.missing_required;}
+   result.checks.push_back({&key,entry!=nullptr,accepted,status,required?"required before seeded startup/menu calls": "conditional path; existing lazy checks remain authoritative when used"});
+diff -ruN -x BASE-SHA256SUMS base/2026-10-08-l26-runtime/typescan-r4/candidate/src/RuntimePakMount.cpp new/2026-10-08-l26-runtime/typescan-r4/candidate/src/RuntimePakMount.cpp
+--- base/2026-10-08-l26-runtime/typescan-r4/candidate/src/RuntimePakMount.cpp	2026-10-13 21:39:48
++++ new/2026-10-08-l26-runtime/typescan-r4/candidate/src/RuntimePakMount.cpp	2026-10-13 21:46:33
+@@ -5,9 +5,16 @@
+ #include <limits>
+ namespace ModBridge::PakMount {
+ bool EnginePins::valid() const {
+- if(!pak_vtable||!platform_mgr_get||!platform_mgr_getpf||!slot_get_lower_level||!slot_delegate_execute||!mountpak_delegate||!handle_mount_pak||!delegate_vtable||!execute||!lower_impl||!snapshot_delegate||!snapshot_vtable||!snapshot_execute||pak_count_offset!=0x18)return false;
++ if(!pak_vtable||!platform_mgr_get||!platform_mgr_getpf||!slot_get_lower_level||!slot_delegate_execute||!mountpak_delegate||!handle_mount_pak||!delegate_vtable||!execute||!lower_impl||!snapshot_delegate||!snapshot_vtable||!snapshot_execute)return false;
+  for(size_t i=0;i<64;++i)if(!((image_sha256[i]>='0'&&image_sha256[i]<='9')||(image_sha256[i]>='a'&&image_sha256[i]<='f')))return false;
+- if(image_sha256[64]||delegate_inst_off!=0||delegate_size_off!=8||slot_delegate_execute!=0x60||slot_get_lower_level!=0x68)return false;
++ // [S1][B6] slot/struct byte offsets are PROFILE DATA (from the per-game pak
++ // pins), not hard-wired UE 5.6 numbers: plausibility only (nonzero, 8-aligned,
++ // bounded). The literal 0x18/0x60/0x68 equality false-refused other engine
++ // versions (READINESS C5/§5). The live chain re-proves them before any mount.
++ // delegate_inst_off / delegate_size_off stay the FDelegateBase C++ ABI (0 / 8).
++ if(image_sha256[64]||delegate_inst_off!=0||delegate_size_off!=8)return false;
++ auto plausible=[](uint32_t o){return o!=0&&(o&7u)==0&&o<=0xffffu;};
++ if(!plausible(slot_delegate_execute)||!plausible(slot_get_lower_level)||!plausible(pak_count_offset))return false;
+  const uint64_t data[]={pak_vtable,mountpak_delegate,delegate_vtable,snapshot_delegate,snapshot_vtable};
+  if(image_extent<128)return false;
+  for(auto address:data)if(address>image_extent-128)return false;
+diff -ruN -x BASE-SHA256SUMS base/ModProfile.hpp new/ModProfile.hpp
+--- base/ModProfile.hpp	1969-12-31 18:00:00
++++ new/ModProfile.hpp	2026-10-13 21:27:50
+@@ -0,0 +1,146 @@
++#pragma once
++// ModProfile.hpp — Team S1 (B3). The in-memory per-game runtime profile.
++//
++// This ONE struct holds every per-game value that used to live in the ~11
++// compiled headers of READINESS §2 A-D. It is populated once at startup by
++// ModProfileLoader from the preloaded profile data file (profile/<sha>.ini),
++// then every consumer reads from rc::modprofile::active() instead of a
++// compiled-in constant. One runtime build then serves every Unreal game.
++//
++// Laws:
++//  * Freestanding: <cstdint>/<cstddef>/<cstring> only. No heap, no exceptions,
++//    no std::filesystem, no engine headers. Safe to call from noexcept paths.
++//  * Fixed capacity: all storage is inline fixed-size arrays (static storage),
++//    so install() is a plain memcpy-class operation with no allocation.
++//  * The STRUCTURE (which fields exist, pin ids, array sizes, which members are
++//    required, validator widths) is generic and compiled. Only the per-game
++//    VALUES live here and load from the file.
++//  * Big layout texts are referenced by pointer+len into the caller's preloaded
++//    buffer (owned for the process lifetime by the activation); the loader
++//    copies only small scalars and byte prefixes.
++//  * Missing/absent REQUIRED value => the loader refuses (fail closed); nothing
++//    is invented here.
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++
++namespace rc::modprofile {
++
++inline constexpr uint32_t kSchema = 1;
++
++// --- fixed capacities (generic, not per-game) -------------------------------
++inline constexpr size_t kHex = 65;          // 64 hex + NUL
++inline constexpr size_t kName = 128;
++inline constexpr size_t kPath = 256;
++inline constexpr size_t kStr = 256;
++inline constexpr size_t kShort = 64;
++inline constexpr size_t kMaxPrefix = 64;    // matches codecache::Pin max (size<=64)
++
++struct Bytes {               // one prologue prefix / proof byte run
++    uint8_t data[kMaxPrefix]{};
++    uint32_t size = 0;       // 0 = absent
++};
++
++struct TextRef {             // a <<< >>> block: pointer+len into the input buffer
++    const char* data = nullptr;
++    size_t size = 0;
++    bool present() const { return data != nullptr && size != 0; }
++};
++
++struct Str { char v[kStr]{}; bool empty() const { return v[0] == '\0'; } };
++
++// --- the profile ------------------------------------------------------------
++struct Profile {
++    // [profile]
++    uint32_t schema = 0;
++    char name[kName]{};
++    char digest[kHex]{};          // kDigest (evidence/profile digest)
++    char body_sha256[kHex]{};     // canonical body hash (loader-verified)
++    char image_sha256[kHex]{};    // lookup key
++    uint64_t image_size = 0;
++    uint64_t image_extent = 0;    // 0xbc602c8 ...  (also rc_seed::kImageFileExtentBytes, shared w/ S2)
++    uint64_t image_base = 0;      // 0x400000 (kBaseObserved)
++    char exe_path[kPath]{};       // codecache::Profile.path  (S2/B8 sources it)
++
++    // [build]
++    uint32_t format = 0, pointer_size = 0, major = 0, minor = 0;
++    char target[kShort]{}, engine_revision[kShort]{}, build_id[kShort]{};
++    uint32_t build_configuration = 0, stats = 0;
++    char build_source[kStr]{}, stats_source[kStr]{};
++    bool non_shipping = false, stats_layout = false;
++    bool fname_case_preserving = false;
++    uint32_t fname_output_bytes = 0, fname_output_alignment = 0;
++
++    // [pool]  (rc_seed::kPoolLayout)
++    uint64_t pool_current_block_offset = 0, pool_current_byte_offset_offset = 0;
++    uint64_t pool_blocks_offset = 0, pool_none_id_offset = 0, pool_byte_property_id_offset = 0;
++    uint32_t pool_block_offset_bits = 0, pool_max_blocks = 0;
++
++    // [seeds]  (SeedTable.h)
++    bool generated = false, required_set_complete = false;
++    uint64_t fname_pool_label = 0, guobject_array_label = 0, fname_ctor_label = 0;
++    uint64_t gmalloc_label = 0, gmalloc_instance_label = 0, gmalloc_vtable_label = 0, sco_label = 0;
++    bool guobject_present = false, fname_ctor_present = false, gmalloc_present = false, sco_present = false;
++    char guobject_derivation[kStr]{}, fname_ctor_derivation[kStr]{};
++    char gmalloc_derivation[kStr]{}, sco_derivation[kStr]{};
++
++    // [fname]  (rc::fnameprofile.kPrefix)
++    Bytes fname_ctor_prefix;
++
++    // [code_pins]  (prefixes; labels come from [seeds]/[listener]/[thread])
++    Bytes sco_prefix;             // pin id 2
++    Bytes listener_add_prefix;    // pin id 5
++    Bytes listener_remove_prefix; // pin id 6
++    Bytes thread_name_prefix;     // pin id 3
++
++    // [listener]  (rc::englistener)  (add/remove labels; guobject label = seeds)
++    uint64_t listener_add_label = 0, listener_remove_label = 0;
++
++    // [tostring]  (rc::engtostring)  — pin removed (B5); constants kept
++    uint32_t tostring_probe_id = 0, tostring_probe_expect_units = 0, tostring_out_units = 0;
++    char tostring_probe_expect[kShort]{};
++    uint64_t tostring_label = 0;  // provenance only (OPTIONAL)
++    Bytes tostring_prefix;        // provenance only (OPTIONAL)
++
++    // [thread]  (NativeNameThread)
++    uint64_t thread_accessor = 0, thread_game_name = 0, thread_render_name = 0, thread_empty_name = 0;
++
++    // [pak]  (ModBridge::PakMount::EnginePins)
++    bool pak_present = false;
++    uint64_t pak_vtable = 0, pak_platform_mgr_get = 0, pak_platform_mgr_getpf = 0;
++    uint64_t pak_mountpak_delegate = 0, pak_handle_mount_pak = 0, pak_delegate_vtable = 0;
++    uint64_t pak_execute = 0, pak_lower_impl = 0, pak_snapshot_delegate = 0;
++    uint64_t pak_snapshot_vtable = 0, pak_snapshot_execute = 0;
++    uint32_t pak_slot_get_lower_level = 0, pak_slot_delegate_execute = 0;
++    uint32_t pak_delegate_inst_off = 0, pak_delegate_size_off = 0, pak_count_offset = 0;
++    uint64_t pak_proof_linked[6]{};
++    Bytes    pak_proof[6];
++
++    // [layout.members] / [layout.vtables]  (the staged INI pair text)
++    TextRef layout_members;
++    TextRef layout_vtables;
++
++    // [features]
++    bool feature_pak_mount = false, feature_delete_listener = false, feature_thread_name = false;
++
++    bool valid = false;  // set true by the loader only on a complete, consistent parse
++};
++
++// --- process-wide active profile --------------------------------------------
++// install() is called ONCE by the bridge after the code cache authenticates the
++// image and the loader has parsed the matching profile. Before install(), or
++// when no profile matched, active() returns nullptr and seeds never arm
++// (fail closed == the "identification launch").
++inline Profile g_active{};
++inline bool g_installed = false;
++
++inline void install(const Profile& p) noexcept { g_active = p; g_installed = p.valid; }
++inline const Profile* active() noexcept { return g_installed ? &g_active : nullptr; }
++inline void reset() noexcept { g_active = Profile{}; g_installed = false; }
++
++// --- layout-text offset lookup (used by the rewired layout consumers) -------
++// Finds `Member=0x..` inside `[Class]` in an INI text block. Returns false when
++// absent (caller fails closed). Pure, bounds-checked, no allocation.
++bool layout_offset(const TextRef& text, const char* klass, const char* member, uint32_t& out) noexcept;
++
++} // namespace rc::modprofile
+diff -ruN -x BASE-SHA256SUMS base/ModProfileLoader.hpp new/ModProfileLoader.hpp
+--- base/ModProfileLoader.hpp	1969-12-31 18:00:00
++++ new/ModProfileLoader.hpp	2026-10-13 21:46:10
+@@ -0,0 +1,565 @@
++#pragma once
++// ModProfileLoader.hpp — Team S1 (B3). Parse the preloaded profile data file
++// (profile/<sha>.ini) into a rc::modprofile::Profile. Fail closed.
++//
++// Laws (same as ModProfile.hpp): freestanding (<cstdint>/<cstddef>/<cstring>),
++// no heap, no exceptions, no std::filesystem, no engine headers, no new import.
++// It parses bytes handed in by the activation; it never opens a file.
++//
++// Integrity: the whole file is already size+sha pinned by its loadlist row.
++// This loader additionally (a) matches [profile] image_sha256 to the
++// authenticated running image, (b) recomputes the body hash via an INJECTED
++// incremental sha256 (runtime: codehash; host tests: a minimal sha) and
++// checks it against [profile] body_sha256, (c) range/consistency-checks every
++// REQUIRED field, and refuses (valid=false) on any failure. A refused profile
++// never installs, so seeds never arm (the identification launch).
++#include "ModProfile.hpp"
++
++namespace rc::modprofile {
++
++// Injected incremental sha256 (so the loader ships NO second sha impl).
++struct Sha256Ops {
++    void (*init)(void* ctx) = nullptr;
++    void (*update)(void* ctx, const unsigned char* data, size_t n) = nullptr;
++    void (*final_hex)(void* ctx, char out[kHex]) = nullptr; // lowercase, 64 hex + NUL
++    void* ctx = nullptr;
++    bool usable() const { return init && update && final_hex; }
++};
++
++enum class Result {
++    Ok = 0,
++    NoProfileForImage,   // no preloaded row matched the authenticated sha (fail closed, run unmodded)
++    BadSyntax,           // malformed line / unterminated block / unknown section or key
++    MissingRequired,     // a REQUIRED key/section absent or a present=0 required slot
++    RangeError,          // a value out of range or a prefix size wrong
++    Inconsistent,        // cross-field contradiction (non_shipping vs config, layout header vs build, ...)
++    DigestMismatch,      // body_sha256 recomputation disagreed
++    NoSha                // Sha256Ops not usable and body_sha256 present
++};
++
++struct Diag {
++    Result result = Result::BadSyntax;
++    char detail[192]{};   // first failure, human-readable (ASCII)
++    int  line = 0;        // 1-based line of the first failure (0 if n/a)
++    uint32_t sections_seen = 0;
++    uint32_t keys_seen = 0;
++    uint32_t required_checked = 0;   // gates must print a nonzero count
++    const char* path = nullptr;      // the selected row path (for logging)
++    bool ok() const { return result == Result::Ok; }
++};
++
++namespace detail {
++
++struct Span { const char* s = nullptr; size_t n = 0; bool has() const { return s != nullptr; } };
++
++inline bool is_space(char c) { return c == ' ' || c == '\t'; }
++
++inline Span trim(Span v) {
++    while (v.n && is_space(v.s[0])) { ++v.s; --v.n; }
++    while (v.n && (is_space(v.s[v.n - 1]) || v.s[v.n - 1] == '\r')) --v.n;
++    return v;
++}
++
++inline bool eq(Span a, const char* b) {
++    size_t i = 0;
++    for (; i < a.n; ++i) { if (b[i] == '\0' || a.s[i] != b[i]) return false; }
++    return b[i] == '\0';
++}
++
++// One (section,key) -> value span, plus the line it was on.
++struct KV { uint16_t section = 0; Span key; Span val; int line = 0; };
++
++enum Section : uint16_t {
++    SEC_NONE = 0, SEC_PROFILE, SEC_BUILD, SEC_POOL, SEC_SEEDS, SEC_FNAME,
++    SEC_CODE_PINS, SEC_LISTENER, SEC_TOSTRING, SEC_THREAD, SEC_PAK,
++    SEC_LAYOUT_MEMBERS, SEC_LAYOUT_VTABLES, SEC_FEATURES, SEC_UNKNOWN
++};
++
++inline uint16_t section_id(Span name) {
++    struct M { const char* n; uint16_t id; };
++    static const M table[] = {
++        {"profile", SEC_PROFILE}, {"build", SEC_BUILD}, {"pool", SEC_POOL},
++        {"seeds", SEC_SEEDS}, {"fname", SEC_FNAME}, {"code_pins", SEC_CODE_PINS},
++        {"listener", SEC_LISTENER}, {"tostring", SEC_TOSTRING}, {"thread", SEC_THREAD},
++        {"pak", SEC_PAK}, {"layout.members", SEC_LAYOUT_MEMBERS},
++        {"layout.vtables", SEC_LAYOUT_VTABLES}, {"features", SEC_FEATURES},
++    };
++    for (const auto& m : table) if (eq(name, m.n)) return m.id;
++    return SEC_UNKNOWN;
++}
++
++inline bool parse_u64(Span v, uint64_t& out) {
++    v = trim(v);
++    if (!v.n) return false;
++    uint64_t r = 0; size_t i = 0; bool hex = false;
++    if (v.n >= 2 && v.s[0] == '0' && (v.s[1] == 'x' || v.s[1] == 'X')) { hex = true; i = 2; if (v.n == 2) return false; }
++    for (; i < v.n; ++i) {
++        char c = v.s[i]; unsigned d;
++        if (c >= '0' && c <= '9') d = unsigned(c - '0');
++        else if (hex && c >= 'a' && c <= 'f') d = unsigned(c - 'a' + 10);
++        else if (hex && c >= 'A' && c <= 'F') d = unsigned(c - 'A' + 10);
++        else return false;
++        uint64_t base = hex ? 16u : 10u;
++        if (r > (UINT64_MAX - d) / base) return false; // overflow
++        r = r * base + d;
++    }
++    out = r; return true;
++}
++
++inline bool parse_bool(Span v, bool& out) {
++    v = trim(v);
++    if (v.n == 1 && v.s[0] == '0') { out = false; return true; }
++    if (v.n == 1 && v.s[0] == '1') { out = true; return true; }
++    return false;
++}
++
++inline bool copy_str(Span v, char* dst, size_t cap) {
++    v = trim(v);
++    if (v.n + 1 > cap) return false;
++    for (size_t i = 0; i < v.n; ++i) {
++        unsigned char c = (unsigned char)v.s[i];
++        if (c < 0x20) return false; // no control chars
++        dst[i] = v.s[i];
++    }
++    dst[v.n] = '\0';
++    return true;
++}
++
++inline bool hex_nib(char c, unsigned& d) {
++    if (c >= '0' && c <= '9') { d = unsigned(c - '0'); return true; }
++    if (c >= 'a' && c <= 'f') { d = unsigned(c - 'a' + 10); return true; }
++    if (c >= 'A' && c <= 'F') { d = unsigned(c - 'A' + 10); return true; }
++    return false;
++}
++
++inline bool parse_bytes(Span v, Bytes& out) {
++    v = trim(v);
++    if (v.n == 0 || (v.n % 2) != 0 || v.n / 2 > kMaxPrefix) return false;
++    uint32_t n = 0;
++    for (size_t i = 0; i < v.n; i += 2) {
++        unsigned hi, lo;
++        if (!hex_nib(v.s[i], hi) || !hex_nib(v.s[i + 1], lo)) return false;
++        out.data[n++] = (uint8_t)((hi << 4) | lo);
++    }
++    out.size = n;
++    return true;
++}
++
++} // namespace detail
++
++// -----------------------------------------------------------------------------
++// layout_offset: find `Member=0x..` inside `[Class]` in an INI text block.
++inline bool /*rc::modprofile::*/ layout_offset_impl(const TextRef& text, const char* klass,
++                                                    const char* member, uint32_t& out) noexcept {
++    if (!text.present()) return false;
++    const char* p = text.data;
++    const char* end = text.data + text.size;
++    bool in_class = false;
++    while (p < end) {
++        const char* ls = p;
++        while (p < end && *p != '\n') ++p;
++        detail::Span line{ls, size_t(p - ls)};
++        if (p < end) ++p; // consume newline
++        line = detail::trim(line);
++        if (line.n == 0 || line.s[0] == ';' || line.s[0] == '#') continue;
++        if (line.s[0] == '[') {
++            // section header [Class]
++            size_t k = 1; while (k < line.n && line.s[k] != ']') ++k;
++            detail::Span name{line.s + 1, (k <= line.n ? k - 1 : 0)};
++            in_class = detail::eq(name, klass);
++            continue;
++        }
++        if (!in_class) continue;
++        // key=value
++        size_t eqp = 0; while (eqp < line.n && line.s[eqp] != '=') ++eqp;
++        if (eqp >= line.n) continue;
++        detail::Span key{line.s, eqp};
++        detail::Span val{line.s + eqp + 1, line.n - eqp - 1};
++        key = detail::trim(key);
++        if (detail::eq(key, member)) {
++            uint64_t v = 0;
++            if (!detail::parse_u64(val, v) || v > 0xffffffffull) return false;
++            out = (uint32_t)v;
++            return true;
++        }
++    }
++    return false;
++}
++
++// -----------------------------------------------------------------------------
++class Loader {
++public:
++    // Parse one already-selected profile row's bytes. `expected_sha` is the
++    // authenticated running image sha (64 hex + NUL); pass nullptr to skip the
++    // match (host tests). sha may be an empty/unusable Sha256Ops only if the
++    // file carries no body_sha256 (it must, so normally sha is required).
++    static Result parse(const char* data, size_t len, const char* expected_sha,
++                        const Sha256Ops& sha, Profile& out, Diag& diag) noexcept {
++        out = Profile{};
++        diag = Diag{};
++        using namespace detail;
++
++        // --- pass 1: collect KV pairs and the two layout text blocks --------
++        static constexpr size_t kMaxKV = 768;
++        KV kv[kMaxKV];
++        size_t kvn = 0;
++        uint16_t section = SEC_NONE;
++        const char* p = data;
++        const char* end = data + len;
++        int lineno = 0;
++        size_t body_line_start = len, body_line_end = len; // for body hashing
++        bool seen_profile_body_sha = false;
++
++        while (p < end) {
++            const char* ls = p;
++            while (p < end && *p != '\n') ++p;
++            size_t raw_len = size_t(p - ls);
++            const char* next = (p < end) ? p + 1 : end;
++            ++lineno;
++            Span line = trim(Span{ls, raw_len});
++            p = next;
++            if (line.n == 0 || line.s[0] == ';' || line.s[0] == '#') continue;
++
++            if (line.s[0] == '[') {
++                size_t k = 1; while (k < line.n && line.s[k] != ']') ++k;
++                if (k >= line.n) return fail(diag, Result::BadSyntax, lineno, "section header missing ]");
++                Span name{line.s + 1, k - 1};
++                uint16_t sid = section_id(trim(name));
++                if (sid == SEC_UNKNOWN)
++                    return fail(diag, Result::BadSyntax, lineno, "unknown section");
++                section = sid;
++                ++diag.sections_seen;
++                // layout text block: next content line must be <<<
++                if (sid == SEC_LAYOUT_MEMBERS || sid == SEC_LAYOUT_VTABLES) {
++                    if (!read_block(p, end, lineno, sid == SEC_LAYOUT_MEMBERS ? out.layout_members : out.layout_vtables, diag))
++                        return diag.result;
++                }
++                continue;
++            }
++
++            // key=value
++            size_t eqp = 0; while (eqp < line.n && line.s[eqp] != '=') ++eqp;
++            if (eqp >= line.n) return fail(diag, Result::BadSyntax, lineno, "expected key=value");
++            Span key = trim(Span{line.s, eqp});
++            Span val = Span{line.s + eqp + 1, line.n - eqp - 1};
++            if (section == SEC_NONE) return fail(diag, Result::BadSyntax, lineno, "key before any section");
++            if (kvn >= kMaxKV) return fail(diag, Result::BadSyntax, lineno, "too many keys");
++            kv[kvn++] = KV{section, key, val, lineno};
++            ++diag.keys_seen;
++            if (section == SEC_PROFILE && eq(key, "body_sha256")) {
++                body_line_start = size_t(ls - data);
++                body_line_end = size_t(next - data); // includes the trailing '\n'
++                seen_profile_body_sha = true;
++            }
++        }
++
++        // --- helpers over the KV table --------------------------------------
++        auto find = [&](uint16_t sec, const char* k) -> Span {
++            for (size_t i = 0; i < kvn; ++i) if (kv[i].section == sec && eq(kv[i].key, k)) return kv[i].val;
++            return Span{};
++        };
++        auto line_of = [&](uint16_t sec, const char* k) -> int {
++            for (size_t i = 0; i < kvn; ++i) if (kv[i].section == sec && eq(kv[i].key, k)) return kv[i].line;
++            return 0;
++        };
++
++        // REQUIRED scalar getters; each bumps required_checked and fails closed.
++        auto req_u64 = [&](uint16_t sec, const char* k, uint64_t& dst) -> bool {
++            ++diag.required_checked;
++            Span v = find(sec, k);
++            if (!v.has()) return fail_b(diag, Result::MissingRequired, line_of(sec, k), k, "missing");
++            if (!parse_u64(v, dst)) return fail_b(diag, Result::RangeError, line_of(sec, k), k, "bad integer");
++            return true;
++        };
++        auto req_u32 = [&](uint16_t sec, const char* k, uint32_t& dst, uint64_t lo, uint64_t hi) -> bool {
++            uint64_t t = 0; if (!req_u64(sec, k, t)) return false;
++            if (t < lo || t > hi) return fail_b(diag, Result::RangeError, line_of(sec, k), k, "out of range");
++            dst = (uint32_t)t; return true;
++        };
++        auto req_bool = [&](uint16_t sec, const char* k, bool& dst) -> bool {
++            ++diag.required_checked;
++            Span v = find(sec, k);
++            if (!v.has()) return fail_b(diag, Result::MissingRequired, line_of(sec, k), k, "missing");
++            if (!parse_bool(v, dst)) return fail_b(diag, Result::RangeError, line_of(sec, k), k, "bad bool");
++            return true;
++        };
++        auto req_str = [&](uint16_t sec, const char* k, char* dst, size_t cap) -> bool {
++            ++diag.required_checked;
++            Span v = find(sec, k);
++            if (!v.has()) return fail_b(diag, Result::MissingRequired, line_of(sec, k), k, "missing");
++            if (!copy_str(v, dst, cap)) return fail_b(diag, Result::RangeError, line_of(sec, k), k, "string too long/invalid");
++            return true;
++        };
++        auto req_bytes = [&](uint16_t sec, const char* k, const char* ksize, Bytes& dst, uint32_t expect) -> bool {
++            ++diag.required_checked;
++            Span v = find(sec, k);
++            if (!v.has()) return fail_b(diag, Result::MissingRequired, line_of(sec, k), k, "missing");
++            if (!parse_bytes(v, dst)) return fail_b(diag, Result::RangeError, line_of(sec, k), k, "bad hex");
++            uint64_t declared = 0;
++            if (ksize) {
++                Span sv = find(sec, ksize);
++                if (!sv.has() || !parse_u64(sv, declared) || declared != dst.size)
++                    return fail_b(diag, Result::Inconsistent, line_of(sec, k), ksize, "size mismatch");
++            }
++            if (expect && dst.size != expect) return fail_b(diag, Result::Inconsistent, line_of(sec, k), k, "unexpected prefix length");
++            return true;
++        };
++        auto opt_u64 = [&](uint16_t sec, const char* k, uint64_t& dst) { Span v = find(sec, k); if (v.has()) parse_u64(v, dst); };
++
++        // --- [profile] ------------------------------------------------------
++        if (!req_u32(SEC_PROFILE, "schema", out.schema, 1, 1)) return diag.result;
++        if (!req_str(SEC_PROFILE, "name", out.name, kName)) return diag.result;
++        if (!req_str(SEC_PROFILE, "digest", out.digest, kHex)) return diag.result;
++        if (!req_str(SEC_PROFILE, "body_sha256", out.body_sha256, kHex)) return diag.result;
++        if (!req_str(SEC_PROFILE, "image_sha256", out.image_sha256, kHex)) return diag.result;
++        if (!hex64(out.digest) || !hex64(out.body_sha256) || !hex64(out.image_sha256))
++            return fail(diag, Result::RangeError, line_of(SEC_PROFILE, "image_sha256"), "digest/sha not 64 lowercase hex");
++        if (!req_u64(SEC_PROFILE, "image_size", out.image_size) || out.image_size < 64)
++            return diag.ok() ? fail(diag, Result::RangeError, line_of(SEC_PROFILE, "image_size"), "image_size too small") : diag.result;
++        if (!req_u64(SEC_PROFILE, "image_extent", out.image_extent) || out.image_extent < 128) return bad_extent(diag, line_of(SEC_PROFILE, "image_extent"));
++        if (!req_u64(SEC_PROFILE, "image_base", out.image_base) || out.image_base == 0)
++            return diag.ok() ? fail(diag, Result::RangeError, line_of(SEC_PROFILE, "image_base"), "image_base zero") : diag.result;
++        if (!req_str(SEC_PROFILE, "exe_path", out.exe_path, kPath)) return diag.result;
++
++        // lookup-key match against the authenticated image (fail closed)
++        if (expected_sha && !streq(out.image_sha256, expected_sha))
++            return fail(diag, Result::NoProfileForImage, line_of(SEC_PROFILE, "image_sha256"), "image_sha256 != authenticated image");
++
++        // --- body hash ------------------------------------------------------
++        if (!seen_profile_body_sha) return fail(diag, Result::MissingRequired, 0, "body_sha256 line not found");
++        if (!sha.usable()) return fail(diag, Result::NoSha, 0, "no sha256 ops to verify body_sha256");
++        char got[kHex]{};
++        sha.init(sha.ctx);
++        if (body_line_start > 0) sha.update(sha.ctx, (const unsigned char*)data, body_line_start);
++        if (body_line_end < len) sha.update(sha.ctx, (const unsigned char*)data + body_line_end, len - body_line_end);
++        sha.final_hex(sha.ctx, got);
++        if (!streq(got, out.body_sha256))
++            return fail(diag, Result::DigestMismatch, line_of(SEC_PROFILE, "body_sha256"), "body hash mismatch");
++
++        // --- [build] --------------------------------------------------------
++        if (!req_u32(SEC_BUILD, "format", out.format, 1, 1)) return diag.result;
++        if (!req_u32(SEC_BUILD, "pointer_size", out.pointer_size, 8, 8)) return diag.result;
++        if (!req_u32(SEC_BUILD, "engine_major", out.major, 4, 5)) return diag.result;
++        if (!req_u32(SEC_BUILD, "engine_minor", out.minor, 0, 99)) return diag.result;
++        if (!req_str(SEC_BUILD, "target", out.target, kShort)) return diag.result;
++        if (!req_str(SEC_BUILD, "engine_revision", out.engine_revision, kShort)) return diag.result;
++        if (!req_str(SEC_BUILD, "build_id", out.build_id, kShort)) return diag.result;
++        if (!req_u32(SEC_BUILD, "build_configuration", out.build_configuration, 1, 3)) return diag.result;
++        if (!req_str(SEC_BUILD, "build_source", out.build_source, kStr)) return diag.result;
++        if (!req_u32(SEC_BUILD, "stats", out.stats, 1, 2)) return diag.result;
++        if (!req_str(SEC_BUILD, "stats_source", out.stats_source, kStr)) return diag.result;
++        if (!req_bool(SEC_BUILD, "non_shipping", out.non_shipping)) return diag.result;
++        if (!req_bool(SEC_BUILD, "stats_layout", out.stats_layout)) return diag.result;
++        if (!req_bool(SEC_BUILD, "fname_case_preserving", out.fname_case_preserving)) return diag.result;
++        if (!req_u32(SEC_BUILD, "fname_output_bytes", out.fname_output_bytes, 1, 64)) return diag.result;
++        if (!req_u32(SEC_BUILD, "fname_output_alignment", out.fname_output_alignment, 1, 64)) return diag.result;
++        if (out.non_shipping != (out.build_configuration != 1))
++            return fail(diag, Result::Inconsistent, line_of(SEC_BUILD, "non_shipping"), "non_shipping != (build_configuration!=1)");
++        if (out.stats_layout != (out.stats == 2))
++            return fail(diag, Result::Inconsistent, line_of(SEC_BUILD, "stats_layout"), "stats_layout != (stats==2)");
++
++        // --- [pool] ---------------------------------------------------------
++        if (!req_u64(SEC_POOL, "current_block_offset", out.pool_current_block_offset)) return diag.result;
++        if (!req_u64(SEC_POOL, "current_byte_offset_offset", out.pool_current_byte_offset_offset)) return diag.result;
++        if (!req_u64(SEC_POOL, "blocks_offset", out.pool_blocks_offset)) return diag.result;
++        if (!req_u64(SEC_POOL, "none_id_offset", out.pool_none_id_offset)) return diag.result;
++        if (!req_u64(SEC_POOL, "byte_property_id_offset", out.pool_byte_property_id_offset)) return diag.result;
++        if (!req_u32(SEC_POOL, "block_offset_bits", out.pool_block_offset_bits, 1, 32)) return diag.result;
++        if (!req_u32(SEC_POOL, "max_blocks", out.pool_max_blocks, 1, 1u << 20)) return diag.result;
++
++        // --- [seeds] --------------------------------------------------------
++        if (!req_bool(SEC_SEEDS, "generated", out.generated) || !out.generated)
++            return diag.ok() ? fail(diag, Result::Inconsistent, line_of(SEC_SEEDS, "generated"), "generated must be 1") : diag.result;
++        if (!req_bool(SEC_SEEDS, "required_set_complete", out.required_set_complete)) return diag.result;
++        if (!req_u64(SEC_SEEDS, "fname_pool_label", out.fname_pool_label)) return diag.result;
++        if (!req_u64(SEC_SEEDS, "guobject_array_label", out.guobject_array_label)) return diag.result;
++        if (!req_u64(SEC_SEEDS, "fname_ctor_label", out.fname_ctor_label)) return diag.result;
++        if (!req_u64(SEC_SEEDS, "gmalloc_label", out.gmalloc_label)) return diag.result;
++        if (!req_u64(SEC_SEEDS, "gmalloc_instance_label", out.gmalloc_instance_label)) return diag.result;
++        if (!req_u64(SEC_SEEDS, "gmalloc_vtable_label", out.gmalloc_vtable_label)) return diag.result;
++        if (!req_u64(SEC_SEEDS, "sco_label", out.sco_label)) return diag.result;
++        if (!req_bool(SEC_SEEDS, "guobject_array_present", out.guobject_present)) return diag.result;
++        if (!req_bool(SEC_SEEDS, "fname_ctor_present", out.fname_ctor_present)) return diag.result;
++        if (!req_bool(SEC_SEEDS, "gmalloc_present", out.gmalloc_present)) return diag.result;
++        if (!req_bool(SEC_SEEDS, "sco_present", out.sco_present)) return diag.result;
++        if (!req_str(SEC_SEEDS, "guobject_array_derivation", out.guobject_derivation, kStr)) return diag.result;
++        if (!req_str(SEC_SEEDS, "fname_ctor_derivation", out.fname_ctor_derivation, kStr)) return diag.result;
++        if (!req_str(SEC_SEEDS, "gmalloc_derivation", out.gmalloc_derivation, kStr)) return diag.result;
++        if (!req_str(SEC_SEEDS, "sco_derivation", out.sco_derivation, kStr)) return diag.result;
++        // all-or-nothing arming (SeedTable semantics): required_set_complete iff all four present
++        bool all_present = out.guobject_present && out.fname_ctor_present && out.gmalloc_present && out.sco_present;
++        if (out.required_set_complete != all_present)
++            return fail(diag, Result::Inconsistent, line_of(SEC_SEEDS, "required_set_complete"), "required_set_complete != (all four slots present)");
++        if (!out.required_set_complete)
++            return fail(diag, Result::MissingRequired, line_of(SEC_SEEDS, "required_set_complete"), "incomplete seed set (fail closed)");
++
++        // --- [fname] + [code_pins] prefixes ---------------------------------
++        if (!req_bytes(SEC_FNAME, "ctor_prefix", "ctor_prefix_size", out.fname_ctor_prefix, 32)) return diag.result;
++        if (!req_bytes(SEC_CODE_PINS, "sco_prefix", "sco_prefix_size", out.sco_prefix, 25)) return diag.result;
++        if (!req_bytes(SEC_CODE_PINS, "listener_add_prefix", "listener_add_prefix_size", out.listener_add_prefix, 16)) return diag.result;
++        if (!req_bytes(SEC_CODE_PINS, "listener_remove_prefix", "listener_remove_prefix_size", out.listener_remove_prefix, 16)) return diag.result;
++        if (!req_bytes(SEC_CODE_PINS, "thread_name_prefix", "thread_name_prefix_size", out.thread_name_prefix, 33)) return diag.result;
++
++        // --- [listener] -----------------------------------------------------
++        if (!req_u64(SEC_LISTENER, "add_label", out.listener_add_label)) return diag.result;
++        if (!req_u64(SEC_LISTENER, "remove_label", out.listener_remove_label)) return diag.result;
++
++        // --- [tostring] (constants kept; pin removed B5) --------------------
++        if (!req_u32(SEC_TOSTRING, "probe_id", out.tostring_probe_id, 1, 0xffffffffu)) return diag.result;
++        if (!req_str(SEC_TOSTRING, "probe_expect", out.tostring_probe_expect, kShort)) return diag.result;
++        if (!req_u32(SEC_TOSTRING, "probe_expect_units", out.tostring_probe_expect_units, 1, 1024)) return diag.result;
++        if (!req_u32(SEC_TOSTRING, "out_units", out.tostring_out_units, 1, 1u << 20)) return diag.result;
++        opt_u64(SEC_TOSTRING, "label", out.tostring_label);
++        { Span v = find(SEC_TOSTRING, "prefix"); if (v.has()) parse_bytes(v, out.tostring_prefix); }
++
++        // --- [thread] -------------------------------------------------------
++        if (!req_u64(SEC_THREAD, "accessor", out.thread_accessor)) return diag.result;
++        if (!req_u64(SEC_THREAD, "game_name", out.thread_game_name)) return diag.result;
++        if (!req_u64(SEC_THREAD, "render_name", out.thread_render_name)) return diag.result;
++        if (!req_u64(SEC_THREAD, "empty_name", out.thread_empty_name)) return diag.result;
++        // (thread pin #3 label == out.thread_accessor by construction — enforced where the pin is built)
++
++        // --- [pak] (required set; structural offsets fixed) -----------------
++        if (!req_u64(SEC_PAK, "pak_vtable", out.pak_vtable)) return diag.result;
++        if (!req_u64(SEC_PAK, "platform_mgr_get", out.pak_platform_mgr_get)) return diag.result;
++        if (!req_u64(SEC_PAK, "platform_mgr_getpf", out.pak_platform_mgr_getpf)) return diag.result;
++        if (!req_u64(SEC_PAK, "mountpak_delegate", out.pak_mountpak_delegate)) return diag.result;
++        if (!req_u64(SEC_PAK, "handle_mount_pak", out.pak_handle_mount_pak)) return diag.result;
++        if (!req_u64(SEC_PAK, "delegate_vtable", out.pak_delegate_vtable)) return diag.result;
++        if (!req_u64(SEC_PAK, "execute", out.pak_execute)) return diag.result;
++        if (!req_u64(SEC_PAK, "lower_impl", out.pak_lower_impl)) return diag.result;
++        if (!req_u64(SEC_PAK, "snapshot_delegate", out.pak_snapshot_delegate)) return diag.result;
++        if (!req_u64(SEC_PAK, "snapshot_vtable", out.pak_snapshot_vtable)) return diag.result;
++        if (!req_u64(SEC_PAK, "snapshot_execute", out.pak_snapshot_execute)) return diag.result;
++        // [S1][B6] slot/struct byte offsets are PROFILE DATA, not fixed UE 5.6
++        // numbers: plausibility only (nonzero, 8-aligned, bounded). delegate_inst
++        // _off / delegate_size_off are genuine FDelegateBase C++ ABI (0 / 8),
++        // generic across UE versions, so they stay structurally fixed.
++        if (!req_u32(SEC_PAK, "slot_get_lower_level", out.pak_slot_get_lower_level, 8, 0xffff) || (out.pak_slot_get_lower_level & 7))
++            return diag.ok() ? fail(diag, Result::RangeError, line_of(SEC_PAK, "slot_get_lower_level"), "slot_get_lower_level not an 8-aligned vtable offset") : diag.result;
++        if (!req_u32(SEC_PAK, "slot_delegate_execute", out.pak_slot_delegate_execute, 8, 0xffff) || (out.pak_slot_delegate_execute & 7))
++            return diag.ok() ? fail(diag, Result::RangeError, line_of(SEC_PAK, "slot_delegate_execute"), "slot_delegate_execute not an 8-aligned vtable offset") : diag.result;
++        if (!req_u32(SEC_PAK, "delegate_inst_off", out.pak_delegate_inst_off, 0, 0)) return diag.result;
++        if (!req_u32(SEC_PAK, "delegate_size_off", out.pak_delegate_size_off, 8, 8)) return diag.result;
++        if (!req_u32(SEC_PAK, "pak_count_offset", out.pak_count_offset, 8, 0xffff) || (out.pak_count_offset & 7))
++            return diag.ok() ? fail(diag, Result::RangeError, line_of(SEC_PAK, "pak_count_offset"), "pak_count_offset not an 8-aligned struct offset") : diag.result;
++        {
++            const char* lk[6] = {"proof0_linked","proof1_linked","proof2_linked","proof3_linked","proof4_linked","proof5_linked"};
++            const char* bk[6] = {"proof0_bytes","proof1_bytes","proof2_bytes","proof3_bytes","proof4_bytes","proof5_bytes"};
++            const char* sk[6] = {"proof0_size","proof1_size","proof2_size","proof3_size","proof4_size","proof5_size"};
++            for (int i = 0; i < 6; ++i) {
++                if (!req_u64(SEC_PAK, lk[i], out.pak_proof_linked[i])) return diag.result;
++                if (!req_bytes(SEC_PAK, bk[i], sk[i], out.pak_proof[i], 0)) return diag.result;
++            }
++        }
++        out.pak_present = true;
++
++        // --- [layout] blocks ------------------------------------------------
++        if (!out.layout_members.present()) return fail(diag, Result::MissingRequired, 0, "[layout.members] block missing");
++        if (!out.layout_vtables.present()) return fail(diag, Result::MissingRequired, 0, "[layout.vtables] block missing");
++        if (!layout_header_matches(out, out.layout_members, diag)) return diag.result;
++        if (!layout_header_matches(out, out.layout_vtables, diag)) return diag.result;
++
++        // --- [features] (optional; default = present-iff-section) -----------
++        out.feature_pak_mount = out.pak_present;
++        out.feature_delete_listener = true;
++        out.feature_thread_name = true;
++        { bool b; if (find(SEC_FEATURES, "pak_mount").has() && req_bool(SEC_FEATURES, "pak_mount", b)) out.feature_pak_mount = b; }
++        { bool b; if (find(SEC_FEATURES, "delete_listener").has() && req_bool(SEC_FEATURES, "delete_listener", b)) out.feature_delete_listener = b; }
++        { bool b; if (find(SEC_FEATURES, "thread_name").has() && req_bool(SEC_FEATURES, "thread_name", b)) out.feature_thread_name = b; }
++
++        out.valid = true;
++        diag.result = Result::Ok;
++        return Result::Ok;
++    }
++
++    // Convenience: select the matching row among preloaded profile rows, then parse.
++    struct Row { const unsigned char* data; uint64_t size; const char* path; };
++    static Result select_and_parse(const Row* rows, size_t row_count, const char* authenticated_sha,
++                                    const Sha256Ops& sha, Profile& out, Diag& diag) noexcept {
++        for (size_t i = 0; i < row_count; ++i) {
++            // cheap pre-match: does [profile] image_sha256 equal the authenticated sha?
++            Profile probe{}; Diag d{};
++            Result r = parse((const char*)rows[i].data, (size_t)rows[i].size, authenticated_sha, sha, probe, d);
++            if (r == Result::Ok) { out = probe; diag = d; diag.path = rows[i].path; return Result::Ok; }
++            // a row whose sha simply does not match this image is not an error; keep looking.
++            if (r != Result::NoProfileForImage) { diag = d; diag.path = rows[i].path; return r; }
++        }
++        diag = Diag{}; diag.result = Result::NoProfileForImage;
++        set_detail(diag, "no preloaded profile row matched the authenticated image sha");
++        return Result::NoProfileForImage;
++    }
++
++private:
++    static bool streq(const char* a, const char* b) { return std::strcmp(a, b) == 0; }
++    static bool hex64(const char* s) {
++        for (int i = 0; i < 64; ++i) { char c = s[i]; if (!((c>='0'&&c<='9')||(c>='a'&&c<='f'))) return false; }
++        return s[64] == '\0';
++    }
++    static void set_detail(Diag& d, const char* msg) {
++        size_t i = 0; for (; msg[i] && i + 1 < sizeof(d.detail); ++i) d.detail[i] = msg[i]; d.detail[i] = '\0';
++    }
++    static Result fail(Diag& d, Result r, int line, const char* msg) {
++        d.result = r; d.line = line; set_detail(d, msg); return r;
++    }
++    static bool fail_b(Diag& d, Result r, int line, const char* key, const char* why) {
++        d.result = r; d.line = line;
++        char buf[192]; size_t n = 0;
++        auto app = [&](const char* s){ for (; *s && n + 1 < sizeof(buf); ++s) buf[n++] = *s; };
++        app(key); app(": "); app(why); buf[n] = '\0'; set_detail(d, buf);
++        return false;
++    }
++    static Result bad_extent(Diag& d, int line) {
++        if (d.ok()) return fail(d, Result::RangeError, line, "image_extent too small");
++        return d.result;
++    }
++    // read a <<< ... >>> block starting at p (p points just past the section header line)
++    static bool read_block(const char*& p, const char* end, int& lineno, TextRef& out, Diag& d) {
++        using namespace detail;
++        // skip comment/blank lines until <<<
++        while (p < end) {
++            const char* ls = p; while (p < end && *p != '\n') ++p; const char* next = (p < end) ? p + 1 : end;
++            ++lineno; Span line = trim(Span{ls, size_t((p < end ? p : end) - ls)}); p = next;
++            if (line.n == 0 || line.s[0] == ';' || line.s[0] == '#') continue;
++            if (!(line.n == 3 && line.s[0]=='<' && line.s[1]=='<' && line.s[2]=='<')) {
++                fail(d, Result::BadSyntax, lineno, "layout section must open with <<<"); return false;
++            }
++            break;
++        }
++        const char* block_start = p;
++        const char* block_end = nullptr;
++        while (p < end) {
++            const char* ls = p; while (p < end && *p != '\n') ++p; const char* lend = p; const char* next = (p < end) ? p + 1 : end;
++            ++lineno; Span line = trim(Span{ls, size_t(lend - ls)});
++            if (line.n == 3 && line.s[0]=='>' && line.s[1]=='>' && line.s[2]=='>') { block_end = ls; p = next; break; }
++            p = next;
++        }
++        if (!block_end) { fail(d, Result::BadSyntax, lineno, "layout block not terminated by >>>"); return false; }
++        out.data = block_start;
++        out.size = size_t(block_end - block_start);
++        return true;
++    }
++    // the [NativeLayout] header inside a layout block must agree with [build]
++    static bool layout_header_matches(const Profile& out, const TextRef& t, Diag& d) {
++        uint32_t v = 0;
++        auto need = [&](const char* k, uint32_t want) -> bool {
++            if (!layout_offset_impl(t, "NativeLayout", k, v)) { fail(d, Result::Inconsistent, 0, "layout header missing field"); return false; }
++            if (v != want) { fail(d, Result::Inconsistent, 0, "layout header disagrees with [build]"); return false; }
++            return true;
++        };
++        // NativeLayout values are plain ints (Format=1, EngineMajor=5 ...), parsed by layout_offset_impl
++        if (!need("Format", out.format)) return false;
++        if (!need("PointerSize", out.pointer_size)) return false;
++        if (!need("EngineMajor", out.major)) return false;
++        if (!need("EngineMinor", out.minor)) return false;
++        if (!need("NonShipping", out.non_shipping ? 1u : 0u)) return false;
++        if (!need("Stats", out.stats_layout ? 1u : 0u)) return false;
++        return true;
++    }
++};
++
++inline bool layout_offset(const TextRef& text, const char* klass, const char* member, uint32_t& out) noexcept {
++    return layout_offset_impl(text, klass, member, out);
++}
++
++} // namespace rc::modprofile

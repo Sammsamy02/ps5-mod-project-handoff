@@ -1,0 +1,994 @@
+--- /LOCAL_SCRATCH	2026-10-12 11:09:09
++++ 2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp	2026-10-12 11:30:47
+@@ -5267,49 +5267,58 @@
+                                    [[maybe_unused]] Unreal::UFunction* Function,
+                                    [[maybe_unused]] void* Parms) -> void
+     {
+-#ifdef __PROSPERO__
+-        // ProcessEvent may run on worker threads. Do not inspect Lua action
+-        // state until the real Tick has published this exact caller thread.
+-        if (!Unreal::IsInGameThreadRaw())
+-        {
+-            return;
+-        }
+-#endif
+-#ifdef __PROSPERO__
+-        NativeLuaActionDispatchScope action_dispatch;
+-        if (!action_dispatch.owns_dispatch())
+-            return;
+-#endif
++        // [R9-GUARD] the engine calls this directly: nothing may escape into engine code
++        // (escaping = std::terminate / abort; launch 3 crash).
++        try
+         {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+-            LuaMod::m_is_processing_actions = true;
+-        }
+-
+-        process_simple_actions(LuaMod::m_game_thread_actions);
+-        process_delayed_actions<GameThreadExecutionMethod::ProcessEvent>(LuaMod::m_delayed_game_thread_actions);
+-
+-        process_pending_notify_on_new_object_callbacks();
+-
+-        {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+-            LuaMod::m_is_processing_actions = false;
+-            if (!LuaMod::m_pending_game_thread_actions.empty())
++    #ifdef __PROSPERO__
++            // ProcessEvent may run on worker threads. Do not inspect Lua action
++            // state until the real Tick has published this exact caller thread.
++            if (!Unreal::IsInGameThreadRaw())
+             {
+-                LuaMod::m_game_thread_actions.insert(
+-                    LuaMod::m_game_thread_actions.end(),
+-                    std::make_move_iterator(LuaMod::m_pending_game_thread_actions.begin()),
+-                    std::make_move_iterator(LuaMod::m_pending_game_thread_actions.end()));
+-                LuaMod::m_pending_game_thread_actions.clear();
++                return;
+             }
+-            if (!LuaMod::m_pending_delayed_game_thread_actions.empty())
++    #endif
++    #ifdef __PROSPERO__
++            NativeLuaActionDispatchScope action_dispatch;
++            if (!action_dispatch.owns_dispatch())
++                return;
++    #endif
+             {
+-                LuaMod::m_delayed_game_thread_actions.insert(
+-                    LuaMod::m_delayed_game_thread_actions.end(),
+-                    std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.begin()),
+-                    std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.end()));
+-                LuaMod::m_pending_delayed_game_thread_actions.clear();
++                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                LuaMod::m_is_processing_actions = true;
+             }
++
++            process_simple_actions(LuaMod::m_game_thread_actions);
++            process_delayed_actions<GameThreadExecutionMethod::ProcessEvent>(LuaMod::m_delayed_game_thread_actions);
++
++            process_pending_notify_on_new_object_callbacks();
++
++            {
++                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                LuaMod::m_is_processing_actions = false;
++                if (!LuaMod::m_pending_game_thread_actions.empty())
++                {
++                    LuaMod::m_game_thread_actions.insert(
++                        LuaMod::m_game_thread_actions.end(),
++                        std::make_move_iterator(LuaMod::m_pending_game_thread_actions.begin()),
++                        std::make_move_iterator(LuaMod::m_pending_game_thread_actions.end()));
++                    LuaMod::m_pending_game_thread_actions.clear();
++                }
++                if (!LuaMod::m_pending_delayed_game_thread_actions.empty())
++                {
++                    LuaMod::m_delayed_game_thread_actions.insert(
++                        LuaMod::m_delayed_game_thread_actions.end(),
++                        std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.begin()),
++                        std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.end()));
++                    LuaMod::m_pending_delayed_game_thread_actions.clear();
++                }
++            }
+         }
++        catch (...)
++        {
++            try { Output::send<LogLevel::Error>(STR("[R9-GUARD] game-thread hook contained an exception\n")); } catch (...) {}
++        }
+     }
+ 
+     // =====================================================================================
+@@ -5653,119 +5662,128 @@
+     static auto funcptr_marshal_hook([[maybe_unused]] Unreal::UnrealScriptFunctionCallableContext& Context,
+                                      [[maybe_unused]] void* CustomData) -> void
+     {
+-        // [l25] runtime-phase tag (Claude l25 item 6): once-only proof that a
+-        // carrier UFunction ever fired this hook at all (the ScriptHookThunks
+-        // UFunction::Func swap worked and the engine called the carrier). This
+-        // is the first split of any marshal-path diagnosis: absence means the
+-        // carrier never invoked the hook; presence localizes any stall to the
+-        // downstream identity/gate/drain steps below.
+-        static std::atomic<bool> s_marshal_hook_first_invocation{true};
+-        if (s_marshal_hook_first_invocation.exchange(false, std::memory_order_relaxed))
++        // [R9-GUARD] the engine calls this directly: nothing may escape into engine code
++        // (escaping = std::terminate / abort; launch 3 crash).
++        try
+         {
+-            L22Diagnostics::observe([&]() {
+-                Output::send(STR("[l25] marshal hook first invocation (carrier fired)\n"));
+-            });
+-            diagnostic_event("r3_marshal_first_invoke", 1u);
+-        }
+-#ifdef __PROSPERO__
+-        auto native_name_ticket=NativeNameThread::acquire_runtime();
+-        if(!native_name_ticket.ticket)return;
+-        // ORDER MATTERS (R3D 4.3): under BOTH_FAIL nothing else publishes the identity,
+-        // so the marshal CANNOT gate on IsInGameThreadRaw() first - before publication
+-        // that predicate is false for every thread and the pump would never start. The
+-        // first accepted invocation publishes via the initializer bridge (publish_current
+-        // is mutex-arbitrated: exactly one thread wins; every other thread, on this and
+-        // later invocations, refuses); from then on the raw gate refuses worker threads.
+-        // The publishing thread BECOMES the game thread - the same semantics as
+-        // HookedEngineTick's genuine-callback publication, backed by the calibration's
+-        // game-thread-stability criterion C-4 (CARRIER-CANDIDATES).
+-        if (!m_funcptr_marshal_identity_published)
+-        {
+-            // 4.4a: the HookedEngineTick publication body, routed onto the marshal.
+-            // Published/AlreadyCurrent both mean this caller IS the game thread;
+-            // Unavailable/DifferentThread/StartupWait-cancelled refuse (false).
+-            if (!Unreal::R3MarshalPublishGameThreadIdentity())
++            // [l25] runtime-phase tag (Claude l25 item 6): once-only proof that a
++            // carrier UFunction ever fired this hook at all (the ScriptHookThunks
++            // UFunction::Func swap worked and the engine called the carrier). This
++            // is the first split of any marshal-path diagnosis: absence means the
++            // carrier never invoked the hook; presence localizes any stall to the
++            // downstream identity/gate/drain steps below.
++            static std::atomic<bool> s_marshal_hook_first_invocation{true};
++            if (s_marshal_hook_first_invocation.exchange(false, std::memory_order_relaxed))
+             {
+-                return;
++                L22Diagnostics::observe([&]() {
++                    Output::send(STR("[l25] marshal hook first invocation (carrier fired)\n"));
++                });
++                diagnostic_event("r3_marshal_first_invoke", 1u);
+             }
+-            m_funcptr_marshal_identity_published = true;
+-            if (Unreal::R3MarshalPumpPending() && !m_funcptr_marshal_pump_pending_logged)
++    #ifdef __PROSPERO__
++            auto native_name_ticket=NativeNameThread::acquire_runtime();
++            if(!native_name_ticket.ticket)return;
++            // ORDER MATTERS (R3D 4.3): under BOTH_FAIL nothing else publishes the identity,
++            // so the marshal CANNOT gate on IsInGameThreadRaw() first - before publication
++            // that predicate is false for every thread and the pump would never start. The
++            // first accepted invocation publishes via the initializer bridge (publish_current
++            // is mutex-arbitrated: exactly one thread wins; every other thread, on this and
++            // later invocations, refuses); from then on the raw gate refuses worker threads.
++            // The publishing thread BECOMES the game thread - the same semantics as
++            // HookedEngineTick's genuine-callback publication, backed by the calibration's
++            // game-thread-stability criterion C-4 (CARRIER-CANDIDATES).
++            if (!m_funcptr_marshal_identity_published)
+             {
+-                m_funcptr_marshal_pump_pending_logged = true;
+-                Output::send(STR("[R3] marshal is the game-thread pump (initializer deferred its EngineTick registrations)\n"));
++                // 4.4a: the HookedEngineTick publication body, routed onto the marshal.
++                // Published/AlreadyCurrent both mean this caller IS the game thread;
++                // Unavailable/DifferentThread/StartupWait-cancelled refuse (false).
++                if (!Unreal::R3MarshalPublishGameThreadIdentity())
++                {
++                    return;
++                }
++                m_funcptr_marshal_identity_published = true;
++                if (Unreal::R3MarshalPumpPending() && !m_funcptr_marshal_pump_pending_logged)
++                {
++                    m_funcptr_marshal_pump_pending_logged = true;
++                    Output::send(STR("[R3] marshal is the game-thread pump (initializer deferred its EngineTick registrations)\n"));
++                }
+             }
+-        }
+-        // The carrier may be invoked on worker threads. Do not inspect Lua action
+-        // state until the published game thread is this exact caller thread.
+-        if (!Unreal::IsInGameThreadRaw())
+-        {
+-            return;
+-        }
+-        // [claude-cloud event-carrier] liveness for r3_marshal_lazy_arm's staleness rescan.
+-        m_funcptr_marshal_last_fire_ms.store(r3_now_ms(), std::memory_order_relaxed);
+-        // [l25] throttled pump liveness (Claude l25 item 6, exact recommendation):
+-        // at most one cheap diagnostic_event("r3_marshal_pumped", ms) per second
+-        // once the carrier fires on the published game thread past the raw gate.
+-        // Proves the drain path stays reachable; no allocation, no log spam.
+-        {
+-            static std::atomic<int64_t> s_marshal_pump_event_ms{0};
+-            const int64_t pump_now_ms = r3_now_ms();
+-            int64_t last_pump_event_ms = s_marshal_pump_event_ms.load(std::memory_order_relaxed);
+-            if (pump_now_ms - last_pump_event_ms >= 1000 &&
+-                s_marshal_pump_event_ms.compare_exchange_strong(last_pump_event_ms, pump_now_ms, std::memory_order_relaxed))
++            // The carrier may be invoked on worker threads. Do not inspect Lua action
++            // state until the published game thread is this exact caller thread.
++            if (!Unreal::IsInGameThreadRaw())
+             {
+-                diagnostic_event("r3_marshal_pumped", static_cast<unsigned int>(pump_now_ms & 0xFFFF'FFFF));
++                return;
+             }
+-        }
+-        NativeLuaActionDispatchScope action_dispatch;
+-        if (!action_dispatch.owns_dispatch())
+-            return;
+-        // [R3][worker-gate5-loadmap r3] The marshal world is now PROVEN live (identity
+-        // published, this IS the published game thread, dispatch owned): land the
+-        // deferred LoadMap arm exactly once. No-op unless the r3 gate queued it in
+-        // on_program_start; if the arm is refused it refuses LOUDLY (fail-closed).
+-        try_deferred_loadmap_arm();
+-        // [FL-MAP] REMOVED from the dispatch path (Claude round-10 item 2,
+-        // launch-2 spawner regression root cause): the 1 Hz World-identity
+-        // scan ran INSIDE funcptr_marshal_hook — the same hook that
+-        // dispatches keybind callbacks. The 40K-object engine scan during
+-        // callback dispatch corrupted/killed the Lua callback execution
+-        // (launch-2 evidence: F7 keybind entries with ZERO Lua output and
+-        // ZERO ExecuteInGameThread queues from either mod; round-4 without
+-        // this code: both queued and ran). Map-load logging is now
+-        // event-driven only (NotifyOnNewObject at framework start, see the
+-        // [FL-MAP-EV] registration in UnrealInitializer).
+-#endif
+-        {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+-            LuaMod::m_is_processing_actions = true;
+-        }
++            // [claude-cloud event-carrier] liveness for r3_marshal_lazy_arm's staleness rescan.
++            m_funcptr_marshal_last_fire_ms.store(r3_now_ms(), std::memory_order_relaxed);
++            // [l25] throttled pump liveness (Claude l25 item 6, exact recommendation):
++            // at most one cheap diagnostic_event("r3_marshal_pumped", ms) per second
++            // once the carrier fires on the published game thread past the raw gate.
++            // Proves the drain path stays reachable; no allocation, no log spam.
++            {
++                static std::atomic<int64_t> s_marshal_pump_event_ms{0};
++                const int64_t pump_now_ms = r3_now_ms();
++                int64_t last_pump_event_ms = s_marshal_pump_event_ms.load(std::memory_order_relaxed);
++                if (pump_now_ms - last_pump_event_ms >= 1000 &&
++                    s_marshal_pump_event_ms.compare_exchange_strong(last_pump_event_ms, pump_now_ms, std::memory_order_relaxed))
++                {
++                    diagnostic_event("r3_marshal_pumped", static_cast<unsigned int>(pump_now_ms & 0xFFFF'FFFF));
++                }
++            }
++            NativeLuaActionDispatchScope action_dispatch;
++            if (!action_dispatch.owns_dispatch())
++                return;
++            // [R3][worker-gate5-loadmap r3] The marshal world is now PROVEN live (identity
++            // published, this IS the published game thread, dispatch owned): land the
++            // deferred LoadMap arm exactly once. No-op unless the r3 gate queued it in
++            // on_program_start; if the arm is refused it refuses LOUDLY (fail-closed).
++            try_deferred_loadmap_arm();
++            // [FL-MAP] REMOVED from the dispatch path (Claude round-10 item 2,
++            // launch-2 spawner regression root cause): the 1 Hz World-identity
++            // scan ran INSIDE funcptr_marshal_hook — the same hook that
++            // dispatches keybind callbacks. The 40K-object engine scan during
++            // callback dispatch corrupted/killed the Lua callback execution
++            // (launch-2 evidence: F7 keybind entries with ZERO Lua output and
++            // ZERO ExecuteInGameThread queues from either mod; round-4 without
++            // this code: both queued and ran). Map-load logging is now
++            // event-driven only (NotifyOnNewObject at framework start, see the
++            // [FL-MAP-EV] registration in UnrealInitializer).
++    #endif
++            {
++                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                LuaMod::m_is_processing_actions = true;
++            }
+ 
+-        process_simple_actions(LuaMod::m_game_thread_actions);
+-        process_delayed_actions<kFuncPtrMarshalExecutor>(LuaMod::m_delayed_game_thread_actions);
++            process_simple_actions(LuaMod::m_game_thread_actions);
++            process_delayed_actions<kFuncPtrMarshalExecutor>(LuaMod::m_delayed_game_thread_actions);
+ 
+-        process_pending_notify_on_new_object_callbacks();
++            process_pending_notify_on_new_object_callbacks();
+ 
+-        {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+-            LuaMod::m_is_processing_actions = false;
+-            if (!LuaMod::m_pending_game_thread_actions.empty())
+             {
+-                LuaMod::m_game_thread_actions.insert(
+-                    LuaMod::m_game_thread_actions.end(),
+-                    std::make_move_iterator(LuaMod::m_pending_game_thread_actions.begin()),
+-                    std::make_move_iterator(LuaMod::m_pending_game_thread_actions.end()));
+-                LuaMod::m_pending_game_thread_actions.clear();
++                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                LuaMod::m_is_processing_actions = false;
++                if (!LuaMod::m_pending_game_thread_actions.empty())
++                {
++                    LuaMod::m_game_thread_actions.insert(
++                        LuaMod::m_game_thread_actions.end(),
++                        std::make_move_iterator(LuaMod::m_pending_game_thread_actions.begin()),
++                        std::make_move_iterator(LuaMod::m_pending_game_thread_actions.end()));
++                    LuaMod::m_pending_game_thread_actions.clear();
++                }
++                if (!LuaMod::m_pending_delayed_game_thread_actions.empty())
++                {
++                    LuaMod::m_delayed_game_thread_actions.insert(
++                        LuaMod::m_delayed_game_thread_actions.end(),
++                        std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.begin()),
++                        std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.end()));
++                    LuaMod::m_pending_delayed_game_thread_actions.clear();
++                }
+             }
+-            if (!LuaMod::m_pending_delayed_game_thread_actions.empty())
+-            {
+-                LuaMod::m_delayed_game_thread_actions.insert(
+-                    LuaMod::m_delayed_game_thread_actions.end(),
+-                    std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.begin()),
+-                    std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.end()));
+-                LuaMod::m_pending_delayed_game_thread_actions.clear();
+-            }
+         }
++        catch (...)
++        {
++            try { Output::send<LogLevel::Error>(STR("[R9-GUARD] game-thread hook contained an exception\n")); } catch (...) {}
++        }
+     }
+ 
+ #if defined(__PROSPERO__)
+@@ -5791,82 +5809,91 @@
+     {
+         auto VmtEngineTickDrain() noexcept -> void
+         {
++            // [R9-GUARD] the engine calls this directly: nothing may escape into engine code
++            // (escaping = std::terminate / abort; launch 3 crash).
+             try
+             {
+-                // Identity was published by the hook body (UnrealInitializer
+-                // VmtPump) before this call; the raw gate still refuses any
+-                // foreign-thread entry (defensive: the hook cannot fire on a
+-                // worker thread, but the bridge is exported).
+-                if (!Unreal::IsInGameThreadRaw())
++                try
+                 {
+-                    return;
+-                }
+-                NativeLuaActionDispatchScope action_dispatch;
+-                if (!action_dispatch.owns_dispatch())
+-                {
+-                    return;
+-                }
+-                // The marshal world is PROVEN live on the genuine game thread
+-                // here (stronger than the carrier proof): land the deferred
+-                // LoadMap arm exactly once, same as the marshal drain.
+-                try_deferred_loadmap_arm();
+-                {
+-                    std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+-                    LuaMod::m_is_processing_actions = true;
+-                    // FIX4 per-tick cap: drain at most kCap simple actions per
+-                    // genuine tick; the overflow moves to the FRONT of the
+-                    // pending queue so the requeue below returns it to the
+-                    // active queue in order for the next tick.
+-                    constexpr size_t kVmtMaxActionsPerTick = 128;
+-                    if (LuaMod::m_game_thread_actions.size() > kVmtMaxActionsPerTick)
++                    // Identity was published by the hook body (UnrealInitializer
++                    // VmtPump) before this call; the raw gate still refuses any
++                    // foreign-thread entry (defensive: the hook cannot fire on a
++                    // worker thread, but the bridge is exported).
++                    if (!Unreal::IsInGameThreadRaw())
+                     {
+-                        auto& active = LuaMod::m_game_thread_actions;
+-                        auto& pending = LuaMod::m_pending_game_thread_actions;
+-                        pending.insert(pending.begin(),
+-                                       std::make_move_iterator(active.begin() + static_cast<std::ptrdiff_t>(kVmtMaxActionsPerTick)),
+-                                       std::make_move_iterator(active.end()));
+-                        active.resize(kVmtMaxActionsPerTick);
++                        return;
+                     }
+-                }
+-                process_simple_actions(LuaMod::m_game_thread_actions);
+-                // FIX4 time-box: stages past the deadline are skipped this
+-                // tick; their work is untouched (delayed actions keep their
+-                // status, pending callbacks stay pending).
+-                constexpr std::chrono::milliseconds kVmtDrainBudget{4};
+-                const auto drain_deadline = std::chrono::steady_clock::now() + kVmtDrainBudget;
+-                if (std::chrono::steady_clock::now() < drain_deadline)
+-                {
+-                    process_delayed_actions<kFuncPtrMarshalExecutor>(LuaMod::m_delayed_game_thread_actions);
+-                }
+-                if (std::chrono::steady_clock::now() < drain_deadline)
+-                {
+-                    process_pending_notify_on_new_object_callbacks();
+-                }
+-                {
+-                    std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+-                    LuaMod::m_is_processing_actions = false;
+-                    if (!LuaMod::m_pending_game_thread_actions.empty())
++                    NativeLuaActionDispatchScope action_dispatch;
++                    if (!action_dispatch.owns_dispatch())
+                     {
+-                        LuaMod::m_game_thread_actions.insert(
+-                            LuaMod::m_game_thread_actions.end(),
+-                            std::make_move_iterator(LuaMod::m_pending_game_thread_actions.begin()),
+-                            std::make_move_iterator(LuaMod::m_pending_game_thread_actions.end()));
+-                        LuaMod::m_pending_game_thread_actions.clear();
++                        return;
+                     }
+-                    if (!LuaMod::m_pending_delayed_game_thread_actions.empty())
++                    // The marshal world is PROVEN live on the genuine game thread
++                    // here (stronger than the carrier proof): land the deferred
++                    // LoadMap arm exactly once, same as the marshal drain.
++                    try_deferred_loadmap_arm();
+                     {
+-                        LuaMod::m_delayed_game_thread_actions.insert(
+-                            LuaMod::m_delayed_game_thread_actions.end(),
+-                            std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.begin()),
+-                            std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.end()));
+-                        LuaMod::m_pending_delayed_game_thread_actions.clear();
++                        std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                        LuaMod::m_is_processing_actions = true;
++                        // FIX4 per-tick cap: drain at most kCap simple actions per
++                        // genuine tick; the overflow moves to the FRONT of the
++                        // pending queue so the requeue below returns it to the
++                        // active queue in order for the next tick.
++                        constexpr size_t kVmtMaxActionsPerTick = 128;
++                        if (LuaMod::m_game_thread_actions.size() > kVmtMaxActionsPerTick)
++                        {
++                            auto& active = LuaMod::m_game_thread_actions;
++                            auto& pending = LuaMod::m_pending_game_thread_actions;
++                            pending.insert(pending.begin(),
++                                           std::make_move_iterator(active.begin() + static_cast<std::ptrdiff_t>(kVmtMaxActionsPerTick)),
++                                           std::make_move_iterator(active.end()));
++                            active.resize(kVmtMaxActionsPerTick);
++                        }
+                     }
++                    process_simple_actions(LuaMod::m_game_thread_actions);
++                    // FIX4 time-box: stages past the deadline are skipped this
++                    // tick; their work is untouched (delayed actions keep their
++                    // status, pending callbacks stay pending).
++                    constexpr std::chrono::milliseconds kVmtDrainBudget{4};
++                    const auto drain_deadline = std::chrono::steady_clock::now() + kVmtDrainBudget;
++                    if (std::chrono::steady_clock::now() < drain_deadline)
++                    {
++                        process_delayed_actions<kFuncPtrMarshalExecutor>(LuaMod::m_delayed_game_thread_actions);
++                    }
++                    if (std::chrono::steady_clock::now() < drain_deadline)
++                    {
++                        process_pending_notify_on_new_object_callbacks();
++                    }
++                    {
++                        std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                        LuaMod::m_is_processing_actions = false;
++                        if (!LuaMod::m_pending_game_thread_actions.empty())
++                        {
++                            LuaMod::m_game_thread_actions.insert(
++                                LuaMod::m_game_thread_actions.end(),
++                                std::make_move_iterator(LuaMod::m_pending_game_thread_actions.begin()),
++                                std::make_move_iterator(LuaMod::m_pending_game_thread_actions.end()));
++                            LuaMod::m_pending_game_thread_actions.clear();
++                        }
++                        if (!LuaMod::m_pending_delayed_game_thread_actions.empty())
++                        {
++                            LuaMod::m_delayed_game_thread_actions.insert(
++                                LuaMod::m_delayed_game_thread_actions.end(),
++                                std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.begin()),
++                                std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.end()));
++                            LuaMod::m_pending_delayed_game_thread_actions.clear();
++                        }
++                    }
+                 }
++                catch (...)
++                {
++                    // The hook body (drive_tick) already isolated this drain; a
++                    // drain failure never propagates into the engine Tick path.
++                }
+             }
+             catch (...)
+             {
+-                // The hook body (drive_tick) already isolated this drain; a
+-                // drain failure never propagates into the engine Tick path.
++                try { Output::send<LogLevel::Error>(STR("[R9-GUARD] game-thread hook contained an exception\n")); } catch (...) {}
+             }
+         }
+     }
+@@ -5877,46 +5904,55 @@
+                                  [[maybe_unused]] float DeltaSeconds,
+                                  [[maybe_unused]] bool bIdle) -> void
+     {
+-#ifdef __PROSPERO__
+-        // Each callback must check the identity published by the real Tick.
+-        // An earlier callback's rejection does not stop this callback.
+-        if (!Unreal::IsInGameThreadRaw())
++        // [R9-GUARD] the engine calls this directly: nothing may escape into engine code
++        // (escaping = std::terminate / abort; launch 3 crash).
++        try
+         {
+-            return;
+-        }
+-        NativeLuaActionDispatchScope action_dispatch;
+-        if (!action_dispatch.owns_dispatch())
+-            return;
+-#endif
+-        {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+-            LuaMod::m_is_processing_actions = true;
+-        }
++    #ifdef __PROSPERO__
++            // Each callback must check the identity published by the real Tick.
++            // An earlier callback's rejection does not stop this callback.
++            if (!Unreal::IsInGameThreadRaw())
++            {
++                return;
++            }
++            NativeLuaActionDispatchScope action_dispatch;
++            if (!action_dispatch.owns_dispatch())
++                return;
++    #endif
++            {
++                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                LuaMod::m_is_processing_actions = true;
++            }
+ 
+-        process_simple_actions(LuaMod::m_engine_tick_actions);
+-        process_delayed_actions<GameThreadExecutionMethod::EngineTick>(LuaMod::m_delayed_game_thread_actions);
++            process_simple_actions(LuaMod::m_engine_tick_actions);
++            process_delayed_actions<GameThreadExecutionMethod::EngineTick>(LuaMod::m_delayed_game_thread_actions);
+ 
+-        process_pending_notify_on_new_object_callbacks();
++            process_pending_notify_on_new_object_callbacks();
+ 
+-        {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+-            LuaMod::m_is_processing_actions = false;
+-            if (!LuaMod::m_pending_engine_tick_actions.empty())
+             {
+-                LuaMod::m_engine_tick_actions.insert(
+-                    LuaMod::m_engine_tick_actions.end(),
+-                    std::make_move_iterator(LuaMod::m_pending_engine_tick_actions.begin()),
+-                    std::make_move_iterator(LuaMod::m_pending_engine_tick_actions.end()));
+-                LuaMod::m_pending_engine_tick_actions.clear();
+-            }
+-            if (!LuaMod::m_pending_delayed_game_thread_actions.empty())
+-            {
+-                LuaMod::m_delayed_game_thread_actions.insert(
+-                    LuaMod::m_delayed_game_thread_actions.end(),
+-                    std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.begin()),
+-                    std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.end()));
+-                LuaMod::m_pending_delayed_game_thread_actions.clear();
++                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                LuaMod::m_is_processing_actions = false;
++                if (!LuaMod::m_pending_engine_tick_actions.empty())
++                {
++                    LuaMod::m_engine_tick_actions.insert(
++                        LuaMod::m_engine_tick_actions.end(),
++                        std::make_move_iterator(LuaMod::m_pending_engine_tick_actions.begin()),
++                        std::make_move_iterator(LuaMod::m_pending_engine_tick_actions.end()));
++                    LuaMod::m_pending_engine_tick_actions.clear();
++                }
++                if (!LuaMod::m_pending_delayed_game_thread_actions.empty())
++                {
++                    LuaMod::m_delayed_game_thread_actions.insert(
++                        LuaMod::m_delayed_game_thread_actions.end(),
++                        std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.begin()),
++                        std::make_move_iterator(LuaMod::m_pending_delayed_game_thread_actions.end()));
++                    LuaMod::m_pending_delayed_game_thread_actions.clear();
++                }
+             }
++        }
++        catch (...)
++        {
++            try { Output::send<LogLevel::Error>(STR("[R9-GUARD] game-thread hook contained an exception\n")); } catch (...) {}
+         }
+     }
+ 
+@@ -8573,8 +8609,16 @@
+                 const int rebase = LuaMadeSimple::rebase_pristine_state_on_backing(const_cast<LuaMadeSimple::Lua&>(lua()));
+                 try
+                 {
+-                    Output::send(STR("[MEM] mod={} lua-state-backend={} rebase={}\n"), m_mod_name,
+-                                 rebase == 1 || rebase == 0 ? STR("gmalloc") : STR("libc"), rebase);
++                    if (rebase == 1 || rebase == 0)
++                    {
++                        Output::send(STR("[MEM] mod={} lua-state-backend=gmalloc rebase={}\n"), m_mod_name, rebase);
++                    }
++                    else
++                    {
++                        // reviewer: a mod left on libc is a FAILURE, not a pass (rebase=-1 no backing,
++                        // -2 state not pristine, -3 allocation failed).
++                        Output::send<LogLevel::Error>(STR("[MEM] FAIL mod={} lua-state-backend=libc rebase={}\n"), m_mod_name, rebase);
++                    }
+                 }
+                 catch (...)
+                 {
+@@ -10003,7 +10047,16 @@
+                 continue;
+             }
+ 
+-            process_delayed_actions();
++            // [R9-GUARD] an error in a mod's LoopAsync/ExecuteAsync must never end this thread
++            // (an escaping exception terminates the game): contain it and keep looping, as PC does.
++            try
++            {
++                process_delayed_actions();
++            }
++            catch (...)
++            {
++                try { Output::send<LogLevel::Error>(STR("[R9-GUARD] async action loop contained an exception; continuing\n")); } catch (...) {}
++            }
+ 
+             std::this_thread::sleep_for(std::chrono::milliseconds(5));
+         }
+@@ -10051,14 +10104,26 @@
+                                                        }
+                                                        catch (std::exception& e)
+                                                        {
+-                                                           Output::send(STR("[{}] {}\n"),
+-                                                                        ensure_str(action.type == LuaMod::ActionType::Loop ? "LoopAsync" : "DelayedAction"),
+-                                                                        ensure_str(e.what()));
++                                                           try
++                                                           {
++                                                               Output::send(STR("[{}] {}\n"),
++                                                                            ensure_str(action.type == LuaMod::ActionType::Loop ? "LoopAsync" : "DelayedAction"),
++                                                                            ensure_str(e.what()));
++                                                           }
++                                                           catch (...)
++                                                           {
++                                                           }
+                                                        }
+                                                        catch (...)
+                                                        {
+-                                                           Output::send(STR("[{}] Unknown exception\n"),
+-                                                                        ensure_str(action.type == LuaMod::ActionType::Loop ? "LoopAsync" : "DelayedAction"));
++                                                           try
++                                                           {
++                                                               Output::send(STR("[{}] Unknown exception\n"),
++                                                                            ensure_str(action.type == LuaMod::ActionType::Loop ? "LoopAsync" : "DelayedAction"));
++                                                           }
++                                                           catch (...)
++                                                           {
++                                                           }
+                                                        }
+ 
+                                                        return result;
+--- /LOCAL_SCRATCH	2026-10-12 11:08:20
++++ 2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMadeSimple/LuaMadeSimple.cpp	2026-10-12 11:30:47
+@@ -86,6 +86,7 @@
+         void (*free_fn)(void* ptr) noexcept{nullptr};
+     };
+     static LmsBacking g_backing{};
++    static LuaBackingAllocator g_backing_public{}; // [R9-MEM] same table, public type (get_lua_backing_allocator)
+     static LmsRelaxedCounter g_backing_installed{0}; // 0 = none, 1 = published (acquire/release below)
+     static LmsRelaxedCounter g_backing_states{0};
+     static LmsRelaxedCounter g_libc_states{0};
+@@ -103,8 +104,14 @@
+         }
+         g_backing.realloc_fn = backing.realloc_fn;
+         g_backing.free_fn = backing.free_fn;
++        g_backing_public = backing;
+         __atomic_store_n(&g_backing_installed.value, size_t{1}, __ATOMIC_RELEASE);
+         return true;
++    }
++
++    auto get_lua_backing_allocator() noexcept -> const LuaBackingAllocator*
++    {
++        return __atomic_load_n(&g_backing_installed.value, __ATOMIC_ACQUIRE) == 1 ? &g_backing_public : nullptr;
+     }
+ 
+     // ud for a state being created now: the published table, or nullptr (libc).
+@@ -1769,6 +1776,7 @@
+                 return -3;
+             }
+             g_backing_states.fetch_add(1);
++            g_libc_states.fetch_sub(1);
+             lua_atpanic(new_state_ptr, &lms_lua_panic);
+             lua_setwarnf(new_state_ptr, lms_warnfoff, new_state_ptr);
+             lua.m_lua_state = new_state_ptr;
+--- /LOCAL_SCRATCH	2026-10-12 11:08:20
++++ 2026-10-08-l26-runtime/typescan-r4/candidate/include/LuaMadeSimple/LuaMadeSimple.hpp	2026-10-12 11:29:23
+@@ -859,6 +859,8 @@
+         void (*free_fn)(void* ptr) noexcept{nullptr};
+     };
+     RC_LMS_API auto set_lua_backing_allocator(const LuaBackingAllocator& backing) noexcept -> bool;
++    // [R9-MEM] the installed backing store, or nullptr while Lua still uses libc.
++    RC_LMS_API auto get_lua_backing_allocator() noexcept -> const LuaBackingAllocator*;
+     // [R9-MEM-REBASE] Mod Lua states are created when mods are set up, long before the
+     // engine allocator is bound. A state that is still PRISTINE (empty stack, empty
+     // globals, nothing loaded) is replaced in place by a fresh state on the installed
+--- /LOCAL_SCRATCH	2026-10-10 12:00:54
++++ 2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaUObject.cpp	2026-10-12 11:29:38
+@@ -45,7 +45,79 @@
+ 
+ namespace RC::LuaType
+ {
+-    std::unordered_set<size_t> s_lua_unreal_objects{};
++    // [R9-MEM] The set of every UObject ever wrapped for Lua grows by one node per wrapped
++    // object and only shrinks when the engine deletes the object. A full ForEachUObject walk
++    // (~160k objects on Townfall) put several MB on the game process's small libc heap and
++    // exhausted it (launch 2 and 3 crashes at self-test 133). Its nodes now live on the same
++    // backing store as Lua (engine GMalloc) when one is installed; the choice is made once,
++    // at the first allocation (always under s_lua_unreal_objects_map_mutex), and never mixed.
++    // The set is never destroyed, so nothing is freed into the engine allocator at exit.
++    namespace
++    {
++        int s_lua_object_set_alloc_mode{0}; // 0 undecided, 1 backing store, 2 libc
++
++        template <typename T>
++        struct LuaObjectSetAllocator
++        {
++            using value_type = T;
++            LuaObjectSetAllocator() noexcept = default;
++            template <typename U>
++            LuaObjectSetAllocator(const LuaObjectSetAllocator<U>&) noexcept
++            {
++            }
++            auto allocate(size_t n) -> T*
++            {
++                if (s_lua_object_set_alloc_mode == 0)
++                {
++                    s_lua_object_set_alloc_mode = LuaMadeSimple::get_lua_backing_allocator() != nullptr ? 1 : 2;
++                }
++                if (s_lua_object_set_alloc_mode == 1)
++                {
++                    const auto* backing = LuaMadeSimple::get_lua_backing_allocator();
++                    void* p = backing != nullptr ? backing->realloc_fn(nullptr, n * sizeof(T)) : nullptr;
++                    if (p == nullptr)
++                    {
++                        throw std::bad_alloc{};
++                    }
++                    return static_cast<T*>(p);
++                }
++                return static_cast<T*>(::operator new(n * sizeof(T)));
++            }
++            auto deallocate(T* p, size_t) noexcept -> void
++            {
++                if (p == nullptr)
++                {
++                    return;
++                }
++                if (s_lua_object_set_alloc_mode == 1)
++                {
++                    if (const auto* backing = LuaMadeSimple::get_lua_backing_allocator())
++                    {
++                        backing->free_fn(p);
++                    }
++                    return;
++                }
++                ::operator delete(p);
++            }
++            template <typename U>
++            auto operator==(const LuaObjectSetAllocator<U>&) const noexcept -> bool
++            {
++                return true;
++            }
++            template <typename U>
++            auto operator!=(const LuaObjectSetAllocator<U>&) const noexcept -> bool
++            {
++                return false;
++            }
++        };
++
++        using LuaObjectSet = std::unordered_set<size_t, std::hash<size_t>, std::equal_to<size_t>, LuaObjectSetAllocator<size_t>>;
++        auto lua_unreal_objects() -> LuaObjectSet&
++        {
++            static LuaObjectSet* const set = new LuaObjectSet{};
++            return *set;
++        }
++    } // namespace
+     std::mutex s_lua_unreal_objects_map_mutex{};
+ 
+     auto add_to_global_unreal_objects_map(Unreal::UObject* object) -> void
+@@ -53,7 +125,7 @@
+         if (object)
+         {
+             std::lock_guard lock{s_lua_unreal_objects_map_mutex};
+-            s_lua_unreal_objects.emplace(object->HashObject());
++            lua_unreal_objects().emplace(object->HashObject());
+         }
+     }
+ 
+@@ -62,9 +134,9 @@
+         if (object)
+         {
+             std::lock_guard lock{s_lua_unreal_objects_map_mutex};
+-            if (const auto it = s_lua_unreal_objects.find(object->HashObject()); it != s_lua_unreal_objects.end())
++            if (const auto it = lua_unreal_objects().find(object->HashObject()); it != lua_unreal_objects().end())
+             {
+-                s_lua_unreal_objects.erase(it);
++                lua_unreal_objects().erase(it);
+             }
+         }
+     }
+@@ -72,7 +144,7 @@
+     auto is_object_in_global_unreal_object_map(Unreal::UObject* object) -> bool
+     {
+         std::lock_guard lock{s_lua_unreal_objects_map_mutex};
+-        return object && s_lua_unreal_objects.contains(object->HashObject());
++        return object && lua_unreal_objects().contains(object->HashObject());
+     }
+ 
+     static auto is_uobject_userdata(const LuaMadeSimple::Lua& lua, int32_t index) -> bool
+@@ -91,7 +163,14 @@
+     FLuaObjectDeleteListener FLuaObjectDeleteListener::s_lua_object_delete_listener{};
+     void FLuaObjectDeleteListener::NotifyUObjectDeleted(const Unreal::UObjectBase* object, [[maybe_unused]] int32_t index)
+     {
+-        remove_from_global_unreal_objects_map(static_cast<const Unreal::UObject*>(object));
++        // [R9-GUARD] called by the engine for every deleted object: nothing may escape into it.
++        try
++        {
++            remove_from_global_unreal_objects_map(static_cast<const Unreal::UObject*>(object));
++        }
++        catch (...)
++        {
++        }
+     }
+ 
+ #ifdef __PROSPERO__
+--- /LOCAL_SCRATCH	2026-10-08 19:15:02
++++ 2026-10-08-l26-runtime/typescan-r4/candidate/src/ClassListener.cpp	2026-10-12 11:29:52
+@@ -163,90 +163,125 @@
+ 
+     void FClassCreateListener::OnUObjectArrayShutdown()
+     {
+-        UObjectArray::RemoveUObjectCreateListener(this);
++        // [R9-GUARD] called by the engine: nothing may escape into engine code.
++        try
++        {
++            UObjectArray::RemoveUObjectCreateListener(this);
++        }
++        catch (...)
++        {
++        }
+     }
+ 
+     void FClassDeleteListener::NotifyUObjectDeleted(const UObjectBase* Object, int32 Index)
+     {
+-        // L25 (item 3): throttled engine-dispatch proof marker.
+-        if (L25ClassDeleteNotifyMarker.should_log())
++        // [R9-GUARD] called by the engine: nothing may escape into engine code.
++        try
+         {
+-            Output::send(STR("[L25][DeleteListener] engine called FClassDeleteListener::NotifyUObjectDeleted (Object={} Index={} calls={})\n"),
+-                         reinterpret_cast<const void*>(Object), Index, L25ClassDeleteNotifyMarker.calls());
+-            L25ClassDeleteNotifyMarker.emit_event(static_cast<uint32_t>(Index));
+-        }
++            // L25 (item 3): throttled engine-dispatch proof marker.
++            if (L25ClassDeleteNotifyMarker.should_log())
++            {
++                Output::send(STR("[L25][DeleteListener] engine called FClassDeleteListener::NotifyUObjectDeleted (Object={} Index={} calls={})\n"),
++                             reinterpret_cast<const void*>(Object), Index, L25ClassDeleteNotifyMarker.calls());
++                L25ClassDeleteNotifyMarker.emit_event(static_cast<uint32_t>(Index));
++            }
+ 
+-        if (UnrealInitializer::StaticStorage::bUObjectArrayCacheRetired)
+-        {
+-            return;
+-        }
++            if (UnrealInitializer::StaticStorage::bUObjectArrayCacheRetired)
++            {
++                return;
++            }
+ 
+-        OBJSEARCHER_PROFILE_REMOVE()
+-        InvalidateGlobalObject(std::bit_cast<UObject*>(Object));
++            OBJSEARCHER_PROFILE_REMOVE()
++            InvalidateGlobalObject(std::bit_cast<UObject*>(Object));
+ 
+-        auto* ObjectItem = Object->GetObjectItem();
++            auto* ObjectItem = Object->GetObjectItem();
+ 
+-        // All classes.
+-        {
+-            std::lock_guard<std::mutex> Lock(ObjectSearcherPool<UClass, AnySuperStruct>::PoolMutex);
+-            ObjectSearcherPool<UClass, AnySuperStruct>::Remove(ObjectItem);
+-        }
++            // All classes.
++            {
++                std::lock_guard<std::mutex> Lock(ObjectSearcherPool<UClass, AnySuperStruct>::PoolMutex);
++                ObjectSearcherPool<UClass, AnySuperStruct>::Remove(ObjectItem);
++            }
+ 
+-        // All actor classes.
+-        {
+-            std::lock_guard<std::mutex> Lock(ObjectSearcherPool<UClass, AActor>::PoolMutex);
+-            ObjectSearcherPool<UClass, AActor>::Remove(ObjectItem);
+-        }
++            // All actor classes.
++            {
++                std::lock_guard<std::mutex> Lock(ObjectSearcherPool<UClass, AActor>::PoolMutex);
++                ObjectSearcherPool<UClass, AActor>::Remove(ObjectItem);
++            }
+ 
+-        // All actor instances.
+-        {
+-            std::lock_guard<std::mutex> Lock(ObjectSearcherPool<AActor, AnySuperStruct>::PoolMutex);
+-            ObjectSearcherPool<AActor, AnySuperStruct>::Remove(ObjectItem);
+-        }
++            // All actor instances.
++            {
++                std::lock_guard<std::mutex> Lock(ObjectSearcherPool<AActor, AnySuperStruct>::PoolMutex);
++                ObjectSearcherPool<AActor, AnySuperStruct>::Remove(ObjectItem);
++            }
+ 
+-        // All instances.
++            // All instances.
++            {
++                std::lock_guard<std::mutex> Lock(ObjectSearcherPool<AnyInstance, AnyInstance>::PoolMutex);
++                ObjectSearcherPool<AnyInstance, AnyInstance>::Remove(ObjectItem);
++            }
++        }
++        catch (...)
+         {
+-            std::lock_guard<std::mutex> Lock(ObjectSearcherPool<AnyInstance, AnyInstance>::PoolMutex);
+-            ObjectSearcherPool<AnyInstance, AnyInstance>::Remove(ObjectItem);
+         }
+     }
+ 
+     void FClassDeleteListener::OnUObjectArrayShutdown()
+     {
+-        // L25 (item 3): engine-dispatch proof marker.
+-        if (L25ClassDeleteShutdownMarker.should_log())
++        // [R9-GUARD] called by the engine: nothing may escape into engine code.
++        try
+         {
+-            Output::send(STR("[L25][DeleteListener] engine called FClassDeleteListener::OnUObjectArrayShutdown (calls={})\n"),
+-                         L25ClassDeleteShutdownMarker.calls());
+-            L25ClassDeleteShutdownMarker.emit_event(0);
++            // L25 (item 3): engine-dispatch proof marker.
++            if (L25ClassDeleteShutdownMarker.should_log())
++            {
++                Output::send(STR("[L25][DeleteListener] engine called FClassDeleteListener::OnUObjectArrayShutdown (calls={})\n"),
++                             L25ClassDeleteShutdownMarker.calls());
++                L25ClassDeleteShutdownMarker.emit_event(0);
++            }
++            UObjectArray::RemoveUObjectDeleteListener(this);
+         }
+-        UObjectArray::RemoveUObjectDeleteListener(this);
++        catch (...)
++        {
++        }
+     }
+ 
+     void FShutdownDeleteListener::NotifyUObjectDeleted([[maybe_unused]] const UObjectBase* Object, [[maybe_unused]] int32 Index)
+     {
+-        // L25 (item 3): throttled engine-dispatch proof marker (body was empty before;
+-        // this listener exists for the shutdown callback only).
+-        if (L25ShutdownDeleteNotifyMarker.should_log())
++        // [R9-GUARD] called by the engine: nothing may escape into engine code.
++        try
+         {
+-            Output::send(STR("[L25][DeleteListener] engine called FShutdownDeleteListener::NotifyUObjectDeleted (Object={} Index={} calls={})\n"),
+-                         reinterpret_cast<const void*>(Object), Index, L25ShutdownDeleteNotifyMarker.calls());
+-            L25ShutdownDeleteNotifyMarker.emit_event(static_cast<uint32_t>(Index));
++            // L25 (item 3): throttled engine-dispatch proof marker (body was empty before;
++            // this listener exists for the shutdown callback only).
++            if (L25ShutdownDeleteNotifyMarker.should_log())
++            {
++                Output::send(STR("[L25][DeleteListener] engine called FShutdownDeleteListener::NotifyUObjectDeleted (Object={} Index={} calls={})\n"),
++                             reinterpret_cast<const void*>(Object), Index, L25ShutdownDeleteNotifyMarker.calls());
++                L25ShutdownDeleteNotifyMarker.emit_event(static_cast<uint32_t>(Index));
++            }
+         }
++        catch (...)
++        {
++        }
+     }
+ 
+     void FShutdownDeleteListener::OnUObjectArrayShutdown()
+     {
+-        // L25 (item 3): engine-dispatch proof marker.
+-        if (L25ShutdownDeleteShutdownMarker.should_log())
++        // [R9-GUARD] called by the engine: nothing may escape into engine code.
++        try
+         {
+-            Output::send(STR("[L25][DeleteListener] engine called FShutdownDeleteListener::OnUObjectArrayShutdown (calls={})\n"),
+-                         L25ShutdownDeleteShutdownMarker.calls());
+-            L25ShutdownDeleteShutdownMarker.emit_event(0);
++            // L25 (item 3): engine-dispatch proof marker.
++            if (L25ShutdownDeleteShutdownMarker.should_log())
++            {
++                Output::send(STR("[L25][DeleteListener] engine called FShutdownDeleteListener::OnUObjectArrayShutdown (calls={})\n"),
++                             L25ShutdownDeleteShutdownMarker.calls());
++                L25ShutdownDeleteShutdownMarker.emit_event(0);
++            }
++            UnrealInitializer::IsInitialized() = false;
++            UnrealInitializer::StaticStorage::bIsInitialized = false;
++            UObjectArray::RemoveUObjectDeleteListener(this);
+         }
+-        UnrealInitializer::IsInitialized() = false;
+-        UnrealInitializer::StaticStorage::bIsInitialized = false;
+-        UObjectArray::RemoveUObjectDeleteListener(this);
++        catch (...)
++        {
++        }
+     }
+ 
+ }

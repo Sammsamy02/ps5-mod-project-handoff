@@ -1,0 +1,54 @@
+{
+  "worker": "worker-no-exec-mode-gate",
+  "date": "2026-10-04",
+  "mode": "PROPOSALS-ONLY",
+  "task": "Close LAUNCH10-MATRIX U-SWAP-5: design the no-exec-mode gate for the merged staged UnrealInitializer (BOTH_FAIL/FATAL rows R5/R9) — enumerate every exec-touching site the Shape-A armed fold leaves live (I7 EngineTick registration, I12 SCO callback arm, and all others, with line cites), design the compile-time gate, define the degraded data-side path and its UE4SS.log/runtime-status signatures, and deliver the exact unified diff + arm/disarm procedure.",
+  "claims": [
+    {
+      "id": "NE-1",
+      "claim": "The merged staging copy (worker-initializer-integration/staging/UnrealInitializer.cpp, 2044 lines) leaves these exec-page-touching sites live when a complete 4-slot seed table arms: (E-1) LoadMap vtable walk :1690-1698 (FLAG-2 read); (E-2) Tick vtable walk :1702 (FLAG-2 read); (E-3) vtable-mismatch display walk :1707-1737 incl. :1725 jmp resolve (FLAG-2, latent when armed); (E-4) EngineTick detour registrations :1787-1791 and :1798-1802 (FLAG-1 write, I7); (E-5) eight further virtual resolves :1810/:1819/:1828/:1837/:1846/:1855/:1864/:1873 (FLAG-2, I8); (E-6) StaticConstructObject post-callback registration :480-507 (FLAG-1 write at identity-unverified slot-4 constant, I12 — NO gate of any kind today); (E-7) ProcessInternal/PLSF derivation :1914-1975 (FLAG-3 read, closed only by v3 ini keys); (E-8) FName ctor detour verifier :1317 via :1424-1434 (FLAG-1, skipped only when seed-bound); (E-9) legacy ps_scan :957-981 and Lua AOB DoScan arms :1186/:1286 (dead when armed, the only address source when the table is absent).",
+      "status": "verified-by-reading",
+      "evidence": [
+        "TEAM:worker-initializer-integration/staging/UnrealInitializer.cpp full read (line cites above are the CURRENT staging numbering)",
+        "TEAM:worker-launch9-prediction/LAUNCH9-PREDICTION.md section 1 items 1-2 and section 2 hops I6/I7/I8/I12 (exec classes FLAG-1/FLAG-2/FLAG-3; UnrealVirtualBaseVC.hpp:115,133 -> ASMHelper.cpp:57-69 no PROSPERO branch; x64Detour.cpp:322-397)",
+        "MATRIX U-SWAP-5 row names only I7 (:1749-1764 in the pre-S2-wrapper numbering) and I12 (:480) as unconditional; this enumeration adds E-1/E-2/E-3/E-5/E-7/E-8/E-9 with the mapping to the older cite base",
+        "ASMHelper.cpp spike snapshot confirms get_first_instruction_at_address reads 16 bytes at the resolved text address with no Prospero guard"
+      ]
+    },
+    {
+      "id": "NE-2",
+      "claim": "The recommended gate source is a compile-time constant (UE4SS_NO_EXEC_MODE build define with an in-file fallback default 0 folded into constexpr bool NoExecGate::kNoExecMode), NOT a settings key: (a) the merged-unit-only diff keeps the replace-receipt walk self-contained and hash-covers the armed state; (b) it constant-folds every refused site out of the binary, so no ini key/Lua/probe can re-arm exec at runtime; (c) the settings-v3 precedent itself documents the disqualifying trap — missing/invalid key silently keeps the true default (SETTINGS-V3-DECISION section 1 trap 2), which for a safety gate means a typo silently re-enables exec; (d) FATAL-row console fragility argues against runtime-parse dependence; (e) matrix R5 already notes 'no new key REQUIRED if the gate is compile-time'. The v3 ini keys (PI/PLSF=0) remain complementary and unchanged.",
+      "status": "verified-by-analysis",
+      "evidence": [
+        "TEAM:worker-settings-v3-package/SETTINGS-V3-DECISION.md sections 1-4",
+        "MATRIX R5 row settings-delta cell",
+        "In-unit precedent: SeedArming::kExecWritabilityVerdictGating constexpr designed-not-armed (staging :623-638); SHAPE A compile-time fold (:883-930)"
+      ]
+    },
+    {
+      "id": "NE-3",
+      "claim": "The gate diff gates all nine gate-able sites (E-1..E-8) with named loud [NoExec] refusals and a machine-checkable summary line, keeps every data-side path alive (seed chain incl. the behavioral ctor probe, GUObjectArray listeners, searcher pools, reflection, S2 layout gate, Kismet fallback, QueryHarness layout arm), and throws (never degrades silently) exactly where no data-side fallback exists: seed-table-absent under no-exec mode, and a defensively-guarded FName detour verifier.",
+      "status": "designed-delivered-as-diff",
+      "evidence": [
+        "NO-EXEC-GATE.diff in this directory (exact unified diff vs the staging copy)",
+        "NO-EXEC-GATE-DESIGN.md sections 3-6"
+      ]
+    },
+    {
+      "id": "NE-4",
+      "claim": "The signature-preservation ordering is: partial seed table under an armed gate STILL throws the unchanged [Seeds] Required-slot seed table incomplete line (T-A) before any [NoExec] logic runs, so matrix box-2 D1 lookup reads identically for row R8; the new [NoExec] REFUSED throw exists only for the table-absent case; a healthy degraded run ends with [NoExec] summary: mode=on exec_sites_refused=<N> engine_ready_data_side=1 and the unchanged I13 ack chain (runtime-status.txt formats untouched).",
+      "status": "designed-delivered-as-diff",
+      "evidence": [
+        "NO-EXEC-GATE-DESIGN.md section 5 (truth table + exact log lines)",
+        "MATRIX section 4 boxes 2-3; LAUNCH9-PREDICTION section 2 I13 and failure-candidate signatures"
+      ]
+    }
+  ],
+  "non_claims": [
+    "No claim the gated unit was compiled against the real UE4SS include tree or executed in any engine; the only build evidence is a host-side mock-TU syntax/warning check of the inserted hunks under both gate states (-Wall -Wextra -Werror).",
+    "No claim any BOTH_FAIL/FATAL verdict exists; the gate is designed for rows R5/R9 per the matrix and arms only when a controller composes it.",
+    "No claim about the R3 zero-syscall tier's spawner-dependency map: worker-r3-zerosyscall-tier was CLAIM-only at design time (R3-TIER-DESIGN.md absent); all R3-dependent degraded-path rows are marked PENDING-R3.",
+    "No claim about kernel/exec-page behavior, seed validity, or the SCO constant; launch evidence remains the only source.",
+    "Nothing outside the staging copy is modified; the merged initializer is frozen and this diff is the NEXT revision's input only."
+  ]
+}

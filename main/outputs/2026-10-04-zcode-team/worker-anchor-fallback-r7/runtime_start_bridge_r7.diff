@@ -1,0 +1,178 @@
+PROPOSAL ONLY — worker-anchor-fallback-r7. Apply from outputs/2026-10-04-zcode-team/worker-module-start-wiring/ with:
+  cp runtime_start_bridge_r6.cpp runtime_start_bridge_r7.cpp && patch -p1 < ../../worker-anchor-fallback-r7/runtime_start_bridge_r7.diff
+--- a/runtime_start_bridge_r6.cpp
++++ b/runtime_start_bridge_r7.cpp
+@@ -109,24 +109,63 @@
+     return profile;
+ }
+ 
+-// ---- validated data-window anchor (r3) ------------------------------------
++// ---- validated data-window ladder (r7) -------------------------------------
+ // The eboot header page is EXEC-ONLY on this target (VMMAP [0x400000,
+ // 0x787c000) prot=4, trusted in-game records), so the in-memory ELF header
+ // scan can never anchor the main image (composition-5 launch 2026-10-04:
+-// NoImageAnchor/needs-base). These windows were verified IN-GAME (igf7
+-// 4/4 candidates, base 0x400000 single-load-bias) and are unique in the
+-// retained eboot image (sha 3b6cfad4...): verify BOTH inside readable VMMAP
+-// spans before trusting the base. No new imports: byte-loop compare only.
++// NoImageAnchor/needs-base). r6 gated on window E alone; r7 replaces that
++// single point of failure with the ordered ladder E -> D -> B -> C(both
++// sites) -> A(logged, never gates). Evidence: igf7 in-game (build
++// igf7-3dd949879a0a, c2-alternative-results.jsonl) proved B/C/D/E byte-exact
++// at base 0x400000 under ONE readable rodata span [0x787c000, 0x82bc000)
++// prot=1 and refused A as "uncovered" (no dereference). Whole-image recount
++// over the retained eboot (sha 3b6cfad4...): B/D/E each occur exactly once;
++// C occurs TWICE (canonical p_vaddr 0x75cffda + second copy 0x76c8e58 =>
++// rt 0x7ac8e58, same rodata LOAD segment). GATE: ONE full match among E/D/B
++// — or C with BOTH sites covered+matching, which resolves its 2-occurrence
++// ambiguity structurally — anchors the base. Every rung is evaluated on
++// every launch (reads bounded ~200 B, each behind its coverage gate) so one
++// launch yields the complete per-window diagnostic picture. No new imports:
++// byte-loop compare only.
++struct AnchorSite {
++    uint64_t vaddr;           // eboot p_vaddr of this site
++    const char *tag_covered;  // diagnostic_event tag: readable-span coverage flag
++    const char *tag_match;    // diagnostic_event tag: full byte-match flag
++    const char *tag_mm_off;   // diagnostic_event tag: first mismatch index
++    const char *tag_live;     // diagnostic_event tag: live bytes (mismatch site when <4, else window head; r6 semantics)
++};
+ struct DataWindowAnchor {
+-    uint64_t vaddr;      // eboot p_vaddr of the window
+     uint32_t length;
+     const unsigned char *bytes;
++    bool gates;               // full match contributes to the ladder decision
++    uint32_t site_count;      // 1 normally; 2 for C (BOTH sites must match)
++    const char *tag_all;      // aggregate match tag (multi-site windows only)
++    AnchorSite sites[2];
+ };
+ static const unsigned char kWindowE[] = { 0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76, 0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0, 0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15, 0x04, 0xc7, 0x23, 0xc3, 0x18, 0x96, 0x05, 0x9a, 0x07, 0x12, 0x80, 0xe2, 0xeb, 0x27, 0xb2, 0x75 };   // AES S-box head, p_vaddr 0x7dd2a40
++static const unsigned char kWindowD[] = { 0x43, 0x75, 0x72, 0x72, 0x65, 0x6e, 0x74, 0x20, 0x43, 0x68, 0x61, 0x6e, 0x67, 0x65, 0x6c, 0x69, 0x73, 0x74, 0x00 };   // "Current Changelist", p_vaddr 0x7b8845d
++static const unsigned char kWindowB[] = { 0x55, 0x00, 0x45, 0x00, 0x35, 0x00, 0x00, 0x00 };   // L"UE5" UTF-16, p_vaddr 0x7826782
++static const unsigned char kWindowC[] = { 0x42, 0x00, 0x75, 0x00, 0x69, 0x00, 0x6c, 0x00, 0x64, 0x00, 0x49, 0x00, 0x64, 0x00, 0x4f, 0x00, 0x76, 0x00, 0x65, 0x00, 0x72, 0x00, 0x72, 0x00, 0x69, 0x00, 0x64, 0x00, 0x65, 0x00, 0x00, 0x00 };   // "BuildIdOverride" UTF-16, p_vaddr 0x75cffda
+ static const unsigned char kWindowA[] = { 0x04, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x47, 0x4e, 0x55, 0x00, 0x04, 0xbb, 0x43, 0x30, 0xa7, 0xd7, 0x1d, 0xce, 0xfe, 0x1c, 0xc2, 0xc4, 0xd1, 0x97, 0x69, 0xd5, 0x00, 0x00, 0x00, 0x00 };   // GNU build-id note, p_vaddr 0xbc5f250
+-static const DataWindowAnchor kDataWindowAnchors[2] = {
+-    { 0x7dd2a40, 64, kWindowE },
+-    { 0xbc5f250, 36, kWindowA },
++static const DataWindowAnchor kDataWindowAnchors[5] = {
++    // rung 1: 64 B, unique in image, igf7-verified, constant table — strongest
++    { 64, kWindowE, true, 1, nullptr,
++      { { 0x7dd2a40, "anchor_E_covered", "anchor_E_match", "anchor_E_mm_off", "anchor_E_live_w0" } } },
++    // rung 2: 19 B, unique, igf7-verified ("Current Changelist")
++    { 19, kWindowD, true, 1, nullptr,
++      { { 0x7b8845d, "anchor_D_covered", "anchor_D_match", "anchor_D_mm_off", "anchor_D_live_w0" } } },
++    // rung 3: 8 B, unique, igf7-verified (L"UE5")
++    { 8, kWindowB, true, 1, nullptr,
++      { { 0x7826782, "anchor_B_covered", "anchor_B_match", "anchor_B_mm_off", "anchor_B_live_w0" } } },
++    // rung 4: 32 B "BuildIdOverride", TWO in-image copies — gates only when
++    // BOTH sites (canonical + second copy) are covered and byte-exact.
++    { 32, kWindowC, true, 2, "anchor_C_match",
++      { { 0x75cffda, "anchor_C1_covered", "anchor_C1_match", "anchor_C1_mm_off", "anchor_C1_live_w0" },
++        { 0x76c8e58, "anchor_C2_covered", "anchor_C2_match", "anchor_C2_mm_off", "anchor_C2_live_w0" } } },
++    // rung 5: build-id note — logged-not-required exactly as r6 (igf7
++    // in-game refusal "uncovered"; never dereference an uncovered span).
++    { 36, kWindowA, false, 1, nullptr,
++      { { 0xbc5f250, "anchor_A_covered", "anchor_A_match", "anchor_A_mm_off", "anchor_A_live_w0" } } },
+ };
+ static constexpr uint64_t kCandidateBase = 0x400000;       // validated bias
+ static constexpr uint64_t kImageExtentVaddr = 0xbc602c8;  // max(p_vaddr+p_memsz)
+@@ -234,6 +273,41 @@
+     return 0;
+ }
+ 
++// r7: verify ONE site of a window — readable-span coverage gate FIRST (the
++// read-risk rule: never dereference an uncovered span; igf7 exercised this
++// path with A refusal=uncovered and no dereference), then a full byte-loop
++// compare with r6's exact mismatch diagnostics (mm_off + live bytes 0..1).
++// Returns covered && matched.
++static bool anchor_site_verify(uint32_t length, const unsigned char *bytes,
++                               const AnchorSite &site,
++                               const lmf::OsVmMapping *mappings, size_t count)
++{
++    const uint64_t rt = kCandidateBase + site.vaddr;
++    bool covered = false;
++    for (size_t i = 0; i < count; ++i) {
++        if ((mappings[i].protection & kVmProtRead) != 0 &&
++            mappings[i].start <= rt && rt + length <= mappings[i].end) {
++            covered = true;
++            break;
++        }
++    }
++    ::diagnostic_event(site.tag_covered, covered ? 1u : 0u);
++    if (!covered) return false;
++    const unsigned char *p = reinterpret_cast<const unsigned char *>(rt);
++    uint32_t mismatch_at = 0xffffffffu;
++    for (uint32_t i = 0; i < length; ++i)
++        if (p[i] != bytes[i]) { mismatch_at = i; break; }
++    const bool matched = mismatch_at == 0xffffffffu;
++    ::diagnostic_event(site.tag_match, matched ? 1u : 0u);
++    if (!matched) {
++        ::diagnostic_event(site.tag_mm_off, mismatch_at);
++        ::diagnostic_event(site.tag_live,
++                           (uint32_t)p[mismatch_at < 4 ? mismatch_at : 0] |
++                               ((uint32_t)p[mismatch_at < 4 ? mismatch_at + 1 : 1] << 8));
++    }
++    return matched;
++}
++
+ static bool window_anchor_verify() {
+     // Fetch fresh mappings via the SAME proven vmentry op the core uses.
+     static lmf::OsVmMapping mappings[kBridgeVmmapEntries];
+@@ -242,43 +316,24 @@
+         total == 0)
+         return false;
+     const size_t count = total < kBridgeVmmapEntries ? total : kBridgeVmmapEntries;
+-    // r6 (launch-4 evidence): igf7 proved windows B/C/D/E match IN-GAME; A
+-    // (build-id note) was never verified in-game. REQUIRE the igf7-proven
+-    // primary (E); check-and-log the secondary (A) without gating on it.
+-    // Per-window diagnostics make any future refusal unambiguous.
+-    bool primary_verified = false;
++    // r7 ordered ladder: E -> D -> B -> C(both sites) -> A(logged). EVERY
++    // rung is evaluated on every launch (decisions stay identical, evidence
++    // stays complete), so an E-only corruption still leaves D/B/C verdicts
++    // and E's mm_off/live bytes in the same launch's diagnostics. The
++    // DECISION is the ladder gate: ONE full match among E/D/B, or C with
++    // BOTH sites matching. A never gates (r6 semantics preserved).
++    bool ladder_verified = false;
+     for (size_t w = 0; w < sizeof(kDataWindowAnchors) / sizeof(kDataWindowAnchors[0]); ++w) {
+         const DataWindowAnchor &a = kDataWindowAnchors[w];
+-        const uint64_t rt = kCandidateBase + a.vaddr;
+-        bool covered = false;
+-        for (size_t i = 0; i < count; ++i) {
+-            if ((mappings[i].protection & kVmProtRead) != 0 &&
+-                mappings[i].start <= rt && rt + a.length <= mappings[i].end) {
+-                covered = true;
+-                break;
+-            }
+-        }
+-        ::diagnostic_event(w == 0 ? "anchor_E_covered" : "anchor_A_covered",
+-                           covered ? 1u : 0u);
+-        if (!covered) continue;
+-        const unsigned char *p = reinterpret_cast<const unsigned char *>(rt);
+-        uint32_t mismatch_at = 0xffffffffu;
+-        for (uint32_t i = 0; i < a.length; ++i)
+-            if (p[i] != a.bytes[i]) { mismatch_at = i; break; }
+-        const bool matched = mismatch_at == 0xffffffffu;
+-        ::diagnostic_event(w == 0 ? "anchor_E_match" : "anchor_A_match",
+-                           matched ? 1u : 0u);
+-        if (!matched) {
+-            ::diagnostic_event(w == 0 ? "anchor_E_mm_off" : "anchor_A_mm_off",
+-                               mismatch_at);
+-            ::diagnostic_event(w == 0 ? "anchor_E_live_w0" : "anchor_A_live_w0",
+-                               (uint32_t)p[mismatch_at < 4 ? mismatch_at : 0] |
+-                                   ((uint32_t)p[mismatch_at < 4 ? mismatch_at + 1 : 1] << 8));
+-            continue;
+-        }
+-        if (w == 0) primary_verified = true;
++        bool all_sites_matched = true;
++        for (uint32_t s = 0; s < a.site_count; ++s)
++            if (!anchor_site_verify(a.length, a.bytes, a.sites[s], mappings, count))
++                all_sites_matched = false;  // continue: remaining sites keep their diagnostics
++        if (a.site_count > 1 && a.tag_all != nullptr)
++            ::diagnostic_event(a.tag_all, all_sites_matched ? 1u : 0u);
++        if (a.gates && all_sites_matched) ladder_verified = true;
+     }
+-    return primary_verified;
++    return ladder_verified;
+ }
+ 
+ }  // namespace

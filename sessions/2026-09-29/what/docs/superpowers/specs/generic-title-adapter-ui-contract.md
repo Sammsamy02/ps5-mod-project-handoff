@@ -1,0 +1,74 @@
+# Generic title, Nexus catalog and adapter UI contract
+
+The initial design below was written without implementation, builds, browser/account/device/network operations or new approval/review gates. The authorized UI implementation and focused offline evidence are recorded in the game-independent selection checkpoint. The intended product remains a clean PS5-only Nexus application across domains. The first test title may change. This contract adds no game/mod-ID branches and preserves the functioning offline desktop prototype. Actual native inventory, live native account/login/downloads, PS5 browser/controller execution and installation remain unfinished; the stopped curl upgrade is not retried by this work.
+
+## Existing seams and the smallest flow
+
+`web/app.js:82–159` currently uses `state.game` for a **Nexus domain**, not a console title. Its request epochs already reject stale mod/file responses, but it does not load `/api/detected-titles`. `companion/modbridge_host.py:193–223,506` exposes generic catalog routes and unavailable title inventory; root has now added `mod_details` plus `GET /api/games/<domain>/mods/<id>` returning `{item: ...}` through the existing `Client.mod`. This removes the need to restrict selection to latest-mod lists; it does not add search.
+
+The native `http_handle` remains diagnostics-only (`native-host/http.c:111–214`): exact authority, 4 KiB headers, no request bodies/Transfer-Encoding, 8 KiB response buffer. Its `/report` reports game information unavailable. The shared UI/assets and companion `/api/*` are not currently served by this native host. `nexus_bridge.h` already provides `MB_NEXUS_MOD` decoding and fixed-provider URL construction; metadata decode authorizes no visibility, download or account action.
+
+Use one Browse view with two independent selections:
+
+1. **Console target:** load a sourced title/build snapshot; select one record or continue with no target. Show “Title information unavailable” for unavailable input and “Build unknown” when identity lacks build evidence. Label a running-process source “Running titles,” never “Installed games.” Partial observations are informational and not target-selectable.
+2. **Nexus catalog:** explicitly choose a domain, or enter a Nexus mod URL/domain + mod ID. This choice neither establishes a console match nor changes target identity. No automatic name/domain match is authoritative; omit heuristics in the first implementation.
+3. **Mod → file:** latest-mod browsing and direct-mod lookup share the same validated mod selection/file loader. A lookup need not appear in the latest list or preloaded games list. Show provider-authored facts with plain escaped text and keep compatibility unresolved.
+4. **Read-only analysis:** when the host capability and authorization are actually available, the explicit file action requests download for analysis. Already owned source content may then be probed and validated through registered native adapters. No file selection automatically creates an install request.
+5. **Result:** display completed read-only stages and separate eligibility blockers. A complete integrity/payload result never activates installation.
+
+Unavailable title inventory does not prevent unbound catalog browsing/analysis when those services are available. Unavailable native Nexus transport/account does prevent real native catalog/download requests. Owned fixture data is visibly fixture evidence and cannot make those live capabilities true.
+
+## Typed wire records and endpoints
+
+Reuse existing endpoints and add fields deliberately; do not create mutable app-wide `/api/target` state.
+
+| Endpoint | Contract |
+|---|---|
+| `GET /api/capabilities` | Existing mode/capabilities/session bootstrap; add explicit read-only adapter-operation availability. Native unavailable services remain false. A compiled library is not live provider capability. |
+| `GET /api/detected-titles` | `{schema_version:1,status,complete,snapshot_id,source_scope,items,reason,issues?}`; each item has opaque `title_key` and sourced display/build fields. |
+| `GET /api/account` | Existing public identity shape; connected presentation requires `status=connected`, `live_service=verified` and a valid public profile. Otherwise display unavailable/disconnected; never infer connection from decoded metadata or credentials being present. |
+| Existing games/mods/files GETs | Catalog remains generic by validated domain. Newly present direct-mod GET returns one `item`; files GET returns `items`. |
+| `POST /api/jobs` | Existing explicit `download_analyze` intent, with optional immutable `target_ref`; a later read-only adapter job names `operation` and an owned `source_ref`. |
+| Jobs GETs | Owning public phase/adapter receipts, source provenance and bound target reference; no paths, pointers, credentials, signed CDN/NXM URLs or raw provider errors. |
+
+Inventory names are coordinated with [the provider design](generic-ps5-title-inventory-design.md). `status` is `observed|partial|unavailable|error`. Unavailable means `complete:false,snapshot_id:null,items:[]`; a complete empty observation is `observed,true`, a non-null snapshot ID and empty items. Optional fields use the provider's sourced `title_id`, `display_name`, `build_version`, `build_fingerprint` records; unavailable values remain null. Snapshot materialization is atomic and bounded. The current native 8 KiB JSON cap rejects a whole oversized response rather than silently truncating selectable records.
+
+The browser stores/sends only:
+
+```json
+{"target_ref":{"snapshot_id":"opaque-current-snapshot","title_key":"opaque-record-key"}}
+```
+
+The trusted host resolves this against its current **complete** snapshot and derives target/build evidence itself. Relevant source/build changes invalidate old IDs. Unknown/stale refs return `409` with constant code `stale_target_ref`, clearing selection and requiring a fresh selection. Reject browser-provided fingerprints/platform/capability fields. Revalidate saved refs after reload; a saved display label does not restore a target. No target is `null`/absent, never a fabricated “unknown” title.
+
+For a download intent, identity is `(kind, domain, mod_id, file_id, target_ref)` plus its idempotency key. Include target reference in conflict checks and durable/public receipts. Reusing a key with another target yields `intent_conflict`; a selected target change creates a new intent. Old receipts without a reference stay unbound analysis-only. A queued job retains its original ref and cannot silently retarget when UI selection changes; later target-dependent work revalidates it.
+
+The current companion job wire retains positive safe JavaScript integer IDs. The UI accepts canonical decimal input only through `Number.MAX_SAFE_INTEGER`, preserves exact string identity internally, and converts to a number only in the current validated job request. Larger/rounded numeric IDs remain unavailable for browser requests. Extending the producer and consumer together to signed-63-bit canonical strings remains separate work; this slice must not silently round them. Domain syntax is exact ASCII `[a-z0-9][a-z0-9_-]{0,79}`.
+
+Direct lookup accepts separate domain/ID fields or the official HTTPS page shape already constructed by `Client._mod_record` / `DownloadSource`: `https://www.nexusmods.com/<domain>/mods/<id>` (optional trailing slash). Validate protocol, exact host, absent userinfo and absent nondefault port; reject encoded separators, alternate hosts, dot segments and invalid IDs before URL normalization. Permit only `tab=files|description` and a safe `file_id` with `tab=files`; reject duplicate or other query parameters, then discard the approved query/fragment locally. Never submit/fetch the entered URL. Construct the known API route using `mb_nexus_metadata_url(MB_NEXUS_MOD,...)` or `Client.mod`, then verify the normalized response's `mod_id` and `game_domain` before loading files. Do not invent a search endpoint or authorize arbitrary URLs.
+
+## Adapter proof, stage and blockers
+
+Align with [the dispatch design](generic-engine-format-dispatch-design.md): `schema_version=1`; `operation=inspect_metadata|validate_selected_payload`; separate `{state,reason,scope}` records `format_candidate`, `engine_build`, `asset_platform`, `install_authority`, plus `operation_state` and `compatibility_state`. States are the dispatch's `supported|unsupported|unverified`; scope is its explicit proof-tag array. A probe match is `candidate_requires_validation`, not successful validation.
+
+The job host resolves an owned `source_ref` (job/content handle and optional host-issued entry key) to immutable local content. Browser paths/offsets cannot supply a source. Invoke the sealed registry and selected adapter once through `mb_dispatch_probe_v1` / `mb_pak_adapter_validate_v1`; source/registry/operation/selection bindings must still match. Retain only the owning receipt after borrowed buffers are released. “Staged” means complete raw bytes in an owned inspection sink, not converted PS5 assets or a prepared installation. Failure discards every sink/row prefix and publishes no positive stage/scope.
+
+Use “Read-only analysis complete,” “Classic v11 bytes validated” or “Selected payload checked” for the corresponding **operation details**. Title/mod cards use compatibility state, never a generic Supported badge inferred from archive integrity. Unknown target/build, missing PS5 asset acceptance, required unavailable Windows/runtime behavior, missing source/download authorization and unavailable installation are separate blockers. `installation_supported=false` and `install_authority=unsupported/install_operation_unavailable` persist for current adapters. Declared hashes check consistency, not authenticity. Adult preference unknown remains unknown; provider visibility/download policy stays with the authenticated service owner, not the metadata decoder or browser.
+
+Existing planner `capability_matches` requires validated scoped evidence bound to exact target fingerprints (`planner.cpp:80–90`). Format-only receipts remain analyzer facts and cannot be translated into planner `status=validated` capabilities, translation eligibility or install authority. Identity/display/version-only title observations leave planner fingerprints empty and follow its existing `unknown_target` path.
+
+## Controller and asynchronous state
+
+Keep target, domain, mod, file and analysis selection as separate state. Target/domain changes invalidate dependent request epochs and positive analysis/eligibility presentation; mod changes invalidate files. Responses must match the entire selection context before committing or moving focus. Account disconnect clears private-service selections/intents, without converting inventory or cached format facts into account evidence. Do not auto-resubmit jobs or restart the stopped curl/account work.
+
+Cross/Enter activates an explicit enabled control; Circle/Escape steps back File → Mod → Domain, closing a modal first. Target selection remains independent with an explicit Clear target control. Options opens current item facts. L1/R1 use the same section activation function as tab clicks, including data loading, and are suppressed during a modal. D-pad/stick follows deterministic visible-control order and the existing 220 ms repeat bound. This slice retains the existing controller edge behavior rather than introducing a new connection/held-button policy. Only actual standard mapping is handled; PS5 controller/display execution remains unverified.
+
+Use stable focus keys derived from opaque title keys/catalog IDs plus control role. Restore focused controls after asynchronous rerender, falling back to the current heading/back control if removed; closing details must handle a detached trigger. Deliberate transitions focus the new heading/first action, while background activity updates retain focus. Treat lookup text fields as editable: the current document `handleKey` intercepts Backspace/arrows, so exempt ordinary text editing while preserving Escape and modal behavior. No auto-action follows focus or selection restoration.
+
+## Concrete next changes and focused fixtures
+
+The next bounded UI change touches only `web/app.js` (`state`, navigation save/restore, `renderGames`, `chooseGame/chooseMod`, new `loadTitles/chooseTitle/lookupMod`, `submitIntent`, focus/back/key/gamepad/start functions), `web/index.html` (target panel + direct-lookup form), and `web/style.css` (target/form layout and visible input focus). Add a separate focused `tests/generic_selection_ui_tests.cjs`; extend the existing owned fixture only if needed. Preserve Activity/Installed behavior, legacy numeric-safe rejection and older UI evidence. Root's new companion `mod_details` route is already present. Luna owns the separate trusted-provider/snapshot module `companion/modbridge_inventory.py`; root owns host/job reference resolution/idempotency and sanitized planner blockers in `companion/modbridge_host.py` with focused host tests. Existing Client/native metadata decoders need no new provider parser.
+
+Native wiring subsequently touches `native-host/http.c:http_handle`, `http.h:host_info/http_response`, `host.c:serve_peer`, and `build.py:identity/compile_objects`. Serve only embedded named `index.html/app.js/style.css` assets as bounded static spans, avoiding an 8 KiB body copy of the much larger JS/CSS; keep JSON capped and CSP/identity tied to actual asset bytes. The current request parser accepts no JSON bodies, so native POST jobs/session/CSRF framing must be explicitly implemented and tested before exposing those capabilities. Cached unavailable bootstrap/title/account GETs can precede it. Preserve diagnostics/shutdown and frozen checkpoint artifacts. Host/Origin checks alone are not credential/session authentication.
+
+Focused offline fixtures: two unrelated titles/domains and direct lookup for a mod absent from latest; unavailable vs complete-empty vs partial inventory; identity-only build blockers; title/build change and `409` stale-ref handling; target-bearing idempotency conflict with legacy unbound records; full-width string IDs vs unsafe legacy numbers; wrong-domain/ID responses and hostile lookup URLs with no arbitrary outbound fetch; late mod/file/analysis responses after Back or a target switch; modal/controller/editable-field/focus restoration; probe-only vs complete scoped validation; late validation failure with no positive prefix; format success plus unresolved engine/assets/unsupported install; unknown adult/account states; native bootstrap with all live Nexus actions disabled. None needs live Nexus, game files, device traffic, sanitizer/full matrices or a new review loop. Actual PS5 account/browser/controller/adapter execution remains a later explicit proof, not a claim from these fixtures.

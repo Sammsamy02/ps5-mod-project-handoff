@@ -1,0 +1,482 @@
+--- /LOCAL_SCRATCH	2026-10-12 12:40:28
++++ ../2026-10-08-l26-runtime/typescan-r4/candidate/src/UObjectGlobals.cpp	2026-10-12 13:10:53
+@@ -1258,10 +1258,27 @@
+             Vec<int32_t> FreeWatch{};  // empty / unreachable slots, re-checked every sync until filled
+             Vec<UClass*> Classes{};
+             Vec<int32_t> ClassSelfIndex{}; // the class object's own array index (liveness check)
++            Vec<uint64_t> ClassNameKey{};  // the class's own FName (comparison + number) at insert
+             Vec<uint8_t> ClassDead{};
+             Vec<Vec<int32_t>> ClassIndices{};
+             Vec<UClass*> HashKeys{};
+             Vec<int32_t> HashVals{};
++            // [R9-IDX2] per query name: the class positions that match it (exact or via a super),
++            // extended incrementally for classes added since; cleared when a class address is reused.
++            struct NameEntry
++            {
++                uint32_t Comparison{0};
++                int32_t Number{0};
++                size_t Upto{0};
++                Vec<int32_t> Matches{};
++                Vec<uint8_t> Exact{};
++                Vec<int32_t> Pending{}; // classes unreachable when examined: re-examined next query
++            };
++            Vec<NameEntry> Names{};
++            // [R9-NOTIFY] indices that received a NEW object since the last collect (only after
++            // the first build, only while a NotifyOnNewObject consumer exists)
++            bool NotifyWanted{false};
++            Vec<int32_t> NewIdx{};
+         };
+         static State* const g_state = new State{};
+         static bool g_logged{false};
+@@ -1284,6 +1301,11 @@
+             if (Object == nullptr || Item->IsUnreachable()) { return nullptr; }
+             return Object;
+         }
++        static auto NameKey(UClass* Class) -> uint64_t
++        {
++            const FName N = Class->GetNamePrivate();
++            return (static_cast<uint64_t>(N.GetComparisonIndex().ToUnstableInt()) << 32) | static_cast<uint32_t>(N.GetNumber());
++        }
+         static auto HashPos(UClass* Class, size_t Mask) -> size_t
+         {
+             uint64_t h = reinterpret_cast<uintptr_t>(Class);
+@@ -1312,14 +1334,23 @@
+                 if (S.HashKeys[p] == Class)
+                 {
+                     const size_t c = static_cast<size_t>(S.HashVals[p]);
++                    // the address may now belong to a different class: dead, moved, or renamed -> match lists stale
++                    const int32_t SelfIndex = Class->GetInternalIndex_Private();
++                    const uint64_t Key = NameKey(Class);
++                    if (S.ClassDead[c] || S.ClassSelfIndex[c] != SelfIndex || S.ClassNameKey[c] != Key)
++                    {
++                        S.Names.clear();
++                    }
+                     S.ClassDead[c] = 0; // seen alive again (an object of it is live right now)
+-                    S.ClassSelfIndex[c] = Class->GetInternalIndex_Private(); // refresh: address may be a new class
++                    S.ClassSelfIndex[c] = SelfIndex;
++                    S.ClassNameKey[c] = Key;
+                     return S.ClassIndices[c];
+                 }
+                 p = (p + 1) & Mask;
+             }
+             S.Classes.push_back(Class);
+             S.ClassSelfIndex.push_back(Class->GetInternalIndex_Private()); // alive now: its object is live
++            S.ClassNameKey.push_back(NameKey(Class));
+             S.ClassDead.push_back(0);
+             S.ClassIndices.emplace_back();
+             S.HashKeys[p] = Class;
+@@ -1350,6 +1381,10 @@
+             }
+             UClass* Class = Object->GetClassPrivate();
+             if (S.ObjAt[Index] == Object && S.ClassAt[Index] == Class) { return; }
++            if (S.Built && S.NotifyWanted && S.ObjAt[Index] != Object && S.NewIdx.size() < (1u << 20))
++            {
++                S.NewIdx.push_back(Index); // a newly appearing object (append or reused slot)
++            }
+             S.ObjAt[Index] = Object;
+             S.ClassAt[Index] = Class;
+             if (Class && S.ListedUnder[Index] != Class)
+@@ -1421,24 +1456,51 @@
+                 const uint32_t Stamp = ++S.QueryStamp == 0 ? ++S.QueryStamp : S.QueryStamp;
+                 Vec<int32_t> Hits{};
+                 int32_t BestExact = -1, BestSuper = -1;
+-                for (size_t c = 0; c < S.Classes.size(); ++c)
++                // classes that match this name (cached; only new / pending classes are examined)
++                const uint32_t Cmp = ClassName.GetComparisonIndex().ToUnstableInt();
++                const int32_t Nr = ClassName.GetNumber();
++                State::NameEntry* E = nullptr;
++                for (auto& N : S.Names)
+                 {
+-                    if (S.ClassDead[c]) { continue; }
+-                    UClass* Class = S.Classes[c];
+-                    // never walk a freed class. Its own slot no longer holding it = really gone
+-                    // (dead, list cleared); still holding it but marked unreachable (GC in flight)
+-                    // = skip for this query only and keep the list.
+-                    {
+-                        FUObjectItem* ClassItem = ItemAt(S.ClassSelfIndex[c]);
+-                        if (ClassItem == nullptr || ClassItem->GetUObject() != static_cast<UObject*>(static_cast<void*>(Class)))
+-                        {
+-                            S.ClassDead[c] = 1;
+-                            for (int32_t i : S.ClassIndices[c]) { if (S.ListedUnder[i] == Class) { S.ListedUnder[i] = nullptr; } }
+-                            S.ClassIndices[c].clear();
+-                            continue;
+-                        }
+-                        if (ClassItem->IsUnreachable()) { continue; }
++                    if (N.Comparison == Cmp && N.Number == Nr) { E = &N; break; }
++                }
++                if (E == nullptr)
++                {
++                    if (S.Names.size() > 512) { S.Names.clear(); }
++                    S.Names.emplace_back();
++                    E = &S.Names.back();
++                    E->Comparison = Cmp;
++                    E->Number = Nr;
++                }
++                bool NeedNamesClear = false;
++                // 0 = live (examined), 1 = gone (dead), 2 = unreachable right now (retry later)
++                const auto ClassState = [&](size_t c) -> int {
++                    if (S.ClassDead[c]) { return 1; }
++                    FUObjectItem* ClassItem = ItemAt(S.ClassSelfIndex[c]);
++                    if (ClassItem == nullptr || ClassItem->GetUObject() != static_cast<UObject*>(static_cast<void*>(S.Classes[c])))
++                    {
++                        S.ClassDead[c] = 1;
++                        for (int32_t i : S.ClassIndices[c]) { if (S.ListedUnder[i] == S.Classes[c]) { S.ListedUnder[i] = nullptr; } }
++                        S.ClassIndices[c].clear();
++                        return 1;
+                     }
++                    if (ClassItem->IsUnreachable()) { return 2; }
++                    if (NameKey(S.Classes[c]) != S.ClassNameKey[c])
++                    {
++                        // same address and slot, different class: treat the cached one as gone
++                        S.ClassDead[c] = 1;
++                        for (int32_t i : S.ClassIndices[c]) { if (S.ListedUnder[i] == S.Classes[c]) { S.ListedUnder[i] = nullptr; } }
++                        S.ClassIndices[c].clear();
++                        NeedNamesClear = true;
++                        return 1;
++                    }
++                    return 0;
++                };
++                const auto Examine = [&](size_t c) {
++                    const int st = ClassState(c);
++                    if (st == 1) { return; }
++                    if (st == 2) { E->Pending.push_back(static_cast<int32_t>(c)); return; }
++                    UClass* Class = S.Classes[c];
+                     const bool bExact = Class->GetNamePrivate().Equals(ClassName);
+                     bool bMatch = bExact;
+                     if (!bMatch)
+@@ -1448,7 +1510,26 @@
+                             if (Super->GetNamePrivate().Equals(ClassName)) { bMatch = true; break; }
+                         }
+                     }
+-                    if (!bMatch) { continue; }
++                    if (bMatch)
++                    {
++                        E->Matches.push_back(static_cast<int32_t>(c));
++                        E->Exact.push_back(bExact ? 1 : 0);
++                    }
++                };
++                {
++                    Vec<int32_t> Retry{};
++                    Retry.swap(E->Pending);
++                    for (int32_t c : Retry) { Examine(static_cast<size_t>(c)); }
++                    for (size_t c = E->Upto; c < S.Classes.size(); ++c) { Examine(c); }
++                    E->Upto = S.Classes.size();
++                }
++                for (size_t m = 0; m < E->Matches.size(); ++m)
++                {
++                    const size_t c = static_cast<size_t>(E->Matches[m]);
++                    const int st = ClassState(c);
++                    if (st != 0) { continue; } // gone, or GC in flight (skip this query only)
++                    UClass* Class = S.Classes[c];
++                    const bool bExact = E->Exact[m] != 0;
+                     auto& Indices = S.ClassIndices[c];
+                     size_t keep = 0;
+                     for (size_t k = 0; k < Indices.size(); ++k)
+@@ -1459,7 +1540,7 @@
+                             if (S.ListedUnder[i] == Class) { S.ListedUnder[i] = nullptr; }
+                             continue; // stale: drop
+                         }
+-                        if (S.SeenStamp[i] == Stamp) { continue; }                       // duplicate: drop
++                        if (S.SeenStamp[i] == Stamp) { continue; } // duplicate: drop
+                         S.SeenStamp[i] = Stamp;
+                         Indices[keep++] = i;
+                         UObject* O = S.ObjAt[i];
+@@ -1477,6 +1558,7 @@
+                     }
+                     Indices.resize(keep);
+                 }
++                if (NeedNamesClear) { S.Names.clear(); } // E is not used after this point
+                 if (FirstOnly)
+                 {
+                     const int32_t Pick = BestExact >= 0 ? BestExact : BestSuper;
+@@ -1503,6 +1585,30 @@
+         }
+     } // namespace r9idx
+ 
++    // [R9-NOTIFY] game thread, once per pump: indices of objects that appeared since the last call.
++    // false = index unusable (no notifications this frame). Objects alive at the first build are
++    // never reported (upstream notifies constructions only).
++    auto r9_index_collect_new(std::vector<int32_t>& Out) -> bool
++    {
++        r9idx::State& S = *r9idx::g_state;
++        std::lock_guard Lock{S.Mutex};
++        if (S.Disabled) { return false; }
++        try
++        {
++            S.NotifyWanted = true;
++            if (!r9idx::Sync(S)) { return false; }
++            if (S.DeletesSeen == 0) { S.NewIdx.clear(); return false; } // delete listener not proven live yet
++            Out.assign(S.NewIdx.begin(), S.NewIdx.end());
++            S.NewIdx.clear();
++            return true;
++        }
++        catch (...)
++        {
++            S.Disabled = true;
++            return false;
++        }
++    }
++
+     // Called by the engine-registered delete listener for every freed object index.
+     auto r9_index_note_deleted(int32_t Index) -> void
+     {
+--- /LOCAL_SCRATCH	2026-10-12 11:30:47
++++ ../2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMadeSimple/LuaMadeSimple.cpp	2026-10-12 13:09:36
+@@ -574,6 +574,66 @@
+     static std::unordered_map<lua_State*, std::shared_ptr<Lua>> lua_instances;
+ 
+     static std::vector<std::optional<Lua::LuaFunction>> lua_functions;
++    // [R9-PERF] per-function cost counters (fixed storage; ids beyond the cap are not counted)
++    static constexpr size_t kFnStatCap = 16384;
++    static uint64_t g_fn_ticks[kFnStatCap]{};
++    static uint32_t g_fn_calls[kFnStatCap]{};
++    static char g_fn_names[kFnStatCap][40]{};
++    static auto note_fn_name(size_t id, const char* prefix, std::string_view name) noexcept -> void
++    {
++        if (id >= kFnStatCap) { return; }
++        size_t n = 0;
++        for (const char* p = prefix; *p && n + 1 < sizeof(g_fn_names[0]); ++p) { g_fn_names[id][n++] = *p; }
++        for (char ch : name) { if (n + 1 >= sizeof(g_fn_names[0])) { break; } g_fn_names[id][n++] = (ch > 32 && ch < 127) ? ch : '_'; }
++        g_fn_names[id][n] = '\0';
++    }
++    auto take_function_stats(char* out, size_t out_size, size_t top_n, uint64_t& total_ticks) noexcept -> void
++    {
++        total_ticks = 0;
++        if (out == nullptr || out_size == 0) { return; }
++        out[0] = '\0';
++        size_t best[16];
++        uint64_t best_ticks[16];
++        uint32_t best_calls[16];
++        size_t nbest = 0;
++        if (top_n > 16) { top_n = 16; }
++        const size_t scan = lua_functions.size() < kFnStatCap ? lua_functions.size() : kFnStatCap;
++        for (size_t i = 0; i < scan; ++i)
++        {
++            const uint64_t t = __atomic_exchange_n(&g_fn_ticks[i], uint64_t{0}, __ATOMIC_RELAXED);
++            const uint32_t calls = __atomic_exchange_n(&g_fn_calls[i], uint32_t{0}, __ATOMIC_RELAXED);
++            if (t == 0) { continue; }
++            total_ticks += t;
++            size_t pos = nbest;
++            while (pos > 0 && best_ticks[pos - 1] < t) { --pos; }
++            if (pos < top_n)
++            {
++                const size_t last = nbest < top_n ? nbest : top_n - 1;
++                for (size_t k = last; k > pos; --k) { best[k] = best[k - 1]; best_ticks[k] = best_ticks[k - 1]; best_calls[k] = best_calls[k - 1]; }
++                best[pos] = i; best_ticks[pos] = t; best_calls[pos] = calls;
++                if (nbest < top_n) { ++nbest; }
++            }
++        }
++        size_t used = 0;
++        const auto put = [&](char ch) { if (used + 1 < out_size) { out[used++] = ch; out[used] = '\0'; } };
++        const auto put_u = [&](uint64_t v) {
++            char tmp[24];
++            int n = 0;
++            do { tmp[n++] = static_cast<char>('0' + v % 10); v /= 10; } while (v != 0 && n < 24);
++            while (n > 0) { put(tmp[--n]); }
++        };
++        for (size_t k = 0; k < nbest; ++k)
++        {
++            const size_t i = best[k];
++            put(' ');
++            const char* nm = g_fn_names[i][0] ? g_fn_names[i] : "fn";
++            for (const char* p = nm; *p; ++p) { put(*p); }
++            put('=');
++            put_u(best_ticks[k]);
++            put('/');
++            put_u(best_calls[k]);
++        }
++    }
+ 
+     // Current errors for all lua states
+     static std::unordered_map<lua_State*, std::string> lua_state_errors;
+@@ -835,6 +895,7 @@
+     auto Lua::Table::add_function_value_internal(Lua::LuaFunction function) const -> void
+     {
+         lua_functions.emplace_back(LuaFunction{function});
++        note_fn_name(lua_functions.size() - 1, "m:", get_lua_instance().m_working_metatable_name);
+ 
+         // Upvalues for process_lua_function
+         // Upvalue #1: Function id
+@@ -1259,6 +1320,7 @@
+     auto Lua::register_function(const std::string& name, const LuaFunction& function) const -> void
+     {
+         lua_functions.emplace_back(LuaFunction{function});
++        note_fn_name(lua_functions.size() - 1, "", name);
+ 
+         // Upvalue for process_lua_function
+         lua_pushinteger(get_lua_state(), lua_functions.size() - 1);
+@@ -1876,14 +1938,15 @@
+             throw_error(lua_state, fmt::format("[process_lua_function] A function requiring userdata as param #1 was called without userdata at param #1"));
+         }
+ 
+-        if (!lua_instances.contains(lua_state))
++        const auto instance_it = lua_instances.find(lua_state); // [R9-PERF] one hash lookup per call (was two)
++        if (instance_it == lua_instances.end())
+         {
+             throw_error(lua_state, fmt::format("[process_lua_function] The lua state '{}' has no instance inside lua_instances unordered map", (void*)lua_state));
+         }
+ 
+-        Lua& data_owner = *lua_instances.find(lua_state)->second;
++        Lua& data_owner = *instance_it->second;
+ 
+-        if (func_id > lua_functions.size())
++        if (func_id >= lua_functions.size())
+         {
+             throw_error(lua_state, fmt::format("[process_lua_function] There was no global function with the id '{}' inside the lua_functions vector", func_id));
+         }
+@@ -1893,6 +1956,21 @@
+             throw_error(lua_state, "[process_lua_function] The optional was empty");
+         }
+ 
++        // [R9-PERF] cost per registered function (cycle counter; an error that longjmps skips the add)
++        const uint64_t r9_t0 = __builtin_readcyclecounter();
++        struct R9FnTimer
++        {
++            size_t id;
++            uint64_t t0;
++            ~R9FnTimer()
++            {
++                if (id < kFnStatCap)
++                {
++                    __atomic_fetch_add(&g_fn_ticks[id], __builtin_readcyclecounter() - t0, __ATOMIC_RELAXED);
++                    __atomic_fetch_add(&g_fn_calls[id], uint32_t{1}, __ATOMIC_RELAXED);
++                }
++            }
++        } r9_fn_timer{func_id, r9_t0};
+         return TRY(lua_state, [&] {
+             auto return_value = lua_functions[func_id].value()(data_owner);
+             for (const auto& post_process_callback : data_owner.m_post_function_process_callbacks)
+--- /LOCAL_SCRATCH	2026-10-12 11:29:23
++++ ../2026-10-08-l26-runtime/typescan-r4/candidate/include/LuaMadeSimple/LuaMadeSimple.hpp	2026-10-12 13:06:25
+@@ -861,6 +861,10 @@
+     RC_LMS_API auto set_lua_backing_allocator(const LuaBackingAllocator& backing) noexcept -> bool;
+     // [R9-MEM] the installed backing store, or nullptr while Lua still uses libc.
+     RC_LMS_API auto get_lua_backing_allocator() noexcept -> const LuaBackingAllocator*;
++    // [R9-PERF] per registered-function cost since the last call: writes the top entries as
++    // " name=ticks/calls" into out (narrow, NUL-terminated) and resets all counters. Ticks are
++    // CPU cycle-counter units (no clock import); the caller converts with its own window.
++    RC_LMS_API auto take_function_stats(char* out, size_t out_size, size_t top_n, uint64_t& total_ticks) noexcept -> void;
+     // [R9-MEM-REBASE] Mod Lua states are created when mods are set up, long before the
+     // engine allocator is bound. A state that is still PRISTINE (empty stack, empty
+     // globals, nothing loaded) is replaced in place by a fresh state on the installed
+--- /LOCAL_SCRATCH	2026-10-12 12:26:34
++++ ../2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp	2026-10-12 13:10:53
+@@ -3264,7 +3264,7 @@
+ 
+             Output::send<LogLevel::Verbose>(STR("[NotifyOnNewObject] Registered notification for {}\n"), class_name);
+ 
+-            refused_log::accepted(lua, "NotifyOnNewObject", class_name, refused_log::Family::EagerDetour);
++            // [R9-NOTIFY] delivered from the object index on the PS5 (no longer a silent refusal)
+             return 0;
+         });
+ 
+@@ -4959,6 +4959,7 @@
+         inline StateSlot slots[16]{};
+         inline int nslots{0};
+         inline int64_t frame_last_ns{0}, frame_max_ns{0}, frame_sum_ns{0}, frames{0}, frames_over_40ms{0}, window_start_ns{0};
++        inline uint64_t tsc_window_start{0};
+ 
+         inline auto add_run(const void* state, int64_t ns) -> void
+         {
+@@ -4993,10 +4994,41 @@
+                 }
+                 uint64_t walk_calls{0}, walk_ns{0};
+                 Unreal::UObjectGlobals::r9_take_walk_stats(walk_calls, walk_ns);
+-                Output::send(STR("[PERF] win_ms={:.0f} frames={} frame_avg_ms={:.1f} frame_max_ms={:.1f} frames_over_40ms={} | pe_calls={} pe_locks={} pe_ms={:.1f} | pump_calls={} pump_ms={:.1f} | run_calls={} run_ms={:.1f} run_max_ms={:.1f} other_ms={:.1f} | walks={} walk_ms={:.1f} walk_avg_ms={:.2f} |{}\n"),
++                // per Lua API cost: cycle ticks -> ms using this window's ticks per ns
++                const uint64_t tsc_now = __builtin_readcyclecounter();
++                const double ticks_per_ns = (tsc_window_start != 0 && now > window_start_ns) ? static_cast<double>(tsc_now - tsc_window_start) / static_cast<double>(now - window_start_ns) : 0.0;
++                tsc_window_start = tsc_now;
++                char fn_raw[640];
++                uint64_t fn_total_ticks{0};
++                LuaMadeSimple::take_function_stats(fn_raw, sizeof(fn_raw), 6, fn_total_ticks);
++                // rewrite " name=ticks/calls" as " name=ms/calls"
++                char fn_ms[720];
++                size_t fused = 0;
++                fn_ms[0] = '\0';
++                for (const char* q = fn_raw; *q != '\0' && fused + 48 < sizeof(fn_ms);)
++                {
++                    const char* eq = q;
++                    while (*eq != '\0' && *eq != '=') { ++eq; }
++                    if (*eq != '=') { break; }
++                    unsigned long long ticks = 0;
++                    const char* sl = eq + 1;
++                    while (*sl >= '0' && *sl <= '9') { ticks = ticks * 10 + static_cast<unsigned long long>(*sl - '0'); ++sl; }
++                    if (*sl != '/') { break; }
++                    const char* end = sl + 1;
++                    while (*end >= '0' && *end <= '9') { ++end; }
++                    const int w = std::snprintf(fn_ms + fused, sizeof(fn_ms) - fused, "%.*s=%.1fms/%.*s", static_cast<int>(eq - q), q,
++                                                ticks_per_ns > 0 ? ticks / ticks_per_ns / 1e6 : -1.0, static_cast<int>(end - sl - 1), sl + 1);
++                    if (w <= 0) { break; }
++                    fused += static_cast<size_t>(w);
++                    q = end;
++                }
++                StringType fn_wide{};
++                for (const char* q = fn_ms; *q != '\0'; ++q) { fn_wide.push_back(static_cast<StringType::value_type>(static_cast<unsigned char>(*q))); }
++                const double fn_total_ms = ticks_per_ns > 0 ? fn_total_ticks / ticks_per_ns / 1e6 : -1.0;
++                Output::send(STR("[PERF] win_ms={:.0f} frames={} frame_avg_ms={:.1f} frame_max_ms={:.1f} frames_over_40ms={} | pe_calls={} pe_locks={} pe_ms={:.1f} | pump_calls={} pump_ms={:.1f} | run_calls={} run_ms={:.1f} run_max_ms={:.1f} other_ms={:.1f} | walks={} walk_ms={:.1f} walk_avg_ms={:.2f} | api_ms={:.1f}{} |{}\n"),
+                              win_ms, frames, frames ? frame_sum_ns / 1e6 / static_cast<double>(frames) : 0.0, frame_max_ns / 1e6, frames_over_40ms,
+                              pe_calls, pe_locks, pe_ns / 1e6, pump_calls, pump_ns / 1e6, run_calls, run_ns / 1e6, run_max_ns / 1e6, run_other_ns / 1e6,
+-                             walk_calls, walk_ns / 1e6, walk_calls ? walk_ns / 1e6 / static_cast<double>(walk_calls) : 0.0, states);
++                             walk_calls, walk_ns / 1e6, walk_calls ? walk_ns / 1e6 / static_cast<double>(walk_calls) : 0.0, fn_total_ms, fn_wide, states);
+             }
+             catch (...)
+             {
+@@ -5107,8 +5139,57 @@
+ 
+     // Process pending NotifyOnNewObject callbacks that were queued from StaticConstructObject
+     // This MUST run on the game thread because Lua is NOT thread-safe
++    namespace Unreal::UObjectGlobals
++    {
++        auto r9_index_collect_new(std::vector<int32_t>& Out) -> bool; // [R9-NOTIFY] UObjectGlobals.cpp
++    }
++
++    // [R9-NOTIFY] NotifyOnNewObject producer for the PS5 (the StaticConstructObject seam is not
++    // armed here, so registrations were accepted but never delivered). New objects come from the
++    // delete-listener-fed object index; matching is the seam's own rule (class or any super with the
++    // registered name AND outer name); delivery is the existing pending queue below, on the game
++    // thread. Deliberate difference from PC: the callback runs on the next pump (<= one frame after
++    // construction) instead of inside StaticConstructObject.
++    static auto r9_feed_notify_from_index() -> void
++    {
++        static std::vector<int32_t> s_new_indices{};
++        {
++            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            if (LuaMod::m_static_construct_object_lua_callbacks.empty()) { return; }
++        }
++        s_new_indices.clear();
++        if (!Unreal::UObjectGlobals::r9_index_collect_new(s_new_indices) || s_new_indices.empty()) { return; }
++        static bool s_logged{false};
++        std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++        if (!s_logged)
++        {
++            s_logged = true;
++            Output::send(STR("[R9-NOTIFY] NotifyOnNewObject delivered from the object index (first batch: {} new objects)\n"), s_new_indices.size());
++        }
++        for (const int32_t object_index : s_new_indices)
++        {
++            Unreal::FUObjectItem* object_item = Unreal::FUObjectArray::IndexToObject(object_index);
++            if (!object_item || object_item->IsUnreachable()) { continue; }
++            Unreal::UObject* object = object_item->GetUObject();
++            if (!object) { continue; }
++            for (Unreal::UStruct* object_class = object->GetClassPrivate(); object_class; object_class = object_class->GetSuperStruct())
++            {
++                for (const auto& callback_data : LuaMod::m_static_construct_object_lua_callbacks)
++                {
++                    if (object_class->GetNamePrivate().Equals(callback_data.instance_class_name) &&
++                        object_class->GetOuterPrivate() && object_class->GetOuterPrivate()->GetNamePrivate().Equals(callback_data.instance_class_outer_name))
++                    {
++                        LuaMod::m_pending_notify_on_new_object_callbacks.push_back(
++                                LuaMod::PendingNotifyOnNewObjectCallback{callback_data.callback_id, object_index, object_item->GetSerialNumber()});
++                    }
++                }
++            }
++        }
++    }
++
+     static auto process_pending_notify_on_new_object_callbacks() -> void
+     {
++        r9_feed_notify_from_index();
+         struct PendingNotifyExec
+         {
+             uint64_t callback_id{};

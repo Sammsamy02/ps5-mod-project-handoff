@@ -1,0 +1,75 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-seh64-family/vendor/windows-services/mb_win_seh64.c	2026-10-04 20:57:00
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-seh64-trampoline-fix/vendor/windows-services/mb_win_seh64.c	2026-10-05 06:12:20
+@@ -35,7 +35,8 @@
+ 
+ mb_win_seh64_status mb_win_seh64_open(mb_win_seh64 *o, const mb_win_seh64_control *c)
+ {
+-    if (!o || !c || !c->call_personality || !c->call_at_frame || !c->resume)
++    if (!o || !c || !c->call_personality || !c->call_at_frame ||
++        !c->call_at_frame2 || !c->resume)
+         return MB_WIN_SEH64_INVALID_ARGUMENT;
+     if (o->active) return MB_WIN_SEH64_BAD_STATE;
+     for (unsigned i = 0; i < MB_WIN_SEH64_MAX_TABLES; ++i)
+@@ -415,11 +416,20 @@
+     uint32_t count = load32((const uint8_t *)dctx->handler_data);
+     if (count > 4096u) return MB_WIN_SEH64_UNSUPPORTED;
+     const uint8_t *rec = (const uint8_t *)dctx->handler_data + 4;
+-    /* Scope-table semantics per documented Win64 __C_specific_handler
+-     * behavior (ReactOS/Wine prior art; resolves the DESIGN.md 5c hedge):
+-     * filter RVA 0 = __finally (unwind pass only), RVA 1 = constant
+-     * EXECUTE_HANDLER, otherwise a real filter function called in the
+-     * establishing frame. Records are innermost-first (compiler order). */
++    /* Scope-table semantics per the observed clang x86_64-pc-windows-msvc
++     * encoding (matches the MSVC/ReactOS/Wine __C_specific_handler shape;
++     * worker-seh64-trampoline-fix F-4): a scope with JumpTarget != 0 is an
++     * __except scope -- filter RVA 1 = constant EXECUTE_HANDLER, otherwise a
++     * real filter function called in the establishing frame during the
++     * search pass. A scope with JumpTarget == 0 and Handler != 0 is a
++     * __finally scope: its funclet runs ONLY during the unwind pass and
++     * receives the frame's call-site rsp as its PSP in rdx (clang
++     * convention, verified against emitted funclets: the funclet forms its
++     * frame register as PSP + 0x20, which lands exactly on the parent's
++     * frame register; rcx is passed identically). Never call finally scopes
++     * on the search pass -- their funclet runs the body immediately and,
++     * with a wrong PSP, would corrupt live unwind state (F-4). Records are
++     * innermost-first (compiler order). */
+     int unwinding = (record->exception_flags & MB_WIN_SEH64_UNWINDING) != 0;
+     for (uint32_t i = 0; i < count; ++i, rec += 16) {
+         uint32_t begin_rva = load32(rec), end_rva = load32(rec + 4);
+@@ -427,7 +437,8 @@
+         if (dctx->control_pc < (uint64_t)(uintptr_t)(image + begin_rva) ||
+             dctx->control_pc >= (uint64_t)(uintptr_t)(image + end_rva)) continue;
+         if (!unwinding) {
+-            if (!filter_rva) continue; /* __finally: inactive on search pass */
++            if (!filter_rva || !jump_rva)
++                continue; /* __finally scope: inactive on search pass (F-4) */
+             int32_t verdict = MB_WIN_SEH64_EXECUTE_HANDLER;
+             if (filter_rva != 1u) {
+                 mb_win_seh64_exception_pointers ptrs = {record, context};
+@@ -452,15 +463,17 @@
+             *unwind_target_ip = (uint64_t)(uintptr_t)(image + jump_rva);
+             return MB_WIN_SEH64_OK;
+         }
+-        /* Unwind pass: run __finally bodies (filter 0 with a jump target)
+-         * covering ControlPc. The selected __except body itself runs via the
+-         * final target transfer, not here. */
+-        if (!filter_rva && jump_rva)
+-            /* Finally funclets receive the establisher frame (PSP) in rcx
+-             * and run just below the frame's rsp. */
+-            owner->control.call_at_frame(
+-                (void *)(uintptr_t)(image + jump_rva),
+-                dctx->frame_rsp, (void *)(uintptr_t)dctx->establisher_frame);
++        /* Unwind pass: run __finally bodies covering ControlPc. The
++         * selected __except body itself runs via the final target transfer,
++         * not here. Clang encoding (F-4): Handler = finally funclet,
++         * JumpTarget = 0; the funclet reads the PSP from rdx. */
++        if (!jump_rva && filter_rva) {
++            owner->control.call_at_frame2(
++                (void *)(uintptr_t)(image + filter_rva),
++                dctx->frame_rsp,
++                (void *)(uintptr_t)dctx->frame_rsp, /* rcx: PSP */
++                (void *)(uintptr_t)dctx->frame_rsp); /* rdx: PSP (clang reads rdx) */
++        }
+     }
+     return MB_WIN_SEH64_OK;
+ }

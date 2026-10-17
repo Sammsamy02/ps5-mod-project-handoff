@@ -1,0 +1,245 @@
+--- /dev/null
++++ b/loader/include/guest_write_map.h
+@@ -0,0 +1,77 @@
++// Bounded output writes only into explicitly registered owned guest memory.
++#ifndef CAP13_GUEST_WRITE_MAP_H
++#define CAP13_GUEST_WRITE_MAP_H
++
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++#include <mutex>
++#include <new>
++#include <vector>
++
++namespace cap13 {
++
++// The registering owner must prove that the allocation is writable and keep
++// it alive until removal. This map cannot infer OS permissions from a pointer.
++// Callers must quiesce guest users before freeing a registered allocation.
++class GuestWriteMap
++{
++  public:
++    bool add(const void* owner, void* base, size_t length)
++    {
++        if (!owner || !base || !length) return false;
++        const auto begin = reinterpret_cast<uintptr_t>(base);
++        if (length > UINTPTR_MAX - begin) return false;
++        const auto end = begin + length;
++        std::lock_guard<std::mutex> guard(mu_);
++        for (const auto& range : ranges_)
++            if (range.owner == owner || (begin < range.end && range.begin < end))
++                return false;
++        try { ranges_.push_back({owner, begin, end}); }
++        catch (const std::bad_alloc&) { return false; }
++        return true;
++    }
++
++    bool remove(const void* owner)
++    {
++        if (!owner) return false;
++        std::lock_guard<std::mutex> guard(mu_);
++        for (auto it = ranges_.begin(); it != ranges_.end(); ++it)
++            if (it->owner == owner)
++            {
++                ranges_.erase(it);
++                return true;
++            }
++        return false;
++    }
++
++    bool write(void* address, const void* source, size_t length) const
++    {
++        if (!address || !source || !length) return false;
++        const auto begin = reinterpret_cast<uintptr_t>(address);
++        std::lock_guard<std::mutex> guard(mu_);
++        for (const auto& range : ranges_)
++            if (begin >= range.begin && begin < range.end &&
++                length <= range.end - begin)
++            {
++                std::memmove(address, source, length);
++                return true;
++            }
++        return false;
++    }
++
++    static bool write_callback(void* user, void* address,
++                               const void* source, size_t length)
++    {
++        return user && static_cast<GuestWriteMap*>(user)->write(address,
++                                                                 source, length);
++    }
++
++  private:
++    struct Range { const void* owner; uintptr_t begin; uintptr_t end; };
++    mutable std::mutex mu_;
++    std::vector<Range> ranges_;
++};
++
++} // namespace cap13
++#endif
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -28,6 +28,7 @@
+ namespace cap13 {
+ 
+ class GuestReadMap;
++class GuestWriteMap;
+ 
+ // A mod-visible module handle ("HMODULE"): opaque index into the registry.
+ using WinModule = void*;
+@@ -64,6 +65,10 @@
+         bool (*read_guest_bytes)(void* user, const void* guest_address,
+                                  void* destination, size_t bytes) = nullptr;
+         void* read_guest_user = nullptr;
++        // Output writes require a separately validated writable allocation.
++        bool (*write_guest_bytes)(void* user, void* guest_address,
++                                  const void* source, size_t bytes) = nullptr;
++        void* write_guest_user = nullptr;
+     };
+ 
+     WinApiShim();
+@@ -74,6 +79,8 @@
+     // Configure before PE preparation. The map must outlive all guest calls.
+     // Its image ranges are registered on process attach and revoked on detach.
+     bool set_guest_read_map(GuestReadMap* map);
++    bool set_guest_write_map(GuestWriteMap* map);
++    bool write_guest_bytes(void* address, const void* source, size_t bytes) const;
+     void set_mod_root(std::string utf8_root); // T2 confinement root
+ 
+     // Register a module the way Windows would expose it:
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -13,6 +13,7 @@
+ 
+ #include "win_api_shim.h"
+ #include "guest_read_map.h"
++#include "guest_write_map.h"
+ #include "win32_last_error_state.h"
+ #include "win32_thread_identity.h"
+ #include "win64_bridge.h"
+@@ -121,6 +122,7 @@
+     };
+     Hooks hooks;
+     GuestReadMap* guest_read_map = nullptr;
++    GuestWriteMap* guest_write_map = nullptr;
+     std::string mod_root = "/data/modbridge/roots/";
+     std::mutex mu;
+     // dll-name(lowercased) -> { symbol/ordinal -> address }
+@@ -255,6 +257,11 @@
+         m->hooks.read_guest_bytes = GuestReadMap::read_callback;
+         m->hooks.read_guest_user = m->guest_read_map;
+     }
++    if (m->guest_write_map)
++    {
++        m->hooks.write_guest_bytes = GuestWriteMap::write_callback;
++        m->hooks.write_guest_user = m->guest_write_map;
++    }
+ }
+ 
+ bool WinApiShim::set_guest_read_map(GuestReadMap* map)
+@@ -267,6 +274,25 @@
+     m->hooks.read_guest_bytes = GuestReadMap::read_callback;
+     m->hooks.read_guest_user = map;
+     return true;
++}
++bool WinApiShim::set_guest_write_map(GuestWriteMap* map)
++{
++    if (!map) return false;
++    std::lock_guard guard(m->mu);
++    for (const auto& row : m->modules)
++        if (row.second.mapped_lookup) return false;
++    m->guest_write_map = map;
++    m->hooks.write_guest_bytes = GuestWriteMap::write_callback;
++    m->hooks.write_guest_user = map;
++    return true;
++}
++
++bool WinApiShim::write_guest_bytes(void* address, const void* source,
++                                   size_t bytes) const
++{
++    return m->hooks.write_guest_bytes &&
++           m->hooks.write_guest_bytes(m->hooks.write_guest_user,
++                                      address, source, bytes);
+ }
+ void WinApiShim::set_mod_root(std::string utf8_root) { m->mod_root = std::move(utf8_root); }
+ 
+--- a/loader/tests/guest_pe_thread_test.cpp
++++ b/loader/tests/guest_pe_thread_test.cpp
+@@ -1,5 +1,7 @@
+ #include "guest_pe_thread.h"
++#include "guest_read_map.h"
+ #include "guest_thread_manager.h"
++#include "guest_write_map.h"
+ #include "win32_thread_identity.h"
+ #include "win_api_shim.h"
+ 
+@@ -22,6 +24,12 @@
+ std::atomic<bool> blocked_started{false};
+ std::atomic<bool> blocked_release{false};
+ std::atomic<uint32_t> blocked_identity{0};
++std::atomic<int> unsafe_write_calls{0};
++bool unsafe_writer(void*, void*, const void*, size_t)
++{
++    ++unsafe_write_calls;
++    return true;
++}
+ cap13::GuestThreadRunResult blocked_runner(cap13::GuestPeBatchResult&,
+                                             cap13::StaticTlsBank&, void*, void*)
+ {
+@@ -93,6 +101,55 @@
+     if (fixture.empty()) return 2;
+     cap13::WinApiShim shim;
+     shim.register_builtin_exports();
++    uint32_t stack_output = 0;
++    uint32_t supplied = 0x12345678;
++    int stack_owner = 0;
++    int other_owner = 0;
++    cap13::GuestWriteMap writes;
++    check(!shim.write_guest_bytes(&stack_output, &supplied, sizeof(supplied)),
++          "guest output write refuses without a validated range");
++    check(writes.add(&stack_owner, &stack_output, sizeof(stack_output)) &&
++          shim.set_guest_write_map(&writes) &&
++          shim.write_guest_bytes(&stack_output, &supplied, sizeof(supplied)) &&
++          stack_output == supplied,
++          "validated stack output receives a bounded DWORD write");
++    check(!writes.add(&other_owner, &stack_output, sizeof(stack_output)) &&
++          !writes.add(&stack_owner, &supplied, sizeof(supplied)) &&
++          !shim.write_guest_bytes(reinterpret_cast<uint8_t*>(&stack_output) + 1,
++                                  &supplied, sizeof(supplied)) &&
++          stack_output == supplied,
++          "overlap and cross-boundary writes refuse without modifying output");
++    std::vector<uint8_t> heap_output(8, 0);
++    check(writes.add(&other_owner, heap_output.data(), heap_output.size()) &&
++          shim.write_guest_bytes(heap_output.data() + 4, &supplied,
++                                 sizeof(supplied)) &&
++          std::memcmp(heap_output.data() + 4, &supplied, sizeof(supplied)) == 0,
++          "caller-owned heap range permits bounded output writes");
++    check(!writes.add(&supplied, reinterpret_cast<void*>(UINTPTR_MAX - 1), 8) &&
++          !shim.write_guest_bytes(nullptr, &supplied, sizeof(supplied)) &&
++          !shim.write_guest_bytes(&stack_output, &supplied, 0),
++          "wrapping and empty guest writes refuse");
++    check(writes.remove(&stack_owner) &&
++          !shim.write_guest_bytes(&stack_output, &supplied, sizeof(supplied)) &&
++          !writes.remove(&stack_owner) &&
++          writes.remove(&other_owner),
++          "owner removal revokes guest output permission");
++    const uint32_t readonly = 0x1234;
++    int readonly_owner = 0;
++    uint32_t copied_read = 0;
++    cap13::GuestReadMap reads;
++    check(reads.add(&readonly_owner, &readonly, sizeof(readonly)) &&
++          reads.read(&readonly, &copied_read, sizeof(copied_read)) &&
++          copied_read == readonly &&
++          !shim.write_guest_bytes(const_cast<uint32_t*>(&readonly),
++                                  &supplied, sizeof(supplied)),
++          "readable guest range does not grant output-write permission");
++    cap13::WinApiShim::Hooks unsafe_hooks{};
++    unsafe_hooks.write_guest_bytes = unsafe_writer;
++    shim.set_hooks(unsafe_hooks);
++    check(!shim.write_guest_bytes(&stack_output, &supplied, sizeof(supplied)) &&
++          unsafe_write_calls.load() == 0,
++          "configured write map cannot be bypassed by later hook changes");
+     cap13::WinApiShim::ExecutableMemoryBackend backend{};
+     backend.allocate_writable = allocate_writable;
+     backend.seal_executable = seal_executable;

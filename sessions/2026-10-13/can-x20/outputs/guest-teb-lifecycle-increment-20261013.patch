@@ -1,0 +1,414 @@
+--- /dev/null
++++ b/loader/src/guest_teb_lifecycle.h
+@@ -0,0 +1,92 @@
++// Offline guest-TEB layout and Win64 DLL notification seam.
++// The segment backend must establish guest GS before any guest instruction.
++#ifndef CAP13_GUEST_TEB_LIFECYCLE_H
++#define CAP13_GUEST_TEB_LIFECYCLE_H
++
++#include "static_tls_bank.h"
++
++#include <array>
++#include <atomic>
++#include <cstdint>
++#include <thread>
++#include <vector>
++
++namespace cap13 {
++
++class GuestTebView
++{
++  public:
++    explicit GuestTebView(StaticTlsBank& bank);
++    GuestTebView(const GuestTebView&) = delete;
++    GuestTebView& operator=(const GuestTebView&) = delete;
++
++    // Refresh only while this thread is outside guest code. The array's
++    // address may change on refresh; the TLS block addresses remain stable.
++    const StaticTlsBank::ThreadArray& refresh();
++    void* address() noexcept;
++    void* const* tls_array() const noexcept;
++    void* self() noexcept;
++    uint8_t* block(uint32_t index) const;
++    bool belongs_to(const StaticTlsBank& bank) const noexcept;
++    bool on_owner_thread() const noexcept;
++
++  private:
++    StaticTlsBank& bank_;
++    std::thread::id owner_;
++    StaticTlsBank::ThreadArray array_;
++    alignas(16) std::array<uint8_t, 0x70> prefix_{};
++};
++
++// This interface deliberately has no PS5 implementation. Refusing enter
++// prevents lifecycle code from invoking a PE with an unpublished GS view.
++class GuestSegmentSwitch
++{
++  public:
++    virtual ~GuestSegmentSwitch() = default;
++    virtual bool enter(void* guest_teb) = 0;
++    virtual void leave() noexcept = 0;
++};
++
++class UnavailableSegmentSwitch final : public GuestSegmentSwitch
++{
++  public:
++    bool enter(void*) override { return false; }
++    void leave() noexcept override {}
++};
++
++enum class GuestNotifyStatus
++{
++    Ok,
++    WrongState,
++    WrongThreadOrBank,
++    TlsPreparationFailed,
++    BackendRefused,
++    EntryReturnedFalse
++};
++
++class GuestModuleLifecycle
++{
++  public:
++    // image_base and executable addresses must come from a validated,
++    // retained mapped image. The caller serializes module notifications.
++    GuestModuleLifecycle(StaticTlsBank& bank, GuestSegmentSwitch& segment,
++                         uint64_t image_base, uint64_t entry,
++                         std::vector<uint64_t> tls_callbacks);
++
++    GuestNotifyStatus process_attach(GuestTebView& teb);
++    GuestNotifyStatus thread_attach(GuestTebView& teb);
++    GuestNotifyStatus thread_detach(GuestTebView& teb);
++    GuestNotifyStatus process_detach(GuestTebView& teb);
++
++  private:
++    GuestNotifyStatus notify(GuestTebView& teb, uint64_t reason);
++    StaticTlsBank& bank_;
++    GuestSegmentSwitch& segment_;
++    uint64_t image_base_;
++    uint64_t entry_;
++    std::vector<uint64_t> callbacks_;
++    std::atomic<bool> attached_{false};
++};
++
++} // namespace cap13
++#endif
+--- /dev/null
++++ b/loader/src/guest_teb_lifecycle.cpp
+@@ -0,0 +1,119 @@
++#include "guest_teb_lifecycle.h"
++
++#include "win64_bridge.h"
++
++#include <cstring>
++#include <new>
++#include <stdexcept>
++
++namespace cap13 {
++
++namespace {
++constexpr uint64_t DLL_PROCESS_DETACH = 0;
++constexpr uint64_t DLL_PROCESS_ATTACH = 1;
++constexpr uint64_t DLL_THREAD_ATTACH = 2;
++constexpr uint64_t DLL_THREAD_DETACH = 3;
++constexpr size_t TEB_SELF_OFFSET = 0x30;
++constexpr size_t TEB_TLS_ARRAY_OFFSET = 0x58;
++
++class LeaveOnExit
++{
++  public:
++    explicit LeaveOnExit(GuestSegmentSwitch& segment) : segment_(segment) {}
++    ~LeaveOnExit() { segment_.leave(); }
++    LeaveOnExit(const LeaveOnExit&) = delete;
++    LeaveOnExit& operator=(const LeaveOnExit&) = delete;
++
++  private:
++    GuestSegmentSwitch& segment_;
++};
++} // namespace
++
++GuestTebView::GuestTebView(StaticTlsBank& bank)
++    : bank_(bank), owner_(std::this_thread::get_id()) {}
++
++const StaticTlsBank::ThreadArray& GuestTebView::refresh()
++{
++    if (!on_owner_thread())
++        throw std::logic_error("guest TEB refreshed from the wrong host thread");
++    array_ = bank_.attach_current_thread();
++    const uint64_t self_pointer = reinterpret_cast<uint64_t>(prefix_.data());
++    const uint64_t tls_pointer = reinterpret_cast<uint64_t>(array_.slots.data());
++    std::memcpy(prefix_.data() + TEB_SELF_OFFSET, &self_pointer, sizeof(self_pointer));
++    std::memcpy(prefix_.data() + TEB_TLS_ARRAY_OFFSET, &tls_pointer, sizeof(tls_pointer));
++    return array_;
++}
++
++void* GuestTebView::address() noexcept { return prefix_.data(); }
++void* const* GuestTebView::tls_array() const noexcept { return array_.slots.data(); }
++void* GuestTebView::self() noexcept { return prefix_.data(); }
++uint8_t* GuestTebView::block(uint32_t index) const
++{
++    if (!on_owner_thread()) return nullptr;
++    return bank_.current_block(index);
++}
++bool GuestTebView::belongs_to(const StaticTlsBank& bank) const noexcept
++{
++    return &bank_ == &bank;
++}
++bool GuestTebView::on_owner_thread() const noexcept
++{
++    return owner_ == std::this_thread::get_id();
++}
++
++GuestModuleLifecycle::GuestModuleLifecycle(StaticTlsBank& bank,
++                                           GuestSegmentSwitch& segment,
++                                           uint64_t image_base, uint64_t entry,
++                                           std::vector<uint64_t> tls_callbacks)
++    : bank_(bank), segment_(segment), image_base_(image_base), entry_(entry),
++      callbacks_(std::move(tls_callbacks)) {}
++
++GuestNotifyStatus GuestModuleLifecycle::notify(GuestTebView& teb, uint64_t reason)
++{
++    if (!teb.belongs_to(bank_) || !teb.on_owner_thread())
++        return GuestNotifyStatus::WrongThreadOrBank;
++    try { (void)teb.refresh(); }
++    catch (const std::bad_alloc&) { return GuestNotifyStatus::TlsPreparationFailed; }
++    if (!segment_.enter(teb.address())) return GuestNotifyStatus::BackendRefused;
++    LeaveOnExit guard(segment_);
++    for (uint64_t callback : callbacks_)
++        (void)cap13_win64_call3(reinterpret_cast<void*>(callback), image_base_, reason, 0);
++    if (entry_)
++    {
++        const uint64_t result = cap13_win64_call3(
++            reinterpret_cast<void*>(entry_), image_base_, reason, 0);
++        if (reason == DLL_PROCESS_ATTACH && result == 0)
++            return GuestNotifyStatus::EntryReturnedFalse;
++    }
++    return GuestNotifyStatus::Ok;
++}
++
++GuestNotifyStatus GuestModuleLifecycle::process_attach(GuestTebView& teb)
++{
++    if (attached_) return GuestNotifyStatus::WrongState;
++    const GuestNotifyStatus status = notify(teb, DLL_PROCESS_ATTACH);
++    if (status == GuestNotifyStatus::Ok) attached_ = true;
++    return status;
++}
++
++GuestNotifyStatus GuestModuleLifecycle::thread_attach(GuestTebView& teb)
++{
++    if (!attached_) return GuestNotifyStatus::WrongState;
++    return notify(teb, DLL_THREAD_ATTACH);
++}
++
++GuestNotifyStatus GuestModuleLifecycle::thread_detach(GuestTebView& teb)
++{
++    if (!attached_) return GuestNotifyStatus::WrongState;
++    return notify(teb, DLL_THREAD_DETACH);
++}
++
++GuestNotifyStatus GuestModuleLifecycle::process_detach(GuestTebView& teb)
++{
++    if (!attached_) return GuestNotifyStatus::WrongState;
++    const GuestNotifyStatus status = notify(teb, DLL_PROCESS_DETACH);
++    if (status == GuestNotifyStatus::Ok) attached_ = false;
++    return status;
++}
++
++} // namespace cap13
+--- /dev/null
++++ b/loader/tests/teb_lifecycle_test.cpp
+@@ -0,0 +1,174 @@
++#include "guest_teb_lifecycle.h"
++
++#include <atomic>
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <vector>
++
++static thread_local void* published_teb = nullptr;
++static std::mutex event_mu;
++static std::vector<std::string> events;
++static std::atomic<bool> teb_ok{true};
++static std::atomic<bool> entry_should_fail{false};
++static int failures = 0;
++
++static void check(bool value, const char* name)
++{
++    std::printf("%s %s\n", value ? "PASS" : "FAIL", name);
++    if (!value) ++failures;
++}
++
++static void note(const char* name, uint64_t module, uint64_t reason, uint64_t reserved)
++{
++    uint64_t self = 0, tls_array = 0;
++    if (!published_teb || module != 0x12345000 || reserved != 0)
++        teb_ok = false;
++    else
++    {
++        auto* bytes = static_cast<uint8_t*>(published_teb);
++        std::memcpy(&self, bytes + 0x30, sizeof(self));
++        std::memcpy(&tls_array, bytes + 0x58, sizeof(tls_array));
++        if (self != reinterpret_cast<uint64_t>(published_teb) || !tls_array ||
++            !static_cast<void**>(reinterpret_cast<void*>(tls_array))[0])
++            teb_ok = false;
++    }
++    std::lock_guard<std::mutex> guard(event_mu);
++    events.emplace_back(std::string(name) + ":" + std::to_string(reason));
++}
++
++extern "C" __attribute__((ms_abi)) void callback_one(uint64_t module,
++                                                        uint64_t reason, uint64_t reserved)
++{
++    note("c1", module, reason, reserved);
++}
++extern "C" __attribute__((ms_abi)) void callback_two(uint64_t module,
++                                                        uint64_t reason, uint64_t reserved)
++{
++    note("c2", module, reason, reserved);
++}
++extern "C" __attribute__((ms_abi)) uint64_t guest_entry(uint64_t module,
++                                                          uint64_t reason, uint64_t reserved)
++{
++    note("entry", module, reason, reserved);
++    return entry_should_fail ? 0 : 1;
++}
++
++class RecordingSwitch : public cap13::GuestSegmentSwitch
++{
++  public:
++    bool allow = true;
++    int enters = 0;
++    int leaves = 0;
++    bool enter(void* teb) override
++    {
++        ++enters;
++        if (!allow) return false;
++        published_teb = teb;
++        return true;
++    }
++    void leave() noexcept override
++    {
++        ++leaves;
++        published_teb = nullptr;
++    }
++};
++
++int main()
++{
++    using cap13::GuestNotifyStatus;
++    cap13::StaticTlsBank bank;
++    bank.register_module({0x42}, 2);
++    cap13::GuestTebView main_teb(bank);
++    const auto& initial = main_teb.refresh();
++    check(initial.slots.size() == 1 && main_teb.address() &&
++          main_teb.tls_array() == initial.slots.data() &&
++          main_teb.self() == main_teb.address(),
++          "TEB prefix publishes self at 0x30 and static TLS array at 0x58");
++
++    RecordingSwitch sw;
++    cap13::GuestModuleLifecycle lifecycle(
++        bank, sw, 0x12345000,
++        reinterpret_cast<uint64_t>(&guest_entry),
++        {reinterpret_cast<uint64_t>(&callback_one),
++         reinterpret_cast<uint64_t>(&callback_two)});
++    check(lifecycle.process_attach(main_teb) == GuestNotifyStatus::Ok &&
++          events == std::vector<std::string>({"c1:1", "c2:1", "entry:1"}) && teb_ok,
++          "process attach publishes TEB then calls callbacks and Win64 entry in order");
++    check(sw.enters == 1 && sw.leaves == 1 && !published_teb,
++          "segment view is restored after process attach");
++    check(lifecycle.process_attach(main_teb) == GuestNotifyStatus::WrongState,
++          "duplicate process attach is refused without guest calls");
++
++    std::atomic<bool> thread_block_distinct{false};
++    std::atomic<bool> cross_thread_refused{false};
++    std::thread worker([&] {
++        cross_thread_refused = lifecycle.thread_attach(main_teb) ==
++            GuestNotifyStatus::WrongThreadOrBank;
++        cap13::GuestTebView worker_teb(bank);
++        const auto attached = lifecycle.thread_attach(worker_teb);
++        thread_block_distinct = attached == GuestNotifyStatus::Ok &&
++            bank.current_block(0) != main_teb.block(0);
++        const auto detached = lifecycle.thread_detach(worker_teb);
++        thread_block_distinct = thread_block_distinct && detached == GuestNotifyStatus::Ok;
++    });
++    worker.join();
++    check(thread_block_distinct && cross_thread_refused && teb_ok &&
++          events == std::vector<std::string>({
++              "c1:1", "c2:1", "entry:1",
++              "c1:2", "c2:2", "entry:2",
++              "c1:3", "c2:3", "entry:3"}),
++          "new thread receives separate block and attach/detach notifications");
++
++    cap13::StaticTlsBank other_bank;
++    cap13::GuestTebView foreign_teb(other_bank);
++    const size_t before_wrong_bank = events.size();
++    check(lifecycle.thread_attach(foreign_teb) == GuestNotifyStatus::WrongThreadOrBank &&
++          events.size() == before_wrong_bank,
++          "TEB from another static TLS bank is refused without guest calls");
++
++    bank.register_module({0x77}, 0);
++    const auto& refreshed = main_teb.refresh();
++    check(refreshed.slots.size() == 2 && main_teb.block(0) == refreshed.slots[0] &&
++          main_teb.block(1) == refreshed.slots[1] && main_teb.block(1)[0] == 0x77,
++          "late module refresh republishes array without replacing old block");
++
++    sw.allow = false;
++    const size_t before_refusal = events.size();
++    check(lifecycle.thread_attach(main_teb) == GuestNotifyStatus::BackendRefused &&
++          events.size() == before_refusal && sw.leaves == 3,
++          "failed segment publication prevents every guest call");
++    sw.allow = true;
++    check(lifecycle.process_detach(main_teb) == GuestNotifyStatus::Ok &&
++          events == std::vector<std::string>({
++              "c1:1", "c2:1", "entry:1",
++              "c1:2", "c2:2", "entry:2",
++              "c1:3", "c2:3", "entry:3",
++              "c1:0", "c2:0", "entry:0"}),
++          "clean process detach sends callbacks and entry notification");
++    check(lifecycle.thread_attach(main_teb) == GuestNotifyStatus::WrongState,
++          "thread event after process detach is refused");
++
++    events.clear();
++    entry_should_fail = true;
++    cap13::GuestModuleLifecycle rejected(
++        bank, sw, 0x12345000, reinterpret_cast<uint64_t>(&guest_entry), {});
++    check(rejected.process_attach(main_teb) == GuestNotifyStatus::EntryReturnedFalse &&
++          events == std::vector<std::string>({"entry:1"}) &&
++          rejected.thread_attach(main_teb) == GuestNotifyStatus::WrongState,
++          "failed DllMain attach never marks the module process-attached");
++
++    cap13::UnavailableSegmentSwitch unavailable;
++    cap13::GuestModuleLifecycle no_backend(bank, unavailable, 0x12345000,
++                                         reinterpret_cast<uint64_t>(&guest_entry), {});
++    const size_t before_no_backend = events.size();
++    check(no_backend.process_attach(main_teb) == GuestNotifyStatus::BackendRefused &&
++          events.size() == before_no_backend,
++          "production placeholder refuses guest calls without a segment backend");
++
++    std::printf("TOTAL: %d failed\n", failures);
++    return failures ? 1 : 0;
++}
+--- /dev/null
++++ b/loader/tests/run_teb_lifecycle.py
+@@ -0,0 +1,17 @@
++#!/usr/bin/env python3
++"""Build and run the isolated x86-64 guest TEB lifecycle host checks."""
++
++import subprocess
++from pathlib import Path
++
++root = Path(__file__).resolve().parents[1]
++out = root / 'tests/teb-lifecycle-host'
++subprocess.run([
++    'clang++', '-arch', 'x86_64', '-std=c++17', '-O1', '-g', '-Wall',
++    '-Wextra', '-Werror', '-pthread', '-I' + str(root / 'src'),
++    str(root / 'tests/teb_lifecycle_test.cpp'),
++    str(root / 'src/static_tls_bank.cpp'),
++    str(root / 'src/guest_teb_lifecycle.cpp'),
++    str(root / 'src/win64_bridge.S'), '-o', str(out),
++], check=True, timeout=30)
++subprocess.run(['arch', '-x86_64', str(out)], check=True, timeout=20)

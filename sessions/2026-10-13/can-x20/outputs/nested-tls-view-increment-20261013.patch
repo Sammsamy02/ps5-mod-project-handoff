@@ -1,0 +1,79 @@
+--- a/loader/src/guest_teb_lifecycle.h
++++ b/loader/src/guest_teb_lifecycle.h
+@@ -20,8 +20,9 @@
+     GuestTebView(const GuestTebView&) = delete;
+     GuestTebView& operator=(const GuestTebView&) = delete;
+ 
+-    // Refresh only while this thread is outside guest code. The array's
+-    // address may change on refresh; the TLS block addresses remain stable.
++    // Refresh before guest entry, including a nested DLL attach. An old
++    // array view remains alive if guest code cached its address; a new TLS
++    // registration publishes a new view through the same TEB prefix.
+     const StaticTlsBank::ThreadArray& refresh();
+     void* address() noexcept;
+     void* const* tls_array() const noexcept;
+@@ -34,6 +35,8 @@
+     StaticTlsBank& bank_;
+     std::thread::id owner_;
+     StaticTlsBank::ThreadArray array_;
++    std::vector<StaticTlsBank::ThreadArray> retired_arrays_;
++    bool array_initialized_ = false;
+     alignas(16) std::array<uint8_t, 0x70> prefix_{};
+ };
+ 
+--- a/loader/src/guest_teb_lifecycle.cpp
++++ b/loader/src/guest_teb_lifecycle.cpp
+@@ -6,6 +6,7 @@
+ #include <cstring>
+ #include <new>
+ #include <stdexcept>
++#include <utility>
+ 
+ namespace cap13 {
+ 
+@@ -37,7 +38,20 @@
+ {
+     if (!on_owner_thread())
+         throw std::logic_error("guest TEB refreshed from the wrong host thread");
+-    array_ = bank_.attach_current_thread();
++    StaticTlsBank::ThreadArray next = bank_.attach_current_thread();
++    if (!array_initialized_)
++    {
++        array_ = std::move(next);
++        array_initialized_ = true;
++    }
++    else if (next.epoch != array_.epoch ||
++             next.slots.size() != array_.slots.size())
++    {
++        // Guest code may have cached GS:[0x58]. Moving the old vector into
++        // retained storage preserves its slot buffer through nested loads.
++        retired_arrays_.push_back(std::move(array_));
++        array_ = std::move(next);
++    }
+     const uint64_t self_pointer = reinterpret_cast<uint64_t>(prefix_.data());
+     const uint64_t tls_pointer = reinterpret_cast<uint64_t>(array_.slots.data());
+     std::memcpy(prefix_.data() + TEB_SELF_OFFSET, &self_pointer, sizeof(self_pointer));
+--- a/loader/tests/teb_lifecycle_test.cpp
++++ b/loader/tests/teb_lifecycle_test.cpp
+@@ -105,6 +105,11 @@
+           main_teb.tls_array() == initial.slots.data() &&
+           main_teb.self() == main_teb.address(),
+           "TEB prefix publishes self at 0x30 and static TLS array at 0x58");
++    void* const* initial_slots = main_teb.tls_array();
++    (void)main_teb.refresh();
++    check(main_teb.tls_array() == initial_slots &&
++          initial_slots[0] == main_teb.block(0),
++          "same-epoch refresh keeps a guest-cached TLS array pointer stable");
+ 
+     RecordingSwitch sw;
+     cap13::GuestModuleLifecycle lifecycle(
+@@ -152,6 +157,9 @@
+     check(refreshed.slots.size() == 2 && main_teb.block(0) == refreshed.slots[0] &&
+           main_teb.block(1) == refreshed.slots[1] && main_teb.block(1)[0] == 0x77,
+           "late module refresh republishes array without replacing old block");
++    check(initial_slots[0] == main_teb.block(0) &&
++          main_teb.tls_array() != initial_slots,
++          "late module refresh retains the prior guest-cached array view");
+ 
+     sw.allow = false;
+     const size_t before_refusal = events.size();

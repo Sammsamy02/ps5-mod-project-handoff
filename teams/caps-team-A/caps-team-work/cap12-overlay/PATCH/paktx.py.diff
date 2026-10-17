@@ -1,0 +1,921 @@
+--- a/outputs/2026-10-08-l25-prep/pak-overlay/paktx.py
++++ b/outputs/2026-10-08-l25-prep/pak-overlay/paktx.py
+@@ -44,6 +44,15 @@
+     into separate steps, one console OK each.  Refuses on a PARTIAL record.
+   * `install --only-into STEM`: diagnostic fallback, one container only
+     (packages owned elsewhere are listed and not installed).
++  * `install --substitute MANIFEST --accept-decision D ...` (capability #12):
++    ship DERIVED package bytes (derive_substitutes.py + mic_reparent.py: a
++    mod material instance re-parented to a base-game material) in place of
++    the mod's export chunk, with the store-entry import repointed.  Every
++    hash has two sources (recomputed here with two independent readers +
++    the game's / mod's own TOC, store and header data); the user decisions
++    the manifest needs must be restated; the derived index is re-read after
++    the build (payload, IoHash, merged store, every import resolves).  Mod
++    files stay read-only; restore is unchanged (byte-exact by rename).
+ 
+ LAWS: mod files are read-only inputs. Base .ucas files are never read
+ beyond the bytes of a mirror, never written, renamed or deleted (FTP backend
+@@ -461,13 +470,24 @@
+     return (n + 15) & ~15
+ 
+ 
+-def project_mod(B, mod, pids: set, out_stem: str, target_dir=None):
++def project_mod(B, mod, pids: set, out_stem: str, target_dir=None,
++                substitute: Optional[Dict[bytes, bytes]] = None,
++                store_imports: Optional[Dict[int, Tuple[int, ...]]] = None):
+     """Write <out_stem>.utoc/.ucas holding only `pids` (intermediate input for
+     build_overlay; never shipped).  Payload bytes are copied block-for-block
+     and re-verified chunk by chunk.  `target_dir` (the destination container's
+     parsed directory index) re-roots the directory index onto a deeper
+     destination mount point: every virtual path stays byte-identical, only the
+-    split between mount point and directories moves (fail-closed otherwise)."""
++    split between mount point and directories moves (fail-closed otherwise).
++
++    capability #12 (`install --substitute`): `substitute` maps a chunk id to
++    DERIVED payload bytes that replace that chunk in this intermediate trio
++    (new stored blocks, new length, IoHash = blake3_20 of the derived bytes);
++    `store_imports` maps a package id to its derived store-entry imports.
++    Both are verified by verify_substitutions before they get here; the mod
++    files themselves are read-only (only the intermediate trio differs)."""
++    substitute = substitute or {}
++    store_imports = store_imports or {}
+     toc = mod.toc
+     bs = toc.block_size
+     header = B.parse_container_header(B.read_mod_header_bytes(mod))
+@@ -482,6 +502,10 @@
+     keep = [r for r, cid in enumerate(toc.ids)
+             if cid != mod.header_chunk_id and B.package_id_of_chunk(cid) in pids]
+     require(keep, "projection_empty", mod.mod_id)
++    require(set(substitute) <= {toc.ids[r] for r in keep}, "substitute_chunk_not_projected",
++            mod.mod_id)
++    require(set(store_imports) <= set(pids) and set(store_imports) <= set(header.packages),
++            "substitute_store_entry_not_projected", mod.mod_id)
+     ids, offsets, metas, blocks, ucas = [], bytearray(), bytearray(), bytearray(), bytearray()
+     with open(mod.ucas_path, "rb") as fh:
+         store = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+@@ -489,6 +513,23 @@
+             for row in keep:
+                 first, last = ranges[row]
+                 new_first = len(blocks) // 12
++                derived = substitute.get(toc.ids[row])
++                if derived is not None:
++                    # derived payload: stored blocks (the only pinned profile),
++                    # new length, IoHash recomputed; meta flags/padding kept
++                    require(0 < len(derived) and toc.meta(row)[20:] == bytes(4),
++                            "substitute_unsupported_chunk_meta", toc.ids[row].hex())
++                    for i in range(0, len(derived), bs):
++                        part = derived[i:i + bs]
++                        np_ = len(ucas)
++                        ucas += part
++                        ucas += bytes(_align16(len(ucas)) - len(ucas))
++                        blocks += (np_.to_bytes(5, "little") + len(part).to_bytes(3, "little") +
++                                   len(part).to_bytes(3, "little") + b"\x00")
++                    ids.append(toc.ids[row])
++                    offsets += (new_first * bs).to_bytes(5, "big") + len(derived).to_bytes(5, "big")
++                    metas += B.blake3_20(derived) + toc.meta(row)[20:]
++                    continue
+                 for b in range(first, last + 1):
+                     phys, stored, decoded, method = toc.block(b)
+                     np_ = len(ucas)
+@@ -502,8 +543,13 @@
+                 metas += toc.meta(row)
+         finally:
+             store.close()
+-    sub = B.ContainerHeader(header.container_id,
+-                            {p: header.packages[p] for p in sorted(pids)},
++    entries = {}
++    for p in sorted(pids):
++        e = header.packages[p]
++        if p in store_imports:
++            e = B.StoreEntry(tuple(store_imports[p]), e.shader_map_hashes)
++        entries[p] = e
++    sub = B.ContainerHeader(header.container_id, entries,
+                             header.soft_serial_region_absent, header.opaque_zero_suffix)
+     hb = B.serialize_container_header(sub)
+     first = len(blocks) // 12
+@@ -557,8 +603,10 @@
+         try:
+             for row in keep:
+                 cid = toc.ids[row]
+-                require(B.extract_chunk_bytes(toc, row, sa) ==
+-                        B.extract_chunk_bytes(spec.toc, spec.toc.ids.index(cid), sb),
++                want = substitute.get(cid)
++                if want is None:
++                    want = B.extract_chunk_bytes(toc, row, sa)
++                require(want == B.extract_chunk_bytes(spec.toc, spec.toc.ids.index(cid), sb),
+                         "projection_payload_mismatch", cid.hex())
+         finally:
+             sa.close()
+@@ -567,6 +615,622 @@
+ 
+ 
+ # ---------------------------------------------------------------------------
++# capability #12: ship DERIVED package bytes (`install --substitute`)
++# ---------------------------------------------------------------------------
++# A derived-packages manifest (written by derive_substitutes.py from a
++# reparent plan + mic_reparent.py outputs) lists, per mod package id, the
++# derived package bytes that replace the mod's export chunk in the DERIVED
++# overlay, plus the store-entry import repoint.  Every value is checked here
++# again, independently of the manifest writer, and every hash has two
++# sources (recomputed here + the game's / mod's own data); anything else
++# refuses before a single byte is planned.  Mod files stay read-only inputs:
++# only the intermediate projected trio (deleted after the build) and the
++# derived index/sidecar carry the derived bytes.  Restore is unchanged
++# (rename of the original index back), so it stays byte-exact.
++
++SUBST_SCHEMA = "paktx-substitute/1"
++KNOWN_DECISIONS = ("allow-partial", "accept-unproven-opaque")
++# the reviewed derived-package writer (mod-manager/material-fallback/mic_reparent.py)
++MIC_REPARENT_SHA256 = "520a805580a6750e9f799c8740095d4cc5d6f3e3a0a3574e6052914e82c06af5"
++# Pinned read-only format readers (integrated copy:
++# outputs/2026-10-08-l25-prep/mod-manager/material-fallback/, Team F cap12).
++# Independent implementations from overlay_builder's: used as the second
++# reader of every hash and structure this feature relies on.
++READER_SHA256 = {
++    "zen.py": "b3c421d448585ab51a91af7d935ff610633968f11dc258158cae4b3bcc889f4f",
++    "cityhash.py": "95955e5872a067d38e024b1f0bad74753842bc24eb79be689afb588898b5167a",
++    "blake3.py": "0613633f746a8e4f6c49baee1602f411cbdc1adbb793bf401b2a8e8c17b1355e",
++    "container_header.py": "e703f080adf49c9ff5bd90a41b13733b367dafe9f74e0b8306c1e1ddad964459",
++}
++
++
++def default_readers_path() -> str:
++    env = os.environ.get("PAKTX_READERS")
++    if env:
++        return env
++    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
++                        "mod-manager", "material-fallback")
++
++
++def load_readers(path: str):
++    """Exec the pinned readers from verified bytes (no import path, no cache)."""
++    out = {}
++    for fn, pinned in sorted(READER_SHA256.items()):
++        p = os.path.join(path, fn)
++        require(os.path.isfile(p), "substitute_reader_missing", p)
++        data = open(p, "rb").read()
++        got = sha256_bytes(data)
++        require(got == pinned, "substitute_reader_sha_mismatch", "%s is %s, pinned %s" % (p, got, pinned))
++        mod = types.ModuleType("paktx_reader_" + fn[:-3])
++        mod.__file__ = p
++        exec(compile(data, p, "exec"), mod.__dict__)
++        out[fn[:-3]] = mod
++    return types.SimpleNamespace(**out)
++
++
++def manifest_self_sha(doc: dict) -> str:
++    return sha256_bytes(canonical({k: v for k, v in doc.items() if k != "manifest_sha256"}))
++
++
++def _hex16(v: int) -> str:
++    return "%016x" % v
++
++
++def _pid(text, code: str) -> int:
++    require(isinstance(text, str) and re.fullmatch(r"[0-9a-f]{16}", text) is not None, code, repr(text))
++    return int(text, 16)
++
++
++def plan_decisions(row: dict) -> List[str]:
++    """User decisions a reparent-plan row needs (the plan, not the manifest,
++    is the source: it is what the user reviewed)."""
++    out = []
++    if row.get("action") == "reparent-partial":
++        out.append("allow-partial")
++    if (row.get("mod_class") or {}).get("unproven_opaque"):
++        out.append("accept-unproven-opaque")
++    return sorted(out)
++
++
++def load_substitute_manifest(path: str, accepted: Sequence[str], plan_path: Optional[str]) -> dict:
++    """The manifest is bound to the reviewed reparent plan by sha256; every
++    row must equal exactly one plan row; the decisions come from the plan and
++    must be restated EXACTLY on the command line."""
++    doc = read_json(path)
++    require(isinstance(doc, dict) and doc.get("schema") == SUBST_SCHEMA, "substitute_manifest_schema")
++    require(manifest_self_sha(doc) == doc.get("manifest_sha256"), "substitute_manifest_self_hash_mismatch")
++    require(doc.get("mic_reparent_sha256") == MIC_REPARENT_SHA256, "substitute_mic_reparent_not_pinned",
++            "manifest made by mic_reparent %s, pinned %s" % (doc.get("mic_reparent_sha256"),
++                                                             MIC_REPARENT_SHA256))
++    rows = doc.get("rows")
++    require(isinstance(rows, list) and rows, "substitute_manifest_has_zero_rows")
++    require(plan_path is not None and os.path.isfile(plan_path), "substitute_needs_reparent_plan",
++            "pass --reparent-plan (the plan the user reviewed)")
++    pbytes = open(plan_path, "rb").read()
++    require(sha256_bytes(pbytes) == (doc.get("source_plan") or {}).get("sha256"),
++            "substitute_plan_sha_mismatch", "manifest made from another reparent plan")
++    prows = [r for r in json.loads(pbytes).get("rows", [])
++             if r.get("action") in ("reparent", "reparent-partial")]
++    by_pkg: Dict[str, List[dict]] = {}
++    for r in prows:
++        by_pkg.setdefault(r.get("mod_package"), []).append(r)
++    for d in accepted:
++        require(d in KNOWN_DECISIONS, "substitute_user_decision_unknown", d)
++    needed = set()
++    seen = set()
++    for r in rows:
++        pid = _pid(r.get("package_id"), "substitute_bad_package_id")
++        require(pid not in seen, "substitute_duplicate_package", r.get("package_id"))
++        seen.add(pid)
++        cands = by_pkg.get(r.get("package"), [])
++        require(len(cands) == 1, "substitute_row_not_in_plan",
++                "%s: %d matching reparent rows in the plan" % (r.get("package"), len(cands)))
++        pr = cands[0]
++        rp = r.get("reparent") or {}
++        rep_ = pr.get("store_entry_repoint") or {}
++        require(r.get("action") == pr.get("action") and
++                rp.get("old_parent") == pr.get("old_parent") and
++                rp.get("new_parent") == pr.get("new_parent") and
++                rp.get("new_export") == pr.get("new_export") and
++                sorted(map(tuple, rp.get("renamed_parameters", []))) ==
++                sorted((pr.get("param_renames") or {}).items()) and
++                rep_.get("package_id") == r.get("package_id"),
++                "substitute_row_disagrees_with_plan", r.get("package"))
++        dec = plan_decisions(pr)
++        require(sorted(r.get("user_decisions", [])) == dec, "substitute_row_decisions_disagree_with_plan",
++                r.get("package"))
++        needed |= set(dec)
++    require(sorted(doc.get("user_decisions", [])) == sorted(needed), "substitute_manifest_decisions_inconsistent")
++    missing = sorted(needed - set(accepted))
++    require(not missing, "substitute_user_decision_missing",
++            "the plan rows need the user's explicit decision(s): %s (pass --accept-decision for each)"
++            % ", ".join(missing))
++    require(set(accepted) == needed, "substitute_user_decision_not_needed",
++            "restate exactly the decisions the rows need: %s" % sorted(needed))
++    shipped = {r.get("package") for r in rows}
++    doc["_plan_rows_not_shipped"] = sorted(
++        ({"package": r.get("mod_package"), "action": r.get("action"),
++          "needs": plan_decisions(r)} for r in prows if r.get("mod_package") not in shipped),
++        key=lambda x: x["package"] or "")
++    doc["_plan_sha256"] = sha256_bytes(pbytes)
++    doc["_dir"] = os.path.dirname(os.path.abspath(path))
++    doc["_file_sha256"] = sha256_file(path)
++    return doc
++
++
++def _man_file(man: dict, ent: dict, code: str) -> bytes:
++    rel = ent.get("path")
++    require(isinstance(rel, str) and rel and not os.path.isabs(rel) and ".." not in rel.split("/"),
++            code + "_path", repr(rel))
++    p = os.path.join(man["_dir"], *rel.split("/"))
++    require(os.path.isfile(p), code + "_missing", rel)
++    data = open(p, "rb").read()
++    require(len(data) == ent.get("bytes") and sha256_bytes(data) == ent.get("sha256"),
++            code + "_sha_mismatch", rel)
++    return data
++
++
++def _export_hashes(R, data: bytes, top_level_only: bool = False) -> Dict[str, int]:
++    p = R.zen.ZenPackage(data)
++    return {e["name"]: e["public_hash"] for e in p.exports
++            if not top_level_only or e["outer"][0] == "Null"}
++
++
++def base_stores(B, R, rec: dict, mirror: str, man: dict) -> Dict[str, dict]:
++    """Every base container's package store, each tied to its TOC by IoHash
++    (two blake3 implementations) and read by two parsers that must agree."""
++    out = {}
++    extra = {}
++    for ent in man.get("base_stores", []):
++        data = _man_file(man, ent, "substitute_base_store")
++        extra[ent.get("container")] = data
++    for stem, c in sorted(rec["containers"].items()):
++        if not c.get("admitted"):
++            continue
++        toc = rec["_tocs"][stem]
++        data = None
++        if c.get("header") is not None:
++            data = record_header_bytes(rec, stem, mirror, B)
++            if stem in extra:
++                require(extra[stem] == data, "substitute_base_store_disagrees_with_record", stem)
++        elif stem in extra:
++            data = extra[stem]
++        if data is None:
++            continue
++        hid = toc.container_id + bytes.fromhex("00000006")
++        require(hid in toc.ids, "substitute_base_store_header_row_missing", stem)
++        meta = toc.meta(toc.ids.index(hid))[:20]
++        require(B.blake3_20(data) == meta and R.blake3.iohash20(data) == meta.hex(),
++                "substitute_base_store_iohash_mismatch", stem)
++        h1 = B.parse_container_header(data)
++        _cid, h2 = R.container_header.parse(data)
++        require(set(h1.packages) == set(h2) and
++                all(tuple(h1.packages[p].imported_packages) == tuple(h2[p]["imports"]) for p in h2),
++                "substitute_base_store_parsers_disagree", stem)
++        out[stem] = {"packages": h1.packages, "sha256": sha256_bytes(data), "bytes": len(data)}
++    for stem in extra:
++        require(stem in out, "substitute_base_store_unknown_container", repr(stem))
++    require(out, "substitute_zero_base_stores")
++    return out
++
++
++def _base_export_chunk(B, rec: dict, pid: int):
++    hits = []
++    want = struct.pack("<Q", pid) + bytes.fromhex("00000001")
++    for stem, toc in sorted(rec["_tocs"].items()):
++        if want in toc.ids:
++            hits.append((stem, toc, toc.ids.index(want)))
++    return hits
++
++
++def _raw_name_batch(d: bytes, pos: int, limit: int):
++    """FName batch read with struct only (independent of zen.py): returns
++    (names, stored hashes, end).  Only the ASCII form is admitted."""
++    require(pos + 4 <= limit, "substitute_raw_names_truncated")
++    n = struct.unpack_from("<I", d, pos)[0]
++    pos += 4
++    if n == 0:
++        return [], [], pos
++    require(n <= 200000 and pos + 12 + 10 * n <= limit, "substitute_raw_names_truncated")
++    nbytes, algo = struct.unpack_from("<IQ", d, pos)
++    pos += 12
++    require(algo == 0xC1640000, "substitute_raw_names_hash_algorithm")
++    hashes = list(struct.unpack_from("<%dQ" % n, d, pos))
++    pos += 8 * n
++    lens = struct.unpack_from(">%dh" % n, d, pos)
++    pos += 2 * n
++    names = []
++    for ln in lens:
++        require(0 <= ln and pos + ln <= limit, "substitute_raw_names_not_ascii_or_truncated")
++        raw = d[pos:pos + ln]
++        require(all(b < 0x80 for b in raw), "substitute_raw_names_not_ascii_or_truncated")
++        names.append(raw.decode("ascii"))
++        pos += ln
++    require(sum(lens) == nbytes, "substitute_raw_names_byte_count")
++    return names, hashes, pos
++
++
++def raw_header_compare(R, orig: bytes, der: bytes, hslot: int, pslot: int,
++                       renames: Dict[str, str]) -> dict:
++    """Byte-level comparison of the original and derived package headers with
++    struct only: everything outside the name map, the one public-hash slot
++    and the one ImportedPackageNames slot must be byte-identical; every
++    stored FName hash must follow the law (the original's prove it on the
++    cooker's own data); offsets move by exactly the name-map delta."""
++    so = struct.unpack_from("<6I9i", orig, 0)
++    sd = struct.unpack_from("<6I9i", der, 0)
++    require(orig[0:4] == der[0:4] and orig[8:24] == der[8:24], "substitute_raw_summary_changed")
++    ho, hd = so[1], sd[1]
++    # fields: iph, imp, exp, bundle, dep_h, dep_e, ipn, cimp, cexp; physical order:
++    # iph, imp, exp, cimp, cexp, bundle, dep_h, dep_e, ipn (then HeaderSize)
++    oo, od = list(so[6:]), list(sd[6:])
++    require(all(x > 0 for x in oo) and all(x > 0 for x in od), "substitute_raw_offsets_unsupported")
++    phys = (0, 1, 2, 7, 8, 3, 4, 5, 6)
++    order_o = [60] + [oo[i] for i in phys] + [ho]
++    order_d = [60] + [od[i] for i in phys] + [hd]
++    require(order_o == sorted(order_o) and order_d == sorted(order_d), "substitute_raw_offsets_unsupported")
++    delta = od[0] - oo[0]
++    require(all(b - a == delta for a, b in zip(oo, od)), "substitute_raw_offsets_moved_unequally")
++    law64 = R.cityhash.cityhash64
++    # name map [60, ImportedPublicExportHashes): batch, u64 pad count, pad, bulk map
++    n_o, h_o, e_o = _raw_name_batch(orig, 60, oo[0])
++    n_d, h_d, e_d = _raw_name_batch(der, 60, od[0])
++    require(len(set(n_d)) == len(n_d), "substitute_raw_name_collision")
++    require(len(n_o) == len(n_d) and all(b == renames.get(a, a) for a, b in zip(n_o, n_d)),
++            "substitute_name_change_not_declared")
++    for names, hashes in ((n_o, h_o), (n_d, h_d)):
++        require(all(law64(n.lower().encode()) == h for n, h in zip(names, hashes)),
++                "substitute_raw_name_hash_law")
++    require(all(a == b for a, b, x in zip(h_o, h_d, n_o) if x not in renames), "substitute_raw_name_hash_changed")
++
++    def tail(d, e, end):
++        require(e + 8 <= end, "substitute_raw_bulk_map_truncated")
++        pad = struct.unpack_from("<Q", d, e)[0]
++        require(pad < 8 and not any(d[e + 8:e + 8 + pad]) and (e + 8 + pad) % 8 == 0,
++                "substitute_raw_padding")
++        return d[e + 8 + pad:end]
++    require(tail(orig, e_o, oo[0]) == tail(der, e_d, od[0]), "substitute_raw_bulk_map_changed")
++    # [ImportedPublicExportHashes, ImportedPackageNames): one 8-byte slot may differ
++    a, b = orig[oo[0]:oo[6]], der[od[0]:od[6]]
++    require(len(a) == len(b), "substitute_raw_maps_resized")
++    lo = 8 * hslot
++    require(oo[0] + lo + 8 <= oo[1] and a[:lo] == b[:lo] and a[lo + 8:] == b[lo + 8:],
++            "substitute_raw_maps_changed")
++    # ImportedPackageNames (last header region): one name + its number may differ
++    p_o, ph_o, pe_o = _raw_name_batch(orig, oo[6], ho)
++    p_d, ph_d, pe_d = _raw_name_batch(der, od[6], hd)
++    require(len(p_o) == len(p_d) and pe_o + 4 * len(p_o) == ho and pe_d + 4 * len(p_d) == hd,
++            "substitute_raw_package_names_layout")
++    require([i for i in range(len(p_o)) if p_o[i] != p_d[i]] == [pslot], "substitute_unexpected_import_package_change")
++    for names, hashes in ((p_o, ph_o), (p_d, ph_d)):
++        require(all(law64(n.lower().encode()) == h for n, h in zip(names, hashes)),
++                "substitute_raw_name_hash_law")
++    k_o = struct.unpack_from("<%di" % len(p_o), orig, pe_o)
++    k_d = struct.unpack_from("<%di" % len(p_d), der, pe_d)
++    require(all(x == y for i, (x, y) in enumerate(zip(k_o, k_d)) if i != pslot),
++            "substitute_raw_package_numbers_changed")
++    require(der[hd:] == orig[ho:], "substitute_payload_after_header_changed")
++    return {"name_map_delta": delta, "header_delta": hd - ho, "names_checked": len(n_o) + len(p_o),
++            "identical_map_bytes": len(a) - 8}
++
++
++def verify_substitutions(B, R, rec: dict, mirror: str, man: dict, mods) -> dict:
++    """Checks every manifest row against the mod, the base game and the hash
++    laws.  Returns {mod_id: {"chunks": {cid: bytes}, "imports": {pid: tuple}}}
++    plus the ledger.  Refuses (nothing planned) on any mismatch."""
++    stores = base_stores(B, R, rec, mirror, man)
++    base_pids = {}
++    for stem, s in stores.items():
++        for p in s["packages"]:
++            base_pids.setdefault(p, []).append(stem)
++    by_sha = {(m.utoc_sha, m.ucas_sha): m for m in mods}
++    mm = man.get("mod") or {}
++    mod = by_sha.get((mm.get("utoc_sha256"), mm.get("ucas_sha256")))
++    require(mod is not None, "substitute_mod_identity_mismatch",
++            "the manifest was made for another mod build (utoc/ucas sha256)")
++    mstore = B.parse_container_header(B.read_mod_header_bytes(mod))
++    _c, mstore2 = R.container_header.parse(B.read_mod_header_bytes(mod))
++    require(set(mstore.packages) == set(mstore2), "substitute_mod_store_parsers_disagree")
++    mod_stores = {m.mod_id: B.parse_container_header(B.read_mod_header_bytes(m)) for m in mods}
++    all_mod_pids = set()
++    winner_of: Dict[int, object] = {}
++    for m in B.effective_mod_order(mods):  # later wins, as in build_overlay
++        all_mod_pids |= set(mod_stores[m.mod_id].packages)
++        for p_ in mod_stores[m.mod_id].packages:
++            winner_of[p_] = m
++    law = R.cityhash.ue_name_hash
++    headers = {}
++    for ent in man.get("base_headers", []):
++        pid = _pid(ent.get("package_id"), "substitute_bad_package_id")
++        data = _man_file(man, ent, "substitute_base_header")
++        hits = _base_export_chunk(B, rec, pid)
++        require(len(hits) == 1, "substitute_base_header_not_in_base_toc",
++                "%s in %d base TOCs" % (ent.get("package_id"), len(hits)))
++        stem, toc, row = hits[0]
++        meta = toc.meta(row)[:20]
++        require(toc.offset_length(row)[1] == len(data), "substitute_base_header_not_whole_chunk",
++                ent.get("package_id"))
++        require(B.blake3_20(data) == meta and R.blake3.iohash20(data) == meta.hex(),
++                "substitute_base_header_iohash_mismatch", ent.get("package_id"))
++        try:
++            q = R.zen.ZenPackage(data)
++        except R.zen.ZenError as e:
++            raise Refused("substitute_base_header_unparsable", str(e))
++        require(law(q.name) == pid, "substitute_base_header_wrong_package", q.name)
++        require(stem == ent.get("container"), "substitute_base_header_container_mismatch", stem)
++        headers[pid] = {"pkg": q, "container": stem, "sha256": sha256_bytes(data), "iohash": meta.hex()}
++    mrows = {cid: i for i, cid in enumerate(mod.toc.ids)}
++    chunks, imports, ledger = {}, {}, []
++    mod_targets: Dict[int, set] = {}
++    with open(mod.ucas_path, "rb") as fh:
++        store = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
++        try:
++            originals = {}
++            for r in man["rows"]:
++                pid = int(r["package_id"], 16)
++                require(pid in mstore.packages, "substitute_package_not_in_mod", r["package_id"])
++                cid = struct.pack("<Q", pid) + bytes.fromhex("00000001")
++                require(r.get("chunk_id") == cid.hex() and cid in mrows, "substitute_chunk_missing",
++                        r["package_id"])
++                orig = B.extract_chunk_bytes(mod.toc, mrows[cid], store)
++                require(B.blake3_20(orig) == mod.toc.meta(mrows[cid])[:20] and
++                        R.blake3.iohash20(orig) == mod.toc.meta(mrows[cid])[:20].hex(),
++                        "substitute_original_iohash_mismatch", r["package_id"])
++                o = r.get("original") or {}
++                require(sha256_bytes(orig) == o.get("sha256") and len(orig) == o.get("bytes"),
++                        "substitute_original_mismatch", r["package_id"])
++                originals[pid] = orig
++        finally:
++            store.close()
++    derived_by_pid = {}
++    for r in man["rows"]:
++        pid = int(r["package_id"], 16)
++        derived_by_pid[pid] = _man_file(man, r.get("derived") or {}, "substitute_derived")
++
++    def target_pkg(tpid: int):
++        """Header of an import target: the package that WINS for that id
++        (derived bytes if substituted, else the winning mod's own chunk), or a
++        verified base header when no mod provides it; None if unknown."""
++        if tpid in derived_by_pid:
++            return R.zen.ZenPackage(derived_by_pid[tpid])
++        wm = winner_of.get(tpid)
++        if wm is not None:
++            tc = struct.pack("<Q", tpid) + bytes.fromhex("00000001")
++            if tc not in wm.toc.ids:
++                return None
++            with open(wm.ucas_path, "rb") as fh2:
++                st = mmap.mmap(fh2.fileno(), 0, access=mmap.ACCESS_READ)
++                try:
++                    return R.zen.ZenPackage(B.extract_chunk_bytes(wm.toc, wm.toc.ids.index(tc), st))
++                finally:
++                    st.close()
++        h = headers.get(tpid)
++        return h["pkg"] if h else None
++
++    for r in man["rows"]:
++        pid = int(r["package_id"], 16)
++        orig, der = originals[pid], derived_by_pid[pid]
++        try:
++            p = R.zen.ZenPackage(orig)
++            q = R.zen.ZenPackage(der)
++        except R.zen.ZenError as e:
++            raise Refused("substitute_derived_unparsable", "%s: %s" % (r["package_id"], e))
++        rp = r.get("reparent") or {}
++        require(p.name == q.name == r.get("package") and law(q.name) == pid,
++                "substitute_identity_changed", r["package_id"])
++        require(len(p.exports) == len(q.exports) and
++                all({k: v for k, v in a.items() if k != "data_offset"} ==
++                    {k: v for k, v in b.items() if k != "data_offset"}
++                    for a, b in zip(p.exports, q.exports)),
++                "substitute_export_map_changed", r["package_id"])
++        require(all(p.export_bytes(a) == q.export_bytes(b) for a, b in zip(p.exports, q.exports)),
++                "substitute_export_bytes_changed", r["package_id"])
++        require(q.cooked_header_size == p.cooked_header_size and q.flags == p.flags,
++                "substitute_summary_changed", r["package_id"])
++        require(len(der) - q.header_size == len(orig) - p.header_size and
++                der[q.header_size:] == orig[p.header_size:],
++                "substitute_payload_after_header_changed", r["package_id"])
++        require(p.imports == q.imports, "substitute_import_map_changed", r["package_id"])
++        # name map: only the declared parameter renames
++        ren = {a: b for a, b in rp.get("renamed_parameters", [])}
++        require(len(p.names) == len(q.names) and
++                all(b == ren.get(a, a) for a, b in zip(p.names, q.names)) and
++                all(a in p.names for a in ren),
++                "substitute_name_change_not_declared", r["package_id"])
++        # imported package names: exactly the parent slot changes
++        diff_pk = [i for i, (a, b) in enumerate(zip(p.imported_packages, q.imported_packages)) if a != b]
++        require(len(p.imported_packages) == len(q.imported_packages) and len(diff_pk) == 1 and
++                p.imported_packages[diff_pk[0]] == rp.get("old_parent") and
++                q.imported_packages[diff_pk[0]] == rp.get("new_parent") and
++                diff_pk[0] == rp.get("parent_import_slot"),
++                "substitute_unexpected_import_package_change", r["package_id"])
++        slot = diff_pk[0]
++        # public export hash slot: exactly the one used by the parent import
++        uses = [v[1] for k, v in q.imports if k == "PackageImport" and v[0] == slot]
++        require(len(uses) == 1 and uses[0] == rp.get("public_hash_slot"), "substitute_parent_import_ambiguous",
++                r["package_id"])
++        hslot = uses[0]
++        diff_h = [i for i, (a, b) in enumerate(zip(p.import_hashes, q.import_hashes)) if a != b]
++        require(len(p.import_hashes) == len(q.import_hashes) and diff_h == [hslot],
++                "substitute_unexpected_public_hash_change", r["package_id"])
++        require(_hex16(p.import_hashes[hslot]) == rp.get("old_public_hash"),
++                "substitute_old_public_hash_disagrees", r["package_id"])
++        raw = raw_header_compare(R, orig, der, hslot, slot, ren)
++        new_hash = q.import_hashes[hslot]
++        new_export = rp.get("new_export")
++        require(isinstance(new_export, str) and law(new_export) == new_hash and
++                _hex16(new_hash) == rp.get("new_public_hash"),
++                "substitute_public_hash_law_mismatch", r["package_id"])
++        to_pid = law(rp["new_parent"])
++        from_pid = law(rp["old_parent"])
++        h = headers.get(to_pid)
++        require(h is not None, "substitute_base_header_missing", _hex16(to_pid))
++        tops = [e for e in h["pkg"].exports if e["outer"][0] == "Null" and e["name"] == new_export]
++        require(len(tops) == 1 and tops[0]["public_hash"] == new_hash, "substitute_base_export_hash_mismatch",
++                "%s: %d top-level exports named %s" % (rp["new_parent"], len(tops), new_export))
++        # store entry: slot order == header import names (cooker's own data), one slot repointed
++        entry = mstore.packages[pid]
++        require(not entry.shader_map_hashes and not mstore2[pid]["shader_maps"],
++                "substitute_entry_has_own_shader_maps",
++                "%s: its own (mod) shader maps would still be used; reparenting cannot fix it" % r["package"])
++        require(sum(1 for m in mods if pid in mod_stores[m.mod_id].packages) == 1,
++                "substitute_package_in_several_mods", r["package_id"])
++        before = tuple(entry.imported_packages)
++        require(before == tuple(law(n) for n in p.imported_packages) and
++                tuple(mstore2[pid]["imports"]) == before,
++                "substitute_store_order_mismatch", r["package_id"])
++        after = tuple(law(n) for n in q.imported_packages)
++        se = r.get("store_entry") or {}
++        require([_hex16(v) for v in before] == se.get("imports_before") and
++                [_hex16(v) for v in after] == se.get("imports_after") and
++                before[slot] == from_pid and after[slot] == to_pid and
++                [i for i in range(len(before)) if before[i] != after[i]] == [slot],
++                "substitute_store_imports_disagree", r["package_id"])
++        require(to_pid in base_pids, "substitute_parent_not_in_base_store", _hex16(to_pid))
++        require(h["container"] in base_pids[to_pid], "substitute_parent_store_container_mismatch",
++                _hex16(to_pid))
++        require(to_pid not in all_mod_pids, "substitute_parent_overridden_by_mod", _hex16(to_pid))
++        # one level further: the base parent's own imports are base packages
++        pstem = h["container"]
++        pimps = stores[pstem]["packages"][to_pid].imported_packages
++        require(all(i in base_pids for i in pimps), "substitute_parent_imports_unresolved",
++                _hex16(to_pid))
++        require(tuple(pimps) == tuple(law(n) for n in h["pkg"].imported_packages),
++                "substitute_parent_store_order_mismatch", _hex16(to_pid))
++        # export level: every package import of the derived package resolves
++        resolved = 0
++        for k, v in q.imports:
++            if k != "PackageImport":
++                continue
++            ti, hi = v
++            require(ti < len(q.imported_packages) and hi < len(q.import_hashes),
++                    "substitute_import_index_out_of_range", r["package_id"])
++            tpid = law(q.imported_packages[ti])
++            require(tpid == after[ti], "substitute_store_order_mismatch", r["package_id"])
++            tp = target_pkg(tpid)
++            require(tp is not None, "substitute_import_unresolvable",
++                    "%s: no header for %s" % (r["package"], q.imported_packages[ti]))
++            require(q.import_hashes[hi] in {e["public_hash"] for e in tp.exports},
++                    "substitute_import_unresolvable",
++                    "%s: %s exports no %016x" % (r["package"], q.imported_packages[ti], q.import_hashes[hi]))
++            if tpid not in all_mod_pids:
++                require(tpid in base_pids, "substitute_import_unresolvable",
++                        "%s not in any base store" % q.imported_packages[ti])
++            else:
++                mod_targets.setdefault(pid, set()).add(tpid)
++            resolved += 1
++        require(resolved > 0, "substitute_zero_imports_checked", r["package_id"])
++        dhash = B.blake3_20(der)
++        require(R.blake3.iohash20(der) == dhash.hex() and (r.get("derived") or {}).get("iohash") == dhash.hex(),
++                "substitute_derived_iohash_mismatch", r["package_id"])
++        cid = struct.pack("<Q", pid) + bytes.fromhex("00000001")
++        chunks[cid] = der
++        imports[pid] = after
++        ledger.append({
++            "package": r["package"], "package_id": r["package_id"], "chunk_id": cid.hex(),
++            "action": r.get("action"), "user_decisions": sorted(r.get("user_decisions", [])),
++            "original": {"bytes": len(orig), "sha256": sha256_bytes(orig),
++                         "iohash": B.blake3_20(orig).hex()},
++            "derived": {"bytes": len(der), "sha256": sha256_bytes(der), "iohash": dhash.hex()},
++            "old_parent": rp["old_parent"], "new_parent": rp["new_parent"], "new_export": new_export,
++            "new_public_hash": _hex16(new_hash),
++            "new_public_hash_sources": "cityhash law + base export map (header IoHash-tied to %s TOC)"
++                                       % h["container"],
++            "new_parent_package_id": _hex16(to_pid),
++            "new_parent_package_id_sources": "cityhash law + base store %s + base TOC chunk id"
++                                             % ",".join(base_pids[to_pid]),
++            "store_imports_before": [_hex16(v) for v in before],
++            "store_imports_after": [_hex16(v) for v in after],
++            "renamed_parameters": [list(x) for x in rp.get("renamed_parameters", [])],
++            "imports_resolved_export_level": resolved,
++            "raw_header_check": raw,
++            "parent_imports_in_base_stores": len(pimps),
++            "parent_imports_overridden_by_mod": sorted(_hex16(i) for i in pimps if i in all_mod_pids),
++            "base_header": {"container": h["container"], "sha256": h["sha256"], "iohash": h["iohash"]},
++        })
++    return {"mod": mod, "chunks": chunks, "imports": imports, "ledger": ledger,
++            "mod_targets": mod_targets,
++            "base_stores": {s: {"sha256": v["sha256"], "bytes": v["bytes"], "packages": len(v["packages"])}
++                            for s, v in sorted(stores.items())},
++            "base_pids": base_pids}
++
++
++def _in_sidecar(toc, row: int, base_ucas_size: int, what: str) -> None:
++    """Every block of the row lies in the sidecar partition (offset >= the base
++    .ucas size), so _OffsetView never wraps into a wrong slice."""
++    off, ln = toc.offset_length(row)
++    first, last = off // toc.block_size, (off + ln - 1) // toc.block_size
++    require(ln > 0 and all(toc.block(i)[0] >= base_ucas_size for i in range(first, last + 1)),
++            "substitute_row_not_in_sidecar", what)
++
++
++def post_build_checks(B, R, subs: dict, dest: str, derived: bytes, sidecar: bytes,
++                      base_ucas_size: int, mods_in_dest) -> dict:
++    """Independent re-read of what will ship: the derived index re-parses,
++    each substituted chunk extracts as the derived bytes with a matching
++    IoHash (two blake3 implementations), the merged store (two parsers) holds
++    the repointed entry, and every import of every mod entry resolves to a
++    package of the merged store or another base store (package level)."""
++    dtoc = B.parse_toc(derived, strict_admission=False)
++    B.validate_lookup(dtoc)
++    view = B._OffsetView(sidecar, base_ucas_size)
++    hid = dtoc.container_id + bytes.fromhex("00000006")
++    require(hid in dtoc.ids, "substitute_merged_header_row_missing", dest)
++    _in_sidecar(dtoc, dtoc.ids.index(hid), base_ucas_size, "merged header")
++    mh = B.extract_chunk_bytes(dtoc, dtoc.ids.index(hid), view)
++    require(B.blake3_20(mh) == dtoc.meta(dtoc.ids.index(hid))[:20], "substitute_merged_header_iohash", dest)
++    h1 = B.parse_container_header(mh)
++    _c, h2 = R.container_header.parse(mh)
++    require(set(h1.packages) == set(h2) and
++            all(tuple(h1.packages[p].imported_packages) == tuple(h2[p]["imports"]) for p in h2),
++            "substitute_merged_header_parsers_disagree", dest)
++    checked_chunks = 0
++    for cid, der in sorted(subs["chunks"].items()):
++        pid = B.package_id_of_chunk(cid)
++        if pid not in h1.packages or pid not in subs["dest_pids"].get(dest, set()):
++            continue
++        require(cid in dtoc.ids, "substitute_derived_row_missing", cid.hex())
++        row = dtoc.ids.index(cid)
++        _in_sidecar(dtoc, row, base_ucas_size, cid.hex())
++        got = B.extract_chunk_bytes(dtoc, row, view)
++        require(got == der, "substitute_derived_payload_mismatch", cid.hex())
++        meta = dtoc.meta(row)[:20]
++        require(meta == B.blake3_20(der) and R.blake3.iohash20(der) == meta.hex(),
++                "substitute_derived_iohash_mismatch", cid.hex())
++        require(tuple(h1.packages[pid].imported_packages) == tuple(subs["imports"][pid]),
++                "substitute_merged_store_entry_mismatch", cid.hex())
++        checked_chunks += 1
++    require(checked_chunks == len(subs["dest_pids"].get(dest, set())), "substitute_rows_not_all_shipped",
++            dest)
++    known = set(h1.packages) | set(subs["base_pids"])
++    mod_pids = set()
++    for m in mods_in_dest:
++        mod_pids |= set(m)
++    here = subs["dest_pids"].get(dest, set())
++    # substituted packages: every store import must name a known package
++    bad = sorted({_hex16(i) for p in here for i in h1.packages[p].imported_packages if i not in known})
++    require(not bad, "substitute_import_package_unresolved",
++            "%s: substituted entries import unknown packages %s" % (dest, bad[:8]))
++    # every other mod entry is the mod's own, unchanged by #12: unknown imports
++    # there are the mod's (also in the plain install); listed, not introduced
++    pre = {}
++    for p in sorted(mod_pids - here):
++        miss = [_hex16(i) for i in h1.packages[p].imported_packages if i not in known]
++        if miss:
++            pre[_hex16(p)] = miss
++    n_sub = sum(len(h1.packages[p].imported_packages) for p in here)
++    n_all = sum(len(h1.packages[p].imported_packages) for p in mod_pids)
++    return {"container": dest, "derived_index_reparsed": True, "lookup_validated": True,
++            "substituted_chunks_verified": checked_chunks,
++            "substituted_store_imports_resolved": n_sub,
++            "mod_store_entries_checked": len(mod_pids),
++            "mod_store_imports_checked": n_all,
++            "mod_store_imports_resolved": n_all - sum(len(v) for v in pre.values()),
++            "unchanged_mod_entries_with_unknown_imports": pre,
++            "merged_header_sha256": sha256_bytes(mh)}
++
++
++# ---------------------------------------------------------------------------
+ # classic .pak base rebuild (pinned repak, config-trial command pattern)
+ # ---------------------------------------------------------------------------
+ 
+@@ -650,8 +1314,15 @@
+                       new_into: Optional[str] = None,
+                       repak: Optional[str] = None,
+                       tool_sha: str = "",
+-                      only_into: Optional[str] = None) -> dict:
+-    """Deterministic plan.  Writes derived artifacts under work/targets/."""
++                      only_into: Optional[str] = None,
++                      substitute: Optional[str] = None,
++                      accepted: Sequence[str] = (),
++                      readers: Optional[str] = None,
++                      reparent_plan: Optional[str] = None) -> dict:
++    """Deterministic plan.  Writes derived artifacts under work/targets/.
++    `substitute`: a derived-packages manifest (capability #12); `accepted`:
++    the user decisions restated on the command line; `readers`: folder of
++    the pinned second-source readers."""
+     os.makedirs(work, exist_ok=True)
+     # mirror must equal the record before anything is derived from it
+     gate_local_mirror(rec, mirror)
+@@ -659,14 +1330,26 @@
+                     for s, c in rec["containers"].items() if c.get("admitted")}
+     inv = inventory_mod(B, mod_dir)
+     mods = inv["iostore"]
+-    nonce = nonce_from(rec["record_sha256"], tool_sha, B.PAKTX_SHA256,
+-                       *sorted("%s:%s" % (f["name"], f["sha256"]) for f in inv["files"]),
+-                       new_into or "", "only_into=" + (only_into or ""))
++    man = None
++    if substitute is not None:
++        man = load_substitute_manifest(substitute, accepted, reparent_plan)
++        require(mods, "substitute_needs_an_iostore_mod")
++    nonce_parts = [rec["record_sha256"], tool_sha, B.PAKTX_SHA256,
++                   *sorted("%s:%s" % (f["name"], f["sha256"]) for f in inv["files"]),
++                   new_into or "", "only_into=" + (only_into or "")]
++    if man is not None:
++        nonce_parts.append("substitute=" + man["manifest_sha256"])
++    nonce = nonce_from(*nonce_parts)
+     targets = []
+     own = None
+     skipped = None
++    subs = None
++    sub_checks = []
+     if mods:
+         own = ownership(B, rec, mods, new_into)
++        if man is not None:
++            R = load_readers(readers or default_readers_path())
++            subs = verify_substitutions(B, R, rec, mirror, man, mods)
+         if only_into is not None:
+             # diagnostic fallback (one container only, the console-proven shape):
+             # packages owned by any other container are NOT installed (listed)
+@@ -674,6 +1357,25 @@
+                     "%s not in %s" % (only_into, sorted(own["groups"])))
+             skipped = {d: own["summary"][d] for d in sorted(own["groups"]) if d != only_into}
+             own["groups"] = {only_into: own["groups"][only_into]}
++        if subs is not None:
++            smid = subs["mod"].mod_id
++            subs["dest_pids"] = {}
++            for dest, mm_ in own["groups"].items():
++                got = set(mm_.get(smid, set())) & set(subs["imports"])
++                if got:
++                    subs["dest_pids"][dest] = got
++            shipped = set().union(*subs["dest_pids"].values()) if subs["dest_pids"] else set()
++            require(shipped == set(subs["imports"]), "substitute_package_not_installed",
++                    "not installed by this plan: %s" % sorted(_hex16(p) for p in
++                                                             set(subs["imports"]) - shipped))
++            installed = set()
++            for mm_ in own["groups"].values():
++                for ps_ in mm_.values():
++                    installed |= set(ps_)
++            lost = sorted({_hex16(t) for ts in subs["mod_targets"].values() for t in ts} -
++                          {_hex16(t) for t in installed})
++            require(not lost, "substitute_import_target_not_installed",
++                    "mod packages the derived packages import are not in this plan: %s" % lost[:8])
+         by_id = {m.mod_id: m for m in mods}
+         # fail fast: every destination's ContainerHeader must be available
+         headers = {dest: record_header_bytes(rec, dest, mirror, B) for dest in sorted(own["groups"])}
+@@ -691,8 +1393,18 @@
+                 mod = by_id[mid]
+                 header = B.parse_container_header(B.read_mod_header_bytes(mod))
+                 same_mount = mod.directory["mount_point"] == bdir["mount_point"]
+-                if set(pids) == set(header.packages) and same_mount:
++                sub_here = (subs is not None and mid == subs["mod"].mod_id and
++                            bool(subs["dest_pids"].get(dest)))
++                if set(pids) == set(header.packages) and same_mount and not sub_here:
+                     specs.append(mod)  # whole mod: the proven unprojected shape
++                elif sub_here:
++                    here = subs["dest_pids"][dest]
++                    specs.append(project_mod(
++                        B, mod, set(pids), os.path.join(tdir, "proj-" + mid),
++                        target_dir=None if same_mount else bdir,
++                        substitute={c: d for c, d in subs["chunks"].items()
++                                    if B.package_id_of_chunk(c) in here},
++                        store_imports={p: subs["imports"][p] for p in here}))
+                 else:
+                     specs.append(project_mod(B, mod, set(pids),
+                                              os.path.join(tdir, "proj-" + mid),
+@@ -711,6 +1423,10 @@
+                     if cid == spec.header_chunk_id:
+                         continue
+                     require(cid in dtoc.ids, "derived_index_missing_mod_chunk", cid.hex())
++            if subs is not None and subs["dest_pids"].get(dest):
++                sub_checks.append(post_build_checks(
++                    B, R, subs, dest, derived, sidecar, c["ucas_bytes"],
++                    [pids for _mid, pids in sorted(own["groups"][dest].items())]))
+             dpath = os.path.join(tdir, c["utoc"])
+             spath = os.path.join(tdir, dest + "_s1.ucas")
+             with open(dpath, "wb") as f:
+@@ -740,6 +1456,14 @@
+     if inv["paks"]:
+         targets.extend(_plan_pak_targets(B, rec, mirror, inv["paks"], work, repak, nonce))
+     require(targets, "plan_has_zero_targets")
++    if subs is not None:
++        require(len(sub_checks) == len(subs["dest_pids"]) and
++                sum(x["substituted_chunks_verified"] for x in sub_checks) == len(subs["ledger"]),
++                "substitute_post_build_check_count_mismatch")
++        for t in targets:
++            if t["kind"] == "iostore":
++                t["substituted_packages"] = sorted(_hex16(p) for p in
++                                                   subs["dest_pids"].get(t["container"], set()))
+     plan = {
+         "schema": PLAN_SCHEMA, "kind": "install", "tool": TOOL, "tool_sha256": tool_sha,
+         "builder_sha256": B.PAKTX_SHA256, "nonce": nonce,
+@@ -752,6 +1476,21 @@
+         "gate": gate_spec(rec),
+         "targets": targets,
+     }
++    if subs is not None:
++        plan["substitution"] = {
++            "manifest_sha256": man["manifest_sha256"],
++            "manifest_file_sha256": man["_file_sha256"],
++            "user_decisions": sorted(man["user_decisions"]),
++            "reparent_plan_sha256": man["_plan_sha256"],
++            "plan_rows_not_shipped": man["_plan_rows_not_shipped"],
++            "decisions_restated_on_command_line": sorted(set(accepted)),
++            "readers_sha256": dict(READER_SHA256),
++            "rows": subs["ledger"],
++            "base_stores": subs["base_stores"],
++            "post_build": sub_checks,
++            "law": "mod files read-only; derived bytes only in the derived index/sidecar; "
++                   "restore = original index back by rename",
++        }
+     plan["operations"] = install_operations(plan)
+     plan["plan_sha256"] = plan_sha(plan)
+     return plan
+@@ -1557,6 +2296,17 @@
+             for mid, p in sorted(mm.items()):
+                 log("NOT INSTALLED (--only-into %s): %d packages of %s owned by %s"
+                     % (plan["only_into"], len(p["replaced"]) + len(p["added"]), mid, d))
++        sub = plan.get("substitution")
++        if sub:
++            log("SUBSTITUTE (capability #12): manifest %s, %d derived packages, user decisions: %s"
++                % (sub["manifest_sha256"][:16], len(sub["rows"]), ", ".join(sub["user_decisions"]) or "none"))
++            for r in sub.get("plan_rows_not_shipped", []):
++                log("  NOT SUBSTITUTED (plan row needs %s): %s stays as the mod ships it"
++                    % (", ".join(r["needs"]) or "nothing", r["package"]))
++            for r in sub["rows"]:
++                log("  %s: parent %s -> %s (derived %d B, iohash %s; mod file unchanged)"
++                    % (r["package"], r["old_parent"], r["new_parent"], r["derived"]["bytes"],
++                       r["derived"]["iohash"][:16]))
+         for t in plan["targets"]:
+             log("TARGET %s [%s]" % (t["container"], t["kind"]))
+             log("  change: %s (%d B, %s) -> derived (%d B, %s)" % (
+@@ -1628,6 +2378,14 @@
+         p.add_argument("--allow-delete", action="store_true")
+         p.add_argument("--only", help="repair: comma-separated names/paths for this step only")
+         p.add_argument("--only-into", help="install/cycle: diagnostic, one container only")
++        p.add_argument("--substitute", help="install/cycle: derived-packages manifest (capability #12)")
++        p.add_argument("--accept-decision", action="append", default=[],
++                       help="install/cycle: restate a user decision the manifest needs "
++                            "(allow-partial, accept-unproven-opaque); once per decision")
++        p.add_argument("--reparent-plan", help="install/cycle: the reviewed reparent plan the "
++                                               "--substitute manifest was made from (sha-bound)")
++        p.add_argument("--readers", help="folder of the pinned second-source readers "
++                                         "(default ../mod-manager/material-fallback)")
+     args = ap.parse_args(argv)
+     log = lambda s: print(s, file=sys.stderr)
+     result: dict = {"tool": TOOL}
+@@ -1663,9 +2421,12 @@
+         elif args.cmd in ("install", "cycle"):
+             rec = load_record(args.record)
+             require(args.mirror and args.mod and args.work, "install_needs_mirror_mod_work")
++            require(args.substitute or not args.accept_decision, "accept_decision_needs_substitute")
+             plan = make_install_plan(B, rec, args.mirror, args.mod, args.work,
+                                      args.new_packages_into, args.repak, tsha,
+-                                     only_into=args.only_into)
++                                     only_into=args.only_into, substitute=args.substitute,
++                                     accepted=args.accept_decision, readers=args.readers,
++                                     reparent_plan=args.reparent_plan)
+             ppath = os.path.join(args.work, "plan.json")
+             write_json(ppath, plan)
+             _print_plan(plan, log)

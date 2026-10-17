@@ -1,0 +1,70 @@
+--- worker-launch10-gmalloc-integration/staging-l10-gmalloc-validator/UnrealInitializer.cpp	2026-10-05 06:58:59
++++ worker-launch10-readpath-guard/staging/UnrealInitializer.cpp	2026-10-05 07:42:18
+@@ -752,6 +752,12 @@
+             // ---- Phase 2: data-slot probes (admission-grade, never identity) ----
+             require_present(SeedTableNS::kGUObjectArray);
+             const uint64_t gua_runtime = base + SeedTableNS::kGUObjectArray.label;
++            // Read-path guard: slot 0 must sit on a readable image span before
++            // any pool-chain read consumes it (exec-only/gap seeds refuse here).
++            if (const auto cls = rc_seed::classify_seed_address(gua_runtime, base); cls != rc_seed::SeedAddressClass::DataReadable)
++            {
++                seed_refused(fmt::format("slot 0 g_uobject_array 0x{:X}: seed class {} (expected data-readable); refusing reads", gua_runtime, rc_seed::seed_class_name(cls)));
++            }
+             if (const auto probe = rc_seed::check_pointer_probe(gua_runtime); !probe.ok)
+             {
+                 seed_refused(fmt::format("slot 0 g_uobject_array: {}", probe.failure));
+@@ -766,6 +772,12 @@
+             // reached with a partial table) ----
+             require_present(SeedTableNS::kGMalloc);
+             const uint64_t gmalloc_runtime = base + SeedTableNS::kGMalloc.label;
++            // Read-path guard: slot 3 must sit on a readable image span before
++            // the weak live-pointer probe reads [GMalloc].
++            if (const auto cls = rc_seed::classify_seed_address(gmalloc_runtime, base); cls != rc_seed::SeedAddressClass::DataReadable)
++            {
++                seed_refused(fmt::format("slot 3 gmalloc 0x{:X}: seed class {} (expected data-readable); refusing reads", gmalloc_runtime, rc_seed::seed_class_name(cls)));
++            }
+             if (const auto probe = rc_seed::check_pointer_probe(gmalloc_runtime); !probe.ok)
+             {
+                 seed_refused(fmt::format("slot 3 gmalloc: {}", probe.failure));
+@@ -811,6 +823,12 @@
+             // mismatch is terminal refutation, never retried.
+             require_present(SeedTableNS::kFNameCtorWchar);
+             const uint64_t pool_runtime = base + SeedTableNS::kFNamePoolLabel;
++            // Read-path guard: every pool-chain read_u64 roots here — the pool
++            // label must be data-readable before the chain starts.
++            if (const auto cls = rc_seed::classify_seed_address(pool_runtime, base); cls != rc_seed::SeedAddressClass::DataReadable)
++            {
++                seed_refused(fmt::format("slot 1 fname pool 0x{:X}: seed class {} (expected data-readable); refusing reads", pool_runtime, rc_seed::seed_class_name(cls)));
++            }
+             PoolWords words{};
+             const auto pool_wait_start = std::chrono::steady_clock::now();
+             for (;;)
+@@ -854,6 +872,14 @@
+             // FNAME_Find EXPLICITLY: the default is FNAME_Add, which would
+             // mutate the pool on a miss (NameTypes.hpp:319 vs :315-318).
+             const uint64_t ctor_runtime = base + SeedTableNS::kFNameCtorWchar.label;
++            // Read-path guard: code seeds are CALL-ONLY. The ctor is assigned
++            // and invoked (instruction fetch, X-permitted); no data read of
++            // exec-only text exists on this path and any future one must be
++            // refused (6-span readable registration never covers text).
++            if (const auto cls = rc_seed::classify_seed_address(ctor_runtime, base); cls != rc_seed::SeedAddressClass::CodeCallOnly)
++            {
++                seed_refused(fmt::format("slot 2 FName ctor 0x{:X}: seed class {} (expected exec-only call-only); refusing bind", ctor_runtime, rc_seed::seed_class_name(cls)));
++            }
+             FName::ConstructorInternal.assign_address(reinterpret_cast<void*>(ctor_runtime));
+             FName ProbeName{STR("ByteProperty"), FNAME_Find};
+             const uint32_t probe_id = ProbeName.GetComparisonIndex().ToUnstableInt();
+@@ -873,6 +899,13 @@
+             // section 4b) ----
+             require_present(SeedTableNS::kStaticConstructObject);
+             const uint64_t sco_runtime = base + SeedTableNS::kStaticConstructObject.label;
++            // Read-path guard: SCO is a code constant, call-only by design;
++            // identity/ABI stay unverified precisely because text reads are
++            // refused on exec-only pages.
++            if (const auto cls = rc_seed::classify_seed_address(sco_runtime, base); cls != rc_seed::SeedAddressClass::CodeCallOnly)
++            {
++                seed_refused(fmt::format("slot 4 static_construct_object 0x{:X}: seed class {} (expected exec-only call-only); refusing bind", sco_runtime, rc_seed::seed_class_name(cls)));
++            }
+             UObjectGlobals::SetupStaticConstructObjectInternalAddress(reinterpret_cast<void*>(sco_runtime));
+             Output::send(STR("[Seeds] slot 4 static_construct_object_internal bound at {} (code; identity and ABI unverified)\n"),
+                          reinterpret_cast<void*>(sco_runtime));

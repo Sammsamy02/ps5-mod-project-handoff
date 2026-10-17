@@ -1,0 +1,22 @@
+# Capabilities 1–12 — quick Mac status pass, 2026-10-12
+
+No new console proof. This prep adds no dependency to the current B7 + hooks + 15-fields build/launch.
+
+| # | Already exists / fresh Mac work | Missing | Dependencies | Console proof |
+|---|---|---|---|---|
+| 1 | Kernel-read design and acceptance ladder | Verified kernel-read service / known-value evidence | Source↔binary contract and recovery | Independent known answer in 3 restart passes; sysctl alone insufficient |
+| 2 | Scanner; historical joint 25/25; 19 prep tests; staged version + ELF geometry fixes | Integration of staged fixes; real broader UE4 anchors | Exact-image profile admission; unknown era selects no pack | Correct automatic engine/version/profile; unsupported/ambiguous refused |
+| 3 | Historical function-pointer hooks; kernel-write design | Verified write channel and recovery | #1; independently sourced values | Hook/callback/restore; kernel work in 3 restart passes |
+| 4 | 14 prep tests; marker audit; reviewed source-only partial-delivery/publication stage | Integration/runtime checks; lossless first-map capture; ordinal1 can be post-only | Exact-source stage; current hooks, one run/build/clock | Ready before first LoadMap, then BeginPlay; preserved replay inconclusive |
+| 5 | 26 prep tests; package layout bound; VMA/xotext coordinates only conditionally equal; 2 exact anchors | Genuine producer symbols; observed runtime base convention; capture pairing | Exact deployed artifact/source provenance and segment/load-bias observation | Honest module/RIP resolution from #4 capture |
+| 6 | 36 historical chains; 2 tests; two actual source pairs permit poll retry, no patch needed | Actual objects/deployed map; correlated callback/queue/menu evidence | Same-run identities and genuine deployed source pairing | Edge→callback→expected action; hold/release and input coexistence |
+| 7 | Composer 29 tests; conditional three-task insert/select/pop with 16B shifts; array differs from linked order | Complete stores/imports; general growth/scheduling, live API/ABI/quiescence | Exact queue guards/capacity; live provider binding | Leon visible, game dump/source mod unchanged |
+| 8 | 38 tests; whole-chunk intake/store replay; exact base-input gaps; 0 directives | Complete base identities/imports/intent and compatibility | #7; native target export/material evidence | Expected Leon materials, disclosed visual loss, untouched originals |
+| 9 | Source survey/lifecycle stage; actual global backend traced through owned-memory refusal | Authorized global backend; expression/pause contracts; compiled full surfaces | API presence cannot enable code-detour-only globals; #11 GUI | Actual source-based mods load and perform observed actions |
+| 10 | 30 prep checks; reviewed observer and additive real-Mono invocation helper | Genuine owner/call site; exact signature/artifact admission; GC/provider proof | Attached retained host, native-root scanning, AOT EH/corlib/resolver; helper excluded from build | Managed assembly inside Townfall calls runtime; Unity full proof later |
+| 11 | Native GUI seam audited; gate refuses 76 gaps; separate Lua 67 assertions | Native frame/input/render host and semantics | Shared context/allocator; revoke/drain callbacks before mod destruction | GUI renders/responds/closes/reopens; gameplay input restored |
+| 12 | 58 prep tests; group verifier/planner; exact group-ID recipe audit, no production checker | Actual inputs/format/writer profile; shader identity; translation/packaging | Full TOC/owner/IoHash; ordered hashes/u32LE sizes/exact format; codecs | Translated shader renders expected result; recipe/ranges insufficient |
+
+Verified scoped utility evidence remains **238 passes** (#2:19; #4:14; #5:26; #6:2; #7:29; #8:38; earlier combined #9/#10/#11 utilities:22; #10:30; #12:58). No tests or code changes this turn. Fresh scoped inventories found no eligible Leon/base/shader inputs or genuine Mono/GUI/backend prerequisite. Inspected launch11 belongs to older R10 and refuses layout before B7/hooks/mod activation; current R10b remains unproved by those records. See READINESS-NEXT-INPUTS.md for exact next inputs. Earlier isolated overlay32/32 and Lua67 assertions remain separate scopes.
+
+Console sequence: **#7+#8 (Leon) → #2 → #4+#5 → #11 → #9 → #1+#3 (3 passes across restarts) → #12 → #10.** One test at a time under the console owner's existing rules. #10 alone never holds Stellar Blade. No Stellar Blade prep performed.

@@ -1,0 +1,141 @@
+{
+  "schema": "local-static-thread-profile-candidate-v1",
+  "image_sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+  "facts": [
+    {
+      "key": "GameThread.Id32",
+      "image_vaddr": "0x9358a98",
+      "width_bytes": 4,
+      "confidence": "high static semantic correlation",
+      "status": "candidate_review_pending",
+      "evidence": [
+        "A26301/A26308 named GameThread selection",
+        "3A14E8E..3A14E9C same current-ID producer then dword write",
+        "BB1D3/BB1DC/BB213 same getter return compared as dword"
+      ]
+    },
+    {
+      "key": "GameThread.IdInitialized",
+      "image_vaddr": "0x9358aa4",
+      "width_bytes": 1,
+      "accepted_ready_value": 1,
+      "confidence": "high static producer/consumer correlation; symbol name inferred",
+      "status": "candidate_review_pending",
+      "evidence": [
+        "3A14E9E/3A14EA5 byte1 after ID write",
+        "B9096/B909F/B90A2 readiness consumer branch; pre-init permissive predicate excluded"
+      ]
+    },
+    {
+      "key": "CurrentNativeThreadId.GetterPLT",
+      "image_vaddr": "0x74723a0",
+      "width_bytes": null,
+      "return_width_bytes": 4,
+      "declaration": "int32_t scePthreadGetthreadid(void);",
+      "confidence": "native NID plus consumer ABI, corroborated by saved third-party PS4 prototype",
+      "status": "candidate_review_pending",
+      "evidence": [
+        "PLT74723A0 -> GOT9132598 -> DT_JMPREL symbol94",
+        "EI-5-jlq2dE#5#J -> module/libkernel identity",
+        "saved OpenOrbis-libkernel.h:573",
+        "actual candidate target adapter EAX32 store and signed positive check"
+      ]
+    }
+  ],
+  "live_observation": false,
+  "selected_profile_promoted": false,
+  "game_executed": false,
+  "native_thread_naming_provenance": {
+    "lookup": "0xa262e0",
+    "game_name_utf16": "0x76d6dec",
+    "render_name_utf16": "0x765beba",
+    "input_register": "EDI32"
+  },
+  "readiness_predicate": {
+    "address": "0xb9090",
+    "semantic_name": "IsInGameThread-like, inferred",
+    "preinit_returns_true": true,
+    "after_ready_TLS_game_index": 2,
+    "TLS_offset": "fs:-0x13c0",
+    "TLS_index1_uses_lazy_ID_cache": "0x932a548",
+    "use_as_strict_authentication": false
+  },
+  "writer_census": {
+    "scope": "exact native references, bounded literal instruction families; does not establish all writers/aliases",
+    "observed_ID_writes": [
+      "0x3a14e9c"
+    ],
+    "observed_ready_writes": [
+      "0x3a14ea5"
+    ],
+    "literal_reset_write_observed": false,
+    "exact_DT_RELA_address_aliases": [],
+    "all_writers_proven": false,
+    "computed_aliases_unresolved": true
+  },
+  "representation": {
+    "native_engine_id": "scalar32; positive signed32 policy is conservative protocol",
+    "opaque_affinity": "actual target std::thread::id/pthread_t pointer8 from pthread_self; never cast/compare to ID32"
+  },
+  "prototype": {
+    "source": {
+      "exact_line": 573,
+      "declaration": "int32_t scePthreadGetthreadid(void);",
+      "source_url": "https://raw.githubusercontent.com/OpenOrbis/OpenOrbis-PS4-Toolchain/master/include/orbis/libkernel.h",
+      "classification": "saved third-party OpenOrbis PS4 prototype; PS5 ABI corroboration only"
+    },
+    "official_PS5_header": false,
+    "PS5_ABI_correlated": true
+  },
+  "strict_policy": {
+    "requirements": [
+      "image/profile/import identity authenticated before reader use",
+      "readiness exactly1 in two successful snapshots",
+      "stored ID and current getter ID both in1..INT32_MAX",
+      "ID/readiness stable across getter invocation",
+      "current native ID equals stored named GameThread ID",
+      "later initialization conflict refuses",
+      "opaque affinity bound separately after native proof",
+      "cancellation refuses at every reader/commit boundary"
+    ],
+    "implementation": "policy/candidate/StrictNativeThreadPolicy.hpp",
+    "target_adapter": "policy/candidate/NativeIdGetterAdapter.cpp",
+    "native_memory_reader_implemented": false,
+    "reader_success_contract": "caller supplies authenticated, fault-reporting snapshots; policy performs no game memory access",
+    "lifetime_scope": "one policy per authenticated image lifetime; cancel permanently, no automatic reset",
+    "remaining_constraints": [
+      "two equal snapshots cannot detect ABA or guarantee atomic multi-field linearizability",
+      "no complete alias-store/writer census or game-thread lifetime/reuse proof",
+      "after-return engine-call/teardown synchronization remains caller obligation",
+      "direct SDK import provider and final module NID must be independently checked at integration",
+      "no live ready value or current game thread acquired"
+    ]
+  },
+  "evidence_inputs": [
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-native-thread-audit/THREAD-CONTRACT-WINDOWS.json",
+      "bytes": 51877,
+      "sha256": "ded633c06a5f18097685fd688438854b4c50522ff69caad51dce559d236cbdea"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-native-thread-audit/THREAD-CONTRACT-REFS.json",
+      "bytes": 71285,
+      "sha256": "2b70376ad1690ebc98143cb037c0ff9b16902fef7a86342472c7a47cbe667f4f"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-native-thread-audit/THREAD-SUPPORT.json",
+      "bytes": 178120,
+      "sha256": "2ba979929c6fccf05cfc1142c8c1d55bd1edc5a973823f6baff1e0552d521b82"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-native-thread-audit/TARGET-THREAD-CENSUS.json",
+      "bytes": 6855,
+      "sha256": "96062c435bcc0999ca80181081731a9d0fe3989d8f2ecbb6e2aa2c301f506762"
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-native-thread-audit/LIBKERNEL-IMPORT-IDENTITY.json",
+      "bytes": 1767,
+      "sha256": "7e12bb41d0d1435735c3074f75340b39a5b2bedbca8c03cddd147358f0d93faf"
+    }
+  ]
+}

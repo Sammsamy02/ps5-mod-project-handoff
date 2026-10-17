@@ -1,0 +1,40 @@
+PROPOSAL ONLY — NOT APPLIED (worker-mutex-sdk-target, 2026-10-04).
+Target file (read-only for this worker): outputs/ps5-mod-bridge/windows-candidate/build.py
+
+--- a/outputs/ps5-mod-bridge/windows-candidate/build.py
++++ b/build.py (proposal)
+@@ -215,7 +215,9 @@
+    objects=[];deps=[]
+    for source in [*native_c,EXEC/'pe_ps5_memory.c',HERE/'sdk_driver.c']:
+     obj=out/(source.stem+'.o');dep=out/(source.stem+'.d');objects.append(obj);deps.append(dep)
+-    run('native-'+source.stem,[cc,*nflags,'-MD','-MF',dep,'-c',source,'-o',obj],env)
++    tflags=bflags if source.name=='owned_runtime.c' else nflags
++    run('native-'+source.stem,[cc,*tflags,'-MD','-MF',dep,'-c',source,'-o',obj],env)
+
+WHY (all verified in SDK-COMPOSITION-RESULT.md):
+- prospero-clang default target is x86_64-sie-ps5, which rejects
+  __attribute__((ms_abi)) at owned_runtime.c:77 (combined_close_handle,
+  MFR-3 mutex integration). x86_64-unknown-freebsd9 (the existing bflags
+  target used for every abi_c TU) accepts ms_abi; the real owned_runtime.c
+  probe-compiles clean under exact bflags (exit 0, zero stderr, 41560-byte
+  object) against the failed run's generated headers.
+- Target layout equality is already a build-enforced invariant:
+  build.py:202-206 compares native-layout (default target) vs bridge-layout
+  (bflags) datalayout/values and passed in 1a6b37b7.
+- bflags == nflags + '--target=x86_64-unknown-freebsd9' + '-fshort-wchar';
+  the probe also passes without -fshort-wchar, so that flag is not
+  load-bearing for this TU.
+
+ALTERNATIVES REJECTED:
+- Removing ms_abi is not viable: combined_close_handle must call the fixture's
+  ms_abi (Win64) CloseHandle pointer; Win64 passes the first argument in RCX vs
+  SysV RDI, so a real ms_abi call site is required.
+- Moving the thunk into call_workers.c (abi_c, bflags-compiled) works but adds
+  a cross-TU symbol and larger source churn for the same effect.
+
+CONTROLLER NOTES:
+- Apply only with a distinct revision; the patched re-run gets a NEW build id
+  (fresh uuid output is automatic). Do not replay or re-rate 78bf885d.
+- The host controls re-prove automatically inside any full-composition re-run
+  (they precede the target path), so a single re-run yields fresh host AND
+  target evidence.

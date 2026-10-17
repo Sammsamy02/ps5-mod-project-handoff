@@ -1,0 +1,36 @@
+{
+  "worker": "worker-composition5-gate",
+  "role": "Offline acceptance gate for composition-5: symbol/wiring spec, scriptable pre-staging checks, negative-control validation against composition-4 artifacts, GO/NO-GO criteria.",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "write_scope": "outputs/2026-10-04-zcode-team/worker-composition5-gate/",
+  "claimed_at": "2026-10-04",
+  "task": "Prepare the OFFLINE acceptance gate so composition-5 artifacts (worker-module-start-wiring entry + worker-composition-5-rebuild build) can be verified in minutes when they land, plus independently review what a correct wiring patch must contain.",
+  "deliverables": [
+    "CLAIM.json (this file, first)",
+    "WIRING-SPEC.md (exact call chain + actual linkable symbols from the composed object)",
+    "GATE-CHECKS.md (scriptable checklist + GO/NO-GO staging criteria)",
+    "gate_check_composition5.py (checker, takes a candidate build dir, PASS/FAIL per check)",
+    "gate-receipt-composition4.json (negative-control run: must FAIL the wiring check on comp4)",
+    "REPORT.md (last)"
+  ],
+  "inputs_read": [
+    "outputs/ps5-mod-bridge/native-runtime-startup/lifecycle/module_entry.c (+ lifecycle/, probe/ tree)",
+    "outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/ (ue4ss_backend, runtime_owner, activated_mod_source)",
+    "outputs/2026-10-04-zcode-team/worker-composition-4-fix/prx-candidate-composition4-1/ (combined-supplier.o, module_entry.o, build-receipt.json, static-checks.json, package-log.txt)",
+    ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/ue4ss-native-supplier-composition-4/run-3/ (exports.stdout, undefined-delta.json, commands.json)",
+    "outputs/2026-10-04-zcode-team/worker-query-s2-arm/integration-patch/new-units/runtime_ack_supplier.{hpp,cpp} (reference chain)",
+    "outputs/2026-10-04-zcode-team/worker-composition-3/bootstrap-stage/native-coherent-pad-runtime-1/build-1/source/ (composed ue4ss_backend.cpp)",
+    ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/activation/modforge_activation.h (mfa API)",
+    "outputs/2026-10-04-zcode-team/worker-prx-link-gaps/package_prx.py (packager checks, EXTENDED_IMPORTS)",
+    "outputs/2026-10-04-zcode-team/worker-composition-5-rebuild/{REPORT.md,REBUILD-PROCEDURE.md,CLAIM.json}",
+    "outputs/2026-10-04-zcode-team/worker-module-start-wiring/CLAIM.json (delivery pending at gate-prep time)"
+  ],
+  "bounds": {
+    "max_tool_calls": "40-80",
+    "no_nested_subagents": true,
+    "no_console_contact": true,
+    "no_network": true,
+    "writes": "this worker dir only; existing files elsewhere read-only"
+  },
+  "negative_control_contract": "gate_check_composition5.py run against worker-composition-4-fix/prx-candidate-composition4-1 MUST fail the module_start-wiring reference check (comp4's entry calls probe_lifecycle_start, not the startup chain) while passing the structural checks that comp4 genuinely satisfies — proving the check detects exactly the comp4 defect."
+}

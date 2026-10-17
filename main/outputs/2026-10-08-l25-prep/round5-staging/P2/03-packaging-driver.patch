@@ -1,0 +1,116 @@
+# PROPOSAL PATCH (PARKED) - P2/03 l26_packaging_driver.py: variant B
+# packaging dead by default. DO NOT APPLY WITHOUT
+# parked/P2-variant-b-removal/NOTES.md (owner FX, 2026-10-10). Changes
+# packaging topology: needs a full rebuild + packaging --plan verify (9
+# gates) when applied. Apply LAST (after P2/01 and P2/02); it is authored
+# ON TOP OF the P1 packaging hunk (sequential apply: P1 first, then this).
+#
+# Authored against l26_packaging_driver.py AFTER P1's copyinsink overlay
+# hunk (P1 base sha256 086e5149... + P1 hunk = P2 base state).
+#
+# Changes:
+#   - import os (also fixes the implicit os.environ use in EO's NB patch 03).
+#   - VARIANTS default = A only; variant B packaging env-opt-in
+#     (L26_PACK_B=1, mirroring build_variants.py L26_BUILD_B). Existing
+#     historical package-B dirs are FROZEN provenance, never touched.
+#   - pair_packaging_receipt (P10/P11 + VARIANT-PAIR-PACKAGING-RECEIPT.json)
+#     runs only when both A and B were packaged; P10/P11 planned-skip on
+#     default A-only runs.
+#   - --plan expected-gates list: P10/P11 listed only when B is active.
+#   - LANDMARK comment for EO's NB packaging entry rebase (old anchor was
+#     the removed B entry).
+#
+# Census/receipt implications (details in NOTES.md):
+#   FINAL-RECEIPT-VARIANT-B.json - no longer written on default runs.
+#   VARIANT-PAIR-PACKAGING-RECEIPT.json - no longer written on default runs.
+#   PREPARATION-RECEIPT.json / FINAL-RECEIPT-VARIANT-A.json - unchanged shape.
+#   P0..P9 per-variant gates - unchanged for A.
+--- a/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py
++++ b/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py
+@@ -6,7 +6,10 @@
+ extended_sections.py) once per l26 runtime variant:
+ 
+   outputs/2026-10-08-l26-package-A/  <- variant A (normal registration)
+-  outputs/2026-10-08-l26-package-B/  <- variant B (skip-define diagnostic)
++  [L26][P2, agent FX 2026-10-10] variant B packaging is DEAD BY DEFAULT
++  (env opt-in L26_PACK_B=1 only, mirroring build_variants.py L26_BUILD_B);
++  FINAL-RECEIPT-VARIANT-B.json and the P10/P11 pair gates run only when B
++  is explicitly opted in AND built.
+ 
+ Per variant the driver:
+   1. copies the five frozen l24 packaging scripts byte-identical plus
+@@ -22,15 +25,17 @@
+      then enforces the l24 acceptance set: 20/20 static checks, preserved
+      constructor arrays (.init_array 238 / .fini_array 2), exactly 207
+      exact ELF import identities, identical pass-1/pass-2 PRX twins;
+-  5. writes FINAL-RECEIPT-VARIANT-{A,B}.json plus a cross-variant
++  5. writes FINAL-RECEIPT-VARIANT-<key>.json per ACTIVE variant plus, when
++     both A and B were packaged, a cross-variant
+      VARIANT-PAIR-PACKAGING-RECEIPT.json (A and B PRXes must differ; both
+-     must carry the identical 207-name import set).
++     must carry the identical 207-name import set). Default runs package A
++     only and skip the pair receipt (P2).
+ 
+ --plan lists every step, input hash and gate without executing anything.
+ No console/network operations. Requires build_variants.py --execute to have
+ completed (runtime twin variants) before --prepare/--execute.
+ """
+-import argparse,hashlib,json,shutil,subprocess,sys
++import argparse,hashlib,json,os,shutil,subprocess,sys
+ from pathlib import Path
+ HERE=Path(__file__).resolve().parent;ROOT=HERE.parents[1]
+ sys.dont_write_bytecode=True
+@@ -49,10 +54,21 @@
+  {'key':'A','build':PAIR_ROOT/'l26-A','pkg':ROOT/'outputs/2026-10-08-l26-package-A','artifact':'runtime-l26-A.o',
+   'note':'l26 variant A production (engine-side delete-listener registration via admission-verified engine FUObjectArray::Add/RemoveUObjectDeleteListener — variant C, fail-closed prologue-signature admission; B skip off); profile lineage carries the l25 container promotion; l23-admitted 207 import identities; local packaging only; no console contact.',
+   'unsafe':False},
+- {'key':'B','build':PAIR_ROOT/'l26-B','pkg':ROOT/'outputs/2026-10-08-l26-package-B','artifact':'runtime-l26-B.o',
+-  'note':'l26 variant B UNSAFE DIAGNOSTIC (delete-listener registration compiled out via -D'+TOKEN+'; stale object pointers not cleared); profile lineage carries the l25 container promotion; l23-admitted 207 import identities; local packaging only; no console contact.',
+-  'unsafe':True},
+ )
++# [L26][P2] (agent FX, 2026-10-10; parked patch set under
++# outputs/2026-10-08-l25-prep/parked/P2-variant-b-removal/): variant B
++# packaging is DEAD BY DEFAULT - env opt-in L26_PACK_B=1 only (mirrors the
++# build driver's L26_BUILD_B). Existing historical package-B dirs
++# (2026-10-08-l26-package-B*) are FROZEN provenance (the frozen known-good
++# record documents the B sibling PRX aa29c765) and are never touched.
++# LANDMARK for env-appended variants: EO's NB packaging entry
++# (parallel-candidate/03-packaging-nb-env.patch) appends after this tuple -
++# rebase it onto this block (its old anchor was the removed B entry).
++B_PKG_VARIANT={'key':'B','build':PAIR_ROOT/'l26-B','pkg':ROOT/'outputs/2026-10-08-l26-package-B','artifact':'runtime-l26-B.o',
++  'note':'l26 variant B UNSAFE DIAGNOSTIC (delete-listener registration compiled out via -D'+TOKEN+'; stale object pointers not cleared); profile lineage carries the l25 container promotion; l23-admitted 207 import identities; local packaging only; no console contact.',
++  'unsafe':True}
++if os.environ.get('L26_PACK_B')=='1':
++    VARIANTS=VARIANTS+(B_PKG_VARIANT,)
+ FROZEN_NOTE_LINE="    b.note('l24 retained93 profile (unchanged from l23); typescan-r3 refusal-rework change; l23-admitted 207 import identities; local packaging only.')"
+ COPY_FILES=('package_prx_l19.py','prep_guard.py','check_import_identity.py','extended_sections.py','test_import_identity.py','test_extended_sections.py')
+ # manifest['pins'] rows under these l24 prefixes are remapped; anything else
+@@ -337,6 +353,15 @@
+     return final
+ 
+ def pair_packaging_receipt(finals,record,steps):
++    # [L26][P2] the pair packaging receipt exists ONLY when both A and B
++    # were packaged (variant B is env-gated dead by default). A default
++    # A-only run records P10/P11 as planned-skip and writes no pair file.
++    if 'A' not in finals or 'B' not in finals:
++        record('P10-variant-prx-differ',None,{'note':'pair packaging receipt skipped: variant B not in the active packaging set (agent-FX P2 drop)'})
++        record('P11-import-name-sets-equal',None,{'note':'pair packaging receipt skipped: variant B not in the active packaging set (agent-FX P2 drop)'})
++        steps.append({'step':'write-variant-pair-packaging-receipt','skipped':True,
++                      'note':'variant B absent; VARIANT-PAIR-PACKAGING-RECEIPT.json not written this run'})
++        return None
+     a,b=finals['A'],finals['B']
+     names_a={r['name'] for r in json.loads(Path(a['prx']['path']).parent.joinpath('EXACT-IMPORT-IDENTITIES.json').read_text())['imports']}
+     names_b={r['name'] for r in json.loads(Path(b['prx']['path']).parent.joinpath('EXACT-IMPORT-IDENTITIES.json').read_text())['imports']}
+@@ -379,8 +404,11 @@
+             record('P2-frozen-source-pin',p.exists() and (expected is None or sha(p)==expected),{'path':str(p),'sha256':sha(p) if p.exists() else None,'manifest_pinned':expected is not None})
+         cand,_=l26_profile_candidates()
+         record('P2-l26-profile-candidates',len(cand)>=3,{'candidates':sorted(cand)})
++        pair_gates=([] if not any(v['key']=='B' for v in VARIANTS)
++                    else ['P10 variant A/B PRX differ','P11 variant import name sets equal (207)'])
+         steps.append({'step':'verify-expected-gates','static_checks_each_pass':20,'exact_import_identities':207,'init_array_slots':238,'fini_array_slots':2,
+-                      'gates':['P5 build receipt MAC_PACKAGE_CHECKS_PASS','P6 20/20 static checks all pass','P7 exactly 207 exact ELF import identities','P8 constructor arrays preserved 238/2','P9 pass-1/pass-2 PRX twins identical','P10 variant A/B PRX differ','P11 variant import name sets equal (207)']})
++                      'gates':['P5 build receipt MAC_PACKAGE_CHECKS_PASS','P6 20/20 static checks all pass','P7 exactly 207 exact ELF import identities','P8 constructor arrays preserved 238/2','P9 pass-1/pass-2 PRX twins identical']+pair_gates,
++                      'pair_gates_note':('A/B pair gates active (B opted in)' if pair_gates else 'P10/P11 skipped: variant B not in the active packaging set (agent-FX P2 drop)')})
+     manifests={}
+     for variant in VARIANTS:
+         manifests[variant['key']]=prepare_variant(variant,record,steps,args.prepare or args.execute)

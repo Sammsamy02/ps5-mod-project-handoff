@@ -1,0 +1,15 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-seh64-family/vendor/windows-services/mb_win_seh64.h	2026-10-04 19:30:37
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-seh64-trampoline-fix/vendor/windows-services/mb_win_seh64.h	2026-10-05 06:07:53
+@@ -178,6 +178,12 @@
+     /* Invoke fn(arg) with RSP inside the establishing frame; returns fn's
+      * int32 result and restores the dispatcher stack afterwards. */
+     int32_t (*call_at_frame)(void *fn, uint64_t establisher_rsp, void *arg);
++    /* Two-argument variant (worker-seh64-trampoline-fix F-4): fn(arg1, arg2)
++     * under the same guard rsp. __finally funclets receive the establisher
++     * frame in arg1 (rcx) and arg2 (rdx) -- clang x64 finally funclets read
++     * the PSP from rdx. */
++    int32_t (*call_at_frame2)(void *fn, uint64_t establisher_rsp, void *arg1,
++                              void *arg2);
+     /* Apply a full machine context and jump; never returns. */
+     void (*resume)(const mb_win_seh64_context *context);
+ } mb_win_seh64_control;

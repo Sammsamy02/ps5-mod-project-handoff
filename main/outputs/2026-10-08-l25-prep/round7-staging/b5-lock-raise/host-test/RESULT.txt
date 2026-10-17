@@ -1,0 +1,94 @@
+free memory: 2960 MB
+extracted P1 LmsRelaxedCounter                                                   LuaMadeSimple.cpp:22-29
+extracted P2 globals/copy_text_bounded/capture/copy_last                         LuaMadeSimple.cpp:63-90
+extracted P3 handle_error/throw_error_impl/throw_error/throw_error_from_buffer   LuaMadeSimple.cpp:1534-1607
+extracted P4 free TRY(lua_State*, ...)                                           LuaMadeSimple.hpp:842-858
+checked: 4 pieces, 127 source lines, 1 adaptation(s); cpp sha 418c1950 hpp sha 03bf0031
+compiled 32 Lua C files (as C) + stub
+B5 lock-then-raise host test (Lua 5.4.7 compiled as C; real B2 wrapper code)
+
+[S1] one raise under one guard (RegisterHook refusal shape)
+       OLD     pcall ok=false type=string raised=1 cxx_converted=0 notify=1 lock_free_for_thread_B=NO
+  PASS  OLD: pcall returned false + string error
+  PASS  OLD: error text carries the message and the traceback
+  PASS  OLD: thread B can NEVER acquire the mutex after the raise (leak reproduced)
+  PASS  OLD: owner thread A can still relock (why the game thread never noticed)
+  PASS  OLD: a blocking lock() on thread B is still stuck after 300 ms
+  PASS  OLD: exactly one leaked lock (owner releases it)
+  PASS  OLD: after the owner releases the leaked lock thread B acquires
+  PASS  OLD: no TRY conversion (cxx_converted=0, raised=1)
+  PASS  OLD: Lua stack balanced after pcall (top==0)
+       NEW     pcall ok=false type=string raised=1 cxx_converted=1 notify=1 lock_free_for_thread_B=yes
+  PASS  NEW: pcall returned false + string error
+  PASS  NEW: error text carries the message and the traceback
+  PASS  NEW: thread B acquires the mutex right after the raise
+  PASS  NEW: a blocking lock() on thread B returns promptly
+  PASS  NEW: the C++ exception object was created once and destroyed (no exception leak)
+  PASS  NEW: error went through the TRY wrapper exactly once (cxx_converted=1, raised=1)
+  PASS  NEW: Lua stack balanced after pcall (top==0)
+       CONTROL pcall ok=false type=string raised=1 cxx_converted=0 notify=1 lock_free_for_thread_B=yes
+  PASS  CONTROL: pcall returned false + string error
+  PASS  CONTROL: error text carries the message and the traceback
+  PASS  CONTROL: thread B acquires the mutex right after the raise
+  PASS  CONTROL: a blocking lock() on thread B returns promptly
+  PASS  CONTROL: Lua stack balanced after pcall (top==0)
+  PASS  OLD vs NEW: Lua-visible error text is byte-identical
+  PASS  OLD vs NEW: pcall status and error type are identical
+  PASS  OLD vs NEW: error callbacks fired the same number of times
+  PASS  NEW vs CONTROL (raise after unlock): error text identical
+       text (NEW) = [refused: HookProcessInternal=0
+stack traceback:
+	[C]: in function 'lock_raise'
+	[C]: in function 'pcall'
+	[string "local ok, e = pcall(lock_raise, 'refused: Hoo..."]:1: in main chunk]
+
+[S2] raise while the SAME thread holds the mutex recursively twice
+  PASS  OLD: pcall returned false + string error with the message
+  PASS  OLD: thread B cannot acquire (2 guards leaked)
+  PASS  OLD: still locked after the owner releases ONE guard (lock depth is 2)
+  PASS  OLD: second release found the second leaked guard
+  PASS  OLD: after both releases thread B acquires (depth was exactly 2)
+  PASS  NEW: pcall returned false + string error with the message
+  PASS  NEW: thread B acquires (both recursive guards were destroyed by unwinding)
+  PASS  NEW: owner relock+unlock leaves it free for thread B (depth is 0, not negative/over-released)
+  PASS  OLD vs NEW: identical Lua-visible error for the double-lock raise
+
+[S3] nested pcall depth 12 (successful locked call at every level) + coroutine
+  PASS  OLD: error from depth 12 reached the outer pcall with its text
+  PASS  OLD: Lua stack balanced after the nested run
+  PASS  OLD: mutex still leaked after the nested run
+  PASS  OLD: raise inside a coroutine is caught by resume() with its text
+  PASS  OLD: coroutine raise leaks the mutex too
+  PASS  NEW: error from depth 12 reached the outer pcall with its text
+  PASS  NEW: Lua stack balanced after the nested run
+  PASS  NEW: mutex free after the nested run (12 locked successes + 1 locked raise)
+  PASS  NEW: raise inside a coroutine is caught by resume() with its text
+  PASS  NEW: mutex free after the coroutine raise
+  PASS  OLD vs NEW: nested-pcall error text byte-identical
+  PASS  OLD vs NEW: coroutine error text byte-identical
+
+[S4] an OUTER lock held by the caller around the Lua call must survive (no over-release)
+  PASS  NEW: caller's own lock is still held after the raise (guards release only their own depth)
+  PASS  NEW: after the caller leaves its scope thread B acquires
+
+[S5] success path, no regression
+  PASS  OLD: 1000 locked calls return the right values
+  PASS  OLD: mutex free after the successful calls
+  PASS  OLD: stack balanced
+  PASS  NEW: 1000 locked calls return the right values
+  PASS  NEW: mutex free after the successful calls
+  PASS  NEW: stack balanced
+  PASS  OLD vs NEW: identical results on the success path
+  PASS  NEW: a locked success right after a locked raise works
+  PASS  NEW: mutex free after raise-then-success
+
+[S6] repetition: 200 raises
+  PASS  OLD and NEW: all 200 calls raised and were caught by pcall
+  PASS  OLD: leaked after 200 raises
+  PASS  OLD: lock depth is exactly 200 (one leaked guard per raise)
+  PASS  OLD: free only after 200 owner releases
+  PASS  NEW: free after 200 raises
+  PASS  NEW: 200 exception objects created, 200 destroyed
+
+checked 63, failed 0
+PASS b5 lock-raise host test (0 failures)

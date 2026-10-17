@@ -1,0 +1,28 @@
+{
+  "worker": "worker-rollback-runbook",
+  "team": "2026-10-04-zcode-team",
+  "date": "2026-10-04",
+  "scope": "Author a console rollback runbook for the ploader-slot mod-bridge .prx staging operation on PS5 console ps5-host-not-configured.invalid. Documentation only: no console contact, no network commands executed, no nested subagents, writes confined to outputs/2026-10-04-zcode-team/worker-rollback-runbook/.",
+  "deliverables": [
+    "CLAIM.json",
+    "ROLLBACK-RUNBOOK.md",
+    "REPORT.md"
+  ],
+  "inputs_read": [
+    "outputs/2026-10-04-zcode-controller/CONSOLE-LOG.md",
+    "checkpoint entries zcode_sdg2_staged and zcode_composition_5_gate_go_staged (via CONSOLE-LOG.md / controller console dir)",
+    "outputs/ps5-mod-bridge/EXPERIMENTS.md (if present)",
+    ".superpowers/native-dependency-spike/ploader-cleanup-candidate-1/original/main.c (pinned ploader source, ini parsing + slot handling)"
+  ],
+  "claims": [
+    "Rollback severity ladder documented: (a) mod failed-but-game-fine => evidence-only, no action; (b) game unstable after composition-5 => user closes game, controller disables slot, choose reversible disable mechanism backed by pinned ploader source evidence; (c) console crash/power loss => recovery ritual; (d) full restore of sdg2/composition-4 from local controller backups with curl + SHT-strip-aware readback verification.",
+    "Disable mechanism chosen on evidence from pinned ploader main.c: which of ploader.ini entry edit vs file rename is safe, reversible, and preserves the .prx file on disk.",
+    "Pre-flight checklist for future slot swaps: local backup exists with sha256, expected readback sha under the SHT-strip law, ploader.ini byte-exact state."
+  ],
+  "out_of_scope": [
+    "Executing any curl/ftp command against the console",
+    "Changing ploader.ini or any console file",
+    "Replaying or re-running the verifier or any other worker's tasks"
+  ],
+  "honesty_notes": "Runbook commands are drafted from controller-side evidence in CONSOLE-LOG.md and the pinned ploader source; they are NOT console-verified executions by this worker. Where a behavior (e.g., ploader handling of a missing/renamed slot file) cannot be proven from the pinned source, the runbook says so explicitly rather than guessing."
+}

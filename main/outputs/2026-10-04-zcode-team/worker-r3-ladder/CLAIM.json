@@ -1,0 +1,52 @@
+{
+  "worker": "worker-r3-ladder",
+  "date": "2026-10-05",
+  "mission": "RUNBOOK l11-marshal-integration 5.1 item 1, the WithDelay-family remainder: trace the ladder trap in the current tree (initializer e7f349af + LuaMod c92c92ff), stage the marshal-first re-order as a replace-unit, host-prove the predicate order, deliver in the composition admission shape. Proposal only; composition NOT run.",
+  "pins": {
+    "base_source": "outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+    "base_sha256": "c92c92ff66686bf6f44e18aaec7d36b227d32fc75726f33349f4bdc7412ef3c0",
+    "staged_source": "outputs/2026-10-04-zcode-team/worker-r3-ladder/staging/luamod-l11-r3-ladder/LuaMod.cpp",
+    "staged_sha256": "6f97f8a1727b7e49d32a43041288bfb1f8772a866067d748752f950aafc955cd",
+    "revision_diff": "outputs/2026-10-04-zcode-team/worker-r3-ladder/diffs/l11-r3-ladder.diff",
+    "revision_diff_sha256": "29535f023c0105f3cc6ade6068423327b482e1526c9073d4f777c4eaf3bcb8ab",
+    "initializer_current": "outputs/2026-10-04-zcode-controller/launch11-combined/units/UnrealInitializer.cpp",
+    "initializer_sha256_first16": "e7f349aff7594ba2"
+  },
+  "trace": {
+    "availability_backend": "RT UE4SSRuntime.cpp:11-16 IsEngineTickAvailable = TickInternal.is_ready() (address check, not arming); address assigned by UI:2051-2054/:2060-2063 vtable fallback in a walk-permitted world",
+    "throw_site": "LM:4820-4822 ensure_engine_tick_hooked throws 'EngineTick callback registration failed' when RegisterEngineTickPreCallback returns ERROR_ID",
+    "marshal_arm": "LM:4725-4751 arm_funcptr_marshal_drain (RegisterPostHook :4740; armed :4748; consumer LM:4776-4808 gated on R3MarshalPumpPending :4782)",
+    "marshal_drain": "LM:4553-4622 funcptr_marshal_hook (publication gate :4566-4574; drains simple :4597 + marshal-tagged time-based delayed :4598; frame-based actions remain EngineTick-only :4376-4385)",
+    "first_default_call": "main.lua:694-696 first F7/OPTIONS press (not load time); default method EngineTick per LuaMod.hpp:167",
+    "drift_vs_reports": "ExecuteInGameThread (:5013-5101) ALREADY EL-fixed in c92c92ff (marshal-first :5041-5056/:5089-5097, enqueue-first :5150-5184); the trap REMAINS at the five WithDelay-family sites LM:5213-5223, 5400-5410, 5553-5561, 5615-5624, 5741-5749",
+    "current_tree_fixed_file_cites": "staged: helper :4194-4197; WithDelay gate :5236-5261; Retriggerable :5446-5471; AfterFrames :5621-5636; LoopWithDelay :5700-5725; LoopAfterFrames :5848-5863"
+  },
+  "evidence": {
+    "compile_gate": "0 errors / 24 warnings both sides, exact warn-kind parity, frozen 172-token argv (work/argv-*.json)",
+    "control_object_new_baseline": "8343578bfa735843189165ff6ed96d5721c53ae586680f5ec331890fb8044de (drifted tree; NOT the merge worker's 813b249d)",
+    "expected_object_sha256_under_pinned_argv": "761b610a20e9d6cbac494976f907cbd0bd053e21005a675e2d7339cf31cd8941",
+    "determinism": "staged object reproduced byte-identically on a second compile with a different -o path",
+    "und_delta": "EMPTY (540=540); bridges already UND in lineage; no --extend-undefined-baseline needed",
+    "host_test": {
+      "control_world": "12/12 PASS — trap reproduced (throw before enqueue, armed marshal bypassed, closure lost)",
+      "fixed_world": "40/40 PASS — P1 armed+alive/both-alive: no throw, marshal-tagged enqueue, zero detour attempts; P2 armed+dead: loud refusal both tick states, nothing enqueued; P3 no backend: third-rung throw preserved; P4/P5 AfterFrames capability refusal; R1/R2 working worlds preserved",
+      "receipt": "host-test/PASS-receipt.txt (85aaeac9d888673a...)",
+      "bounds": "HOST evidence only; PS5 surface shimmed and declared; __PROSPERO__ is a host define; no console run"
+    },
+    "round_trip": "patch -R reproduces base byte-identically; forward apply reproduces staged byte-identically"
+  },
+  "admission": {
+    "flag": "--replace-runtime-unit luamod=outputs/2026-10-04-zcode-team/worker-r3-ladder/staging/luamod-l11-r3-ladder/LuaMod.cpp",
+    "receipt": "--replace-receipt outputs/2026-10-04-zcode-team/worker-r3-ladder/receipts/replace-receipt.json",
+    "extra_unit_needed": false,
+    "driver": "launch11-combined/build_runtime_composition6_fixed_l11.py (luamod in RETAINED_REPLACEABLE :92)",
+    "composed_object_sha": "UNMEASURED — controller's pass measures it; never reuse a prior comparator"
+  },
+  "honest_limits": [
+    "No composition, packaging, or console contact; nothing here is in-game acceptance evidence.",
+    "Residual (out of scope, distinct-ID): WithDelay-family enqueue-first discipline when the marshal is NOT armed — unreachable in the R3 candidate's usable-marshal world.",
+    "GATE-5 (LuaMod eager LoadMap registration) unowned and untouched; F-1 carrier rate open; GATE-1 walkguard fold unchanged.",
+    "Lineage stacking: base is the MERGED staging; the loadmap-guard-r2 branch (9a7a37d6) is a different lineage — do not stack this diff there without re-derivation.",
+    "This worker wrote only under outputs/2026-10-04-zcode-team/worker-r3-ladder/."
+  ]
+}

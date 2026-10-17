@@ -1,0 +1,378 @@
+--- candidate/include/LuaMadeSimple/LuaMadeSimple.hpp
++++ staged/include/LuaMadeSimple/LuaMadeSimple.hpp
+@@ -829,8 +829,35 @@
+         size_t arena_external_bytes{0};
+         size_t raised_errors{0};   // [B2] Lua errors raised through throw_error since start
+         size_t cxx_exceptions{0};  // [B2] C++ exceptions converted by the TRY wrappers
++        // [R9-MEM] backing-store split (appended; older fields keep their meaning).
++        // be_installed: 1 once a backing allocator was installed (set_lua_backing_allocator).
++        // be_states / libc_states: Lua states CREATED on each backend (a state keeps
++        // the backend it was created with for its whole life).
++        // be_live_bytes / be_failed_calls: the part of live_bytes / failed_calls that
++        // belongs to backing-store states.
++        size_t be_installed{0};
++        size_t be_states{0};
++        size_t libc_states{0};
++        size_t be_live_bytes{0};
++        size_t be_failed_calls{0};
+     };
+     RC_LMS_API auto query_lua_memory(lua_State*) -> LuaMemorySnapshot;
++
++    // [R9-MEM] Optional backing store for Lua states created AFTER installation.
++    // Default (never installed): every state uses the libc realloc/free path
++    // exactly as before. The host installs a backing store once (the PS5 host
++    // installs the engine's own GMalloc; see UE4SSProgram.cpp [R9-MEM]). Both
++    // callbacks must be noexcept and must report failure by returning nullptr
++    // (realloc_fn) - never by throwing. realloc_fn(nullptr, n) allocates;
++    // nsize is never 0 (free_fn is used instead). Returns false and changes
++    // nothing if a backing store is already installed or a callback is null
++    // (install-once: live states hold a pointer to the installed table).
++    struct LuaBackingAllocator
++    {
++        void* (*realloc_fn)(void* ptr, size_t nsize) noexcept{nullptr};
++        void (*free_fn)(void* ptr) noexcept{nullptr};
++    };
++    RC_LMS_API auto set_lua_backing_allocator(const LuaBackingAllocator& backing) noexcept -> bool;
+     // [B2] Copies the most recently raised Lua error text (no allocation; the
+     // buffer is shared by all states, so a concurrent raise may mix two texts).
+     RC_LMS_API auto copy_last_raised_error(char* out, size_t out_size) noexcept -> void;
+--- candidate/src/LuaMadeSimple/LuaMadeSimple.cpp
++++ staged/src/LuaMadeSimple/LuaMadeSimple.cpp
+@@ -60,6 +60,59 @@
+     };
+     static LuaAllocStats g_lua_alloc_stats;
+ 
++    // =================================================================================
++    // [R9-MEM] Lua backing store (round-9 memory track, launch-2 B5 crash).
++    //
++    // WHY: on PS5 this PRX's malloc/realloc/free are imports from the SYSTEM
++    // module libSceLibcInternal (import contract: all five allocator imports
++    // bind there). That heap is NOT the engine heap: the game routes ITS OWN
++    // libc (sce_module/libc.prx) into GMalloc through its malloc-replace table
++    // (eboot sha 3b6cfad4, libc param -> MallocReplace: malloc thunk 0xdde0 =
++    // [GMalloc]->vtbl+0x30, realloc 0xde00 = +0x40, free 0xddc0 = +0x50).
++    // Every Lua state therefore competed with the Sony system libraries for a
++    // small shared heap; launch 2 exhausted it (fails=1437, fail_n=3072) at
++    // only ~7 MB of live Lua memory, and everything after that failed.
++    //
++    // WHAT: a state created after set_lua_backing_allocator() gets the
++    // installed table as its allocator userdata (lua_newstate ud) and keeps it
++    // for life (lua_newthread children share it), so a block is always freed by
++    // the store that allocated it - no mixing, no headers, no ownership test.
++    // States created before installation (or when nothing is installed) keep
++    // ud == nullptr and the unchanged libc / 0002 paths below.
++    // =================================================================================
++    struct LmsBacking
++    {
++        void* (*realloc_fn)(void* ptr, size_t nsize) noexcept{nullptr};
++        void (*free_fn)(void* ptr) noexcept{nullptr};
++    };
++    static LmsBacking g_backing{};
++    static LmsRelaxedCounter g_backing_installed{0}; // 0 = none, 1 = published (acquire/release below)
++    static LmsRelaxedCounter g_backing_states{0};
++    static LmsRelaxedCounter g_libc_states{0};
++    static LmsRelaxedCounter g_backing_live_bytes{0};
++    static LmsRelaxedCounter g_backing_failed_calls{0};
++
++    auto set_lua_backing_allocator(const LuaBackingAllocator& backing) noexcept -> bool
++    {
++        if (backing.realloc_fn == nullptr || backing.free_fn == nullptr) { return false; }
++        // Install-once: claim the slot 0 -> 2 (in progress), fill, then publish 1.
++        size_t expected = 0;
++        if (!__atomic_compare_exchange_n(&g_backing_installed.value, &expected, size_t{2}, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
++        {
++            return false;
++        }
++        g_backing.realloc_fn = backing.realloc_fn;
++        g_backing.free_fn = backing.free_fn;
++        __atomic_store_n(&g_backing_installed.value, size_t{1}, __ATOMIC_RELEASE);
++        return true;
++    }
++
++    // ud for a state being created now: the published table, or nullptr (libc).
++    static auto backing_for_new_state() noexcept -> void*
++    {
++        return __atomic_load_n(&g_backing_installed.value, __ATOMIC_ACQUIRE) == 1 ? static_cast<void*>(&g_backing) : nullptr;
++    }
++
+     // [B2] error-wrapper observability (fixed storage, never allocates).
+     static LmsRelaxedCounter g_raised_errors{0};
+     static LmsRelaxedCounter g_cxx_exceptions{0};
+@@ -323,7 +376,52 @@
+ 
+     static void* lms_counting_alloc(void* ud, void* ptr, size_t osize, size_t nsize)
+     {
+-        (void)ud;
++        // [R9-MEM] ud != nullptr: this state was created on the installed
++        // backing store (backing_for_new_state). Same lua_Alloc contract, same
++        // shared counters, plus the backing-only counters; never touches the
++        // libc / arena paths, so no block crosses stores.
++        if (ud != nullptr)
++        {
++            const auto* backing = static_cast<const LmsBacking*>(ud);
++            g_lua_alloc_stats.total_alloc_calls.fetch_add(1);
++            if (nsize == 0)
++            {
++                if (ptr != nullptr)
++                {
++                    backing->free_fn(ptr);
++                    g_lua_alloc_stats.live_blocks.fetch_sub(1);
++                    g_lua_alloc_stats.live_bytes.fetch_sub(osize);
++                    g_backing_live_bytes.fetch_sub(osize);
++                }
++                return nullptr;
++            }
++            void* nptr = backing->realloc_fn(ptr, nsize);
++            if (nptr == nullptr)
++            {
++                // Lua 5.4 already ran its emergency full GC before this NULL
++                // becomes LUA_ERRMEM (lmem.c), exactly as on the libc path.
++                g_lua_alloc_stats.failed_calls.fetch_add(1);
++                g_lua_alloc_stats.last_fail_osize.store(osize);
++                g_lua_alloc_stats.last_fail_nsize.store(nsize);
++                g_backing_failed_calls.fetch_add(1);
++                return nullptr;
++            }
++            if (ptr == nullptr)
++            {
++                // osize carries the object type tag for fresh blocks (Lua 5.4).
++                g_lua_alloc_stats.live_blocks.fetch_add(1);
++                g_lua_alloc_stats.live_bytes.fetch_add(nsize);
++                g_backing_live_bytes.fetch_add(nsize);
++            }
++            else
++            {
++                const long long delta = static_cast<long long>(nsize) - static_cast<long long>(osize);
++                g_lua_alloc_stats.live_bytes.fetch_add(static_cast<size_t>(delta));
++                g_backing_live_bytes.fetch_add(static_cast<size_t>(delta));
++            }
++            return nptr;
++        }
++
+         arena_ensure_init();
+         g_lua_alloc_stats.total_alloc_calls.fetch_add(1);
+ 
+@@ -457,6 +555,12 @@
+         snap.arena_external_bytes = g_arena_state.external_bytes.load();
+         snap.raised_errors = g_raised_errors.load();
+         snap.cxx_exceptions = g_cxx_exceptions.load();
++        // [R9-MEM]
++        snap.be_installed = __atomic_load_n(&g_backing_installed.value, __ATOMIC_ACQUIRE) == 1 ? 1 : 0;
++        snap.be_states = g_backing_states.load();
++        snap.libc_states = g_libc_states.load();
++        snap.be_live_bytes = g_backing_live_bytes.load();
++        snap.be_failed_calls = g_backing_failed_calls.load();
+         return snap;
+     }
+ 
+@@ -1611,9 +1715,12 @@
+         // [IS-LUA-ALLOC] luaL_newstate() equivalent, but with the counting
+         // allocator installed so LUA_ERRMEM failures become observable.
+         // Same allocator ABI as l_alloc (realloc/free); see lms_counting_alloc.
+-        auto new_lua_state = lua_newstate(lms_counting_alloc, nullptr);
++        // [R9-MEM] the state's backing store is fixed here, for its whole life.
++        void* const backing_ud = backing_for_new_state();
++        auto new_lua_state = lua_newstate(lms_counting_alloc, backing_ud);
+         if (new_lua_state != nullptr)
+         {
++            (backing_ud != nullptr ? g_backing_states : g_libc_states).fetch_add(1);
+             // Preserve luaL_newstate post-conditions (lauxlib.c):
+             lua_atpanic(new_lua_state, &lms_lua_panic);
+             lua_setwarnf(new_lua_state, lms_warnfoff, new_lua_state);
+--- candidate/src/UE4SSProgram.cpp
++++ staged/src/UE4SSProgram.cpp
+@@ -117,6 +117,132 @@
+     //*/
+ 
+     SettingsManager UE4SSProgram::settings_manager{};
++
++#ifdef __PROSPERO__
++    // =================================================================================
++    // [R9-MEM] Lua backing store = the engine's own allocator (GMalloc).
++    //
++    // Generic for every UE game the profile covers: it consumes ONLY values the
++    // runtime already binds and checks for any game - the GMalloc variable
++    // (seed slot 3, V1 instance + V2 vptr) and the FMalloc Realloc/Free vtable
++    // slots from the per-game layout map (the same FMalloc::Realloc/Free path
++    // the runtime's TArray/FString code already uses through FMemory). No new
++    // offset, no new import, no detour: a plain virtual call into the engine
++    // allocator, exactly what the game's own libc does (its malloc-replace
++    // thunks call [GMalloc]->Malloc/Realloc/Free). Missing anything -> fail
++    // closed: nothing is installed and Lua keeps the libc path (B5 behavior).
++    // Lua's contract maps 1:1: realloc(p,n)/free(p); Alignment 0 is the
++    // engine DEFAULT_ALIGNMENT (>= 16 B for >= 16 B blocks; Lua needs 8).
++    // =================================================================================
++    namespace
++    {
++        auto r9_gmalloc_lua_realloc(void* ptr, size_t nsize) noexcept -> void*
++        {
++            try
++            {
++                return (*Unreal::GMalloc)->Realloc(ptr, nsize, 0);
++            }
++            catch (...)
++            {
++                // Only the wrapper's own "slot unavailable" throw can land here
++                // (engine code does not throw); report it as an allocation failure.
++                return nullptr;
++            }
++        }
++
++        auto r9_gmalloc_lua_free(void* ptr) noexcept -> void
++        {
++            try
++            {
++                (*Unreal::GMalloc)->Free(ptr);
++            }
++            catch (...)
++            {
++                // Unreachable after the install probe below (same slot lookup);
++                // a block would leak rather than reach a foreign allocator.
++            }
++        }
++
++        auto r9_install_lua_backing_allocator() noexcept -> void
++        {
++            const File::CharType* reason = nullptr;
++            void* instance = nullptr;
++            try
++            {
++                if (Unreal::GMalloc == nullptr || *Unreal::GMalloc == nullptr)
++                {
++                    reason = STR("gmalloc-unbound");
++                }
++                else if (!Unreal::UnrealInitializer::StaticStorage::bVersionedContainerIsInitialized)
++                {
++                    reason = STR("versioned-container-uninitialized");
++                }
++                else if (!Unreal::FMalloc::VTableLayoutMap.contains(STR("Realloc")) || !Unreal::FMalloc::VTableLayoutMap.contains(STR("Free")))
++                {
++                    reason = STR("fmalloc-slots-missing");
++                }
++                else
++                {
++                    instance = static_cast<void*>(*Unreal::GMalloc);
++                    // Probe the exact calls Lua will make: allocate, grow (copy), free.
++                    void* probe = r9_gmalloc_lua_realloc(nullptr, 64);
++                    if (probe == nullptr)
++                    {
++                        reason = STR("probe-alloc-failed");
++                    }
++                    else
++                    {
++                        static_cast<unsigned char*>(probe)[0] = 0x5a;
++                        static_cast<unsigned char*>(probe)[63] = 0xa5;
++                        void* grown = r9_gmalloc_lua_realloc(probe, 4096);
++                        if (grown == nullptr)
++                        {
++                            r9_gmalloc_lua_free(probe);
++                            reason = STR("probe-grow-failed");
++                        }
++                        else
++                        {
++                            const bool kept = static_cast<unsigned char*>(grown)[0] == 0x5a && static_cast<unsigned char*>(grown)[63] == 0xa5;
++                            r9_gmalloc_lua_free(grown);
++                            if (!kept)
++                            {
++                                reason = STR("probe-copy-mismatch");
++                            }
++                        }
++                    }
++                }
++                if (reason == nullptr)
++                {
++                    const LuaMadeSimple::LuaBackingAllocator backing{&r9_gmalloc_lua_realloc, &r9_gmalloc_lua_free};
++                    if (!LuaMadeSimple::set_lua_backing_allocator(backing))
++                    {
++                        reason = STR("already-installed");
++                    }
++                }
++            }
++            catch (...)
++            {
++                reason = STR("exception");
++            }
++            try
++            {
++                if (reason == nullptr)
++                {
++                    Output::send(STR("[MEM] lua-backend=gmalloc gmalloc={} instance={} probe=ok (new Lua states use the engine allocator)\n"),
++                                 static_cast<void*>(Unreal::GMalloc), instance);
++                }
++                else
++                {
++                    Output::send<LogLevel::Warning>(STR("[MEM] lua-backend=libc reason={} (fail-closed: Lua keeps the libc heap)\n"), reason);
++                }
++            }
++            catch (...)
++            {
++                // Observational only: a log failure never changes the decision.
++            }
++        }
++    }
++#endif
+ 
+ #define OUTPUT_MEMBER_OFFSETS_FOR_STRUCT(StructName)                                                                                                           \
+     for (const auto& [name, offset] : Unreal::StructName::MemberOffsets)                                                                                       \
+@@ -1618,6 +1744,12 @@
+             // event loop lived. Each mod-start step is now individually
+             // caught, logged, and marked; mods start even when a step fails.
+             bool install_ok = true;
++#ifdef __PROSPERO__
++            // [R9-MEM] must run before install_lua_mods(): a Lua state keeps the
++            // backing store it is created with (launch-2 order, console-proven:
++            // GMalloc bound at decoded:518/659, install_lua_mods at decoded:772).
++            r9_install_lua_backing_allocator();
++#endif
+             try
+             {
+                 install_lua_mods();
+--- candidate/src/LuaMod.cpp
++++ staged/src/LuaMod.cpp
+@@ -2022,7 +2022,7 @@
+         // process-wide across all Lua states). Read-only; never errors.
+         lua.register_function("GetLuaMemory", [](const LuaMadeSimple::Lua& lua) -> int {
+             const auto snap = LuaMadeSimple::query_lua_memory(lua.get_lua_state());
+-            lua.set_string(std::format("gc_kb={} live_kb={} blocks={} allocs={} fails={} fail_o={} fail_n={} arena_cap_kb={} arena_used_kb={} arena_ext_kb={} errs={} cxx={}",
++            lua.set_string(std::format("gc_kb={} live_kb={} blocks={} allocs={} fails={} fail_o={} fail_n={} arena_cap_kb={} arena_used_kb={} arena_ext_kb={} errs={} cxx={} be={} be_states={} libc_states={} be_kb={} be_fails={}",
+                                        snap.gc_kb,
+                                        snap.live_bytes / 1024,
+                                        snap.live_blocks,
+@@ -2034,7 +2034,12 @@
+                                        snap.arena_used_bytes / 1024,
+                                        snap.arena_external_bytes / 1024,
+                                        snap.raised_errors,
+-                                       snap.cxx_exceptions));
++                                       snap.cxx_exceptions,
++                                       snap.be_installed != 0 ? "gmalloc" : "libc",
++                                       snap.be_states,
++                                       snap.libc_states,
++                                       snap.be_live_bytes / 1024,
++                                       snap.be_failed_calls));
+             return 1;
+         });
+ 
+@@ -6307,7 +6312,8 @@
+                         // dropped (a diagnostic must not change GC timing).
+                         const int gc_kb = lua_gc(lua.get_lua_state(), LUA_GCCOUNT);
+                         const auto snap = LuaMadeSimple::query_lua_memory(lua.get_lua_state());
+-                        Output::send(STR("[MEM] state={} gc_kb={} live_kb={} blocks={} allocs={} fails={} fail_o={} fail_n={} arena_cap_kb={} arena_used_kb={} arena_ext_kb={} errs={} cxx={}\n"),
++                        // [R9-MEM] be/be_states/libc_states/be_kb/be_fails appended (older parsers keep working).
++                        Output::send(STR("[MEM] state={} gc_kb={} live_kb={} blocks={} allocs={} fails={} fail_o={} fail_n={} arena_cap_kb={} arena_used_kb={} arena_ext_kb={} errs={} cxx={} be={} be_states={} libc_states={} be_kb={} be_fails={}\n"),
+                                      static_cast<void*>(lua.get_lua_state()),
+                                      gc_kb,
+                                      snap.live_bytes / 1024,
+@@ -6320,7 +6326,12 @@
+                                      snap.arena_used_bytes / 1024,
+                                      snap.arena_external_bytes / 1024,
+                                      snap.raised_errors,
+-                                     snap.cxx_exceptions);
++                                     snap.cxx_exceptions,
++                                     snap.be_installed != 0 ? STR("gmalloc") : STR("libc"),
++                                     snap.be_states,
++                                     snap.libc_states,
++                                     snap.be_live_bytes / 1024,
++                                     snap.be_failed_calls);
+                         diagnostic_event("lua_mem_gc_kb", static_cast<unsigned int>(gc_kb < 0 ? 0 : gc_kb));
+                         diagnostic_event("lua_mem_fails", static_cast<unsigned int>(snap.failed_calls));
+                     });

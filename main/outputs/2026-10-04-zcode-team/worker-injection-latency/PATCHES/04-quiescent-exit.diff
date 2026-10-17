@@ -1,0 +1,45 @@
+--- a/main.c
++++ b/main.c
+@@ -756,8 +756,10 @@
+ 	pid_t known[MAX_KNOWN_PIDS];
+ 	int   known_count = get_all_pids(known, MAX_KNOWN_PIDS);
+ 
+-	struct timespec start, now;
++	struct timespec start, now, last_new;
+ 	clock_gettime(CLOCK_MONOTONIC, &start);
++	last_new = start;
++	int game_seen = 0;
+ 
+ 	while (!all_injected()) {
+ 		clock_gettime(CLOCK_MONOTONIC, &now);
+@@ -779,6 +781,7 @@
+ 
+ 			if (known_count < MAX_KNOWN_PIDS)
+ 				known[known_count++] = pid;
++			clock_gettime(CLOCK_MONOTONIC, &last_new);
+ 
+ 			app_info_t info = { 0 };
+ 			if (sceKernelGetAppInfo(pid, &info) != 0 || info.title_id[0] == '\0')
+@@ -786,6 +789,7 @@
+ 
+ 			plugin_entry_t* entry = find_entry(info.title_id);
+ 			if (!entry || entry->injected) continue;
++			game_seen = 1;
+ 
+ 			notify("[%s] Injecting %d plugin(s)", entry->title_id, entry->path_count);
+ 			steplog("[%s] injecting %d plugin(s)", entry->title_id, entry->path_count);
+@@ -858,6 +862,14 @@
+ 			if (all_ok) entry->injected = 1;
+ 		}
+ 
++		clock_gettime(CLOCK_MONOTONIC, &now);
++		// exit early once a matching title was processed and no new process has
++		// appeared for 15 s; avoids idling to the 120 s cap after unretryable
++		// failures. Never triggers before the game is first seen.
++		if (game_seen && (now.tv_sec - last_new.tv_sec) >= 15) {
++			notify("No further work, exiting early.");
++			break;
++		}
+ 		usleep(50000); // 50ms
+ 	}
+ }

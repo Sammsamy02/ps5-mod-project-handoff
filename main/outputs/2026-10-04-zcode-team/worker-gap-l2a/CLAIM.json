@@ -1,0 +1,60 @@
+{
+  "worker": "worker-gap-l2a",
+  "date": "2026-10-05",
+  "gap_id": "GAP-L2a",
+  "mission": "FHitResult OUT-PARAM readback in LineTraceSingle: recover the PS5 FHitResult usage from the analyzed eboot, compare vs the port's readback assumptions, verify the KismetSystemLibrary ProcessEvent vtable slot (0x260 Win64-derived).",
+  "method": "Static only. Ghidra 12.1.4 headless on the analyzed project /tmp/wrfp_ghidra_proj/fnamepool, program /decrypted-eboot.bin, imageBase=0 (330MB db, prior worker analysis reused; no re-import). Wide-string (UTF-16LE) anchor search -> rip-relative LEA/MOV scan over the 122MB text -> targeted disassembly windows. No console contact, no game writes.",
+  "address_convention": "All eboot addresses below are FILE vaddrs (imageBase=0). Runtime = file vaddr + 0x400000 (extent law, runtime extent [0x400000, 0xc0602c8)).",
+  "verdicts": {
+    "fhitresult_readback_layout": {
+      "verdict": "MATCH (by construction; load-bearing mechanism byte-verified)",
+      "claim": "The port's out-param readback does NOT assume any FHitResult member layout. port FHitResult.hpp is an empty default-constructible stub (literal comment: 'Temporary empty implementation for FHitResult'). All offsets come from live game reflection: out-param slot = param->GetOffset_Internal(), FHitResult members = child FProperty::GetOffset_Internal() walked from the live UScriptStruct.",
+      "verification": "The single Win64-PDB-derived assumption the readback depends on - FProperty::Offset_Internal at +0x44 inside the FField object (5_06_MemberVariableLayout_DefaultSetter_FProperty.cpp:23) - is byte-verified in the eboot: the game's own exec-thunk Step helper at 0x4577d0 executes 'MOVSXD RCX, dword ptr [RDX+0x44]' (file vaddr 0x4577de) reading Offset_Internal from the live FProperty and adding it to the frame's data base. The game's own thunks and the port's readback therefore read the SAME +0x44 field of the SAME live objects: identical offsets by construction, for both the HitResult slot in the params buffer and every member inside FHitResult.",
+      "envelope_evidence": "PS5 FHitResult default-construction profile (38 inlined ctor sites found via 1.0f/-1.0f store-pair scan): 0xF0-0xF4-byte struct; ctor writes {+0x00: 0.0f, +0x04: 1.0f} (qword 0x3f80000000000000), {+0xA4: -1.0f}, {+0xD0: -1.0f}, zeroes the rest; a 2-vector trace thunk at 0x247c410 copies two 24-byte double vectors into +0x70 and +0x88 of the out struct. Absolute per-name offsets (ImpactPoint/ImpactNormal) were NOT pinned statically: UE5.6 packs reflected property offsets in an encoded .rodata table that was not decoded in this pass, and ctor sites write zeroed members without names.",
+      "undecided_remainder": "What would decide absolute member offsets: (a) the runtime log's first ground-trace call (port marshals whatever live reflection declares - sane ImpactPoint/ImpactNormal values in the log confirm end-to-end), or (b) decoding the UE5.6 property-table encoding in .rodata. Neither is claimed here."
+    },
+    "process_event_vtable_slot": {
+      "verdict": "SHIFTED +8",
+      "claim": "Win64-PDB-derived UObject::ProcessEvent slot 0x260 (5_06_VTableOffsets_UObject_FunctionBody.cpp:573) is WRONG on PS5. PS5 slot index for ProcessEvent is 77 = byte offset 0x268.",
+      "evidence": [
+        "5,571 vtable runs (>=96 text-pointer slots) found in .rodata (segments at 0x747c000 and 0x7ebc000 regions).",
+        "PS5 vtables carry a TWO-slot destructor prefix: slot 0 and slot 1 hold adjacent paired functions per family (top pairs: 0x29c800/0x29c810 x943 runs, 0x1370fd/0x1370fe x638, 0x222169/0x22216a x188) - Itanium complete/deleting dtor pair. The Win64 map has ONE dtor slot (__vecDelDtor=0x0). Every UObject-family virtual from slot 1 onward therefore shifts +8 on PS5.",
+        "Slot 77 (0x268) dominant value 0x459830 (x2193 runs) disassembles as UObject::ProcessEvent: reads [this+0x8] ObjectFlags test 0x40000000 guard; tests FUNC_Native at byte [ufunction+0xB1] bit 0x4; virtual-calls [vtbl+0x270] and [vtbl+0x278] - which are GetFunctionCallspace/CallRemoteFunction (Win64 map: 0x268/0x270, i.e. exactly +8 shifted); then walks UFunction fields (+0xC8 native Func ptr, +0xB1 FUNC_NetReliable-family flag, +0x58/+0x5c/+0xb6) constructing the FFrame. Internal consistency: the function PS5 places at slot 77 calls the functions PS5 places at slots 78/79.",
+        "Slot 76 (0x260) - the Win64 ProcessEvent slot - is dominated on PS5 by a near-universal EMPTY STUB 0xb290 (x2514 runs: PUSH RBP; MOV RBP,RSP; POP RBP; RET). The port's live-check calling vtable[0x260] as ProcessEvent would silently no-op."
+      ],
+      "consequence": "UnrealInitializer's ProcessEvent resolve (OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UObject, ProcessEvent, Object), 0x260) returns the empty stub on PS5; UFunction calls through calling_context->ProcessEvent (LuaUObject.cpp:327) would do nothing. The same +8 shift applies to every other UObject-family virtual slot >=0x8 used by the composed runtime (AActor::Tick, UGameViewportClient::Tick, UObject::ProcessConsoleExec, UStruct::Link) - each individual slot needs its own verification before enabling those hooks; not claimed here."
+    }
+  },
+  "line_trace_single_recovery": {
+    "kismet_class_names": "Wide (UTF-16LE) reflected names found in segment_1 rodata: 'LineTraceSingle' x5 (0x75f3b36, 0x76ae936, 0x78bfd46, 0x79ac4a0, 0x7a28330), 'KismetSystemLibrary' x19, 'ImpactPoint' 0x7a10640, 'ImpactNormal' 0x75d89ca, 'FHitResult' x4. All FName constructions route through the known CORROB anchor 0x23d590 (FName ctor).",
+    "exec_thunk": "0x31436f0 = execLineTraceSingle (high confidence): 12 sequential FFrame::StepCompiledIn-style param reads (helpers 0x4577a0/0x4577d0, finisher 0x436850) matching the LineTraceSingle signature order (WorldContextObject, Start vec, End vec, TraceChannel, bTraceComplex, ActorsToIgnore, DrawDebugType, HitResult REF via Step-with-default-local, bIgnoreSelf, TraceColor, TraceHitColor, DrawTime), then one native call with locals, then writes the returned bool to the caller's out bool* (saved RDX). Its P_GET_STRUCT_REF default local (RBP-0x130) is FHitResult-constructed inline with the envelope writes +0x04=1.0f, +0xA4=-1.0f, +0xD0=-1.0f. Start/End locals are 24-byte double vectors.",
+    "static_fname_slots": "LineTraceSingle static FName slots per TU: 0x952c2b0/0x952c2b8 (reg site 0x3143697), 0x952c338 (0x3144487), 0x952c3b0/0x952c3b8 (0x3143d88). FHitResult member-name table (Engine TU at 0x5d51c10): ImpactPoint slot 0x95c8c88, ImpactNormal slot 0x95c8c90 (second copy 0x95c9830/0x95c9838).",
+    "game_caller_behavior": "Direct game callers reading hit.ImpactPoint after the call were not individually decompiled; ground truth established instead via (a) the game's own thunk/reflection read path (0x4577d0) proving reflection offsets are the game's offsets, and (b) 38 inlined FHitResult ctor sites. The outer 'LineTraceSingle' name refs at 0x47f058f/0x4826113/0x489d4bb/0x489fb39 are engine/game code constructing the FName, not member-offset evidence."
+  },
+  "port_side_pins": {
+    "readback": "LuaUObject.cpp (__PROSPERO__ branch): Invocation.StoreOutTableReference ~:283; out-param loop :330-369 with data = &dynamic_unreal_function_data.data[param->GetOffset_Internal()]; push_structproperty :816 -> convert_struct_to_lua_table reads each child at field->GetOffset_Internal().",
+    "empty_fhitresult": "port/unreal/include/Unreal/FHitResult.hpp - empty struct, no member layout.",
+    "offset_internal_assumption": "unreal/generated_include/FunctionBodies/5_06_MemberVariableLayout_DefaultSetter_FProperty.cpp:21-24 -> Offset_Internal = 0x44 (now eboot-verified).",
+    "vtable_default": "unreal/generated_include/FunctionBodies/5_06_VTableOffsets_UObject_FunctionBody.cpp:3 (__vecDelDtor=0x0), :571-578 (ProcessEvent=0x260), :581-593 (GetFunctionCallspace=0x268, CallRemoteFunction=0x270). Wired via unreal/src/VersionedContainer/UnrealVirtualImpl/UnrealVirtual506.cpp:32 inside set_virtual_offsets(), called from unreal/src/UnrealInitializer.cpp:293 (InitializeVersionedContainer).",
+    "override_mechanism": "ue4ss/src/NativeLayoutBinding.cpp: StageNativeLayoutFiles reads MemberVariableLayout.ini + VTableLayout.ini from the package root; StageNativeLayoutBundle validates (format=1, target=prospero-x86_64-sysv, pointer_size=8, offset%8==0, identity/axes vs resolved engine facts) and PublishStagedNativeLayoutMaps swaps the staged map into the real UObject::VTableLayoutMap BEFORE caching; the 5_06 default setters use find-guards and skip already-published keys. Shipped VTableLayout.ini is identity-only (no entries) by design (worker-staged-pair-emission REPORT: 'VTableLayout.ini identity-only by design' - no vtable slot had evidence until now)."
+  },
+  "staged_fix": {
+    "file": "staged/VTableLayout.ini",
+    "sha256": "37a7d86036106d1042c10c10e11f66edef4ba7c2b2a2948c8aaeea719ee9a8a5",
+    "baseline": "outputs/2026-10-04-zcode-team/worker-loadlist-final/final-package/ue4ss/VTableLayout.ini sha256 9c20f7c9b1a1ea9a665db12df82ee7e62694fe4cd207cf53a44116e124fbad86 (identity-only, 10 lines)",
+    "change": "Add [UObject] ProcessEvent=0x268. Identity header preserved byte-exact.",
+    "constraints": [
+      "PROPOSAL-LEVEL until integrated: must be staged through the existing Stage24 seam BEFORE InitializeVersionedContainer (CheckEmpty requires the real map still empty at stage time).",
+      "Residual Win64 defaults for other UObject keys remain wrong-but-dormant after this fix (e.g. GetFunctionCallspace default 0x268 now collides with PS5 ProcessEvent's slot; ProcessConsoleExec/UStruct::Link/Actor-Tick slots not individually verified). The hooks consuming them must stay disabled until separately verified.",
+      "Not runtime-validated: no console contact; parser dry-run via the vendored parser_verify harness is the next bounded step."
+    ],
+    "lua_readback_diff": "NONE - verdict MATCH; no change to LuaUObject.cpp or any readback source."
+  },
+  "non_claims": [
+    "No absolute ImpactPoint/ImpactNormal member offset is claimed (reflection table encoding not decoded; runtime log would decide).",
+    "No in-game behavior claim; console untouched; spawn path not executed.",
+    "No claim that other classes' vtable slots (AActor::Tick etc.) are verified beyond the UObject family shift; each needs individual confirmation.",
+    "No full UObject vtable map correction is staged - only ProcessEvent."
+  ],
+  "scripts": "/tmp/wrfp_spawn_trace/GapL2A1..GapL2A19.java (Ghidra headless postScripts); artifacts in /tmp/wrfp_gap_l2a/ (run1-19 logs, native_lts_dump.txt, ctor_scan2.txt, step_vt.txt, vtable_runs.txt, vt2.txt, tabrefs.txt, table_scan.txt, vt_raw.txt)"
+}

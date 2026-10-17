@@ -1,0 +1,43 @@
+{
+  "marker": "modbridge.claim",
+  "schema": 1,
+  "worker": "worker-pad-hardware-probe",
+  "team": "2026-10-04-zcode-team",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "claimed_at": "2026-10-04",
+  "role": "Build the standalone pad input probe as a ploader-loadable PRX (modbridge_pad_probe.prx): tests whether PS5 pad input reaches a dispatch-gate keybind (OPTIONS->F7) inside the game process, independent of the composed runtime. Entry marker first, then registers the one keybind, then bounded poll window; JSONL to /data/pad-probe-events.jsonl. Host-test against synthetic pad events; build with two-run determinism; STAGE-PLAN for the user-coordinated launch test.",
+  "inputs": {
+    "module_code": "outputs/2026-10-04-zcode-team/worker-real-input-pad/pad_probe/ (PadProbe.{hpp,cpp}, pad_probe_main.cpp, keydef_modifier_ops.cpp, host_test.cpp, build_and_test.sh, PROBE-PRX-BUILD.md) — read-only vendor; the record vocabulary (probe_start/probe_failed/key_fired/phase_change/probe_end), OPTIONS->F7 binding, bounded-poll contract and ordering (entry -> register -> poll) come from this module",
+    "retained_provider": ".superpowers/native-dependency-spike/ue4ss-native-pad-provider-1/port/PS5PadSource.{hpp,cpp}, PS5PadNative.cpp, PadServiceLease.hpp + primary-sources/SDL/src/joystick/ps5/SDL_ps5joystick.h — read-only; the C port reproduces the exact activate()/poll() backend sequence, edge semantics and phase names",
+    "packaging_lineage": "outputs/2026-10-04-zcode-team/worker-ingame-probe-v3/ (build_ingame.py recipe, harness/Program.cs Packager, check_ingame_artifact.py, record_sink/ingame_libc/boundaries/sentinels/module_entry src) — read-only vendor; same frozen recipe with module/build-id/log-path changed",
+    "import_identities": {
+      "verbatim_7": ".superpowers/native-dependency-spike/native-full-runtime-aligned-entry-1/import-contract.json (7 rows copied byte-identical: __error, sceKernelOpen, sceKernelWrite, sceKernelClose, sysctl, getpid, clock_gettime)",
+      "pad_7": "ALL 14 rows are byte-identical rows of the same frozen 191-import contract: it already carries the 7 pad/service identities (scePadInit/scePadOpen/scePadReadState/scePadClose + sceUserServiceInitialize/sceUserServiceGetLoginUserIdList/sceUserServiceTerminate) with Townfall's OWN executable import declarations as evidence (cross-checked in the build script against .superpowers/native-dependency-spike/ue4ss-public-import-declarations-1/declared-input.json; mismatch = loud failure). The aligned-entry runtime built from this contract loaded on console; THIS module's own load as a NEW ploader plugin remains the unproven step and is exactly what the staged launch tests."
+    },
+    "staging_mechanics": "outputs/2026-10-04-zcode-team/worker-console-staging-bundle/MASTER-STAGING-PACKAGE.md section C (/data/plugins/ploader.ini [PPSA33286] mode-2 lines) + worker-ingame-probe-v3/STAGE-PLAN-V3.md (ftpsrv decryption oracle, launch ritual)"
+  },
+  "scope": {
+    "output_dir": "outputs/2026-10-04-zcode-team/worker-pad-hardware-probe/",
+    "writes": [
+      "CLAIM.json",
+      "src/ (C port of the probe over the retained provider semantics; vendored lineage files labeled at top)",
+      "harness/ (vendored Packager; moduleName modbridge_pad_probe)",
+      "tests/ (host test with synthetic pad backends + JSONL checks)",
+      "build_pad_probe.py (frozen v3 recipe: import_references-first combine, SharpProspero, finalize_sdk 0x11000000, pinned make_fself)",
+      "check_pad_artifact.py (14 strong / 0 weak expectations + forbidden-symbol gate)",
+      "determinism/run1, determinism/run2 (two-run byte-identical builds)",
+      "STAGE-PLAN.md",
+      "RECEIPT.md",
+      "REPORT.md (last)"
+    ]
+  },
+  "bounds": {
+    "nested_subagents": false,
+    "network": false,
+    "console_contact": false,
+    "existing_files_immutable": true,
+    "toolchain": "pinned SDK/LLVM + frozen SharpProspero assemblies only",
+    "max_tool_calls": 60
+  },
+  "honesty": "The retained C++ Handler.cpp/PS5PadSource.cpp are NOT linked (libc++ is unproven in the ploader PRX lineage); pad_source.c is a line-faithful C port of their exact backend sequence, validity gates, edge/timestamp semantics and phase names, host-tested against synthetic pad events. All 14 import rows are byte-identical frozen-contract rows (the pad rows carry Townfall-executable declaration evidence), but loading THIS new plugin with the pad rows has ZERO direct console evidence — a load rejection is a possible and honestly reportable outcome. No in-game result is claimed until /data/pad-probe-events.jsonl exists on console."
+}

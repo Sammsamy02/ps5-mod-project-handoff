@@ -1,0 +1,187 @@
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -13,6 +13,7 @@
+ #include "win_api_shim.h"
+ #include "win64_bridge.h"
+ 
++#include <atomic>
+ #include <cerrno>
+ #include <cstdio>
+ #include <cstring>
+@@ -164,6 +165,59 @@
+     (void)ms;
+ #endif
+     return 0;
++}
++
++static uint32_t impl_GetCurrentProcessId(WinApiShim::Impl* m)
++{
++#if CAP13_POSIX
++    (void)m;
++    return static_cast<uint32_t>(::getpid());
++#else
++    m->fail_closed("GetCurrentProcessId host identity unavailable");
++    return 0;
++#endif
++}
++
++static uint32_t impl_GetCurrentThreadId(WinApiShim::Impl* m)
++{
++    // A host thread keeps one Windows-visible ID across all shim instances.
++    // Assignment is process-wide and never wraps a DWORD ID into reuse.
++    static std::atomic<uint64_t> next_id{1};
++    static thread_local uint64_t id = next_id.fetch_add(1, std::memory_order_relaxed);
++    if (id > UINT32_MAX)
++    {
++        m->fail_closed("GetCurrentThreadId ID space exhausted");
++        return 0;
++    }
++    return static_cast<uint32_t>(id);
++}
++
++static void impl_GetSystemTimeAsFileTime(WinApiShim::Impl* m, void* output)
++{
++    if (!output)
++    {
++        m->fail_closed("GetSystemTimeAsFileTime null output");
++        return;
++    }
++#if CAP13_POSIX
++    struct timespec utc{};
++    if (::clock_gettime(CLOCK_REALTIME, &utc) != 0)
++    {
++        m->fail_closed("GetSystemTimeAsFileTime host clock failed");
++        return;
++    }
++    // FILETIME is two little-endian DWORDs, counting 100 ns ticks since
++    // 1601-01-01 UTC. The POSIX clock counts from 1970-01-01 UTC.
++    constexpr uint64_t epoch_delta = 116444736000000000ull;
++    const uint64_t ticks = epoch_delta +
++        static_cast<uint64_t>(utc.tv_sec) * 10000000ull +
++        static_cast<uint64_t>(utc.tv_nsec) / 100ull;
++    const uint32_t words[2] = {static_cast<uint32_t>(ticks),
++                               static_cast<uint32_t>(ticks >> 32)};
++    std::memcpy(output, words, sizeof(words));
++#else
++    m->fail_closed("GetSystemTimeAsFileTime host clock unavailable");
++#endif
+ }
+ 
+ static uint32_t impl_WaitForSingleObject_events(WinApiShim::Impl*, void* handle, uint32_t ms)
+@@ -363,10 +417,13 @@
+         bool reviewed_for_publication;
+     };
+     const Row rows[] = {
+-        // Only Sleep and GetTickCount have host-checked basic time behavior.
++        // These identity/time rows have host-checked basic behavior.
+         // The other raw bodies are catalogued but remain unresolved imports.
+         {"kernel32.dll", "VirtualAlloc", (void*)&impl_VirtualAlloc, 4, false},
+         {"kernel32.dll", "Sleep", (void*)&impl_Sleep, 1, true},
++        {"kernel32.dll", "GetCurrentProcessId", (void*)&impl_GetCurrentProcessId, 0, true},
++        {"kernel32.dll", "GetCurrentThreadId", (void*)&impl_GetCurrentThreadId, 0, true},
++        {"kernel32.dll", "GetSystemTimeAsFileTime", (void*)&impl_GetSystemTimeAsFileTime, 1, true},
+         {"kernel32.dll", "WaitForSingleObject", (void*)&impl_WaitForSingleObject_events, 2, false},
+         {"kernel32.dll", "TlsAlloc", (void*)&impl_TlsAlloc, 0, false},
+         {"kernel32.dll", "TlsGetValue", (void*)&impl_TlsGetValue, 1, false},
+--- a/loader/tests/typed_import_install_test.cpp
++++ b/loader/tests/typed_import_install_test.cpp
+@@ -4,6 +4,7 @@
+ #include <chrono>
+ #include <cstdint>
+ #include <cstdio>
++#include <thread>
+ #include <sys/mman.h>
+ #include <unistd.h>
+ 
+@@ -51,7 +52,11 @@
+     void* sleep_page = map_page();
+     void* tick_page = map_page();
+     void* spare_page = map_page();
+-    if (!sleep_page || !tick_page || !spare_page) return 2;
++    void* process_page = map_page();
++    void* thread_page = map_page();
++    void* filetime_page = map_page();
++    if (!sleep_page || !tick_page || !spare_page || !process_page ||
++        !thread_page || !filetime_page) return 2;
+ 
+     cap13::WinApiShim shim;
+     active_shim = &shim;
+@@ -62,7 +67,10 @@
+           "unregistered catalog cannot publish an import");
+     shim.register_builtin_exports();
+     check(shim.resolve("kernel32.dll", "Sleep", 0) == nullptr &&
+-          shim.resolve("kernel32.dll", "GetTickCount", 0) == nullptr,
++          shim.resolve("kernel32.dll", "GetTickCount", 0) == nullptr &&
++          shim.resolve("kernel32.dll", "GetCurrentProcessId", 0) == nullptr &&
++          shim.resolve("kernel32.dll", "GetCurrentThreadId", 0) == nullptr &&
++          shim.resolve("kernel32.dll", "GetSystemTimeAsFileTime", 0) == nullptr,
+           "catalog names remain unresolved before executable sealing");
+     check(shim.install_builtin_integer_wrapper("kernel32.dll", "Imaginary", spare_page,
+           static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
+@@ -119,6 +127,66 @@
+           shim.resolve("kernel32.dll", "Sleep", 0) == sleep_page,
+           "duplicate installation cannot replace a live IAT target");
+ 
++    sealing_symbol = "GetCurrentProcessId";
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", sealing_symbol,
++          process_page, static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Ok && !visible_during_seal,
++          "process identity wrapper seals before publication");
++    sealing_symbol = "GetCurrentThreadId";
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", sealing_symbol,
++          thread_page, static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Ok && !visible_during_seal,
++          "thread identity wrapper seals before publication");
++    sealing_symbol = "GetSystemTimeAsFileTime";
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", sealing_symbol,
++          filetime_page, static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Ok && !visible_during_seal,
++          "UTC file-time wrapper seals before publication");
++
++    const bool identity_ready =
++        shim.resolve("kernel32.dll", "GetCurrentProcessId", 0) == process_page &&
++        shim.resolve("kernel32.dll", "GetCurrentThreadId", 0) == thread_page &&
++        shim.resolve("kernel32.dll", "GetSystemTimeAsFileTime", 0) == filetime_page;
++    if (identity_ready)
++    {
++    check(static_cast<uint32_t>(cap13_win64_call0(process_page)) ==
++          static_cast<uint32_t>(getpid()),
++          "Win64 GetCurrentProcessId returns the host process identity");
++    const uint32_t main_tid = static_cast<uint32_t>(cap13_win64_call0(thread_page));
++    uint32_t worker_tid = 0;
++    std::thread worker([&] {
++        worker_tid = static_cast<uint32_t>(cap13_win64_call0(thread_page));
++        if (worker_tid != static_cast<uint32_t>(cap13_win64_call0(thread_page)))
++            worker_tid = 0;
++    });
++    worker.join();
++    check(main_tid != 0 && worker_tid != 0 && main_tid != worker_tid &&
++          main_tid == static_cast<uint32_t>(cap13_win64_call0(thread_page)),
++          "Win64 thread IDs stay stable and distinguish live threads");
++
++    struct FileTime { uint32_t low; uint32_t high; };
++    FileTime ft{0, 0};
++    const auto unix_before = std::chrono::system_clock::now();
++    (void)cap13_win64_call1(filetime_page, reinterpret_cast<uint64_t>(&ft));
++    const auto unix_after = std::chrono::system_clock::now();
++    const uint64_t windows_ticks = (uint64_t(ft.high) << 32) | ft.low;
++    const uint64_t epoch_delta = 116444736000000000ull;
++    const auto before_ticks = epoch_delta + uint64_t(std::chrono::duration_cast<
++        std::chrono::nanoseconds>(unix_before.time_since_epoch()).count() / 100);
++    const auto after_ticks = epoch_delta + uint64_t(std::chrono::duration_cast<
++        std::chrono::nanoseconds>(unix_after.time_since_epoch()).count() / 100);
++    check(windows_ticks >= before_ticks && windows_ticks <= after_ticks,
++          "Win64 file-time output has the documented UTC epoch and layout");
++    int stopped = 0;
++    cap13::WinApiShim::Hooks hooks{};
++    hooks.stop_mod = +[](void* user, const char*) { ++*static_cast<int*>(user); };
++    hooks.stop_user = &stopped;
++    shim.set_hooks(hooks);
++    (void)cap13_win64_call1(filetime_page, 0);
++    check(stopped == 1, "null FILETIME output stops the mod through its hook");
++    }
++    else check(false, "all three identity/time wrappers are callable");
++
+     munmap(spare_page, static_cast<size_t>(page_bytes));
+     // Published trampolines stay mapped until process exit, as required by
+     // the retained-module lifetime rule.

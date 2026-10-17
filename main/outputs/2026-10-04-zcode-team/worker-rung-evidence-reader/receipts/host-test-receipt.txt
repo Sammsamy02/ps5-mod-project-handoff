@@ -1,0 +1,82 @@
+# rung_check.py host-test receipt — 2026-10-05T00:32:33Z
+tool: 659b1f0c91458d702d3ce06ab8c56185bc4c25f3374ca1fef6c5c86a4467c74e  rung_check.py
+host: Python 3.9.6 on Darwin arm64
+
+PASS rung1-pass                                 exit=0 match=RUNG1: PASS
+PASS rung1-status-activated FAIL                exit=1 match=status_engine_ready_or_later
+PASS rung1-c2-missing FAIL                      exit=1 match=c2_present
+PASS rung1-ticks-flat FAIL                      exit=1 match=ticks_accepted_strictly_increasing
+PASS rung1-key-flip FAIL                        exit=1 match=game_thread_id_key_stable_nonzero
+PASS rung1-no-refusal FAIL                      exit=1 match=at_least_one_counted_guard_refusal
+PASS rung1-unverified-driver                    exit=1 match=RUNG1: UNVERIFIED
+PASS rung2-pass                                 exit=0 match=RUNG2: PASS
+PASS rung2-inconclusive FAIL                    exit=1 match=do NOT re-rate
+PASS empty-dir CANNOT_ASSERT                    exit=3 match=CANNOT_ASSERT
+PASS placeholders ALL exit0                     exit=0 match=VERDICT: PASS
+PASS placeholder counts (fc1/load line)        
+PASS discover-fake-listing                      exit=0 match=modbridge-ingame-facts.jsonl
+PASS dry-run curl commands                      exit=0 match=ftp://ps5-host-not-configured.invalid:2121/data/modbridge-ingame-facts.jsonl
+----
+host-test: 14 passed, 0 failed
+
+== sample: rung1-pass full output ==
+== rung_check ==
+fetch query_jsonl    OK        637 B  /data/modbridge-ingame-facts.jsonl
+fetch ue4ss_log      OK        243 B  /data/plugins/UE4SS.log
+fetch runtime_status OK        121 B  /data/modbridge/roots/PPSA33286/runtime-status.txt
+fetch entry_diag     OK        127 B  /data/townfall_runtime_aligned_entry.log
+fetch observer_log   OK          0 B  /data/townfall_runtime_aligned_observer.log
+fetch query_jsonl_snap2 OK        454 B  /data/modbridge-ingame-facts.jsonl
+status: pid=298 ms=8866900000000 last=mods-started ladder=['activated', 'engine-ready', 'mods-started']
+c2: 3 lines (1 qh records, 1 ig envelopes, 0 unparsed) driver_seen=True
+engine version line: Using engine version: 5.6
+RUNG1: PASS (all 5 conditions + driver line seen)
+  [PASS] status_engine_ready_or_later       last state mods-started
+  [PASS] c2_present                         3 non-empty lines
+  [PASS] ticks_accepted_strictly_increasing snap1 max=5 snap2 max=9
+  [PASS] game_thread_id_key_stable_nonzero  distinct nonzero keys: ['0x0000000000000f3c']
+  [PASS] at_least_one_counted_guard_refusal {"refused_identity_unknown": 1, "refused_wrong_thread": 2}
+RUNG2: PASS (terminal completed record)
+  [PASS] status_completed                   status='completed'
+  [PASS] count_source_engine_uobject_array  count_source='engine_uobject_array'
+  [PASS] counts_recorded_2                  counts.recorded=2
+  [PASS] both_counts_gt_10000               first=48152 second=48152 threshold=10000
+  [PASS] monotonic_equal_or_nondecreasing   monotonic='equal'
+  [PASS] identity_checks_2                  identity_checks=2
+  [PASS] key_nonzero                        game_thread_id_key='0x0000000000000f3c'
+  [PASS] refusals_between_0                 ticks.refusals_between=0
+  [PASS] threshold_10000                    threshold=10000
+  [PASS] gate_source_nonempty               gate_source='PublishStagedNativeLayoutMaps'
+RUNG3: PLACEHOLDER {"pos_tails": 0, "fail_tails": 0, "fc1_records_in_c2": 0}
+  note: pos tail -> FindFirstOf callable, DB absent; fail tail -> B2 unresolved; FC1 via IgSink under its build_id
+RUNG4: PLACEHOLDER {"load_lines": 1, "mod_tag_lines_total": 1}
+  note: expect load line exactly ONCE in /data/plugins/UE4SS.log; alternates /data/townfall_runtime_buffered_lua.log and /data/townfall_mod.log are older lineages, not fetched
+RUNG5: PLACEHOLDER {"spawned": 0, "failed_at": 0}
+  note: C4 video/frame correlation is out of scope for file assertions (EVIDENCE-SPEC 5.2/5.7)
+
+VERDICT: PASS
+NEXT: Requested rung(s) asserted from console files; keep evidence raw (PLAYBOOK honesty rules).
+exit=0
+
+== sample: --json RUNG2 (rung2-pass), verdict fields ==
+{
+ "verdict": "PASS",
+ "rung2": {
+  "verdict": "PASS",
+  "why": "terminal completed record",
+  "records_seen": 3,
+  "completed_records": 2,
+  "inconclusive_records": 0
+ }
+}
+
+== sample: discover fixture output ==
+== rung_check ==
+c2: 0 lines (0 qh records, 0 ig envelopes, 0 unparsed) driver_seen=None
+-- discover --
+  /data/ -> {"candidates": ["modbridge", "modbridge-ingame-facts.jsonl", "townfall_runtime_aligned_entry.log"]}
+  /data/plugins/ -> {"error": "fixture missing: host-test/fixtures/discover/dirlist-data-plugins.txt"}
+  /data/modbridge/ -> {"error": "fixture missing: host-test/fixtures/discover/dirlist-data-modbridge.txt"}
+  /data/modbridge/roots/ -> {"error": "fixture missing: host-test/fixtures/discover/dirlist-data-modbridge-roots.txt"}
+  /data/modbridge/roots/PPSA33286/ -> {"candidates": ["ue4ss.log"]}
+exit=0

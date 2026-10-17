@@ -1,0 +1,46 @@
+--- a/http.c
++++ b/http.c
+@@ -290,7 +290,10 @@
+         (!strcmp(target, "/api/jobs") || !strcmp(target, "/api/generations") ||
+          !strcmp(target, "/api/acquisition-plan") ||
+          !strcmp(target, "/api/acquisitions") || job_resume_target(target, NULL));
+-    size_t body_limit = auth_post ? HTTP_AUTH_BODY_LIMIT : json_post ? HTTP_JOB_BODY_LIMIT : 0;
++    int service_post = !strcmp(method, "POST") &&
++        !strcmp(target, "/api/mod-service/request");
++    size_t body_limit = auth_post ? HTTP_AUTH_BODY_LIMIT :
++        (json_post || service_post) ? HTTP_JOB_BODY_LIMIT : 0;
+     int host_seen = 0, origin_seen = 0, cookie_seen = 0, csrf_seen = 0, type_seen = 0;
+     size_t length = 0;
+     char *cursor = end + 2;
+@@ -771,8 +774,10 @@
+ static int mod_service_response(struct parsed_request *request, const struct host_info *info,
+                                 struct http_response *out) {
+     int records = !strcmp(request->target, "/api/mod-service/records");
+-    if (!records && strcmp(request->target, "/api/mod-service")) return 0;
+-    if (strcmp(request->method, "GET")) { http_error(out, 405); return 1; }
++    int forward = !strcmp(request->target, "/api/mod-service/request");
++    if (!records && !forward && strcmp(request->target, "/api/mod-service")) return 0;
++    if (!forward && strcmp(request->method, "GET")) { http_error(out, 405); return 1; }
++    if (forward && strcmp(request->method, "POST")) { http_error(out, 405); return 1; }
+     if (!mb_mod_service_usable(info->mod_service)) { http_error(out, 503); return 1; }
+ #if MB_HOST_DOWNLOAD
+     if (!info->auth) { http_error(out, 503); return 1; }
+@@ -787,8 +792,16 @@
+         auth_status_error(out, result.status); return 1;
+     }
+     char *copy = NULL; size_t size = 0;
+-    int status = mb_mod_service_read(info->mod_service,
+-        records ? MB_MOD_SERVICE_RECORDS : MB_MOD_SERVICE_DESCRIBE, &copy, &size);
++    int status;
++    if (forward) {
++        if (!request->body || !request->body_bytes ||
++            request->body_bytes > MB_MOD_SERVICE_RESPONSE_LIMIT) { http_error(out, 400); return 1; }
++        status = mb_mod_service_call(info->mod_service,
++            (const char *)request->body, request->body_bytes, &copy, &size);
++    } else {
++        status = mb_mod_service_read(info->mod_service,
++            records ? MB_MOD_SERVICE_RECORDS : MB_MOD_SERVICE_DESCRIBE, &copy, &size);
++    }
+     if (status != 200) { http_error(out, status); return 1; }
+     out->owned_body = copy; out->owned_capacity = size + 1;
+     out->size = size; out->status = 200;

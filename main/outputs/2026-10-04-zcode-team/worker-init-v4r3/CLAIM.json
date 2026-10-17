@@ -1,0 +1,77 @@
+{
+  "worker": "worker-init-v4r3",
+  "date": "2026-10-05",
+  "task": "Resolve the launch-11 A3 lineage collision: produce ONE initializer carrying BOTH (a) the launch-10-final v4 lineage (RE-corrected pool predicate: engine CurrentBlock law id>>16<=CurrentBlock, span-membership either-class, entry-0 None anchor, read-path guards, value-printing refusals) AND (b) the R3 armed fold (DIFF-2 rev B + the in-file UE4SS_R3_MARSHAL_MODE 0->1 flip), because the marshal pump's two bridge symbols resolve only against the armed-fold initializer (pairing law) while the v4 predicate is what lets a valid pool ADMIT. Compile-gate + host-verify.",
+  "scope": [
+    "LOCAL ONLY, this worker dir. No console contact, no composition runs, no packaging, no in-game claim of any kind.",
+    "All writes confined to outputs/2026-10-04-zcode-team/worker-init-v4r3/. Every other worker/controller file read-only (copy-from only).",
+    "Deliverable order: CLAIM.json first (this file), staging + diffs + receipts, MERGE.md/DIFF.md/FOLD.md, REPORT.md last."
+  ],
+  "verdict": "MERGE CLEAN — no genuine semantic conflict. The rev-B fold and the v4 predicate compose: the fold compiles out the detour verification path and both EngineTick registrations (R3 arm), the v4 predicate governs pool ADMISSION in the seed path and is NOT compiled out by R3 mode. All four gates PASS (series byte-exactness, compile gate with control reproduction, object census, 69/69 host suite).",
+  "claims": [
+    {
+      "id": "V4R3-1",
+      "text": "Patch series extraction and validation: B (worker-launch10-r3-armed staging initializer, 8b0c7e99) decomposes EXACTLY into (1) DIFF-2 rev B diff 68d0c006 applied by patch -p1 to the common ancestor O (c85c42f7, worker-launch10-prebuild armed staging) yielding 72247480 byte-identical to B's kept pre-flip copy UnrealInitializer.cpp.r3fallback0, then (2) the single-line arming flip line 179 #define UE4SS_R3_MARSHAL_MODE 0 -> 1 yielding 8b0c7e99 byte-exact. The extracted series is the complete B delta; nothing else differs.",
+      "status": "PASS (measured)",
+      "evidence": "receipts/derivation.json series_validation; work/ recon runs; cmp byte-exact at both steps"
+    },
+    {
+      "id": "V4R3-2",
+      "text": "Overlap map and clean application: A's delta vs O (the launch-10-final fold + the v4 RE-correction) is confined to O-lines 614-852 (SeedArming namespace: GMalloc V1/V2 validators, v4 check_pool_shape caller at O:797, read_bytes_at, check_none_anchor). The rev-B hunks land at O-lines ~158-228, ~1312-1330, ~1782-1802, ~2041+ (R3MarshalGate, QueryHarness [[maybe_unused]], VerifyFNameConstructor early-return, EngineTick refuse/defer, bridges). The regions are TEXTUALLY DISJOINT: rev B applied to A with patch -p1 exit 0, zero fuzz, zero offset, no .rej; the A->merged unified delta is line-for-line identical to the O->B delta modulo the flip line. The nearest approach is conceptual only: rev-B hunk 3 sits in VerifyFNameConstructor (compiled out under R3) whose comment cites SeedArming::bSeedBoundFNameCtor coexistence — that symbol is untouched by v4 (still merged:1062), so the coexistence statement remains true in the merged file.",
+      "status": "PASS (measured)",
+      "evidence": "diff O A / diff O B / diff A merged; patch session log; MERGE.md overlap table"
+    },
+    {
+      "id": "V4R3-3",
+      "text": "Semantic composition (the pairing law x the admission law): under the armed fold the seed path still runs FIRST (SeedArming::consume_required_slot_seeds, merged:833/1178) and the v4 predicate alone governs pool ADMISSION there; if it admits, bSeedBoundFNameCtor is set and the detour verifier is skipped entirely; if the verifier is still reached (seed refused/unbound), the R3 early-return settles the latch and refuses loudly instead of arming the PLH detour. Both EngineTick registrations compile out under R3; the pump defers to the marshal drain. NO genuine semantic conflict found; nothing was STOPPED.",
+      "status": "PASS (derived from the merged source + measured symbol census)",
+      "evidence": "merged lines 833/991/1014-1015/1062/1178 (seed path intact), 1541-1556 (R3 FName early-return), 2022-2049 (R3 EngineTick defer), 2316-2373 (bridges); receipts/object-census.json"
+    },
+    {
+      "id": "V4R3-4",
+      "text": "Compile gate: standard 190-entry initializer argv (worker-fname-validator-v4 receipts/compile-gate.argv.json, LLVM_CONFIG=outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin/llvm-config). CONTROL: the final-units v4 file (4a2b9400) compiles exit 0 to a437861a... EXACTLY reproducing the v4 worker's recorded gate object. MERGED: staging/UnrealInitializer-v4r3.cpp compiles exit 0 to fe5d26d9... (1,830,904 B), byte-identical across two passes. Warning multiset: 6 warnings, normalized multiset == control == v4 baseline (all third-party headers; zero new classes).",
+      "status": "PASS (measured)",
+      "evidence": "receipts/control-v4-final-units.*, receipts/v4r3-merged-pass1.*, receipts/v4r3-merged-pass2-determinism.*, receipts/warning-multiset.json"
+    },
+    {
+      "id": "V4R3-5",
+      "text": "Object census: the merged object carries BOTH lineages. v4: all 9 plain refusal strings + 2 UTF-16 success strings PRESENT (incl. 'None entry block index exceeds CurrentBlock' and 'inside a published readable span (image or non-image) of'), all 4 retired strings ABSENT. R3 armed fold: '[R3] refused:' and the deferral line PRESENT; the three R3Marshal* bridges DEFINED under their exact mangled names (_ZN2RC6Unreal34R3MarshalPublishGameThreadIdentityEv, _ZN2RC6Unreal29R3MarshalQueryHarnessDispatchEv, _ZN2RC6Unreal20R3MarshalPumpPendingEv) and 0 R3Marshal* UND — the l11 plan-D consumer contract resolves against this object. Polarity checks: control object has the R3 markers ABSENT and the 'Phase 2: Verifying FName constructor...' string PRESENT; merged has R3 PRESENT and Phase-2 ABSENT (the R3 early-return compiles out the FName verification path, matching the r3-armed worker's measured correction). Armed banner present in both.",
+      "status": "PASS (measured)",
+      "evidence": "receipts/object-census.json; nm on receipts/unreal-unrealinitializer-v4r3.o vs -v4-control.o"
+    },
+    {
+      "id": "V4R3-6",
+      "text": "Host predicate suite: the worker-fname-validator-v4 suite (unmodified source sha 674897f0) run against THIS merged staging header world passes 69/69, exit 0 (receipts/fixture-pool-bounds-v4r3.txt). Because the controller's own final-units v4 fold removed the retired publish_nonimage_readable_spans alias, the AL1 fixture's one call site was adapted to the primary publish_readable_spans (suite copy host-test/test_pool_bounds_host.v4r3.cpp, sha 78e20890, exactly one token changed on line 611 — mirroring the controller's bridge call-site rename; AL1 becomes degenerate-by-design in the alias-free world). Baseline reproduction: the UNMODIFIED suite passes 69/69 exit 0 against the v4 worker's own staging header, and the two receipts are byte-identical.",
+      "status": "PASS (measured, adaptation documented)",
+      "evidence": "receipts/fixture-pool-bounds-v4r3.txt, receipts/fixture-pool-bounds-v4-baseline-repro.txt (byte-identical), receipts/suite-*.stderr (0 bytes)"
+    }
+  ],
+  "non_claims": [
+    "No composition run, no packaging, no PRX, no gate-v2 receipt, no console or in-game claim. The launch-11 combined candidate is NOT built by this worker; FOLD.md only RE-POINTS the l11 editions for the controller/loop.",
+    "fe5d26d9 is the initializer-unit object comparator under the STANDARD 190-entry single-unit argv ONLY. Composition-time initializer objects (4 prepended -I, different source/-o paths) are a different argv class (l10r3 precedent: f5aa9efa there) and are measured fresh; the composition-time pairing law is enforced by the runner's consumer_und_gate, which this census pre-verifies 3/3.",
+    "No claim that the marshal pump drains in-game (the calibration service still does not exist; DIFF-1 luamod consumer is a separate l11 unit), that seeds are valid, or that any launch verdict changes. [Seeds] REFUTED remains a possible early terminal exactly as the r3-armed worker recorded.",
+    "No FName detour verification is performed under R3 mode (latch settled + loud refusal by design; FC-1 validator remains the designated future replacement, F-1 open).",
+    "The A-world headers ship with the staging because the merged initializer REQUIRES them (GMalloc labels, v4 functions); this is a required invariant, not an optional companion (V4R3-7 note in MERGE.md).",
+    "The v4 worker's SeedValidation b84f8585 vs final-units f09ec9b3 difference (retired-alias removal) is inherited controller work, not re-derived here; mission text 'armed SeedTable 59effe6e' for A is recorded as loose phrasing — the shipped launch-10-final table is d183e0c0 = 59effe6e + GMalloc V1/V2 constants, which A requires."
+  ],
+  "input_pins": {
+    "A": "outputs/2026-10-04-zcode-controller/launch10-build/final-units/{UnrealInitializer.cpp=4a2b9400, SeedValidation.hpp=f09ec9b3, SeedTable.h=d183e0c0}",
+    "B": "outputs/2026-10-04-zcode-team/worker-launch10-r3-armed/staging/initializer-l10-r3/{UnrealInitializer.cpp=8b0c7e99, UnrealInitializer.cpp.r3fallback0=72247480, SeedValidation.hpp=b8d851e9, SeedTable.h=59effe6e}",
+    "O": "outputs/2026-10-04-zcode-team/worker-launch10-prebuild/staging/initializer-launch10/UnrealInitializer.cpp=c85c42f7",
+    "revB_diff": "outputs/2026-10-04-zcode-team/worker-r3-diff2-rebase/diffs/r3-initializer-r3-marshal-mode.revB.diff=68d0c006",
+    "v4_diff_reference": "outputs/2026-10-04-zcode-team/worker-fname-validator-v4/staging/unrealinitializer-v3-to-v4.diff=3c45a1ac",
+    "argv": "outputs/2026-10-04-zcode-team/worker-fname-validator-v4/receipts/compile-gate.argv.json (190 entries)",
+    "suite": "outputs/2026-10-04-zcode-team/worker-fname-validator-v4/host-test/test_pool_bounds_host.cpp=674897f0"
+  },
+  "measured_verdicts": {
+    "merged_initializer": {
+      "sha256": "22f062863fe2d599ccbccabec678ccd8f2fbe5f74c677ed9f6377ae116417fb0",
+      "lines": 2375,
+      "preflip_intermediate": "8f1ad71a3d7a16175e4b4245885c0012992d893dc24baeca52914a4a2baa4272"
+    },
+    "objects": {
+      "control_v4": "a437861a17614705b46e9cd6ba7401b9db09cbc37c58952eca179661a04be27a (1,939,584 B; == v4 worker gate object)",
+      "merged_v4r3": "fe5d26d9aa1d2abfab6db0eac84ff28e3a5da9afdf1afaa5a449b716409c133c (1,830,904 B; THE COMPARATOR, 2 deterministic passes)"
+    }
+  }
+}

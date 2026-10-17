@@ -1,0 +1,51 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-owned-detour-1/original/polyhook2/ZydisDisassembler.hpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-owned-detour-1/include/polyhook2/ZydisDisassembler.hpp
+@@ -1,3 +1,8 @@
++#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++#include <polyhook2/OwnedMemory.hpp>
++#include <memory>
++#include <stdexcept>
++#endif
+ #ifndef POLYHOOK_2_0_ZYDISDISASSEMBLER_HPP
+ #define POLYHOOK_2_0_ZYDISDISASSEMBLER_HPP
+ 
+@@ -21,8 +26,23 @@
+ 
+     // TODO: Move to accessor
+ 	static void writeEncoding(const PLH::insts_t& instructions, const MemAccessor& accessor) {
++#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++        // Acquire every instruction-owned byte lifetime before the first write.
++        std::vector<std::unique_ptr<OwnedMemory::ScopedRegion>> sources;
++        sources.reserve(instructions.size());
++        for (const auto& inst : instructions) {
++            if (!inst.size() || inst.size() > inst.getBytes().size())
++                throw std::runtime_error("Invalid owned instruction extent");
++            sources.push_back(std::make_unique<OwnedMemory::ScopedRegion>(
++                const_cast<uint8_t*>(inst.getBytes().data()), inst.size(), R));
++        }
++        for (const auto& inst : instructions)
++            if (!accessor.mem_copy(inst.getAddress(), (uint64_t)inst.getBytes().data(), inst.size()))
++                throw std::runtime_error("Owned instruction write refused");
++#else
+ 		for (const auto& inst : instructions)
+ 			writeEncoding(inst, accessor);
++#endif
+ 	}
+ 
+ 	/**Write the raw bytes of the given instruction into the memory specified by the
+@@ -34,7 +54,15 @@
+ 	**/
+ 	static void writeEncoding(const Instruction& instruction, const MemAccessor& accessor) {
+ 		assert(instruction.size() <= instruction.getBytes().size());
++#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++        if (!instruction.size() || instruction.size() > instruction.getBytes().size())
++            throw std::runtime_error("Invalid owned instruction extent");
++        OwnedMemory::ScopedRegion source(const_cast<uint8_t*>(instruction.getBytes().data()), instruction.size(), R);
++        if (!accessor.mem_copy(instruction.getAddress(), (uint64_t)instruction.getBytes().data(), instruction.size()))
++            throw std::runtime_error("Owned instruction write refused");
++#else
+ 		accessor.mem_copy(instruction.getAddress(), (uint64_t)&instruction.getBytes()[0], instruction.size());
++#endif
+ 	}
+ 
+ 	static bool isConditionalJump(const PLH::Instruction& instruction) {

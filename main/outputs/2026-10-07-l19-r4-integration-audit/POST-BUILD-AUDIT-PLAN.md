@@ -1,0 +1,13 @@
+The independent post-build audit waits for the root's actual frozen artifact notification. It does not inspect pending build outputs or repeatedly poll files. All review writes remain in this owned audit directory; source/profile/evidence/GO/build receipts/artifacts stay read-only. No console/network contact or unchanged-suite reruns.
+
+On handoff, pin the exact final source/GO/execution selections and both build result manifests. Verify that the admission uses corrected REVIEW-FINAL.v2 and preserves the accepted generated declaration/profile header identities. Review actual executed commands and return codes rather than treating planned recipes as completed work.
+
+Verify two actual PRX files and their corresponding linked runtime objects by independent full-size SHA256 and byte comparison. Check the real container/ELF magic, architecture and module/SDK metadata using the retained format checker and actual SDK tools as applicable; do not infer validity from extension or source compilation. Tie each binary to its own completed link/package receipt and input object manifests.
+
+Inspect the actual 147 second-pass dependency rebuild receipts: commands executed, success/output artifacts, required selected header dependency, fresh-source and object hashes, and run separation. Ensure the accepted Owner header is admitted at the actual dependent-build path and the final Program/provider/initializer/binder consumers use the selected sources. Preserve actual retained runtime_owner/shadow_copy roles; reject test aliases, stale object substitutions or receipt-only claims of rebuild work.
+
+Independently inspect final actual SDK/import analysis. Require exactly 206 imports with unchanged names and module/library/NID identities according to the accepted baseline, plus successful real SDK checks. Verify expected new local helper/provider symbols resolve internally and do not become unintended dynamic imports. Do not describe a successful focused compile as final linkage or runtime support.
+
+Verify final guard receipts and their source/artifact identities, refusal behavior, XOM/file/live-evidence distinctions, budget/lifetime/bank cleanup, map/publication bounds, pad/mod preservation, and diagnostics. Retain unchanged accepted evidence by exact hash. Do not call a host model live console proof or a cleanup callback a completed retirement operation.
+
+Seal a separate post-build receipt/report with exact artifact sizes/hashes, observed completed checks, source/GO/admission ties and any actionable blockers. Acceptance covers verified local artifacts only; root retains responsibility for console readiness and any later upload decision.

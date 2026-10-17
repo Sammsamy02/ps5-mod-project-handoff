@@ -1,0 +1,95 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l22-runtime/diagnostics/src/LuaMod.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l23-runtime/thread/src/LuaMod.cpp
+@@ -1,3 +1,6 @@
++#if defined(__PROSPERO__)
++#include "L23GameThreadProbe.hpp"
++#endif
+ #include <L22Diagnostics/Logging.hpp>
+ #include "ThreadNameRuntime.hpp"
+ #define NOMINMAX
+@@ -95,6 +98,65 @@
+ 
+ namespace RC
+ {
++#if defined(__PROSPERO__)
++    namespace L23GameThreadProbe {
++        extern "C" int32_t scePthreadGetthreadid(void);
++        static State state;
++        static uint64_t now_ms() noexcept {
++            return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
++                std::chrono::steady_clock::now().time_since_epoch()).count());
++        }
++        static int callback(lua_State*) noexcept {
++            try {
++                const int32_t tid=scePthreadGetthreadid();
++                const bool genuine=Unreal::IsInGameThreadRaw();
++                const auto result=state.ran(now_ms(),tid,genuine);
++                L22Diagnostics::observe([&] {
++                    if(result.accepted) Output::send(STR("[l23] game-thread self-test ran thread={} drain={}ms late={}\n"),result.thread,result.elapsed,result.late);
++                    else Output::send(STR("[l23] game-thread self-test callback refused thread={} genuine={} state={}\n"),tid,genuine,static_cast<int>(state.status()));
++                });
++            } catch(...) { /* A diagnostic must not throw across the Lua C ABI. */ }
++            return 0;
++        }
++        static int request(lua_State* L) {
++            // Run all potentially raising Lua operations inside the caller's
++            // pcall. No C++ owner lives on this Lua-longjmp frame.
++            lua_getglobal(L,"ExecuteInGameThread");
++            if(!lua_isfunction(L,-1)) return luaL_error(L,"ExecuteInGameThread is unavailable");
++            lua_pushcfunction(L,callback);
++            lua_call(L,1,0);
++            return 0;
++        }
++        static void Queue(const void* owner,lua_State* L) noexcept {
++            try {
++                // Same lock as the production dispatcher: no concurrent drain
++                // can race the queued marker or the protected main-state call.
++                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                if(!state.begin(owner,now_ms(),scePthreadGetthreadid())) return;
++                const int top=lua_gettop(L);
++                lua_pushcfunction(L,request);
++                const int result=lua_pcall(L,0,0,0);
++                if(result==LUA_OK) {
++                    state.queued();
++                    L22Diagnostics::observe([&]{Output::send(STR("[l23] game-thread self-test queued via ExecuteInGameThread deadline=30000ms\n"));});
++                } else {
++                    state.failed();
++                    L22Diagnostics::observe([&]{const char* msg=lua_tostring(L,-1);Output::send(STR("[l23] game-thread self-test enqueue failed: {}\n"),ensure_str(msg?msg:"non-string Lua error"));});
++                }
++                lua_settop(L,top);
++            } catch(...) { state.failed(); }
++        }
++        static void Cancel(const void* owner) noexcept {
++            try { if(state.cancel(owner)) L22Diagnostics::observe([]{Output::send(STR("[l23] game-thread self-test cancelled before Lua owner teardown\n"));}); }
++            catch(...) {}
++        }
++        void Poll() noexcept {
++            try { if(state.timeout(now_ms())) L22Diagnostics::observe([]{Output::send(STR("[l23] game-thread self-test NOT DRAINED within 30000ms; startup continues; callback remains owned by the normal queue\n"));}); }
++            catch(...) {}
++        }
++    }
++#endif
++
+     namespace Unreal
+     {
+         // =================================================================================
+@@ -7494,6 +7556,9 @@
+                     L22Diagnostics::observe([&]() {
+                         Output::send(STR("[l22] Lua mod started: {} (main script returned)\n"), m_mod_name);
+                     });
++#if defined(__PROSPERO__)
++                    L23GameThreadProbe::Queue(this,main_lua()->get_lua_state());
++#endif
+                 }
+             }
+             else
+@@ -7589,6 +7654,9 @@
+         // Now acquire mutex to safely modify shared data structures
+         std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+ 
++#if defined(__PROSPERO__)
++        L23GameThreadProbe::Cancel(this);
++#endif
+         fire_on_lua_stop_for_cpp_mods();
+         fire_on_lua_stop_for_self();
+ 

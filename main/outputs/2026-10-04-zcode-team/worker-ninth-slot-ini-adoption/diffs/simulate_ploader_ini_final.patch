@@ -1,0 +1,114 @@
+--- law/simulate_ploader_ini_final.py.asfound	2026-10-05 01:49:51
++++ law/simulate_ploader_ini_final.py	2026-10-05 02:18:50
+@@ -1,6 +1,7 @@
+ #!/usr/bin/env python3
+ """simulate_ploader_ini_final.py — EXTENDED ridealongs simulator for the
+-DEFINITIVE 8-entry return-session ploader.ini (worker-final-ini-layout).
++DEFINITIVE return-session ploader.ini (worker-final-ini-layout; NINTH-SLOT
++revision by worker-ninth-slot-ini-adoption, 2026-10-04).
+ 
+ Parser core is byte-for-byte the pinned-parser re-implementation delivered by
+ worker-game-session-ridealongs/simulate_ploader_ini.py (itself derived from
+@@ -10,10 +11,13 @@
+ file order L776-820, NO path dedupe). The original file is left untouched;
+ this module embeds the same law and adds:
+ 
+-  1. CANONICAL_FINAL: the definitive 8-entry layout (7 active + igf=0 inert).
++  1. CANONICAL_FINAL: the definitive 9-entry layout (8 active + igf=0 inert;
++     cc1 carrier appended AFTER the igf line per
++     worker-carrier-probe-build/STAGE-PLAN.md — the ninth-slot revision;
++     parser core UNCHANGED from the 8-entry delivery).
+   2. Per-stager content-anchored ensure() ops + a commutativity proof: every
+      staging-order permutation (and every subset/repeat) converges to the
+-     canonical bytes byte-for-byte.
++     canonical bytes byte-for-byte (9! = 362880 orders).
+   3. Reorder-consequence variants: probe-after-composition (verdict-absent-
+      at-composition-init modelled), ridealongs-before-composition (window
+      burn), duplicate hazard, igf=2 counterfactual, mode-1 probes,
+@@ -40,6 +44,7 @@
+     ("/data/plugins/modbridge_runtime_aligned_entry.prx", 2),
+     ("/data/plugins/modbridge_path_test.prx", 2),
+     ("/data/plugins/modbridge_ingame_facts.prx", 0),
++    ("/data/plugins/modbridge_carrier.prx", 2),
+ ]
+ 
+ CANONICAL_FINAL = HEADER + "\n" + "".join(
+@@ -47,7 +52,7 @@
+ 
+ EXPECT_REGISTERED = [
+     p for p, m in CANONICAL_ENTRIES if m > 0
+-]  # 7 active entries, igf=0 skipped
++]  # 8 active entries, igf=0 skipped; carrier appended after the igf line
+ 
+ 
+ # ---------------------------------------------------------------- parser law
+@@ -293,12 +298,13 @@
+     "/data/plugins/modbridge_runtime_aligned_entry.prx",
+     "/data/plugins/modbridge_path_test.prx",
+     "/data/plugins/modbridge_ingame_facts.prx",
++    "/data/plugins/modbridge_carrier.prx",
+ ]
+ 
+ 
+ def v_staging_permutations():
+-    """Every permutation of the 8 stager ensure-ops from the bare header must
+-    converge byte-for-byte to CANONICAL_FINAL (8! = 40320 orders)."""
++    """Every permutation of the 9 stager ensure-ops from the bare header must
++    converge byte-for-byte to CANONICAL_FINAL (9! = 362880 orders)."""
+     results = set()
+     for perm in itertools.permutations(STAGER_LINES):
+         text = HEADER + "\n"
+@@ -358,15 +364,15 @@
+         if name == "canonical":
+             if [p for p, _ in reg] != EXPECT_REGISTERED:
+                 failures.append(f"{name}: order/set mismatch: {[p for p, _ in reg]}")
+-            if len(reg) != 7:
+-                failures.append(f"{name}: expected 7 registered, got {len(reg)}")
++            if len(reg) != 8:
++                failures.append(f"{name}: expected 8 registered, got {len(reg)}")
+             if not all(m == 2 for _, m in reg):
+                 failures.append(f"{name}: expected all modes == 2")
+         elif name == "no_trailing_newline":
+-            if [p for p, _ in reg] != EXPECT_REGISTERED or len(reg) != 7:
++            if [p for p, _ in reg] != EXPECT_REGISTERED or len(reg) != 8:
+                 failures.append(f"{name}: parse diverged without trailing NL")
+         elif name == "crlf_comments":
+-            if [p for p, _ in reg] != EXPECT_REGISTERED or len(reg) != 7:
++            if [p for p, _ in reg] != EXPECT_REGISTERED or len(reg) != 8:
+                 failures.append(f"{name}: CRLF/comment parse diverged")
+         elif name == "probes_mode1":
+             if [p for p, _ in reg] != EXPECT_REGISTERED:
+@@ -376,8 +382,8 @@
+                modes["/data/plugins/modbridge_fc1pool.prx"] != 1:
+                 failures.append(f"{name}: mode-1 not reflected")
+         elif name == "igf2_counterfactual":
+-            if len(reg) != 8:
+-                failures.append(f"{name}: expected 8 registered if igf flipped to 2, got {len(reg)}")
++            if len(reg) != 9:
++                failures.append(f"{name}: expected 9 registered if igf flipped to 2, got {len(reg)}")
+             print("   COUNTERFACTUAL: flipping igf to 2 would add a SECOND "
+                   "writer on qdrv1's jsonl — MUST stay 0")
+         elif name == "duplicate_hazard":
+@@ -403,7 +409,7 @@
+             if not any(p.endswith("modbridge_surprise.prx") for p, _ in reg):
+                 failures.append(f"{name}: parser unexpectedly dropped the line")
+             print("   PARSER LAW: an unknown but well-formed line REGISTERS "
+-                  "(8th slot burned, double-writer risk) — only the "
++                  "(9th slot burned, double-writer risk) — only the "
+                   "final-layout VERIFIER rejects it; parser never will")
+         elif name == "composition_mode_flipped":
+             modes = dict(reg)
+@@ -421,9 +427,10 @@
+         for f in failures:
+             print(" -", f)
+         return 1
+-    print("SIMULATION_PASSED: 7 active entries registered in definitive file "
+-          "order (igf=0 skipped, no slot); 7/10 MAX_PLUGINS; every staging "
+-          "order converges byte-for-byte to the canonical layout; duplicate/"
++    print("SIMULATION_PASSED: 8 active entries registered in definitive file "
++          "order (igf=0 skipped, no slot; cc1 carrier appended after the igf "
++          "line); 8/10 MAX_PLUGINS; every staging order (9! = 362880) "
++          "converges byte-for-byte to the canonical layout; duplicate/"
+           "mode-3/mode-flip hazards behave per the pinned parser law.")
+     return 0
+ 

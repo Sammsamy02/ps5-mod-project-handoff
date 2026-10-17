@@ -1,0 +1,26 @@
+#pragma once
+#include "runtime_owner.hpp"
+#include "activated_mod_source.hpp"
+#include <Platform/NativeProgramContext.hpp>
+
+namespace modbridge::native
+{
+// Creates the actual native UE4SSProgram, with mod autostart disabled. The
+// caller supplies a genuine, validated, owning native module context; this
+// function does not discover mappings or prove their identity/ABI. Construction
+// performs UE4SS settings/path/log setup and must run while those are available.
+// The returned owner has not called init(). Engine readiness is reported only
+// by the real program callback after setup_unreal/properties/Lua sharing.
+std::unique_ptr<RuntimeOwner> PrepareDeferredUE4SSRuntime(RC::Platform::NativeProgramContext context);
+
+// Opt-in inventory path for a validated startup activation. Construction
+// discovers the buffered Lua inventory; main.lua still runs only after the
+// real Unreal initialization performed by start(). No native binary mod is
+// admitted by this adapter. Both factories require a genuine game context.
+// runtime_ack (RUNTIME-ACK.md) optionally opens <status_root>/runtime-status.txt
+// during module_start and records the session states the installer reads; an
+// empty status_root changes nothing.
+std::unique_ptr<RuntimeOwner> PrepareActivatedUE4SSRuntime(
+    RC::Platform::NativeProgramContext context, ActivatedMods activation,
+    std::string_view expected_title, const RuntimeAckConfig& runtime_ack = {});
+}

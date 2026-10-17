@@ -1,0 +1,67 @@
+{
+  "worker": "worker-seh64-trampoline-fix",
+  "date": "2026-10-04",
+  "lineage": "Discharges the owning-lineage duty named by worker-idle-work-survey/TRAMPOLINE-REVIEW.md finding F-1 (and the F-2 comment correction) inside the SEH64 lineage: worker-seh64-family -> worker-dll-8fam-combined -> this worker.",
+  "task": "F-1: fix the guard-frame funclet entry stack alignment inversion in call_at_frame_win64 (guard zone 0x28 -> 0x30; recovery pre-store moved 0x20(%rsi) -> 0x28(%rsi) keeping the frame_rsp-8 return-slot emulation; restores pre-call rsp = frame_rsp-0x30 == 0 (mod 16) and callee entry rsp == 8 (mod 16)). F-2: relabel the captured Context.Rax comment (it holds the pushfq EFlags image, not the caller's rax). Add the discharging host probe the review specified: fixture filters/__finally funclets that force 16-byte-aligned SSE stack spills (movaps class) plus an entry-rsp parity check, and a negative-control build that keeps the PRE-FIX trampoline bytes to prove the new test bites.",
+  "bounds": {
+    "console_contact": false,
+    "target_execution": false,
+    "nested_subagents": false,
+    "network": false,
+    "writes": "only under outputs/2026-10-04-zcode-team/worker-seh64-trampoline-fix/",
+    "source_workers": "worker-seh64-family and worker-dll-8fam-combined read-only; fixed copies live under this worker dir",
+    "no_engine_claims": true,
+    "budget_tool_calls": "40-80"
+  },
+  "inputs_read_only": [
+    "outputs/2026-10-04-zcode-team/worker-idle-work-survey/TRAMPOLINE-REVIEW.md (F-1/F-2 findings and the exact fix shape)",
+    "outputs/2026-10-04-zcode-team/worker-seh64-family/ (vendor tree, receipts, SEH64-IMPLEMENTATION.md)",
+    "outputs/2026-10-04-zcode-team/worker-dll-8fam-combined/ (8-family combined vendor tree and receipts)"
+  ],
+  "claims": {
+    "f1_fix": "Guard-zone adjustment exactly as the review specifies: subq $0x30 (was $0x28); recovery address pre-stored at 0x28(%rsi) (was 0x20(%rsi)) so the emulated return-address slot stays at frame_rsp-0x8; shadow space remains entirely below the establisher rsp. Pre-call rsp = frame_rsp-0x30 == 0 (mod 16); callee entry rsp = frame_rsp-0x38 == 8 (mod 16) whenever frame_rsp == 0 (mod 16) -- the general case provenance argument in the review.",
+    "f2_fix": "svc_capture_context comment corrected: Context.Rax is the captured EFlags image (same value stored at offset 0x44), NOT the caller's rax; caller-dead-by-contract wording kept for rdx/r8-r11 which are stored as found.",
+    "new_host_probe": "New fixture guards with a NON-constant filter that (a) reads its own entry rsp and requires Win64 funclet parity (rsp == 8 mod 16 at entry) and (b) forces a 16-byte-aligned __m128 stack spill + aligned stores (movaps class) - the class the shipped constant-filter census compiled without; plus a cross-frame __finally funclet doing the same during the unwind pass. Unique codes -138/-139 (census used -130..-137).",
+    "negative_control": "A control build keeps the PRE-FIX call_at_frame_win64 bytes (pristine copy of mb_win_seh64_abi.c) with only the fixture bisect removed so the guard path runs; the same probe must FAIL there (either funclet-parity failure code or an alignment fault), proving the test detects the unfixed trampoline.",
+    "validation": "Family host validation (--host-only --entry --workers --seh64) run on the fixed tree twice for determinism, all green; 8-family combined validation re-run on a fresh graft of the fixed SEH64 files, all green; SDK ELF candidates re-composed compile-only; expected tiny ELF delta and unchanged import surface.",
+    "scope": "Host-route (Mach-O x86_64 under Rosetta) evidence only. No target/console evidence is created by this worker; the console-bound part of F-1 provenance stays as bounded by the survey review."
+  },
+  "non_claims": [
+    "Nothing PS5/target-executed; no console contact.",
+    "No claim that the shipped family receipts exercised the guard funclet path - the shipped fixture carried a 'BISECT-1: kit only' early return; this worker removes that bisect in the probe builds and states what the runs show.",
+    "No Windows ntdll/VCRUNTIME parity; no C++ EH, vectored handlers, signal->exception shim, or FP-state restore claims (documented ceilings unchanged).",
+    "No quality score above 8 anywhere; no AAA/full-parity claims."
+  ],
+  "deliverables_ordered": [
+    "CLAIM.json (this file, written first)",
+    "vendor/ (fixed copy of the seh64-family vendored tree)",
+    "negative-control/ (control tree keeping the pre-fix trampoline bytes)",
+    "diffs/ (unified diffs of every changed file vs the worker-seh64-family originals)",
+    "out-family-baseline/ out-family-fixed/ (family host validation receipts; fixed run twice for determinism)",
+    "out-negative-control/ (control receipt proving the new test bites on the pre-fix bytes)",
+    "out-sdk-family/ out-sdk-8fam/ (compile-only SDK ELF candidates + ELF delta receipts)",
+    "vendor-8fam/ (8-family combined tree with the fixed SEH64 grafts) + out-host-8fam/ (two deterministic runs)",
+    "OWNING-LINEAGE.md",
+    "REPORT.md (last)"
+  ],
+  "addendum_after_first_run": "Written after the first fixed-tree run failed and during debugging; the original\nclaims/bounds above are unchanged. Two additional latent defects in the inherited\nSEH64 tree (both provably never exercised before: the shipped fixture carried an\nunconditional 'BISECT-1: kit only' early return at worker-seh64.h that skipped\nevery raise past the walker kit, so the raise/dispatch/recover path had never run\nin any validated receipt of worker-seh64-family or worker-dll-8fam-combined --\ntheir receipts' claims that the full -130..-137 exercise ran are contradicted by\nthe shipped bytes):\nF-3: svc_raise_exception (the RaiseException substrate entry) captured ITS OWN\nframe, so the dispatch search pass always started at a driver-side frame with no\nunwind info and every exception went unhandled. Fixed OS-faithfully with a naked\nentry shim (svc_raise_exception) that captures the raise CALLER's context before\nany compiler frame exists (nonvolatiles live), rewrites rip/rsp to the caller's\ncall site, then calls the C dispatch body (svc_raise_body) and rets to the\ncaller. One software raise in flight at a time (static context); documented.\nF-4: __C_specific_handler scope-table handling did not match the actual\nclang x86_64-pc-windows-msvc encoding: __finally scopes are {Handler=finally\nfunclet, JumpTarget=0}, not {Handler=0}; the shipped code invoked finally\nfunclets as FILTERS on the search pass with a wrong PSP (corrupting live frames)\nand never ran them on the unwind pass. Fixed: finally scopes are skipped on\nsearch and invoked on unwind via a new two-argument control hook\n(call_at_frame2) that delivers the PSP in rdx (clang funclets read rdx; verified\nagainst emitted funclets: frame register = PSP + 0x20) -- the PSP is the frame's\ncall-site rsp, not the SET_FPREG establisher frame.\nNegative-control outcomes: with ONLY the trampoline bytes reverted (0x30->0x28,\n0x28(%rsi)->0x20(%rsi)), every control variant wedges the host driver\ndeterministically at the FIRST real filter-funclet invocation (the -138 SSE\nfilter guard): with the aligned-spill fixture the funclet's rsp-relative aligned\nmovaps is present (disassembly verified); even with all SSE removed the funclet\nstill does not return through the misaligned entry. The fixed tree runs the same\nfunclet green twice, deterministically.",
+  "deliverables_observed": {
+    "family_fixed_runs": [
+      "out-family-fixed (OWNED_CANDIDATE_HOST_CONTROLS_PASSED)",
+      "out-family-fixed2 (PASSED; evidence streams byte-identical modulo build_id)"
+    ],
+    "baseline_reproduction": "out-family-baseline (shipped bytes re-run: PASSED, evidence byte-equal to the worker-seh64-family receipt modulo build_id)",
+    "controls": [
+      "out-negative-control (full fixture + pre-fix bytes: FAILED, driver wedged at -138 filter invoke)",
+      "out-negative-control-probeonly / probeonly2 (control variants; same wedge)"
+    ],
+    "eight_family": [
+      "out-host-8fam + out-host-8fam2 (PASSED x2; 30 commands; evidence byte-identical modulo build_id AND byte-identical to the original worker-dll-8fam-combined receipt modulo build_id)"
+    ],
+    "sdk": [
+      "out-sdk-family (COMPILED_NOT_EXECUTED; +120 bytes vs baseline; import set identical)",
+      "out-sdk-8fam (COMPILED_NOT_EXECUTED; +120 bytes vs baseline; import set identical)",
+      "out-sdk-elf-delta.json"
+    ]
+  }
+}

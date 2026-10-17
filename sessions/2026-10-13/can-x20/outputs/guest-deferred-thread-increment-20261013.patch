@@ -1,0 +1,301 @@
+--- a/loader/include/guest_thread_manager.h
++++ b/loader/include/guest_thread_manager.h
+@@ -1,5 +1,5 @@
+-// Host-owned thread objects for attached guest PE batches. These objects are
+-// not published as kernel32 imports until guest pointer and loader-lock gates.
++// Host-owned thread objects for attached guest PE batches. Import publication
++// is a separate shim decision after guest pointer and loader-lock gates.
+ #ifndef CAP13_GUEST_THREAD_MANAGER_H
+ #define CAP13_GUEST_THREAD_MANAGER_H
+ 
+@@ -35,6 +35,11 @@
+                                              void*, void*);
+     explicit GuestThreadManager(GuestPeBatchResult& batch, StaticTlsBank& bank,
+                                 Runner runner = pe_run_guest_thread);
++    // Construct before process attach so DllMain-created workers can hold
++    // handles but cannot enter guest code until activate() sees a stable,
++    // fully attached batch. The batch must outlive all workers and quiesce.
++    explicit GuestThreadManager(StaticTlsBank& bank,
++                                Runner runner = pe_run_guest_thread);
+     ~GuestThreadManager();
+     GuestThreadManager(const GuestThreadManager&) = delete;
+     GuestThreadManager& operator=(const GuestThreadManager&) = delete;
+@@ -45,6 +50,11 @@
+                                    void* attributes = nullptr,
+                                    uint64_t stack_size = 0,
+                                    uint32_t flags = 0);
++    // Call after the attached batch has reached its stable output object.
++    // A failed attach should call abort_pending() instead. Activation is
++    // one-shot; invalid queued starts complete with InvalidStart.
++    bool activate(GuestPeBatchResult& batch);
++    bool abort_pending();
+     GuestThreadWaitStatus wait(uint64_t handle, uint32_t milliseconds);
+     GuestThreadQueryResult query(uint64_t handle);
+     bool close(uint64_t handle);
+--- a/loader/src/guest_thread_manager.cpp
++++ b/loader/src/guest_thread_manager.cpp
+@@ -5,6 +5,7 @@
+ #include <chrono>
+ #include <condition_variable>
+ #include <mutex>
++#include <new>
+ #include <thread>
+ #include <unordered_map>
+ #include <utility>
+@@ -33,16 +34,19 @@
+     {
+         uint32_t id = 0;
+         bool handle_open = true; // protected by Impl::mutex
++        void* start = nullptr;
++        void* argument = nullptr;
+         std::mutex mutex;
+         std::condition_variable cv;
+         bool finished = false;
+         GuestThreadRunResult run{};
+         std::thread worker;
+     };
+-    GuestPeBatchResult& batch;
++    GuestPeBatchResult* batch = nullptr;
+     StaticTlsBank& bank;
+     Runner runner;
+     std::mutex mutex;
++    bool deferred = false;
+     bool accepting = true;
+     bool quiescing = false;
+     bool quiesced = false;
+@@ -50,19 +54,58 @@
+     std::unordered_map<uint64_t, std::shared_ptr<Record>> handles;
+     std::vector<std::shared_ptr<Record>> records;
+ 
+-    Impl(GuestPeBatchResult& b, StaticTlsBank& k, Runner r)
+-        : batch(b), bank(k), runner(r) {}
++    Impl(GuestPeBatchResult* b, StaticTlsBank& k, Runner r)
++        : batch(b), bank(k), runner(r), deferred(!b) {}
+ 
+     bool valid_start(void* start) const
+     {
+-        if (!batch.ok || batch.modules.empty() || !start) return false;
++        if (!batch || !batch->ok || batch->modules.empty() || !start)
++            return false;
+         unsigned owners = 0;
+-        for (const auto& module : batch.modules)
++        for (const auto& module : batch->modules)
+         {
+             if (!module || !module->mapped_handle()) return false;
+             if (module->owns_executable_address(start)) ++owners;
+         }
+         return owners == 1;
++    }
++
++    void complete_without_worker(const std::shared_ptr<Record>& rec,
++                                 GuestThreadRunStatus status)
++    {
++        {
++            std::lock_guard<std::mutex> guard(rec->mutex);
++            rec->run = {status, 0};
++            rec->finished = true;
++        }
++        if (status != GuestThreadRunStatus::Ok) failed_worker = true;
++        rec->cv.notify_all();
++    }
++
++    bool launch(const std::shared_ptr<Record>& rec)
++    {
++        try
++        {
++            Impl* impl = this;
++            rec->worker = std::thread([impl, rec] {
++                GuestThreadRunResult result{GuestThreadRunStatus::StartFailed, 0};
++                try
++                {
++                    if (win32_bind_current_thread_id(rec->id))
++                        result = impl->runner(*impl->batch, impl->bank,
++                                              rec->start, rec->argument);
++                }
++                catch (...) { result = {GuestThreadRunStatus::StartFailed, 0}; }
++                {
++                    std::lock_guard<std::mutex> done_guard(rec->mutex);
++                    rec->run = result;
++                    rec->finished = true;
++                }
++                rec->cv.notify_all();
++            });
++            return true;
++        }
++        catch (...) { return false; }
+     }
+ 
+     void reap_closed_finished()
+@@ -88,7 +131,10 @@
+ 
+ GuestThreadManager::GuestThreadManager(GuestPeBatchResult& batch,
+                                        StaticTlsBank& bank, Runner runner)
+-    : m_(new Impl(batch, bank, runner)) {}
++    : m_(new Impl(&batch, bank, runner)) {}
++
++GuestThreadManager::GuestThreadManager(StaticTlsBank& bank, Runner runner)
++    : m_(new Impl(nullptr, bank, runner)) {}
+ 
+ GuestThreadManager::~GuestThreadManager()
+ {
+@@ -106,7 +152,8 @@
+     m_->reap_closed_finished();
+     if (attributes || stack_size || flags)
+         return {GuestThreadCreateStatus::UnsupportedOptions, 0, 0};
+-    if (!m_->runner || !m_->valid_start(start))
++    if (!m_->runner || !start ||
++        (!m_->deferred && !m_->valid_start(start)))
+         return {GuestThreadCreateStatus::InvalidStart, 0, 0};
+     const uint32_t id = win32_reserve_thread_id();
+     const uint64_t handle = reserve_handle();
+@@ -118,25 +165,13 @@
+     {
+         rec = std::make_shared<Impl::Record>();
+         rec->id = id;
++        rec->start = start;
++        rec->argument = argument;
+         m_->records.push_back(rec);
+         appended = true;
+         m_->handles.emplace(handle, rec);
+-        Impl* impl = m_.get();
+-        rec->worker = std::thread([impl, rec, start, argument] {
+-            GuestThreadRunResult result{GuestThreadRunStatus::StartFailed, 0};
+-            try
+-            {
+-                if (win32_bind_current_thread_id(rec->id))
+-                    result = impl->runner(impl->batch, impl->bank, start, argument);
+-            }
+-            catch (...) { result = {GuestThreadRunStatus::StartFailed, 0}; }
+-            {
+-                std::lock_guard<std::mutex> done_guard(rec->mutex);
+-                rec->run = result;
+-                rec->finished = true;
+-            }
+-            rec->cv.notify_all();
+-        });
++        if (!m_->deferred && !m_->launch(rec))
++            throw std::bad_alloc();
+     }
+     catch (...)
+     {
+@@ -145,6 +180,37 @@
+         return {GuestThreadCreateStatus::StartFailed, 0, 0};
+     }
+     return {GuestThreadCreateStatus::Ok, handle, id};
++}
++
++bool GuestThreadManager::activate(GuestPeBatchResult& batch)
++{
++    std::lock_guard<std::mutex> guard(m_->mutex);
++    if (!m_->deferred || !m_->accepting || !batch.ok ||
++        batch.modules.empty()) return false;
++    m_->batch = &batch;
++    m_->deferred = false;
++    for (const auto& rec : m_->records)
++    {
++        if (rec->finished || rec->worker.joinable()) continue;
++        if (!m_->valid_start(rec->start))
++            m_->complete_without_worker(rec, GuestThreadRunStatus::InvalidStart);
++        else if (!m_->launch(rec))
++            m_->complete_without_worker(rec, GuestThreadRunStatus::StartFailed);
++    }
++    return true;
++}
++
++bool GuestThreadManager::abort_pending()
++{
++    std::lock_guard<std::mutex> guard(m_->mutex);
++    if (!m_->deferred || !m_->accepting) return false;
++    m_->deferred = false;
++    m_->accepting = false;
++    for (const auto& rec : m_->records)
++        if (!rec->finished)
++            m_->complete_without_worker(rec, GuestThreadRunStatus::StartFailed);
++    m_->reap_closed_finished();
++    return true;
+ }
+ 
+ GuestThreadWaitStatus GuestThreadManager::wait(uint64_t handle,
+@@ -199,6 +265,14 @@
+         std::lock_guard<std::mutex> guard(m_->mutex);
+         if (m_->quiesced) return true;
+         if (m_->quiescing) return false;
++        if (m_->deferred)
++        {
++            m_->deferred = false;
++            for (const auto& rec : m_->records)
++                if (!rec->finished)
++                    m_->complete_without_worker(rec,
++                                                GuestThreadRunStatus::StartFailed);
++        }
+         for (const auto& rec : m_->records)
+             if (rec->worker.joinable() &&
+                 rec->worker.get_id() == std::this_thread::get_id())
+--- a/loader/tests/guest_pe_thread_test.cpp
++++ b/loader/tests/guest_pe_thread_test.cpp
+@@ -367,6 +367,65 @@
+               "closed failed worker remains visible before batch detach");
+         segment.allow_until = 1000;
+     }
++    {
++        blocked_started.store(false);
++        blocked_release.store(false);
++        cap13::GuestThreadManager manager(bank, blocked_runner);
++        auto pending = manager.create(start, nullptr);
++        auto closed = manager.create(start, nullptr);
++        check(pending.status == cap13::GuestThreadCreateStatus::Ok &&
++              closed.status == cap13::GuestThreadCreateStatus::Ok &&
++              pending.handle != closed.handle &&
++              !blocked_started.load() &&
++              manager.wait(pending.handle, 0) ==
++                  cap13::GuestThreadWaitStatus::Timeout,
++              "pre-attach CreateThread requests retain handles without entry");
++        check(manager.close(closed.handle) &&
++              manager.activate(batch),
++              "post-attach activation starts even a closed-handle worker");
++        while (!blocked_started.load()) std::this_thread::yield();
++        check(manager.wait(pending.handle, 0) ==
++                  cap13::GuestThreadWaitStatus::Timeout &&
++              !manager.activate(batch),
++              "active worker is waitable and batch activation is one-shot");
++        blocked_release.store(true);
++        check(manager.wait(pending.handle, 10000) ==
++                  cap13::GuestThreadWaitStatus::Object0 &&
++              manager.close(pending.handle) && manager.quiesce_all() &&
++              !manager.had_worker_failure(),
++              "deferred and closed-handle workers quiesce before detach");
++    }
++    {
++        cap13::GuestThreadManager manager(bank);
++        auto invalid = manager.create(reinterpret_cast<void*>(&ue4ss_initialized),
++                                      nullptr);
++        check(invalid.status == cap13::GuestThreadCreateStatus::Ok &&
++              manager.activate(batch) &&
++              manager.wait(invalid.handle, 10000) ==
++                  cap13::GuestThreadWaitStatus::Object0,
++              "invalid deferred start becomes a completed thread object");
++        auto result = manager.query(invalid.handle);
++        check(result.valid && result.finished &&
++              result.run.status == cap13::GuestThreadRunStatus::InvalidStart &&
++              manager.close(invalid.handle) && manager.quiesce_all() &&
++              manager.had_worker_failure(),
++              "invalid deferred start is reported without guest entry");
++    }
++    {
++        cap13::GuestThreadManager manager(bank);
++        auto pending = manager.create(start, nullptr);
++        check(pending.status == cap13::GuestThreadCreateStatus::Ok &&
++              manager.abort_pending() &&
++              manager.wait(pending.handle, 0) ==
++                  cap13::GuestThreadWaitStatus::Object0,
++              "failed attachment signals pending thread without starting it");
++        check(manager.query(pending.handle).run.status ==
++                  cap13::GuestThreadRunStatus::StartFailed &&
++              manager.create(start, nullptr).status ==
++                  cap13::GuestThreadCreateStatus::WrongState &&
++              manager.quiesce_all(),
++              "aborted manager refuses further starts and quiesces");
++    }
+     check(cap13::pe_detach_guest_batch(batch, main_teb),
+           "root DLL detaches after all worker threads join");
+     if (writable_rva)

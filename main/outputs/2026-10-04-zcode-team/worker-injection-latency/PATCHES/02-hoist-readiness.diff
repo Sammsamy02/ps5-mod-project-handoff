@@ -1,0 +1,45 @@
+--- a/main.c
++++ b/main.c
+@@ -774,9 +774,23 @@
+ 			notify("[%s] Injecting %d plugin(s)", entry->title_id, entry->path_count);
+ 
+ 			int all_ok = 1;
++
++			// readiness is a property of the process, not of a plugin: wait once
++			// per title with the strictest mode instead of once per plugin
++			int worst_mode = 0;
++			for (int p = 0; p < entry->path_count; p++)
++				if (!entry->dead[p] && entry->modes[p] > worst_mode)
++					worst_mode = entry->modes[p];
++
++			char needs[MAX_DEPS][MAX_DEP_NAME_LEN];
++			int  nneeds = collect_needs(needs, MAX_DEPS);
++			if (!wait_for_needs(pid, needs, nneeds, worst_mode,
++			                    (worst_mode == 2) ? 25000 : 18000)) {
++				notify("[%s] The case died while waiting", entry->title_id);
++				all_ok = 0;
++			}
+ 			for (int p = 0; p < entry->path_count; p++) {
+ 				const char* path = entry->paths[p];
+-				int         mode = entry->modes[p];
+ 
+ 				if (entry->dead[p])
+ 					continue;
+@@ -791,17 +805,6 @@
+ 					continue;
+ 				}
+ 
+-				int         max_ms = (mode == 2) ? 25000 : 18000;
+-
+-				char needs[MAX_DEPS][MAX_DEP_NAME_LEN];
+-				int  nneeds = collect_needs(needs, MAX_DEPS);
+-
+-				if (!wait_for_needs(pid, needs, nneeds, mode, max_ms)) {
+-					notify("[%s] The case died while waiting '%s'", entry->title_id, get_filename(path));
+-					all_ok = 0;
+-					break;
+-				}
+-
+ 				if (pt_attach(pid) < 0) {
+ 					notify("[%s] Attach failed for '%s'", entry->title_id, get_filename(path));
+ 					all_ok = 0;

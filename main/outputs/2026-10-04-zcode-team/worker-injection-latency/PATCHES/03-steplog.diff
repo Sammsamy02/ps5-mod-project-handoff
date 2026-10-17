@@ -1,0 +1,41 @@
+--- a/main.c
++++ b/main.c
+@@ -572,6 +572,22 @@
+ 	struct timespec n;
+ 	clock_gettime(CLOCK_MONOTONIC, &n);
+ 	return (n.tv_sec - g_t0.tv_sec) * 1000L + (n.tv_nsec - g_t0.tv_nsec) / 1000000L;
++}
++
++#define STEPLOG_PATH "/data/plugins/ploader.log"
++
++// append-only step log: injection timing that survives reboot (toasts do not)
++static void steplog(const char* fmt, ...) {
++	FILE* f = fopen(STEPLOG_PATH, "a");
++	if (!f)
++		return;
++	fprintf(f, "[%ldms] ", now_ms());
++	va_list ap;
++	va_start(ap, fmt);
++	vfprintf(f, fmt, ap);
++	va_end(ap);
++	fputc('\n', f);
++	fclose(f);
+ }
+ 
+ ////////// INI PARSER //////////
+@@ -772,6 +788,7 @@
+ 			if (!entry || entry->injected) continue;
+ 
+ 			notify("[%s] Injecting %d plugin(s)", entry->title_id, entry->path_count);
++			steplog("[%s] injecting %d plugin(s)", entry->title_id, entry->path_count);
+ 
+ 			int all_ok = 1;
+ 
+@@ -830,6 +847,7 @@
+ 					notify("[%s] OK (%ldms): %s", entry->title_id, dt, get_filename(path));
+ 				else
+ 					notify("[%s] FAIL (%ldms): %s", entry->title_id, dt, get_filename(path));
++				steplog("[%s] %s (%ldms): %s", entry->title_id, ok ? "OK" : "FAIL", dt, get_filename(path));
+ 
+ 				restore_creds(ucred, &saved, pid);
+ 				pt_detach(pid);

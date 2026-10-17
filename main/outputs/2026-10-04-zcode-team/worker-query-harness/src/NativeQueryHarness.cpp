@@ -1,0 +1,447 @@
+// Quoted include: resolves next to this file so the extra-unit compile needs
+// no include-path addition beyond the build_runtime.py template.
+#include "NativeQueryHarness.hpp"
+
+// See NativeQueryHarness.hpp for the milestone contract. Implementation notes:
+//  * The ONLY writer of record_ is the accepted game-thread Tick path
+//    (identity checks admit exactly one thread), guarded by the seqlock.
+//  * Refusal paths never touch record_; they only advance diagnostic
+//    counters, so a refusal can never publish or corrupt a partial record.
+//  * An engine read that faults or throws inside the noexcept Tick entry
+//    terminates the process by design: masking a real engine fault would be
+//    dishonest evidence for this milestone.
+
+#include <atomic>
+#include <cstring>
+#include <stdexcept>
+#include <thread>
+
+#if !defined(NATIVE_QUERY_HARNESS_HOST_TEST)
+#include <functional>
+#include <Unreal/UnrealInitializer.hpp>
+#include <Unreal/UObjectArray.hpp>
+#endif
+
+namespace RC::Platform::QueryHarness
+{
+#if !defined(NATIVE_QUERY_HARNESS_HOST_TEST)
+    namespace
+    {
+        auto target_is_game_thread_initialized() noexcept -> bool
+        {
+            return RC::Unreal::IsGameThreadInitialized();
+        }
+        auto target_is_in_game_thread_raw() noexcept -> bool
+        {
+            return RC::Unreal::IsInGameThreadRaw();
+        }
+        auto target_game_thread_id_key() noexcept -> uint64_t
+        {
+            if (!RC::Unreal::IsGameThreadInitialized()) return 0;
+            return static_cast<uint64_t>(std::hash<std::thread::id>{}(RC::Unreal::GetGameThreadIdRaw()));
+        }
+        auto target_read_num_elements() -> int32_t
+        {
+            return RC::Unreal::UObjectArray::GetNumElements();
+        }
+    }
+
+    auto MakeDefaultEngineBindings() noexcept -> EngineBindings
+    {
+        return EngineBindings{
+            &target_is_game_thread_initialized,
+            &target_is_in_game_thread_raw,
+            &target_game_thread_id_key,
+            &target_read_num_elements,
+            CountSourceKind::EngineUObjectArray,
+            StorageLayout::Unknown, // informational; the S2 gate facts carry the validated storage claim
+        };
+    }
+#endif
+
+    auto Harness::InstallEngineBindings(const EngineBindings& bindings) -> void
+    {
+        if (bindings_installed_) throw std::logic_error{"QueryHarness engine bindings already installed for this loaded lifetime"};
+        if (!bindings.is_game_thread_initialized || !bindings.is_in_game_thread_raw ||
+            !bindings.game_thread_id_key || !bindings.read_num_elements)
+            throw std::logic_error{"QueryHarness engine bindings require all four probes"};
+        if (bindings.count_source_kind != CountSourceKind::EngineUObjectArray &&
+            bindings.count_source_kind != CountSourceKind::Synthetic)
+            throw std::logic_error{"QueryHarness engine bindings require a bound or synthetic count source"};
+        bindings_ = bindings;
+        bindings_installed_ = true;
+    }
+
+    auto Harness::InstallDefaultEngineBindings() -> void
+    {
+#if defined(NATIVE_QUERY_HARNESS_HOST_TEST)
+        // No engine code exists in a host build; refusing beats a silent stub.
+        throw std::logic_error{"QueryHarness default engine bindings are unavailable in host-test builds"};
+#else
+        InstallEngineBindings(MakeDefaultEngineBindings());
+#endif
+    }
+
+    auto Harness::ArmLayoutGate(const LayoutGateFacts& facts) -> void
+    {
+        if (gate_armed_) throw std::logic_error{"QueryHarness layout gate is already armed for this loaded lifetime"};
+        if (facts.engine_major == 0 || facts.engine_minor == 0)
+            throw std::logic_error{"QueryHarness layout gate requires resolved engine identity"};
+        size_t length = 0;
+        while (length < kSourceLabelCapacity && facts.source[length] != '\0') ++length; // bounded strnlen
+        if (length == 0 || length >= kSourceLabelCapacity)
+            throw std::logic_error{"QueryHarness layout gate requires a bounded non-empty provenance label"};
+        if (facts.non_shipping > 1 || facts.stats > 1)
+            throw std::logic_error{"QueryHarness layout gate axes must be 0/1 facts"};
+        gate_facts_ = facts;
+        gate_armed_ = true;
+    }
+
+    auto Harness::DisarmLayoutGate() noexcept -> void
+    {
+        gate_armed_ = false;
+    }
+
+    auto Harness::record_refusal(QueryStatus refusal) noexcept -> void
+    {
+        const auto index = static_cast<uint32_t>(refusal) - 1;
+        if (index < kRefusalStatusCount) refusals_[index].fetch_add(1, std::memory_order_relaxed);
+        last_refusal_.store(refusal, std::memory_order_relaxed);
+        last_refusal_sequence_.store(ticks_dispatched_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        // No-Tick-leak rule: discard any staged first count so the recorded
+        // pair always comes from consecutive accepted Ticks under a
+        // continuously-open gate. The query record is never touched here.
+        if (phase_.load(std::memory_order_relaxed) == Phase::AwaitSecondCount)
+        {
+            staged_count_ = 0;
+            staged_key_ = 0;
+            staged_tick_ = 0;
+            staged_resets_.fetch_add(1, std::memory_order_relaxed);
+            phase_.store(Phase::Idle, std::memory_order_release);
+        }
+    }
+
+    auto Harness::begin_write() noexcept -> uint32_t
+    {
+        const uint32_t version = version_.load(std::memory_order_relaxed);
+        version_.store(version + 1, std::memory_order_relaxed); // odd: write in progress
+        return version;
+    }
+
+    auto Harness::end_write(uint32_t version) noexcept -> void
+    {
+        version_.store(version + 2, std::memory_order_release);
+    }
+
+    auto Harness::publish_terminal(QueryStatus status, uint8_t counts_recorded, int64_t first,
+                                   int64_t second, MonotonicVerdict verdict, uint64_t key,
+                                   uint8_t identity_checks) noexcept -> void
+    {
+        const uint32_t version = begin_write();
+        record_.status = status;
+        record_.monotonic = verdict;
+        record_.storage = gate_facts_.storage;
+        record_.count_source = bindings_.count_source_kind;
+        record_.counts_recorded = counts_recorded;
+        record_.identity_checks = identity_checks;
+        record_.engine_major = gate_facts_.engine_major;
+        record_.engine_minor = gate_facts_.engine_minor;
+        record_.axes_non_shipping = gate_facts_.non_shipping;
+        record_.axes_stats = gate_facts_.stats;
+        record_.threshold = kMinimumPlausibleElementCount;
+        record_.game_thread_id_key = key;
+        record_.ticks_dispatched = ticks_dispatched_.load(std::memory_order_relaxed);
+        record_.ticks_accepted = ticks_accepted_.load(std::memory_order_relaxed);
+        // 0 by construction: any refusal between the two reads discards the
+        // staged count and restarts the pair.
+        record_.refusals_between_counts = 0;
+        record_.count_first = first;
+        record_.count_second = second;
+        record_.count_delta = second - first;
+        std::memcpy(record_.gate_source, gate_facts_.source, kSourceLabelCapacity);
+        end_write(version);
+        phase_.store(Phase::Terminal, std::memory_order_release);
+        status_.store(status, std::memory_order_relaxed);
+    }
+
+    auto Harness::OnEngineTickDispatch() noexcept -> QueryStatus
+    {
+        ticks_dispatched_.fetch_add(1, std::memory_order_relaxed);
+        const Phase current = phase_.load(std::memory_order_acquire);
+        if (current == Phase::Terminal) return status_.load(std::memory_order_relaxed);
+
+        // Distinct refusal checks, cheapest honest order. None of them can
+        // leave pending work (see record_refusal).
+        if (!bindings_installed_) { record_refusal(QueryStatus::RefusedBindingsAbsent); return QueryStatus::RefusedBindingsAbsent; }
+        if (!gate_armed_) { record_refusal(QueryStatus::RefusedLayoutGateClosed); return QueryStatus::RefusedLayoutGateClosed; }
+        if (!bindings_.is_game_thread_initialized()) { record_refusal(QueryStatus::RefusedIdentityUnknown); return QueryStatus::RefusedIdentityUnknown; }
+        if (!bindings_.is_in_game_thread_raw()) { record_refusal(QueryStatus::RefusedWrongThread); return QueryStatus::RefusedWrongThread; }
+        const uint64_t key = bindings_.game_thread_id_key();
+        if (key == 0) { record_refusal(QueryStatus::RefusedIdentityUnknown); return QueryStatus::RefusedIdentityUnknown; }
+        if (current == Phase::AwaitSecondCount && key != staged_key_)
+        {
+            // The published identity changed between the two reads; the pair
+            // is not consecutive on one identity. Refuse and restart.
+            record_refusal(QueryStatus::RefusedWrongThread);
+            return QueryStatus::RefusedWrongThread;
+        }
+
+        const int64_t count = static_cast<int64_t>(bindings_.read_num_elements());
+        ticks_accepted_.fetch_add(1, std::memory_order_relaxed);
+
+        if (current == Phase::Idle)
+        {
+            if (count <= static_cast<int64_t>(kMinimumPlausibleElementCount))
+            {
+                // Inconclusive-not-refuted: below the initializer's own
+                // post-construction heuristic threshold.
+                publish_terminal(QueryStatus::InconclusiveBelowThreshold, 1, count, 0,
+                                 MonotonicVerdict::Unknown, key, 1);
+                return QueryStatus::InconclusiveBelowThreshold;
+            }
+            staged_count_ = count;
+            staged_key_ = key;
+            staged_tick_ = ticks_accepted_.load(std::memory_order_relaxed);
+            phase_.store(Phase::AwaitSecondCount, std::memory_order_release);
+            return QueryStatus::Pending;
+        }
+
+        // Phase::AwaitSecondCount: the consecutive accepted Tick.
+        const int64_t first = staged_count_;
+        const MonotonicVerdict verdict = count == first ? MonotonicVerdict::Equal
+            : (count > first ? MonotonicVerdict::NonDecreasing : MonotonicVerdict::Decreasing);
+        const QueryStatus status = count <= static_cast<int64_t>(kMinimumPlausibleElementCount)
+            ? QueryStatus::InconclusiveBelowThreshold
+            : QueryStatus::Completed;
+        publish_terminal(status, 2, first, count, verdict, key, 2);
+        return status;
+    }
+
+    auto Harness::TrySnapshot(QueryResultRecord& out) const noexcept -> bool
+    {
+        for (int attempt = 0; attempt < kSnapshotMaxRetries; ++attempt)
+        {
+            const uint32_t before = version_.load(std::memory_order_acquire);
+            if (before % 2 == 0)
+            {
+                QueryResultRecord copy = record_;
+                if (version_.load(std::memory_order_acquire) == before)
+                {
+                    const bool terminal = copy.status == QueryStatus::InconclusiveBelowThreshold ||
+                                          copy.status == QueryStatus::Completed;
+                    if (terminal && copy.magic == kRecordMagic && copy.record_size == sizeof(QueryResultRecord))
+                    {
+                        out = copy;
+                        return true;
+                    }
+                    return false; // no terminal record exists right now
+                }
+            }
+            std::this_thread::yield(); // bounded retry; writer finishes in bounded steps
+        }
+        return false;
+    }
+
+    auto Harness::SnapshotDispatchCounters() const noexcept -> DispatchCounters
+    {
+        DispatchCounters counters{};
+        counters.ticks_dispatched = ticks_dispatched_.load(std::memory_order_relaxed);
+        counters.ticks_accepted = ticks_accepted_.load(std::memory_order_relaxed);
+        counters.refused_bindings_absent = refusals_[0].load(std::memory_order_relaxed);
+        counters.refused_layout_gate_closed = refusals_[1].load(std::memory_order_relaxed);
+        counters.refused_identity_unknown = refusals_[2].load(std::memory_order_relaxed);
+        counters.refused_wrong_thread = refusals_[3].load(std::memory_order_relaxed);
+        counters.staged_resets = staged_resets_.load(std::memory_order_relaxed);
+        counters.last_refusal = last_refusal_.load(std::memory_order_relaxed);
+        counters.last_refusal_sequence = last_refusal_sequence_.load(std::memory_order_relaxed);
+        return counters;
+    }
+
+    auto Harness::phase() const noexcept -> Phase
+    {
+        return phase_.load(std::memory_order_acquire);
+    }
+
+    auto Harness::ResetForHostTest() noexcept -> void
+    {
+        // Test/teardown only; NOT synchronized with concurrent Tick
+        // dispatch, but the record rewrite stays under the seqlock with a
+        // monotonic version so a concurrent snapshot never observes a torn
+        // reset (it either sees the old terminal record or the pristine one).
+        const uint32_t version = begin_write();
+        record_ = QueryResultRecord{};
+        end_write(version);
+        staged_count_ = 0;
+        staged_key_ = 0;
+        staged_tick_ = 0;
+        phase_.store(Phase::Idle, std::memory_order_relaxed);
+        status_.store(QueryStatus::Pending, std::memory_order_relaxed);
+        bindings_ = EngineBindings{};
+        bindings_installed_ = false;
+        gate_facts_ = LayoutGateFacts{};
+        gate_armed_ = false;
+        ticks_dispatched_.store(0, std::memory_order_relaxed);
+        ticks_accepted_.store(0, std::memory_order_relaxed);
+        for (auto& slot : refusals_) slot.store(0, std::memory_order_relaxed);
+        staged_resets_.store(0, std::memory_order_relaxed);
+        last_refusal_.store(QueryStatus::Pending, std::memory_order_relaxed);
+        last_refusal_sequence_.store(0, std::memory_order_relaxed);
+    }
+
+    auto Global() -> Harness&
+    {
+        static Harness instance{};
+        return instance;
+    }
+
+    namespace
+    {
+        // Allocation-free bounded writer for the off-thread JSONL formatter.
+        struct LineWriter
+        {
+            char* data{};
+            size_t capacity{};
+            size_t length{0};
+            bool overflow{false};
+
+            auto raw(char c) noexcept -> void
+            {
+                if (length + 1 >= capacity) { overflow = true; return; }
+                data[length++] = c;
+            }
+            auto text(const char* s) noexcept -> void
+            {
+                while (*s) raw(*s++);
+            }
+            auto unsigned_decimal(uint64_t value) noexcept -> void
+            {
+                char digits[20];
+                int n = 0;
+                do { digits[n++] = static_cast<char>('0' + value % 10); value /= 10; } while (value);
+                while (n) raw(digits[--n]);
+            }
+            auto signed_decimal(int64_t value) noexcept -> void
+            {
+                if (value < 0)
+                {
+                    raw('-');
+                    unsigned_decimal(0 - static_cast<uint64_t>(value));
+                }
+                else unsigned_decimal(static_cast<uint64_t>(value));
+            }
+            auto hex(uint64_t value) noexcept -> void
+            {
+                text("0x");
+                for (int shift = 60; shift >= 0; shift -= 4)
+                {
+                    const uint64_t nibble = (value >> shift) & 0xF;
+                    raw(nibble < 10 ? static_cast<char>('0' + nibble) : static_cast<char>('a' + nibble - 10));
+                }
+            }
+            auto field_u64(const char* name, uint64_t value) noexcept -> void { text("\""); text(name); text("\":"); unsigned_decimal(value); }
+            auto field_i64(const char* name, int64_t value) noexcept -> void { text("\""); text(name); text("\":"); signed_decimal(value); }
+            auto field_str(const char* name, const char* value) noexcept -> void { text("\""); text(name); text("\":\""); text(value); text("\""); }
+            auto finish() noexcept -> size_t
+            {
+                if (overflow) return 0;
+                data[length] = '\0';
+                return length;
+            }
+        };
+    }
+
+    auto StatusName(QueryStatus status) noexcept -> const char*
+    {
+        switch (status)
+        {
+        case QueryStatus::Pending: return "pending";
+        case QueryStatus::RefusedBindingsAbsent: return "refused_bindings_absent";
+        case QueryStatus::RefusedLayoutGateClosed: return "refused_layout_gate_closed";
+        case QueryStatus::RefusedIdentityUnknown: return "refused_identity_unknown";
+        case QueryStatus::RefusedWrongThread: return "refused_wrong_thread";
+        case QueryStatus::InconclusiveBelowThreshold: return "inconclusive_below_threshold";
+        case QueryStatus::Completed: return "completed";
+        }
+        return "unknown_status";
+    }
+
+    auto MonotonicName(MonotonicVerdict verdict) noexcept -> const char*
+    {
+        switch (verdict)
+        {
+        case MonotonicVerdict::Equal: return "equal";
+        case MonotonicVerdict::NonDecreasing: return "non_decreasing";
+        case MonotonicVerdict::Decreasing: return "decreasing";
+        case MonotonicVerdict::Unknown: break;
+        }
+        return "unknown";
+    }
+
+    auto StorageName(StorageLayout storage) noexcept -> const char*
+    {
+        switch (storage)
+        {
+        case StorageLayout::FixedArray: return "fixed_array";
+        case StorageLayout::ChunkedArray: return "chunked_array";
+        case StorageLayout::Unknown: break;
+        }
+        return "unknown";
+    }
+
+    auto CountSourceName(CountSourceKind kind) noexcept -> const char*
+    {
+        switch (kind)
+        {
+        case CountSourceKind::EngineUObjectArray: return "engine_uobject_array";
+        case CountSourceKind::Synthetic: return "synthetic";
+        case CountSourceKind::Unbound: break;
+        }
+        return "unbound";
+    }
+
+    auto FormatRecordJsonLine(const QueryResultRecord& record, char (&out)[kJsonLineCapacity]) noexcept -> size_t
+    {
+        LineWriter writer{out, kJsonLineCapacity, 0, false};
+        writer.text("{\"record\":\"native_query_harness\",\"magic\":\"NQH1\",\"status\":\"");
+        writer.text(StatusName(record.status));
+        writer.text("\",\"engine\":\"");
+        writer.unsigned_decimal(record.engine_major);
+        writer.text(".");
+        writer.unsigned_decimal(record.engine_minor);
+        writer.text("\",\"axes\":{\"non_shipping\":");
+        writer.unsigned_decimal(record.axes_non_shipping);
+        writer.text(",\"stats\":");
+        writer.unsigned_decimal(record.axes_stats);
+        writer.text("},\"storage\":\"");
+        writer.text(StorageName(record.storage));
+        writer.text("\",\"count_source\":\"");
+        writer.text(CountSourceName(record.count_source));
+        writer.text("\",\"game_thread_id_key\":\"");
+        writer.hex(record.game_thread_id_key);
+        writer.text("\",\"counts\":{\"first\":");
+        writer.signed_decimal(record.count_first);
+        writer.text(",\"second\":");
+        writer.signed_decimal(record.count_second);
+        writer.text(",\"recorded\":");
+        writer.unsigned_decimal(record.counts_recorded);
+        writer.text("}");
+        writer.text(",");
+        writer.field_i64("delta", record.count_delta);
+        writer.text(",\"monotonic\":\"");
+        writer.text(MonotonicName(record.monotonic));
+        writer.text("\",\"identity_checks\":");
+        writer.unsigned_decimal(record.identity_checks);
+        writer.text(",");
+        writer.field_u64("threshold", record.threshold);
+        writer.text(",\"ticks\":{\"dispatched\":");
+        writer.unsigned_decimal(record.ticks_dispatched);
+        writer.text(",\"accepted\":");
+        writer.unsigned_decimal(record.ticks_accepted);
+        writer.text(",\"refusals_between\":");
+        writer.unsigned_decimal(record.refusals_between_counts);
+        writer.text("},\"gate_source\":\"");
+        writer.text(record.gate_source);
+        writer.text("\"}");
+        return writer.finish();
+    }
+}

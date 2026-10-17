@@ -1,0 +1,53 @@
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  writer=failline pid=317 t=60004266ms (first stamp for this pid)
+  writer=supplier-diag-jsonl (t_ms, monotonic-ms; same writer — deltas valid):
+    module_start_entered t=60003456 (first t_ms)
+    entry_incoming_sp_mod16 t=60003460 +4ms
+    entry_call_sp_mod16 t=60003461 +1ms
+    constructor_count t=60003463 +2ms
+    import_validation_begin t=60003464 +1ms
+    import_validation_missing_count t=60003466 +2ms
+    constructor_begin t=60003470 +4ms
+    ctor-1 t=60003471 +1ms
+    constructor_return t=60003473 +2ms
+    constructor_begin t=60003474 +1ms
+    ctor-2 t=60003476 +2ms
+    constructor_return t=60003477 +1ms
+    constructor_begin t=60003479 +2ms
+    constructor_return t=60003480 +1ms
+    constructor_begin t=60003481 +1ms
+    constructor_return t=60003484 +3ms
+    constructor_begin t=60003486 +2ms
+    constructor_return t=60003487 +1ms
+    constructor_begin t=60003489 +2ms
+    constructor_return t=60003490 +1ms
+    constructor_begin t=60003492 +2ms
+    constructor_return t=60003493 +1ms
+    constructor_begin t=60003494 +1ms
+    constructor_return t=60003496 +2ms
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 1 (diag_channel_open_failed/-22: 0) [r4-prefixed: 1]
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: events=548 pid_first=317 start_ok=0 start_failed=1 lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1 vmentry=22761 cfg_gamedir=1 (single-writer t_ms sequence above)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  supplier-diag: S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S4_LEASE_REG -> S5_IDENTITY_ANCHORS -> S6_CONVERSION -> S11_STOP
+  ue4ss-text:    S9_START_ACK
+  note: S7_CFG_ATTACH appears before S4/S5 — bridge_exepath_source is emitted mid-walk by the bridge (before anchors/lease); first-seen order is correct, only the stage numbering looks out of order (display quirk, no misattribution)
+terminal/attributed stage hits:
+  [S9_START_ACK] failure line without a pinned detail string (raw line is the evidence)
+     modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad.ini must be ASCII text without control bytes
+
+notable lines (verbatim, capped):
+  [ue4ss] modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad.ini must be ASCII text without control bytes
+
+VERDICT: FAILED_code3
+NEXT: Bridge failure line present. Stage codes 1-4 = CONVERSION/CONTEXT/START/INTERNAL (bridge.h:36-41); MRS_ERR_STOP_EXN is 5 post-r13. Raw line above is the evidence; report verbatim; do not re-stage on this signature alone.
+{"verdict":"FAILED_code3","stage_chain":"S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S4_LEASE_REG -> S5_IDENTITY_ANCHORS -> S6_CONVERSION -> S11_STOP","failure_lines":1,"diag22":0,"gmalloc":0,"shape_a":0,"seeds_refuted":0,"stage_tags":0,"bridge_cfg":0,"observer":{"start_ok":0,"start_failed":0,"stop_result":0},"progress":0,"mod_load_lines":0,"igw":0,"crash_tail":0,"entry4_lines":1,"pathtest_stamps":0,"pathtest_open_failed":0,"diag_lines":0,"xwp_mirror":0,"status":{"present":false,"session_pid":"","session_ms":"","fresh":"unknown","last_state":"","last_code":"","ladder":""},"sizes":{"ue4ss":7732,"entry":0,"xwp":0,"sdiag":81704,"baselines":{"ue4ss":7591,"entry":2343756,"status":169,"xwp":4362,"session_pid":273,"session_ms":44372083}},"config":"shortest-2plugin-1216aab6"}

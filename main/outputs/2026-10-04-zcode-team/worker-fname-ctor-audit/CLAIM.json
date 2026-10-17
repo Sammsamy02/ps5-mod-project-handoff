@@ -1,0 +1,91 @@
+{
+  "worker": "worker-fname-ctor-audit",
+  "date": "2026-10-04",
+  "scope": "FName construction on PROSPERO: port resolution chain, exec-only scan status, offline pool derivation from the frozen capture, FindFirstOf verdict + remedy design. Host/offline analysis only; no console contact; no nested subagents; no engine execution.",
+  "capture": {
+    "path": ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+    "sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+    "note": "sha256 re-verified this session; matches worker-2-layout-facts profile E-capture"
+  },
+  "claims": [
+    {
+      "id": "A",
+      "claim": "The port's FName string ctor silently no-ops when ConstructorInternal is unbound: NameTypes.hpp construct_with_string returns early leaving ComparisonIndex=0 (NAME_None). FindFirstOf then harmlessly matches nothing; a negative result is ambiguous.",
+      "citations": [
+        "ue4ss-unreal-native-build-1/port/unreal/include/Unreal/NameTypes.hpp:246-248 (early return), :218 (ComparisonIndex{} init), :319-327 (ctor default FNAME_Add)",
+        "ue4ss-unreal-native-build-1/port/first/include/Function/Function.hpp:57-63 (assign_address(nullptr) -> m_is_ready=false)",
+        "worker-rung3-reflection-prep/REPORT.md:41-47 (same hazard, independently traced)"
+      ]
+    },
+    {
+      "id": "B",
+      "claim": "On PROSPERO the ONLY port mechanisms that could bind FName::ConstructorInternal are (1) a Lua AOB script UE4SS_Signatures/FName_Constructor.lua via ScanOverrides, or (2) an optional 'native ps_scan backend' that is declared optional and not wired. No signature container is built in-tree; without the Lua script results.fname_ctor_wchar stays 0 and assign_address(0) leaves the Function not-ready.",
+      "citations": [
+        "port/unreal/src/UnrealInitializer.cpp:842-845 (second-pass assign), :863-872 (scan only if override absent)",
+        "port/unreal/src/Signatures.cpp:107-111 (ctor container ONLY from ScanOverrides)",
+        "port/ue4ss/src/Signatures.cpp:222-285 (Lua script override; VerifyFNameConstructor + FName(\"ByteProperty\", FNAME_Find, address) probe at :242-248)",
+        "port/ue4ss/include/Platform/NativeProgramContext.hpp:64-66 ('Optional concrete scanner owner for the selected native ps_scan backend')",
+        "port/ue4ss/src/UE4SSProgram.cpp:964 (scanner_source passthrough)"
+      ]
+    },
+    {
+      "id": "C",
+      "claim": "Any in-game code scan is exec-blocked: the eboot text span [0x400000,0x787c000) maps prot=0x4 (PS5 PROT_EXEC) in the igf6 vmmap; data spans are prot=1/3 (readable). Code-pattern scans (patternsleuth FNameCtorWchar, Lua AOB, detour-based VerifyFNameConstructor) all join the exec-only dead list. The frozen offline survey already returned fname_ctor_original status=3 (absent) and the FName::ToString anchor absent.",
+      "citations": [
+        "worker-parser-validation/run2/igf6-results.parsed.jsonl (g5_vmmap: 0x400000-0x787c000 prot 0x4)",
+        "worker-parser-validation/run2/igf6-results.parsed.jsonl (igf3 v1_vmmap_full prot histogram; v1_vmmap_raw records)",
+        "worker-2-layout-facts/profiles/townfall-ps5-ue56.profile.json:198-250 (fname_ctor_original status=3; fname_to_string status=3; fname_ctor_call_candidate 0x23d590)",
+        "worker-checkpoint-reconcile/CURRENT-STATE.md:9 (code-anchor byte-read blocked; leading hypothesis exec-only)"
+      ]
+    },
+    {
+      "id": "D",
+      "claim": "No in-game record pins the FName pool. igf/anchor records cover vmmap, module list, layout predicates and GUA array-header words only; no class or name strings were ever read in-game.",
+      "citations": [
+        "worker-rung3-reflection-prep/REPORT.md:70-77 (no class names in retained records)",
+        "worker-anchor-validation/REPORT.md:75 (GUA read = array-header words)",
+        "worker-checkpoint-reconcile/CURRENT-STATE.md:7 (GUA layout A, 0x97ba110, 71,959 objects)"
+      ]
+    },
+    {
+      "id": "E",
+      "claim": "Offline derivation from the frozen capture (no symbols: section-table header offset 0x6f48a0a8 is beyond EOF; program headers only): the FName ctor candidate 0x23d590 (55 48 89 e5 53 50 48 89 f0 48 89 fb..., rdi=sret/rsi=wchar_t*/edx=mode) chains 0x23d590 -> 0x23d600 -> 0x23e0d0 -> 0x242470, and 0x242470 LEAs the FNamePool singleton at file-image vaddr 0x9365ec0 (runtime 0x9765ec0 with the observed uniform 0x400000 base).",
+      "citations": [
+        "this worker's capstone disasm of capture vaddrs 0x23d590, 0x23d600 (+0x23d60e mov rbx,[rip+0x8ef48f3]), 0x23e0d0, 0x242470",
+        "0x242470: lea rax,[0x9365ec0]+call 0x23a5d0 (init, 0x2424c7-0x2424d7); lea rax,[0x9365ec0]+call 0x23c0b0 (FNAME_Find, 0x2424ee-0x2424fe); lea rcx,[0x9365ec0]; shl rax,6; lea rdi,[rax+rcx+0x10040]+call 0x23c340 (insert probe, 0x24252e-0x242550)"
+      ]
+    },
+    {
+      "id": "F",
+      "claim": "Layout corroboration of the 0x9365ec0 pool: init fn 0x23a5d0(rdi=pool) stores first block ptr at pool+0x10, sets up hash tables at pool+0x10040 and pool+0x14040, and interning of bootstrap strings 'None' (0x7b96c17), 'ByteProperty' (0x7abcd83), 'IntProperty' (0x7bfb4f8) with ids stored at pool+0x14040/0x14044. Find fn 0x23c0b0 reads [pool+0x10] (Blocks) and [pool+0x18] (Blocks[1]); insert fn 0x23c340 reads [pool+0xc] (CurrentByteOffset) and [pool+0x10] (Blocks[0]). This matches FNameEntryAllocator = Lock@0x0, CurrentBlock@0x8, CurrentByteOffset@0xC, Blocks[8192]@0x10 and the port's own constants (NameTypes.hpp:154-159).",
+      "citations": [
+        "this worker's disasm of 0x23a5d0 (mov [rbx+0x10],rax at 0x23a625; lea r14,[rbx+0x10040] at 0x23a618; lea r15,[rbx+0x14040] at 0x23a656; mov dword [rbx+0x14040],eax at 0x23a727)",
+        "this worker's disasm of 0x23c0b0 (mov r14,[rbx+0x10] at 0x23c1b2) and 0x23c340 (mov r13d,[rbx+0xc] at 0x23c359; mov r14,[rbx+0x10] at 0x23c361)",
+        "capture bytes: 0x7b96c17='None', 0x7abcd83='ByteProperty', 0x7bfb4f8='IntProperty'",
+        "port/unreal/src/Signatures.cpp:243-248 comment ('ByteProperty is a hardcoded EName, registered by the name pool itself')"
+      ]
+    },
+    {
+      "id": "G",
+      "claim": "VERDICT: FindFirstOf(\"ItemDatabaseSubsystem\") can NOT work after composition-6 as composed today. It depends on exactly one missing fact: a bound, validated engine FName ctor. Remedy option 1 (preferred, minimal): carry the runtime ctor candidate 0x63d590 (= image base 0x400000 + file-image 0x23d590) in the composition, bind it via FName::ConstructorInternal/FunctionAddressOverride (port ABI already void(FName*, const wchar_t*, EFindName), NameTypes.hpp:228-235), and validate BEHAVIORALLY in-game with FNAME_Find(\"ByteProperty\") returning a nonzero id that must equal the independently read pool-stored id at pool+0x14044. In-game validation must be data-side only (code reads are exec-blocked), using the derived pool at 0x9765ec0: CurrentBlock(u32 @+0x8) >= 1, Blocks[0](@+0x10) nonzero heap pointer, entry 0 string = 'None'. Remedy option 2 (no engine call at all): data-side FindFirstOf - resolve the target name id by walking pool blocks (readable RW), then scan GUA 71,959 objects comparing UObjectBase NamePrivate (UObjectBase fully widthed: NamePrivate 8, profile compiled_port_widths) against that id. Never a guessed address: every address above is an operand-derived file-image label from the frozen capture, and each carries an in-game data-side validation read.",
+      "citations": [
+        "worker-spawner-itemdb-audit/SPAWN-READINESS.md:17,:63,:79 (hard gate + prerequisite ordering)",
+        "worker-itemspawner-lua-audit/ACTIVATION-PATH.md:29 (FindFirstOf(\"ItemDatabaseSubsystem\") IS:64)",
+        "port/unreal/src/UObjectGlobals.cpp:434-504 (FindFirstOf = FName ctor + index Equals)",
+        "worker-fname-fc1-materialize/REPORT.md:37-53 (0x23d590 byte-exact candidate + ABI corroboration; runtime 0x63d590)",
+        "worker-fname-construction/REPORT.md:59-78 (FC-1/FC-2/FC-3 ladder this verdict extends)"
+      ]
+    },
+    {
+      "id": "H",
+      "caveat": "All addresses are operand-derived file-image labels from the frozen capture (same standard as GameEngineTick 0x2fac8c0); none has been read or called on the target. The pool candidate 0x9365ec0/0x9765ec0 has no in-game record yet - its validation reads are specified, not performed. FNAME_Add default in FindFirstOf(const CharType*) would mutate the pool on a miss; the remedy must construct the FName with FNAME_Find explicitly (NameTypes.hpp:315-318). The 161,503-ref global at 0x9131f08 used by the FName functions shows a read-compare-guard pattern and is left honestly unresolved (TLS-guard hypothesis); it is not part of the pool chain.",
+      "citations": [
+        "worker-2-layout-facts/profiles/townfall-ps5-ue56.profile.json:371-384 (GameEngineTick precedent), :510-523 (unresolved_list)",
+        "this worker's disasm 0x24247f/0x242489/0x242557-0x242576 (guard compare + ud2 abort)",
+        "port/unreal/include/Unreal/NameTypes.hpp:315-318 (FNAME_Find guidance)"
+      ]
+    }
+  ],
+  "status": "complete",
+  "deliverables": ["CLAIM.json", "FNAME-VERDICT.md", "REPORT.md"]
+}

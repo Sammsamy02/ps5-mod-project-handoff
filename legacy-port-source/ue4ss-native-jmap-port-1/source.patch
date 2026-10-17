@@ -1,0 +1,116 @@
+--- upstream/JMapGenerator.cpp
++++ native/JMapGenerator.cpp
+@@ -16,7 +16,7 @@
+ #include <variant>
+ #include <vector>
+ 
+-#include <DynamicOutput/DynamicOutput.hpp>
++#include <DynamicOutput/Output.hpp>
+ #include <File/Macros.hpp>
+ #include <Helpers/String.hpp>
+ #include <JMapGenerator/JMapGenerator.hpp>
+@@ -42,7 +42,13 @@
+ #ifndef NOMINMAX
+ #define NOMINMAX
+ #endif
++#ifdef __PROSPERO__
++#include <JMapGenerator/NativeSupport.hpp>
++#include <Unreal/UnrealInitializer.hpp>
++#include <Unreal/PlatformModuleSnapshot.hpp>
++#else
+ #include <Windows.h>
++#endif
+ 
+ // Dumps reflection data to the .jmap JSON format (https://github.com/trumank/jmap).
+ // The output mirrors the layout produced by jmap_dumper/serde so existing jmap consumers
+@@ -661,6 +667,9 @@
+         // ============================================================================
+         // Memory validity checks (region cache over VirtualQuery)
+         // ============================================================================
++#ifdef __PROSPERO__
++        using MemoryChecker = Native::MemoryChecker;
++#else
+         class MemoryChecker
+         {
+         public:
+@@ -736,6 +745,8 @@
+ 
+             std::map<uint64_t, Region> m_regions{};
+         };
++
++#endif
+ 
+         // Raw views of engine containers holding property values; layouts are identical across supported versions.
+         struct ScriptArrayView
+@@ -809,6 +820,9 @@
+             bool m_include_blueprint_types{};
+             bool m_skip_property_values{};
+             MemoryChecker m_memory{};
++#ifdef __PROSPERO__
++            std::shared_ptr<const Unreal::Platform::ModuleSnapshot> m_native_module_owner;
++#endif
+             std::unordered_map<const UObject*, std::string> m_path_cache{};
+             std::unordered_map<UEnum*, std::vector<std::pair<std::string, int64_t>>> m_enum_names_cache{};
+             std::map<std::string, DumpedObject> m_objects{};
+@@ -1937,11 +1951,15 @@
+         auto iso8601_utc_now() -> std::string
+         {
+             std::time_t now = std::time(nullptr);
++#ifdef __PROSPERO__
++            return Native::utc_timestamp(now);
++#else
+             std::tm utc{};
+             gmtime_s(&utc, &now);
+             char buf[32];
+             std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &utc);
+             return buf;
++#endif
+         }
+ 
+         // Extracts the changelist from engine version strings like "5.1.1-23058290+++UE5+Release-5.1"
+@@ -1993,11 +2011,15 @@
+             std::string game_name = to_utf8_string(*UKismetSystemLibrary::GetGameName());
+             auto build_change_list = parse_build_change_list(engine_version);
+ 
++#ifdef __PROSPERO__
++            const auto source = Native::source_filename(UE4SSProgram::get_program().get_game_executable_path());
++#else
+             wchar_t module_path[MAX_PATH]{};
+             GetModuleFileNameW(nullptr, module_path, MAX_PATH);
+             std::wstring module_path_wide{module_path};
+             auto separator = module_path_wide.find_last_of(L"/\\");
+             std::string source = to_utf8_string(separator == std::wstring::npos ? module_path_wide : module_path_wide.substr(separator + 1));
++#endif
+ 
+             JsonObject metadata{};
+             metadata.add("tool", "UE4SS JMapGenerator (https://github.com/UE4SS-RE/RE-UE4SS)");
+@@ -2030,7 +2052,15 @@
+             sink.append("{\n  \"metadata\": ");
+             write_json(sink, JsonValue{std::move(metadata)}, 1);
+             sink.append(",\n  \"image_base_address\": ");
++#ifdef __PROSPERO__
++            const auto& module_source = m_native_module_owner;
++            if (!module_source)
++                throw std::runtime_error("Native JMap module identity is unavailable");
++            const auto& main_image = module_source->Views().array[static_cast<size_t>(ScanTarget::MainExe)];
++            json_escape_to(sink, hex_address(reinterpret_cast<uint64_t>(main_image.image_base)));
++#else
+             json_escape_to(sink, hex_address(reinterpret_cast<uint64_t>(GetModuleHandleW(nullptr))));
++#endif
+             if (auto engine_offsets = build_engine_offsets(); !engine_offsets.members.empty())
+             {
+                 sink.append(",\n  \"engine_offsets\": ");
+@@ -2133,6 +2163,13 @@
+ 
+         auto JMapDumper::dump() -> void
+         {
++#ifdef __PROSPERO__
++            // Retain the loader-supplied module bytes for this whole traversal.
++            // This gate does not establish game identity or arbitrary heap coverage.
++            m_native_module_owner = UnrealInitializer::StaticStorage::GlobalConfig.ModuleSource;
++            if (!UnrealInitializer::IsInitialized().load() || !m_native_module_owner)
++                throw std::runtime_error("Native JMap requires an initialized engine and module owner");
++#endif
+             Output::send(STR("[JMapGenerator] Dumping reflection data to .jmap (format by trumank, https://github.com/trumank/jmap)\n"));
+             if (m_include_blueprint_types)
+             {

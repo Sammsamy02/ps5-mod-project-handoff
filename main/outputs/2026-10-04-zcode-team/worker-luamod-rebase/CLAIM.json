@@ -1,0 +1,89 @@
+{
+  "worker": "worker-luamod-rebase",
+  "date": "2026-10-04",
+  "task": "Staged rebase + integration path for DIFF-1 (r3-luamod-funcptr-marshal) onto the composed luamod unit's notify-cancel overlay lineage (0f0697a3...), closing the three blockers recorded by worker-launch10-r3-armed: (1) frozen-script eligibility, (2) DIFF-1 base skew, (3) the SettingsManager.hpp shared-header recompile set. Produce the rebased source with an anchored 3-way derivation record, the composition admission path per the established versioned-driver-edition pattern, the shared-header resolution, and host verification. The CONTROLLER builds; this worker does not run the composition.",
+  "scope": [
+    "LOCAL ONLY: no web, no console contact, no composition rebuild, nothing staged to any console, nothing executed in-game.",
+    "All writes confined to outputs/2026-10-04-zcode-team/worker-luamod-rebase/. Every input (spike trees, frozen scripts, other workers' outputs, the port tree) is read-only; originals untouched everywhere.",
+    "Deliverable order: CLAIM.json (this file, written before the final documents), staged sources + diffs + driver editions + receipts, REBASE.md, INTEGRATION.md, REPORT.md last."
+  ],
+  "claims": [
+    {
+      "id": "L10LM-1",
+      "text": "Lineage measurement: DIFF-1 (a8d1d6b4...) anchors on port-tree LuaMod.cpp a2d07f7c... + SettingsManager.hpp a9b4abbe... (both re-measured this session, byte-verified). The composed luamod unit's source is the notify-cancel overlay 0f0697a3... (attested by ue4ss-native-notify-cancel-1/plan.json overlay_source_sha256 AND the build-1 base receipt's luamod unit source_sha256 AND the on-disk bytes). The overlay lineage is EXACTLY two small deltas from the DIFF-1 base: (A) tick-affinity 24e2cf9c... = a2d07f7c... + one 6-line insert (IsInGameThreadRaw gate at the top of engine_tick_hook, patch b3539286...); (B) notify-cancel 0f0697a3... = 24e2cf9c... + one 4-line insert (callbacks_to_remove skip in the notify exec loop, patch 081f1ba2...). Both insert sites are disjoint from every DIFF-1 hunk region (NC at ~4217 sits between DIFF-1 hunks 2 and 3; TA at ~4466 sits inside engine_tick_hook, which DIFF-1 never touches).",
+      "status": "PASS (measured)",
+      "evidence": "shasum over all inputs; diff -u of both overlay steps; receipts/sha-manifest.json"
+    },
+    {
+      "id": "L10LM-2",
+      "text": "Anchored 3-way rebase: DIFF-1's luamod hunks (hunks 2-10 of a8d1d6b4, carried byte-identical in the luamod-only diff cdec0435...) apply to the overlay copy 0f0697a3... with patch -p2 CLEANLY (dry-run clean, real apply clean, no fuzz, no rejects), yielding bc082c72.... PROOF OF ORDER-INDEPENDENCE (the anchored cross-check): applying FULL DIFF-1 to the port base reproduces the authoring worker's anchored patched copy ce61f02a... byte-exactly, and then applying the two overlay patches (TA b3539286..., then NC 081f1ba2...) onto that copy yields bc082c72... again - i.e. rebase(DIFF-1, overlay) == overlay(DIFF-1(base)) byte-for-byte. The original port tree and the authoring worker's files were never modified.",
+      "status": "PASS (measured, both application orders)",
+      "evidence": "receipts/patch-A.log, receipts/patch-B.log, shasum outputs in the session; work/rebased-crosscheck.cpp == work/dryrun-B/.../LuaMod.cpp (bc082c72...)"
+    },
+    {
+      "id": "L10LM-3",
+      "text": "Shared-header resolution (BLOCKER 3 dissolved): the rebased DIFF-1 is delivered in a formulation that needs NO SettingsManager.hpp change. DIFF-1's single hunk on that header appends 'FuncPtrMarshal' LAST to enum class GameThreadExecutionMethod { ProcessEvent, EngineTick } in a9b4abbe..., i.e. value 2. The delivered variant B replaces all 13 qualified C++ references 'GameThreadExecutionMethod::FuncPtrMarshal' in the rebased LuaMod.cpp with one file-local 'static constexpr auto kFuncPtrMarshalExecutor = static_cast<GameThreadExecutionMethod>(2);' (anchored insertion before the [R3] FuncPtr-marshal state block; the Lua table KEY string \"FuncPtrMarshal\" is a string literal and is unchanged). OBJECT-LEVEL EQUIVALENCE PROOF: variant A (rebased DIFF-1 WITH the enum append, compiled with the patched header shadowing the port one) and variant B compile to the BYTE-IDENTICAL object 5595feb7... under the same argv. Consequence: zero additional recompile set - luamod/settingsmanager/program/luamodref stay untouched headers; only the luamod TU is replaced. The variant A files (bc082c72... LuaMod.cpp + 5b7c50f4... SettingsManager.hpp) are staged under staging/luamod-l10rebase-variantA-full/ as the documented fallback ONLY (it would need the 4-unit recompile set and is NOT admitted by the delivered driver).",
+      "status": "PASS (measured)",
+      "evidence": "diffs/l10lm-executor-tag-formulation.diff (70bcb1ab...); receipts/compile-gate.json formulation_equivalence.identical=true; grep counts 13/13 replaced, 0 remaining qualified refs, Lua key intact; base enum text cited in REBASE.md section 5"
+    },
+    {
+      "id": "L10LM-4",
+      "text": "Composition admission path (BLOCKER 1 solved per the established new-edition pattern, WGP E0/E1 prior art): (a) build_runtime_composition6_fixed_l10lm.py (9de2c4c8...) is a copy of the frozen fixed script 8dd92a6f... with EXACTLY ONE tagged edit - line 52 RETAINED_REPLACEABLE={'program'} -> {'program','luamod'} (diff-verified one line; the affected-set assertion at line 125 is untouched, SEC32-4 holds); (b) build_runtime_composition6_l10lm.py (9b332fc5...) is a copy of the r3-armed one-pass driver 51646132... with exactly the tagged edits L10LM E0 (compose engine -> the new edition + its sha), L10LM E1 (MY -> this worker dir), L10LM E2 (initializer spec -> this worker's byte-verified re-stage of the r3-armed armed+fold-1 initializer, 8b0c7e99.../59effe6e.../b8d851e9...), L10LM E3 (SECOND --replace-runtime-unit spec luamod=<staged rebased copy>), L10LM E4 (the inherited L10R3 E3 in-memory packaging __file__ point-in, mechanism unchanged), L10LM E5 (default replace-receipt -> this worker's regenerated receipt); (c) receipts/composition6-replace-receipt.json (27c1b3b0...) regenerated from the r3-armed lineage receipt 67793c0c... (99 files) with exactly 4 changes (3 initializer staging entries re-pointed byte-verified + the luamod replacement source added; include_dir_map verbatim), self-verified with the frozen receipt-loader semantics. The luamod retained-unit fresh-dependency gate is fully pre-covered: 1306/1306 pinned luamod.d deps are inside the existing pin layers (pinned-external-inputs + snapshot-plan + base input-hashes + W globs + base unit sources), measured 0 rr additions needed beyond the replacement source itself. The retained path recompiles luamod under its OWN pinned 172-token argv with source/-o/-MF redirection only (SEC32-3 argv-drift assertion).",
+      "status": "PASS (staged, diff-verified, receipt self-verified; compose run is the controller's)",
+      "evidence": "diff vs frozen fixed script = 1 line; diff vs l10r3 driver = the 6 tagged sites only (py_compile clean); regen_receipt_l10lm.py output + fail-closed self-check; coverage computation in REPORT.md section 3"
+    },
+    {
+      "id": "L10LM-5",
+      "text": "Host compile gate (L10LM-COMPILE-GATE-2, receipts/compile-gate.json, exit 0) under the EXACT pinned luamod argv recovered from the notify-cancel build-1 base receipt (172 tokens, LLVM_CONFIG env, the gmalloc-integration recovery pattern): (a) CONTROL (untouched overlay 0f0697a3...): compiles exit 0 and is a DRIFT WITNESS, not a bit-reproduction - it differs from the receipt-pinned object 2371839b... in EXACTLY 6 bytes, all member-offset immediates shifted +0x30 inside RC::UE4SSProgram header-member functions (can_process_events / get_event_loop_thread_id / is_event_loop_thread) and RC::LuaMod::fire_on_lua_start_for_cpp_mods, attributed to the rr-attested Resolution-B Platform/NativeProgramContext.hpp edit (mtime 2026-10-04 21:41, AFTER the pinned build 2026-10-03 22:04; UE4SSProgram.hpp:127 embeds Platform::NativeProgramContext by value; it is the ONLY luamod.d-closed header modified after the pinned build); (b) VARIANT B: compiles exit 0 under the retained-path-exact argv (drift indices == {source,-o,-MF} exactly), object 5595feb7... (6,903,984 B, +1,808 vs control), with the R3 readiness/ladder/table markers present (m_funcptr_marshal_armed, is_funcptr_marshal_armed, the FuncPtrMarshal Lua key, all five ladder throw strings) and ZERO new undefined symbols (565 == 565 UND, identical sets vs pinned AND vs control); (c) VARIANT A: byte-identical object to variant B (claim L10LM-3); (d) the authoring worker's port-base patched copy FAILS to compile over the current unpatched header with 4 no-member-named-FuncPtrMarshal errors (receipts/gate-portA.stderr) - measured proof that the as-authored DIFF-1 hard-depends on the enum append and variant B removes that dependency.",
+      "status": "PASS (measured, gate exit 0)",
+      "evidence": "receipts/compile-gate.json, receipts/gate-control.o (a9716f55...), receipts/gate-variantB.o (5595feb7...), receipts/gate-variantA.o (5595feb7...), receipts/gate-portA.stderr, UND set diffs empty"
+    },
+    {
+      "id": "L10LM-6",
+      "text": "NEW MEASURED FINDING - pre-existing stale-layout exposure of the composition-6 lineage (recorded for the controller, not introduced or fixable by this worker): the pinned luamod object (and by construction EVERY retained base-1 unit compiled before 2026-10-04 21:41 whose TU closes over Platform/NativeProgramContext.hpp) holds the OLD RC::UE4SSProgram layout (member offsets 48 bytes smaller), while the freshly composed units (program, initializer, affected six) hold the NEW layout of the rr-attested edited header. The 6-byte drift witness IS that exposure, measured at the object level. A fresh luamod compile via the delivered admission path REPAIRS the luamod instance (its header-emitted UE4SSProgram member functions get the current offsets); the same exposure class may exist for other retained units - out of this worker's scope, flagged for the controller.",
+      "status": "RECORDED (measured drift witness; no in-game behavior claim)",
+      "evidence": "compile-gate.json control.vs_pinned (6 diffs, offsets stable across two runs); header mtime + include chain; disassembly diff receipts in the session log"
+    },
+    {
+      "id": "L10LM-7",
+      "text": "NEW MEASURED FINDING - DIFF-1 link-level inertness as authored: in the variant B object the drain cluster (funcptr_marshal_hook, arm_funcptr_marshal_drain, r3_marshal_carrier_precheck) and the three R3Marshal* bridge references are ABSENT - they are file-static with NO TU-internal caller (verified by grep: the only references are definitions, comments, and arm_funcptr_marshal_drain's own internal calls), so the compiler dead-code-eliminates them. What survives and is live: the readiness state (m_funcptr_marshal_armed), is_funcptr_marshal_armed, the EGameThreadMethod.FuncPtrMarshal Lua table entry, the delayed-action executor filter, and all five ladder rungs. Consequence (sharpens the r3-armed honesty note): even with DIFF-1 composed, NOTHING arms the marshal or drains the deferred pump until a caller for arm_funcptr_marshal_drain exists (non-static linkage + a declaration reachable by the calibration owner, or an in-TU caller). This is inherent to DIFF-1's authored linkage (independent of the rebase; the variant A object is byte-identical, and the as-authored port copy cannot even compile without the header append) - a controller-level design decision, NOT a rebase defect, and NOT silently 'fixed' by this worker.",
+      "status": "RECORDED (measured symbol census; no in-game behavior claim)",
+      "evidence": "compile-gate.json r3_additions.r3_link_inertness (eliminated symbol list, empty UND delta, strings census); grep of the staged source; variantB==variantA object identity"
+    }
+  ],
+  "non_claims": [
+    "NO composition was run by this worker: no composed object, no candidate PRX, no packaging artifacts, no gate-v2 verdict, and no determinism double-pass exist for the L10LM candidate. The one-pass driver + fixed edition + receipt are STAGED and diff-verified; running them (twice, plus the manifest/gate flow) is the controller's build per the task division. First-run failures are possible and the runbook documents the fail-fast points.",
+    "NO claim that the R3 marshal route works in-game, that a calibration service exists, that the deferred game-thread pump gets drained, or that any carrier was hooked: to the contrary, claim L10LM-7 records that the drain is link-inert as authored. F-1 (carrier with game-thread cadence) remains OPEN exactly as R3-TIER-DESIGN states.",
+    "NO completion/quality claim about in-game behavior of anything: every artifact here is host-side (staged sources, diffs, driver editions, receipts, object-level comparisons).",
+    "NO claim that the 6-byte layout drift is or is not a launch blocker: the drift is measured at object level and attributed by include-chain evidence; whether any cross-TU consumer pair actually exchanges the drifted members is a controller-level analysis (this worker measured; did not fix the lineage).",
+    "NO claim the variant A fallback is admitted anywhere: it is staged for the record with its recompile-set cost documented; the delivered driver admits variant B only.",
+    "The LAUNCH10-MATRIX file, the frozen scripts, the spike trees, and every other worker's outputs were not edited; the blockers recorded by worker-launch10-r3-armed are hereby ADDRESSED by staged artifacts, not by rewriting history: the frozen fixed script itself remains frozen."
+  ],
+  "input_pins": {
+    "diff1_original": "outputs/2026-10-04-zcode-team/worker-r3-diffs-authoring/diffs/r3-luamod-funcptr-marshal.diff (a8d1d6b4f277fe1af80aa947d5a1022af8b2c3c0cd8bf11e97a7674fc2b38d2a)",
+    "diff1_bases": "port LuaMod.cpp a2d07f7c233a59d05f35779ece3a05b7068475b2ee9ab8a1709b72113f2cc4ae + SettingsManager.hpp a9b4abbe26f0cc1c9ec71029cb009e721dd88839395a72786dcbeda8f8b5aa2e (native-coherent-runtime-1/source/port/ue4ss/...)",
+    "overlay_lineage": "tick-affinity 24e2cf9c91ee96974a29fa7382f8b7f0348020319942face3511c36fcace9d1f (patch b3539286d159b2c9a9ac72455fc9fbb3552b607a5ba714b2e6274173a70bd02e) -> notify-cancel 0f0697a3a5ac99282598b2f98427c7696ae6012de81771410a1b6b099c7fca3c (patch 081f1ba2080fb79896572d8e46fa3d11ebce3a2412344d51abf9541c70d1c86b); base receipt bcd23a2a4abef518d8f220786e80cb131036e351b2218a322d26aee6adca8384",
+    "authoring_patched_copy": "outputs/2026-10-04-zcode-team/worker-r3-diffs-authoring/work/patched/LuaMod.cpp (ce61f02a9557e441d4d97208c0fcf722335ca014997f2838a53c69b349352972)",
+    "frozen_scripts": "worker-comp6-driver/build_runtime_composition6_fixed.py 8dd92a6f... + worker-prx-link-gaps/package_prx.py e6fbe6c5... (both unchanged)",
+    "driver_lineage": "worker-launch10-r3-armed/build_runtime_composition6_l10r3.py (51646132324a2200aba7094aab29d01ea5cad25adb527aea687164995a2b729b)",
+    "r3armed_initializer_staging": "UnrealInitializer.cpp 8b0c7e9905ce4a857ec1eca0de6c5437862118207922b101122b0819c50badc0 + SeedTable.h 59effe6e4cd34eb0b1138532f1c147b32dc45ffb567e8f8a39eb2ee1d44b0090 + SeedValidation.hpp b8d851e9f29f48998bc1558dda4a6dcd31fac0da00a280295cc75dd51ef60069 (re-staged byte-verified)",
+    "r3armed_replace_receipt": "outputs/2026-10-04-zcode-team/worker-launch10-r3-armed/receipts/composition6-replace-receipt.json (67793c0c397939f8...)",
+    "pinned_luamod_unit": "base receipt bcd23a2a... selected_runtime_units.luamod: source 0f0697a3..., object 2371839b3d6fe0b42ee999e5ac456df72d77921b04b6838aeb2105631d39c848, argv 172 tokens, LLVM_CONFIG pinned"
+  },
+  "measured_verdicts": {
+    "staged_rebased_luamod_variantB": {
+      "sha256": "4540593ac9e66cdc0a62e56736f05c05a23ca897881a902cae55e1d51bb79b25",
+      "derivation": "0f0697a3 + DIFF-1 luamod hunks (cdec0435) = bc082c72 (cross-checked both orders) + L10LM executor-tag formulation (70bcb1ab) = 4540593a; single-step equivalent diff a06101ec round-trip verified on a fresh overlay copy"
+    },
+    "gate_objects": {
+      "control": "a9716f55077cba1c1092d7a57a007e80bae2c0fe27d29fca68e982798fa00de7 (6,902,176 B; vs pinned 2371839b... exactly 6 attributed bytes, all +0x30)",
+      "variantB": "5595feb785206c0057eb29af0ccdcd53a8898d86629db0b10debc4a17aa08dea (6,903,984 B)",
+      "variantA": "5595feb785206c0057eb29af0ccdcd53a8898d86629db0b10debc4a17aa08dea (byte-identical to variantB)"
+    },
+    "edition_shas": {
+      "fixed_script_edition": "9de2c4c8ccfbbdf89d03510e080c5b321a42b6944f0e9642a37cf3829d0c9eaf (frozen + 1 line)",
+      "one_pass_driver": "9b332fc56ededa745603b36a8d93354cdbd43274ed37ab6be1efb7edfcefceb1 (l10r3 + L10LM E0/E1/E2/E3/E4/E5)",
+      "replace_receipt": "27c1b3b0dc8d646a... (100 files, self-verified)"
+    }
+  }
+}

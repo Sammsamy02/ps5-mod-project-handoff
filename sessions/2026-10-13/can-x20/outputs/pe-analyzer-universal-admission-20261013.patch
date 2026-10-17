@@ -1,0 +1,1027 @@
+--- a/cap13/TOOL/pe_analyzer.py
++++ b/cap13/TOOL/pe_analyzer.py
+@@ -25,6 +25,7 @@
+ import json
+ import struct
+ import sys
++import uuid
+ from typing import Any, Dict, List, Optional, Tuple
+ 
+ # ---------------------------------------------------------------------------
+@@ -138,6 +139,8 @@
+         self.imports: List[Dict[str, Any]] = []
+         self.delay_imports: List[Dict[str, Any]] = []
+         self.exports: Dict[str, Any] = {}
++        self.tls: Dict[str, Any] = {"status": "none"}
++        self.debug: Dict[str, Any] = {"status": "none", "codeview": []}
+         self.managed: Optional[Dict[str, Any]] = None
+ 
+     def warn(self, msg: str) -> None:
+@@ -175,6 +178,8 @@
+ 
+     def rva_to_offset(self, rva: int) -> Optional[int]:
+         """Map RVA to file offset via the section table."""
++        if rva < 0:
++            return None
+         for s in self.sections:
+             va = s["virtual_address"]
+             vsize = max(s["virtual_size"], s["raw_size"])
+@@ -191,9 +196,24 @@
+         return None
+ 
+     def read_at_rva(self, rva: int, size: int) -> Optional[bytes]:
++        if rva < 0 or size < 0:
++            return None
+         off = self.rva_to_offset(rva)
+         if off is None or off + size > len(self.data):
+             return None
++        for section in self.sections:
++            start = section["virtual_address"]
++            extent = max(section["virtual_size"], section["raw_size"])
++            if start <= rva < start + extent:
++                if size > section["raw_size"] - (rva - start):
++                    return None
++                break
++        else:
++            header_end = self.optional.get("size_of_headers", 0)
++            if self.sections:
++                header_end = min(header_end, self.sections[0]["virtual_address"])
++            if size > header_end - rva:
++                return None
+         return self.data[off:off + size]
+ 
+     # -- header parsing ----------------------------------------------------
+@@ -204,7 +224,7 @@
+             return False
+         try:
+             self._parse_headers()
+-        except (struct.error, IndexError):
++        except (PEFormatError, struct.error, IndexError):
+             self.diag("truncated or malformed PE headers")
+             return False
+         return True
+@@ -269,6 +289,7 @@
+ 
+         num_dirs_off = opt_off + (108 if is_pe32p else 92)
+         num_dirs = self.u32(num_dirs_off)
++        o["number_of_rva_and_sizes"] = num_dirs
+         dirs_off = num_dirs_off + 4
+         self.data_dirs = []
+         for i in range(num_dirs):
+@@ -325,6 +346,136 @@
+         if index < len(self.data_dirs):
+             return self.data_dirs[index]
+         return None
++
++    def parse_tls(self) -> None:
++        """Classify PE static TLS without executing callbacks or mapping the image."""
++        directory = self._dir(9)
++        if not directory or (directory["rva"] == 0 and directory["size"] == 0):
++            return
++
++        def malformed(reason: str) -> None:
++            self.tls = {"status": "malformed", "reason": reason}
++            self.warn("TLS directory: " + reason)
++
++        is_64 = self.optional.get("format") == "PE32+"
++        layout = "<QQQQII" if is_64 else "<IIIIII"
++        size = struct.calcsize(layout)
++        if directory["rva"] == 0 or directory["size"] < size:
++            malformed("missing RVA or truncated structure")
++            return
++        if directory["rva"] + directory["size"] > self.optional["size_of_image"] or \
++                self.read_at_rva(directory["rva"], directory["size"]) is None:
++            malformed("declared directory outside file-backed image")
++            return
++        raw = self.read_at_rva(directory["rva"], size)
++        if raw is None:
++            malformed("structure outside file-backed image")
++            return
++        start, end, index_va, callbacks_va, zero_fill, _characteristics = struct.unpack(layout, raw)
++        base = self.optional["image_base"]
++        image_size = self.optional["size_of_image"]
++        def in_image(va: int, size: int = 1) -> bool:
++            return base <= va and va - base < image_size and size <= image_size - (va - base)
++
++        if end < start or ((start == 0) != (end == 0)):
++            malformed("invalid raw-data VA range")
++            return
++        if start and (not in_image(start) or end - base > image_size):
++            malformed("raw-data VA range outside image")
++            return
++        initialized = end - start
++        if initialized:
++            if self.read_at_rva(start - base, initialized) is None:
++                malformed("raw-data template outside file-backed image")
++                return
++        if index_va and (index_va % 4 or not in_image(index_va, 4)):
++            malformed("TLS index VA outside image or unaligned")
++            return
++
++        callback_count = 0
++        if callbacks_va:
++            pointer_size = 8 if is_64 else 4
++            pointer_format = "<Q" if is_64 else "<I"
++            if callbacks_va % pointer_size or not in_image(callbacks_va, pointer_size):
++                malformed("callback table VA outside image or unaligned")
++                return
++            callbacks_rva = callbacks_va - base
++            for callback_count in range(257):
++                entry = self.read_at_rva(callbacks_rva + callback_count * pointer_size,
++                                         pointer_size)
++                if entry is None:
++                    malformed("callback table lacks a file-backed terminator")
++                    return
++                callback_va = struct.unpack(pointer_format, entry)[0]
++                if callback_va == 0:
++                    break
++                if not in_image(callback_va):
++                    malformed("callback target VA outside image")
++                    return
++            else:
++                malformed("callback table exceeds 256 entries")
++                return
++
++        self.tls = {
++            "status": "real" if initialized or zero_fill or callback_count else "empty",
++            "initialized_bytes": initialized,
++            "zero_fill_bytes": zero_fill,
++            "callback_table_present": bool(callbacks_va),
++            "callback_count": callback_count,
++            "index_va_present": bool(index_va),
++        }
++
++    def parse_debug(self) -> None:
++        """Read the image's own RSDS GUID/age; never claim a game-PDB match."""
++        directory = self._dir(6)
++        if not directory or (directory["rva"] == 0 and directory["size"] == 0):
++            return
++
++        def malformed(reason: str) -> None:
++            self.debug = {"status": "malformed", "codeview": [], "reason": reason}
++            self.warn("debug directory: " + reason)
++
++        if directory["rva"] == 0 or directory["size"] == 0 or directory["size"] % 28:
++            malformed("missing RVA or invalid entry-array size")
++            return
++        entries = self.read_at_rva(directory["rva"], directory["size"])
++        if entries is None:
++            malformed("entry array outside file-backed image")
++            return
++        codeview = []
++        for offset in range(0, len(entries), 28):
++            _flags, _timestamp, _major, _minor, kind, data_size, _data_rva, data_off = \
++                struct.unpack_from("<IIHHIIII", entries, offset)
++            if kind != 2:
++                continue
++            if data_size < 4 or data_off > len(self.data) or data_size > len(self.data) - data_off:
++                malformed("CodeView record outside file or too short for signature")
++                return
++            record = self.data[data_off:data_off + data_size]
++            if record[:4] != b"RSDS":
++                continue
++            if data_size < 25:
++                malformed("RSDS record too short")
++                return
++            end = record.find(b"\0", 24)
++            if end <= 24:
++                malformed("RSDS PDB path missing terminator or name")
++                return
++            try:
++                pdb_path = record[24:end].decode("utf-8")
++            except UnicodeDecodeError:
++                malformed("RSDS PDB path is not UTF-8")
++                return
++            pdb_name = pdb_path.replace("\\", "/").rsplit("/", 1)[-1]
++            if not pdb_name:
++                malformed("RSDS PDB path has empty basename")
++                return
++            codeview.append({
++                "guid": str(uuid.UUID(bytes_le=record[4:20])),
++                "age": struct.unpack_from("<I", record, 20)[0],
++                "pdb_name": pdb_name,
++            })
++        self.debug = {"status": "rsds" if codeview else "present_no_rsds", "codeview": codeview}
+ 
+     def _thunk_size(self) -> int:
+         return 8 if self.optional.get("format") == "PE32+" else 4
+@@ -426,6 +577,7 @@
+ 
+         names: List[Dict[str, Any]] = []
+         forwarders: List[str] = []
++        names_by_index: Dict[int, str] = {}
+         npt_off = self.rva_to_offset(npt_rva)
+         eat_off = self.rva_to_offset(eat_rva)
+         ot_off = self.rva_to_offset(ot_rva)
+@@ -440,17 +592,35 @@
+             if ot_off is not None and ot_off + i * 2 + 2 <= len(self.data):
+                 ord_idx = self.u16(ot_off + i * 2)
+                 ordinal = ordinal_base + ord_idx
+-                if eat_off is not None and eat_off + ord_idx * 4 + 4 <= len(self.data):
+-                    sym_rva = self.u32(eat_off + ord_idx * 4)
++                names_by_index[ord_idx] = fname
++                eat_entry = self.read_at_rva(eat_rva + ord_idx * 4, 4)
++                if eat_entry is not None:
++                    sym_rva = struct.unpack("<I", eat_entry)[0]
+                     if dir_start <= sym_rva < dir_end:
+                         forwarder = self.cstr(self.rva_to_offset(sym_rva) or -1)
+             entry: Dict[str, Any] = {"name": fname, "ordinal": ordinal, "rva": None}
+             if forwarder is not None:
+                 entry["forwarder"] = forwarder
+-                forwarders.append("%s -> %s" % (fname, forwarder))
+-            elif ordinal is not None and eat_off is not None and eat_off + (ordinal - ordinal_base) * 4 + 4 <= len(self.data):
+-                entry["rva"] = self.u32(eat_off + (ordinal - ordinal_base) * 4)
++            elif ordinal is not None:
++                eat_entry = self.read_at_rva(eat_rva + (ordinal - ordinal_base) * 4, 4)
++                if eat_entry is not None:
++                    entry["rva"] = struct.unpack("<I", eat_entry)[0]
+             names.append(entry)
++        # Export Address Table entries can be forwarded without a name pointer.
++        # Scan every ordinal so a proxy hint does not depend on named exports.
++        for ord_idx in range(min(addr_entries, 65535)):
++            eat_entry = self.read_at_rva(eat_rva + ord_idx * 4, 4)
++            if eat_entry is None:
++                self.warn("export address table truncated at %d" % ord_idx)
++                break
++            sym_rva = struct.unpack("<I", eat_entry)[0]
++            if dir_start <= sym_rva < dir_end:
++                target_off = self.rva_to_offset(sym_rva)
++                if target_off is None:
++                    self.warn("export forwarder unmapped at ordinal %d" % (ordinal_base + ord_idx))
++                    continue
++                label = names_by_index.get(ord_idx, "Ordinal#%d" % (ordinal_base + ord_idx))
++                forwarders.append("%s -> %s" % (label, self.cstr(target_off)))
+         self.exports = {
+             "present": True,
+             "dll_name": dll_name,
+@@ -745,9 +915,11 @@
+                          if imp["dll"].lower() in ("ue4ss.dll", "ue4ss")]
+         start_mod_exports = [e["name"] for e in self.exports.get("names", [])
+                              if e["name"] in ("start_mod", "stop_mod")]
+-        proxy_name = any(imp["dll"].lower() in ("dwmapi.dll", "winmm.dll", "version.dll",
+-                                                "dbghelp.dll", "xinput1_4.dll", "dsound.dll")
+-                         for imp in self.imports)
++        proxy_dlls = ("dwmapi.dll", "winmm.dll", "version.dll",
++                      "dbghelp.dll", "xinput1_4.dll", "dsound.dll")
++        proxy_name = (any(imp["dll"].lower() in proxy_dlls for imp in self.imports)
++                      or ((self.exports.get("dll_name") or "").lower() in proxy_dlls
++                          and bool(self.exports.get("forwarders"))))
+         return {
+             "imports_ue4ss_dll": bool(ue4ss_imports),
+             "ue4ss_imported_functions": sorted({f for imp in ue4ss_imports for f in imp["functions"]}),
+@@ -772,6 +944,8 @@
+             "is_dll": self.coff.get("is_dll"),
+             "managed": bool(self.managed and self.managed.get("is_managed")),
+             "ue4ss": self.ue4ss_report(),
++            "tls": self.tls,
++            "debug": self.debug,
+             "diagnostics": list(self.diagnostics),
+             "warnings": list(self.warnings),
+         }
+@@ -802,6 +976,8 @@
+         img.parse_managed()
+         img.parse_imports()
+         img.parse_delay_imports()
++        img.parse_tls()
++        img.parse_debug()
+         img.parse_exports()
+     return img, img.to_dict(full=True)
+ 
+@@ -872,6 +1048,27 @@
+         ue.get("looks_like_proxy_dll")))
+     if ue.get("ue4ss_imported_functions"):
+         p("  ue4ss functions:  %s" % ", ".join(ue["ue4ss_imported_functions"][:max_items]))
++    tls = report.get("tls", {})
++    tls_status = tls.get("status", "none")
++    if tls_status in ("real", "empty"):
++        p("tls:                %s (initialized=%s, zero-fill=%s, callbacks=%s)" % (
++            tls_status, tls.get("initialized_bytes", 0), tls.get("zero_fill_bytes", 0),
++            tls.get("callback_count", 0)))
++    else:
++        p("tls:                %s%s" % (
++            tls_status, " (%s)" % tls["reason"] if tls.get("reason") else ""))
++    debug = report.get("debug", {})
++    codeview = debug.get("codeview", [])
++    if codeview:
++        for entry in codeview[:max_items]:
++            p("debug CodeView:     %s (GUID=%s, age=%s)" % (
++                entry["pdb_name"], entry["guid"], entry["age"]))
++        if len(codeview) > max_items:
++            p("  ... +%d more" % (len(codeview) - max_items))
++    else:
++        p("debug CodeView:     %s%s" % (
++            debug.get("status", "none"),
++            " (%s)" % debug["reason"] if debug.get("reason") else ""))
+     for d in report.get("diagnostics", []):
+         p("diagnostic:         %s" % d)
+     for w in report.get("warnings", []):
+--- /dev/null
++++ b/cap13/TOOL/test_proxy_hint.py
+@@ -0,0 +1,54 @@
++"""Regression for a forwarding WinMM proxy with no WinMM import."""
++
++import hashlib
++import os
++import struct
++import tempfile
++import unittest
++from pathlib import Path
++
++from pe_analyzer import analyze_file
++
++
++ROOT = Path(__file__).resolve().parent.parent
++TRUEFOV = Path(os.environ.get("CAP13_TRUEFOV_DLL", str(ROOT / "SAMPLE" / "TrueFOV-upstream-winmm.dll")))
++
++
++class ProxyHintTests(unittest.TestCase):
++    def test_forwarding_winmm_proxy_is_detected_without_winmm_import(self):
++        path = TRUEFOV
++        if not path.is_file():
++            self.skipTest("set CAP13_TRUEFOV_DLL to the unchanged upstream winmm.dll")
++        self.assertEqual(
++            hashlib.sha256(path.read_bytes()).hexdigest(),
++            "5f23eee1c7479e75699d26d339ea69269eb0da0c33fc9be4cd60957ee63302a3",
++        )
++        _, report = analyze_file(str(path))
++        self.assertEqual(report["exports"]["dll_name"].lower(), "winmm.dll")
++        self.assertEqual(len(report["exports"]["forwarders"]), 181)
++        self.assertEqual(sum(item.startswith("Ordinal#") for item in report["exports"]["forwarders"]), 1)
++        self.assertFalse(any(row["dll"].lower() == "winmm.dll" for row in report["imports"]))
++        self.assertTrue(report["ue4ss"]["looks_like_proxy_dll"])
++
++    def test_ordinary_exporting_mod_is_not_marked_as_proxy(self):
++        path = ROOT / "FIXTURES" / "cap13-ue4ss-native-mod-FIXTURE.dll"
++        _, report = analyze_file(str(path))
++        self.assertEqual(report["exports"]["forwarders"], [])
++        self.assertFalse(report["ue4ss"]["looks_like_proxy_dll"])
++
++    def test_ordinal_only_forwarders_still_mark_proxy(self):
++        data = bytearray(TRUEFOV.read_bytes())
++        image, _ = analyze_file(str(TRUEFOV))
++        export_off = image.rva_to_offset(image._dir(0)["rva"])
++        struct.pack_into("<I", data, export_off + 24, 0)  # NumberOfNames
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "ordinal-only-FIXTURE.dll"
++            path.write_bytes(data)
++            _, report = analyze_file(str(path))
++        self.assertEqual(report["exports"]["names"], [])
++        self.assertEqual(len(report["exports"]["forwarders"]), 181)
++        self.assertTrue(report["ue4ss"]["looks_like_proxy_dll"])
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/cap13/TOOL/test_tls_classification.py
+@@ -0,0 +1,117 @@
++"""Read-only PE TLS feature classification against known image bytes."""
++
++import hashlib
++import os
++import struct
++import tempfile
++import unittest
++from pathlib import Path
++
++from pe_analyzer import analyze_file
++
++
++ROOT = Path(__file__).resolve().parent.parent
++TRUEFOV = Path(os.environ.get("CAP13_TRUEFOV_DLL", str(ROOT / "SAMPLE" / "TrueFOV-upstream-winmm.dll")))
++
++
++class TlsClassificationTests(unittest.TestCase):
++    def _mutated_truefov(self, change):
++        data = bytearray(TRUEFOV.read_bytes())
++        image, _ = analyze_file(str(TRUEFOV))
++        tls_off = image.rva_to_offset(image._dir(9)["rva"])
++        change(data, image, tls_off)
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "mutated-tls-FIXTURE.dll"
++            path.write_bytes(data)
++            _, report = analyze_file(str(path))
++        return report
++
++    def test_no_tls_directory_reports_none(self):
++        _, report = analyze_file(str(ROOT / "FIXTURES" / "cap13-ue4ss-native-mod-FIXTURE.dll"))
++        self.assertEqual(report["tls"]["status"], "none")
++
++    def test_linker_artifact_directory_reports_empty(self):
++        path = ROOT / "SAMPLE" / "cap13-mod-splitscreen.dll"
++        self.assertEqual(
++            hashlib.sha256(path.read_bytes()).hexdigest(),
++            "73ed26e406b425c06a5f32706802297601343f53b4e369fcf470f8fc3067c6c7",
++        )
++        _, report = analyze_file(str(path))
++        self.assertEqual(report["tls"]["status"], "empty")
++        self.assertEqual(report["tls"]["initialized_bytes"], 0)
++        self.assertEqual(report["tls"]["callback_count"], 0)
++
++    def test_truefov_reports_real_tls_data_and_empty_callback_table(self):
++        path = TRUEFOV
++        if not path.is_file():
++            self.skipTest("set CAP13_TRUEFOV_DLL to the unchanged upstream winmm.dll")
++        self.assertEqual(
++            hashlib.sha256(path.read_bytes()).hexdigest(),
++            "5f23eee1c7479e75699d26d339ea69269eb0da0c33fc9be4cd60957ee63302a3",
++        )
++        _, report = analyze_file(str(path))
++        self.assertEqual(report["tls"]["status"], "real")
++        self.assertEqual(report["tls"]["initialized_bytes"], 8)
++        self.assertEqual(report["tls"]["zero_fill_bytes"], 0)
++        self.assertTrue(report["tls"]["callback_table_present"])
++        self.assertEqual(report["tls"]["callback_count"], 0)
++
++    def test_truncated_tls_directory_reports_malformed(self):
++        source = (ROOT / "SAMPLE" / "cap13-mod-splitscreen.dll").read_bytes()
++        data = bytearray(source)
++        pe_off = struct.unpack_from("<I", data, 0x3C)[0]
++        opt_off = pe_off + 4 + 20
++        tls_dir_size_off = opt_off + 112 + 9 * 8 + 4
++        struct.pack_into("<I", data, tls_dir_size_off, 4)
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / "bad-tls-FIXTURE.dll"
++            path.write_bytes(data)
++            _, report = analyze_file(str(path))
++        self.assertEqual(report["tls"]["status"], "malformed")
++
++    def test_template_cannot_read_across_raw_section_boundary(self):
++        def change(data, image, tls_off):
++            base = image.optional["image_base"]
++            struct.pack_into("<QQ", data, tls_off, base + 0x5D5FC, base + 0x5D604)
++        report = self._mutated_truefov(change)
++        self.assertEqual(report["tls"]["status"], "malformed")
++
++    def test_tls_index_must_point_into_mapped_image(self):
++        def change(data, image, tls_off):
++            outside = image.optional["image_base"] + image.optional["size_of_image"] + 8
++            struct.pack_into("<Q", data, tls_off + 16, outside)
++        report = self._mutated_truefov(change)
++        self.assertEqual(report["tls"]["status"], "malformed")
++
++    def test_callback_target_must_point_into_mapped_image(self):
++        def change(data, image, tls_off):
++            callback_table_va = struct.unpack_from("<Q", data, tls_off + 24)[0]
++            callback_off = image.rva_to_offset(callback_table_va - image.optional["image_base"])
++            outside = image.optional["image_base"] + image.optional["size_of_image"] + 8
++            struct.pack_into("<Q", data, callback_off, outside)
++        report = self._mutated_truefov(change)
++        self.assertEqual(report["tls"]["status"], "malformed")
++
++    def test_empty_template_va_must_point_into_mapped_image(self):
++        def change(data, image, tls_off):
++            outside = image.optional["image_base"] + image.optional["size_of_image"] + 8
++            struct.pack_into("<QQ", data, tls_off, outside, outside)
++        report = self._mutated_truefov(change)
++        self.assertEqual(report["tls"]["status"], "malformed")
++
++    def test_callback_limit_allows_256_then_terminator(self):
++        def change(data, image, tls_off):
++            base = image.optional["image_base"]
++            table_rva = 0x1000
++            table_off = image.rva_to_offset(table_rva)
++            struct.pack_into("<Q", data, tls_off + 24, base + table_rva)
++            for slot in range(256):
++                struct.pack_into("<Q", data, table_off + slot * 8, base + 0x1000)
++            struct.pack_into("<Q", data, table_off + 256 * 8, 0)
++        report = self._mutated_truefov(change)
++        self.assertEqual(report["tls"]["status"], "real")
++        self.assertEqual(report["tls"]["callback_count"], 256)
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/cap13/TOOL/test_debug_identity.py
+@@ -0,0 +1,81 @@
++"""PE CodeView identity is image-specific and read without loading a PDB."""
++
++import hashlib
++import os
++import struct
++import tempfile
++import unittest
++from pathlib import Path
++
++from pe_analyzer import analyze_file
++
++
++ROOT = Path(__file__).resolve().parent.parent
++TRUEFOV = Path(os.environ.get("CAP13_TRUEFOV_DLL", str(ROOT / "SAMPLE" / "TrueFOV-upstream-winmm.dll")))
++
++
++class DebugIdentityTests(unittest.TestCase):
++    def test_truefov_image_reports_its_own_codeview_pdb_identity(self):
++        if not TRUEFOV.is_file():
++            self.skipTest("set CAP13_TRUEFOV_DLL to the unchanged upstream winmm.dll")
++        self.assertEqual(
++            hashlib.sha256(TRUEFOV.read_bytes()).hexdigest(),
++            "5f23eee1c7479e75699d26d339ea69269eb0da0c33fc9be4cd60957ee63302a3",
++        )
++        _, report = analyze_file(str(TRUEFOV))
++        self.assertEqual(report["debug"]["status"], "rsds")
++        self.assertEqual(
++            report["debug"]["codeview"],
++            [{"guid": "af9cfae1-a970-4477-a17b-60c21eb6f6c1", "age": 1,
++              "pdb_name": "winmm.pdb"}],
++        )
++
++    def test_image_without_debug_directory_reports_none(self):
++        _, report = analyze_file(str(ROOT / "FIXTURES" / "cap13-ue4ss-native-mod-FIXTURE.dll"))
++        self.assertEqual(report["debug"], {"status": "none", "codeview": []})
++
++    def test_truncated_rsds_record_is_malformed(self):
++        if not TRUEFOV.is_file():
++            self.skipTest("set CAP13_TRUEFOV_DLL to the unchanged upstream winmm.dll")
++        data = bytearray(TRUEFOV.read_bytes())
++        image, _ = analyze_file(str(TRUEFOV))
++        directory = image._dir(6)
++        debug_entry = image.rva_to_offset(directory["rva"])
++        struct.pack_into("<I", data, debug_entry + 16, 8)  # CodeView SizeOfData
++        with tempfile.TemporaryDirectory() as directory_name:
++            path = Path(directory_name) / "short-rsds-FIXTURE.dll"
++            path.write_bytes(data)
++            _, report = analyze_file(str(path))
++        self.assertEqual(report["debug"]["status"], "malformed")
++
++    def test_other_codeview_signature_is_not_mistaken_for_corrupt_rsds(self):
++        if not TRUEFOV.is_file():
++            self.skipTest("set CAP13_TRUEFOV_DLL to the unchanged upstream winmm.dll")
++        data = bytearray(TRUEFOV.read_bytes())
++        image, _ = analyze_file(str(TRUEFOV))
++        directory = image._dir(6)
++        debug_entry = image.rva_to_offset(directory["rva"])
++        record_off = struct.unpack_from("<I", data, debug_entry + 24)[0]
++        struct.pack_into("<I", data, debug_entry + 16, 20)
++        data[record_off:record_off + 4] = b"NB10"
++        with tempfile.TemporaryDirectory() as directory_name:
++            path = Path(directory_name) / "nb10-FIXTURE.dll"
++            path.write_bytes(data)
++            _, report = analyze_file(str(path))
++        self.assertEqual(report["debug"], {"status": "present_no_rsds", "codeview": []})
++
++    def test_rsds_path_with_empty_basename_is_malformed(self):
++        data = bytearray(TRUEFOV.read_bytes())
++        image, _ = analyze_file(str(TRUEFOV))
++        debug_entry = image.rva_to_offset(image._dir(6)["rva"])
++        record_off = struct.unpack_from("<I", data, debug_entry + 24)[0]
++        data[record_off + 24:record_off + 32] = b"C:\\dir\\\0"
++        with tempfile.TemporaryDirectory() as directory_name:
++            path = Path(directory_name) / "empty-pdb-name-FIXTURE.dll"
++            path.write_bytes(data)
++            _, report = analyze_file(str(path))
++        self.assertEqual(report["debug"]["status"], "malformed")
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/cap13/TOOL/test_text_report.py
+@@ -0,0 +1,29 @@
++"""The default CLI text includes compatibility findings visible in JSON."""
++
++import os
++import subprocess
++import sys
++import unittest
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parent.parent
++TRUEFOV = Path(os.environ.get("CAP13_TRUEFOV_DLL", str(ROOT / "SAMPLE" / "TrueFOV-upstream-winmm.dll")))
++
++
++class TextReportTests(unittest.TestCase):
++    def test_cli_prints_tls_and_codeview_identity(self):
++        result = subprocess.run(
++            [sys.executable, str(ROOT / "TOOL" / "pe_analyzer.py"), str(TRUEFOV)],
++            check=True, capture_output=True, text=True,
++        )
++        self.assertIn("tls:                real", result.stdout)
++        self.assertIn("initialized=8", result.stdout)
++        self.assertIn("callbacks=0", result.stdout)
++        self.assertIn("debug CodeView:     winmm.pdb", result.stdout)
++        self.assertIn("af9cfae1-a970-4477-a17b-60c21eb6f6c1", result.stdout)
++        self.assertIn("age=1", result.stdout)
++
++
++if __name__ == "__main__":
++    unittest.main()
+--- /dev/null
++++ b/cap13/TOOL/admission_dossier.py
+@@ -0,0 +1,190 @@
++#!/usr/bin/env python3
++"""Read-only DLL intake against a source-pinned loader capability snapshot.
++
++The result is an offline refusal or a request for loader preflight, never a claim
++that a DLL can execute or produce gameplay behavior on PS5.
++"""
++
++import argparse
++import hashlib
++import json
++from pathlib import Path
++from typing import Any, Dict, List
++
++from pe_analyzer import analyze_file
++
++
++FEATURES = (
++    "native_x64_pe32_plus", "metadata_integrity", "managed_clr", "real_static_tls",
++    "tls_callback_table_pointer", "delay_import_directory", "rwx_partition",
++    "windows_import_abi", "dynamic_loadlibrary", "target_binding",
++    "console_behavior",
++)
++STATES = {"preflight_only", "refused", "unverified"}
++SOURCE_PIN_PATHS = {
++    "loader/src/pe_loader.cpp", "loader/include/pe_loader.h",
++    "loader/src/pe_types.h", "loader/src/win_api_shim.cpp",
++    "loader/src/win_api_shim.h",
++}
++
++
++def validate_source_pins(pins: Dict[str, str]) -> None:
++    if not isinstance(pins, dict) or set(pins) != SOURCE_PIN_PATHS:
++        raise ValueError("loader capability registry has missing or extra source pins")
++    if any(not isinstance(value, str) or len(value) != 64 or
++           any(char not in "0123456789abcdef" for char in value)
++           for value in pins.values()):
++        raise ValueError("loader capability registry has invalid source pin hash")
++
++
++def load_registry(path: Path) -> Dict[str, Any]:
++    registry = json.loads(path.read_text())
++    if registry.get("schema_version") != 1:
++        raise ValueError("unsupported loader capability registry schema")
++    entries = registry.get("features")
++    if not isinstance(entries, dict) or set(entries) != set(FEATURES):
++        raise ValueError("loader capability registry has missing or extra features")
++    if any(value not in STATES for value in entries.values()):
++        raise ValueError("loader capability registry has an unknown feature state")
++    validate_source_pins(registry.get("source_pins"))
++    options = registry.get("loader_options")
++    if options != {"page_size": 16384, "allow_rwx_partition": False,
++                   "allow_no_relocs": False}:
++        raise ValueError("loader capability registry has unsupported loader options")
++    return registry
++
++
++def verify_source_pins(registry: Dict[str, Any], loader_root: Path) -> None:
++    validate_source_pins(registry.get("source_pins"))
++    root = loader_root.resolve()
++    for relative, expected in registry["source_pins"].items():
++        path = (root / relative).resolve()
++        if root not in path.parents or not path.is_file() or \
++                hashlib.sha256(path.read_bytes()).hexdigest() != expected:
++            raise ValueError("loader source pin missing or mismatched: " + relative)
++
++
++def make_dossier(report: Dict[str, Any], registry: Dict[str, Any],
++                 source_pins_verified: bool = False) -> Dict[str, Any]:
++    features = registry["features"]
++    blockers: List[Dict[str, str]] = []
++    def block(feature: str, observation: str) -> None:
++        blockers.append({"feature": feature, "observation": observation,
++                         "capability": features.get(feature, "unverified")})
++
++    if report.get("classification") != "native-x64" or report.get("format") != "PE32+":
++        block("native_x64_pe32_plus", report.get("classification", "unknown"))
++    directories = {row.get("index"): row for row in report.get("data_directories", [])}
++    clr_dir = directories.get(14, {})
++    if report.get("managed") or clr_dir.get("rva") or clr_dir.get("size"):
++        block("managed_clr", "CLR descriptor present")
++    if report.get("optional", {}).get("number_of_rva_and_sizes", 0) <= 9:
++        block("metadata_integrity", "loader requires more than nine PE data directories")
++    optional = report.get("optional", {})
++    image_size = optional.get("size_of_image", 0)
++    if image_size == 0 or image_size > 512 * 1024 * 1024:
++        block("metadata_integrity", "SizeOfImage is zero or exceeds loader's 512 MiB cap")
++    entry_rva = optional.get("address_of_entry_point", 0)
++    if entry_rva:
++        executable = False
++        for section in report.get("sections", []):
++            exec_bytes = section["raw_size"]
++            if section["virtual_size"] and section["virtual_size"] < exec_bytes:
++                exec_bytes = section["virtual_size"]
++            if section["executable"] and section["virtual_address"] <= entry_rva < \
++                    section["virtual_address"] + exec_bytes:
++                executable = True
++                break
++        if not executable:
++            block("metadata_integrity", "entry point is outside file-backed executable section")
++    if report.get("warnings") or report.get("debug", {}).get("status") == "malformed":
++        block("metadata_integrity", "PE inspection produced warnings or malformed debug data")
++
++    tls = report.get("tls", {})
++    if tls.get("status") == "malformed":
++        block("real_static_tls", "malformed TLS directory: " + tls.get("reason", "unknown"))
++    elif tls.get("status") == "real" and features["real_static_tls"] != "preflight_only":
++        block("real_static_tls", "initialized=%s, zero-fill=%s, callbacks=%s" % (
++            tls.get("initialized_bytes", 0), tls.get("zero_fill_bytes", 0),
++            tls.get("callback_count", 0)))
++    if tls.get("callback_table_present") and features["tls_callback_table_pointer"] != "preflight_only":
++        block("tls_callback_table_pointer", "callback table pointer present")
++
++    delay_dir = directories.get(13, {})
++    if (delay_dir.get("rva") or delay_dir.get("size")) and \
++            features["delay_import_directory"] != "preflight_only":
++        block("delay_import_directory", "delay import directory present")
++
++    options = registry["loader_options"]
++    if not options["allow_rwx_partition"]:
++        page_size = options["page_size"]
++        page_flags: Dict[int, set] = {}
++        for section in report.get("sections", []):
++            start = section["virtual_address"]
++            extent = section["virtual_size"] or section["raw_size"]
++            if not extent:
++                continue
++            if start + extent > report.get("optional", {}).get("size_of_image", 0):
++                block("metadata_integrity", "section extends beyond SizeOfImage")
++                continue
++            for page in range(start // page_size, (start + extent - 1) // page_size + 1):
++                flags = page_flags.setdefault(page, set())
++                if section["executable"]:
++                    flags.add("X")
++                if section["writable"]:
++                    flags.add("W")
++        for page, flags in sorted(page_flags.items()):
++            if flags == {"W", "X"}:
++                block("rwx_partition", "16 KiB page at RVA 0x%X needs write and execute" %
++                      (page * page_size))
++
++    return {
++        "file": report.get("file"),
++        "sha256": report.get("sha256"),
++        "registry_snapshot": registry.get("snapshot"),
++        "registry_source_pins": registry["source_pins"],
++        "registry_source_pins_verified": source_pins_verified,
++        "registry_loader_options": options,
++        "offline_gate": "blocked" if blockers else "requires_loader_preflight",
++        "blockers": blockers,
++        "observed": {
++            "classification": report.get("classification"),
++            "tls": tls,
++            "debug": report.get("debug"),
++            "proxy_hint": report.get("ue4ss", {}).get("looks_like_proxy_dll"),
++            "import_dlls": [row.get("dll") for row in report.get("imports", [])],
++            "delay_import_dlls": [row.get("dll") for row in report.get("delay_imports", [])],
++        },
++        "unverified_gates": ["loader_preflight", "relocation_and_slide",
++                             "windows_import_abi", "dynamic_loadlibrary",
++                             "target_binding", "console_behavior"],
++        "warnings": report.get("warnings", []),
++        "diagnostics": report.get("diagnostics", []),
++    }
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("files", nargs="+", help="Windows PE DLLs to inspect without execution")
++    parser.add_argument("--registry", type=Path,
++                        default=Path(__file__).with_name("loader_capabilities.json"))
++    parser.add_argument("--loader-root", type=Path,
++                        help="verify registry hashes against this loader checkout")
++    parser.add_argument("--out", type=Path, help="write JSON to this file")
++    args = parser.parse_args()
++    registry = load_registry(args.registry)
++    if args.loader_root:
++        verify_source_pins(registry, args.loader_root)
++    dossiers = [make_dossier(analyze_file(path)[1], registry,
++                             source_pins_verified=bool(args.loader_root)) for path in args.files]
++    payload = dossiers[0] if len(dossiers) == 1 else dossiers
++    result = json.dumps(payload, indent=2) + "\n"
++    if args.out:
++        args.out.write_text(result)
++    else:
++        print(result, end="")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+--- /dev/null
++++ b/cap13/TOOL/loader_capabilities.json
+@@ -0,0 +1,29 @@
++{
++  "schema_version": 1,
++  "snapshot": "cg-console-wait-20261013-04 Mac-only PE loader",
++  "source_pins": {
++    "loader/src/pe_loader.cpp": "9a6348790bd1d6bc8c8da4bc0d5d06b15ab2ec13b369889266211f6eb66e2a51",
++    "loader/src/win_api_shim.cpp": "65f5e7093369e93c38e2caa831be92ad198e0c9bb22b4bed5ae58bf5b654e3f4",
++    "loader/include/pe_loader.h": "a55870934d5f97c8883e61999cbd99bf831ec1ecae4024f18b70ca8acbac7a2e",
++    "loader/src/pe_types.h": "6da2a827fd698023c8e1a9b9ed60c035772f4cbef9785074411ecbd7a982e719",
++    "loader/src/win_api_shim.h": "367e59f744e310a875a520f52a0ceaff174f35d85bd8eec05d8aed5774c577b9"
++  },
++  "loader_options": {
++    "page_size": 16384,
++    "allow_rwx_partition": false,
++    "allow_no_relocs": false
++  },
++  "features": {
++    "native_x64_pe32_plus": "preflight_only",
++    "metadata_integrity": "refused",
++    "managed_clr": "refused",
++    "real_static_tls": "refused",
++    "tls_callback_table_pointer": "refused",
++    "delay_import_directory": "refused",
++    "rwx_partition": "refused",
++    "windows_import_abi": "unverified",
++    "dynamic_loadlibrary": "unverified",
++    "target_binding": "unverified",
++    "console_behavior": "unverified"
++  }
++}
+--- /dev/null
++++ b/cap13/TOOL/test_admission_dossier.py
+@@ -0,0 +1,189 @@
++"""Offline gate tests use unchanged upstream DLLs and a no-TLS control."""
++
++import hashlib
++import json
++import struct
++import tempfile
++import unittest
++from pathlib import Path
++
++from admission_dossier import load_registry, make_dossier, verify_source_pins
++from pe_analyzer import analyze_file
++
++
++ROOT = Path(__file__).resolve().parent.parent
++UPSTREAM = Path('/WORKSPACE/.codex/worktrees/translation-core/caps-resume-20261013/caps-team-work/cg-max-ready-20261013-03/cap13/upstream-inputs')
++REGISTRY = ROOT / 'TOOL/loader_capabilities.json'
++LOADER_ROOT = Path('/WORKSPACE/.codex/worktrees/translation-core/caps-resume-20261013/caps-team-work/cg-console-wait-20261013-04')
++
++
++class AdmissionDossierTests(unittest.TestCase):
++    def _mutated_fixture_report(self, change):
++        source = ROOT / 'FIXTURES/cap13-ue4ss-native-mod-FIXTURE.dll'
++        data = bytearray(source.read_bytes())
++        pe_off = struct.unpack_from('<I', data, 0x3C)[0]
++        opt_off = pe_off + 4 + 20
++        change(data, opt_off)
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / 'mutated-FIXTURE.dll'
++            path.write_bytes(data)
++            _, report = analyze_file(str(path))
++        return report
++
++    def _mutated_worker_report(self, change):
++        source = Path('/WORKSPACE/.codex/worktrees/translation-core/caps-resume-20261013/caps-team-work/cap13/SAMPLE/real-worker-standard.dll')
++        data = bytearray(source.read_bytes())
++        pe_off = struct.unpack_from('<I', data, 0x3C)[0]
++        opt_off = pe_off + 4 + 20
++        change(data, opt_off)
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / 'mutated-worker-FIXTURE.dll'
++            path.write_bytes(data)
++            _, report = analyze_file(str(path))
++        return report
++
++    def test_five_unchanged_upstream_dlls_refuse_real_static_tls(self):
++        samples = [ROOT / 'SAMPLE/TrueFOV-upstream-winmm.dll'] + [
++            UPSTREAM / name for name in (
++                'ZeroCompanyMandoWardrobe-upstream-main.dll',
++                'TFWWorkbench-upstream-main.dll',
++                'EventViewerMod-upstream-main.dll',
++                'KismetDebuggerMod-upstream-main.dll',
++            )]
++        registry = load_registry(REGISTRY)
++        for path in samples:
++            with self.subTest(path=path.name):
++                before = hashlib.sha256(path.read_bytes()).hexdigest()
++                _, report = analyze_file(str(path))
++                dossier = make_dossier(report, registry)
++                self.assertEqual(dossier['sha256'], before)
++                self.assertEqual(dossier['offline_gate'], 'blocked')
++                self.assertIn('real_static_tls', [x['feature'] for x in dossier['blockers']])
++                self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
++
++    def test_no_tls_fixture_with_shared_write_execute_page_is_blocked(self):
++        _, report = analyze_file(str(ROOT / 'FIXTURES/cap13-ue4ss-native-mod-FIXTURE.dll'))
++        dossier = make_dossier(report, load_registry(REGISTRY))
++        self.assertEqual(dossier['offline_gate'], 'blocked')
++        self.assertIn('rwx_partition', [x['feature'] for x in dossier['blockers']])
++
++    def test_no_tls_separate_page_sample_still_needs_loader_preflight(self):
++        path = Path('/WORKSPACE/.codex/worktrees/translation-core/caps-resume-20261013/caps-team-work/cap13/SAMPLE/real-worker-standard.dll')
++        _, report = analyze_file(str(path))
++        dossier = make_dossier(report, load_registry(REGISTRY))
++        self.assertEqual(dossier['offline_gate'], 'requires_loader_preflight')
++        self.assertEqual(dossier['blockers'], [])
++        self.assertIn('loader_preflight', dossier['unverified_gates'])
++        self.assertIn('target_binding', dossier['unverified_gates'])
++        self.assertIn('windows_import_abi', dossier['unverified_gates'])
++
++    def test_empty_tls_template_with_callback_pointer_is_refused(self):
++        source = ROOT / 'SAMPLE/TrueFOV-upstream-winmm.dll'
++        data = bytearray(source.read_bytes())
++        image, _ = analyze_file(str(source))
++        tls_off = image.rva_to_offset(image._dir(9)['rva'])
++        start = struct.unpack_from('<Q', data, tls_off)[0]
++        struct.pack_into('<Q', data, tls_off + 8, start)
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / 'empty-template-callback-pointer-FIXTURE.dll'
++            path.write_bytes(data)
++            _, report = analyze_file(str(path))
++        self.assertEqual(report['tls']['status'], 'empty')
++        dossier = make_dossier(report, load_registry(REGISTRY))
++        self.assertEqual(dossier['offline_gate'], 'blocked')
++        self.assertIn('tls_callback_table_pointer', [x['feature'] for x in dossier['blockers']])
++
++    def test_unrecognized_registry_state_is_rejected(self):
++        registry = json.loads(REGISTRY.read_text())
++        registry['features']['real_static_tls'] = 'ready'
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / 'bad-registry.json'
++            path.write_text(json.dumps(registry))
++            with self.assertRaisesRegex(ValueError, 'unknown feature state'):
++                load_registry(path)
++
++    def test_registry_matches_pinned_loader_sources(self):
++        verify_source_pins(load_registry(REGISTRY), LOADER_ROOT)
++
++    def test_mismatched_loader_source_is_rejected(self):
++        registry = load_registry(REGISTRY)
++        with tempfile.TemporaryDirectory() as directory:
++            with self.assertRaisesRegex(ValueError, 'missing or mismatched'):
++                verify_source_pins(registry, Path(directory))
++
++    def test_bad_pe_signature_is_refused_without_crashing_intake(self):
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / 'bad-signature-FIXTURE.dll'
++            data = bytearray(128)
++            data[:2] = b'MZ'
++            struct.pack_into('<I', data, 0x3C, 0x40)
++            path.write_bytes(data)
++            _, report = analyze_file(str(path))
++        dossier = make_dossier(report, load_registry(REGISTRY))
++        self.assertEqual(report['classification'], 'unknown')
++        self.assertEqual(dossier['offline_gate'], 'blocked')
++
++    def test_rva_only_clr_directory_is_refused(self):
++        def change(data, opt_off):
++            struct.pack_into('<II', data, opt_off + 112 + 14 * 8, 0x2000, 0)
++        report = self._mutated_fixture_report(change)
++        self.assertFalse(report['managed'])
++        dossier = make_dossier(report, load_registry(REGISTRY))
++        self.assertIn('managed_clr', [x['feature'] for x in dossier['blockers']])
++
++    def test_loader_minimum_data_directory_count_is_enforced(self):
++        def change(data, opt_off):
++            struct.pack_into('<I', data, opt_off + 108, 9)
++        report = self._mutated_fixture_report(change)
++        dossier = make_dossier(report, load_registry(REGISTRY))
++        self.assertIn('metadata_integrity', [x['feature'] for x in dossier['blockers']])
++
++    def test_declared_tls_directory_must_be_wholly_file_backed(self):
++        source = ROOT / 'SAMPLE/cap13-mod-splitscreen.dll'
++        data = bytearray(source.read_bytes())
++        pe_off = struct.unpack_from('<I', data, 0x3C)[0]
++        opt_off = pe_off + 4 + 20
++        struct.pack_into('<I', data, opt_off + 112 + 9 * 8 + 4, 0x601)
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / 'oversized-tls-FIXTURE.dll'
++            path.write_bytes(data)
++            _, report = analyze_file(str(path))
++        dossier = make_dossier(report, load_registry(REGISTRY))
++        self.assertEqual(report['tls']['status'], 'malformed')
++        self.assertIn('real_static_tls', [x['feature'] for x in dossier['blockers']])
++
++    def test_absolute_source_pin_cannot_bypass_loader_root(self):
++        registry = load_registry(REGISTRY)
++        registry['source_pins'] = {str(LOADER_ROOT / 'loader/src/pe_loader.cpp'):
++                                   registry['source_pins']['loader/src/pe_loader.cpp']}
++        with tempfile.TemporaryDirectory() as directory:
++            with self.assertRaisesRegex(ValueError, 'source pin'):
++                verify_source_pins(registry, Path(directory))
++
++    def test_registry_requires_pe_structure_header_pin(self):
++        registry = json.loads(REGISTRY.read_text())
++        registry['source_pins'].pop('loader/src/pe_types.h', None)
++        with tempfile.TemporaryDirectory() as directory:
++            path = Path(directory) / 'missing-header-pin.json'
++            path.write_text(json.dumps(registry))
++            with self.assertRaisesRegex(ValueError, 'source pins'):
++                load_registry(path)
++
++    def test_image_over_loader_cap_is_refused(self):
++        report = self._mutated_worker_report(
++            lambda data, opt_off: struct.pack_into('<I', data, opt_off + 56, 0x20001000))
++        dossier = make_dossier(report, load_registry(REGISTRY))
++        self.assertIn('metadata_integrity', [x['feature'] for x in dossier['blockers']])
++
++    def test_entrypoint_in_read_only_data_is_refused(self):
++        source = Path('/WORKSPACE/.codex/worktrees/translation-core/caps-resume-20261013/caps-team-work/cap13/SAMPLE/real-worker-standard.dll')
++        image, _ = analyze_file(str(source))
++        rdata_rva = next(s['virtual_address'] for s in image.sections if s['name'] == '.rdata')
++        report = self._mutated_worker_report(
++            lambda data, opt_off: struct.pack_into('<I', data, opt_off + 16, rdata_rva))
++        dossier = make_dossier(report, load_registry(REGISTRY))
++        self.assertIn('metadata_integrity', [x['feature'] for x in dossier['blockers']])
++
++
++if __name__ == '__main__':
++    unittest.main()

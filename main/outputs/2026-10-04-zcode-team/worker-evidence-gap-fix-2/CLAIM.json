@@ -1,0 +1,75 @@
+{
+  "worker": "worker-evidence-gap-fix-2",
+  "date": "2026-10-05",
+  "scope": "evidence.sh + its suites (worker-launch10-evidence-upgrade/host-test); real-run fixtures worker-verdict-first-real/fixtures untouched",
+  "task": "Fix the nine REAL-DATA gaps G1-G9 from worker-verdict-first-real/LAUNCH10-RESULTS.md section 5; the three real runs are the regression corpus (rerun required); verdicts must come out SAME or BETTER-labeled; no re-baselining",
+  "file": "outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/evidence.sh",
+  "sha256_before": "76559126074c28dad936905a8d9c2c3c3d7fffedc47907cc7f0f356616ae858a",
+  "sha256_after": "7b03ca9503a2cd229d391e3f116d27e308b9de39124ee438711319554412d7ee",
+  "changes": [
+    {
+      "gap": "G1 HIGH — verdict-name fidelity",
+      "what": "The two observed refusal classes now carry the oracle's own vocabulary instead of bare FAILED_code<N>: FAILED_E2_START (oracle E2: runtime_start_failed code=3, EXPECTED-REFUSAL, >= MINIMAL-ACCEPT) and FAILED_B7_MFA (oracle B7: mfa_activate_failed, EXPECTED-REFUSAL, FAIL with named cause, nothing downstream ran). A MINIMAL_ACCEPT_E2_REFUSAL verdict fires when a code=3 refusal coexists with the current session's sdiag conversion quartet (all 4 lmf_extent events + anchor_count>0 + intervals_found>0 + cfg events), no D6 line, no crash tail, and a fresh failed status whose detail matches the refusal — with the E4 'activated' O_TRUNC caveat printed (evidence-equivalence per LAUNCH10-RESULTS section 2). ORACLE-CLASS lines + JSON refusal_class name the row. map_detail now stages mfa lines at S2_ACTIVATION and code=3 lines at S9_START_REFUSED (was the misleading S9_START_ACK 'without a pinned detail string'). Bare FAILED_code<N> remains the fallback.",
+      "verified": "run1 FAILED_code3 -> FAILED_E2_START (rung reserved: no status capture, fresh=unknown); run2 FAILED_code-8 -> FAILED_B7_MFA; run3 FAILED_code3 -> MINIMAL_ACCEPT_E2_REFUSAL with caveat. Same-or-better-labeled on all three; rehearsal five sets unchanged."
+    },
+    {
+      "gap": "G2 HIGH — sdiag per-pid/session split",
+      "what": "classify_sdiag groups everything PER PID (session): SDIAGSUM is now the file-total line (events/sessions/pid_first/pid_last/baseline_cut; value tags explicitly = LAST session's) and each session gets PIDSUM (per-session start_ok/start_failed, mfa/runtime_start_failed codes with int32 rendering, extent_events/4, cfg_events, lease_spans/reg, anchor_count/intervals_found, vmentry/walk_stop, exepath_source, spanpub count/total/cap/env pair, stat_ownmod[_ec], module_start_return), a PIDCHAIN first-seen chain, and a PIDJSON record for the JSON tail. STIME deltas computed ONLY within one pid — a session switch prints a marker and resets the delta base; never cross-session. Optional --baseline-sdiag-bytes / --baseline-dir modbridge-supplier-diag-baseline.txt append-only cut (launch-10 pinned NO sdiag baseline: defaults OFF; per-pid split scopes cumulative files regardless).",
+      "verified": "run3's one cumulative jsonl (1591 events) now splits into pid 317 (548 ev, quartet 7/1/6), pid 341 (495 ev, mfa -8, prologue-only chain S1->S2->S11), pid 355 (548 ev, quartet 7/1/6, current). Synthetic boundary test: no cross-session delta, marker printed."
+    },
+    {
+      "gap": "G3 HIGH — JSON tail under-represents sdiag",
+      "what": "JSON tail gains: refusal_class + oracle_class (G1), a sdiag object (present/events/sessions/pid_first/pid_last/current_pid/chain/start_failed_total/baseline_cut/quartet + the current session's full value set incl. the predicted pair anchor_count/intervals_found next to lease_spans), a sessions array (PIDJSON per-session records), and a vm_capacity note object (G7). All pre-existing keys unchanged.",
+      "verified": "python3 json.loads valid on run1/run2/run3 + rehearsal A-E; run3 JSON shows current_pid=355 quartet=yes anchor=7 intervals=1 spans=6 and per-pid sessions — a JSON-only consumer now sees the MINIMAL-ACCEPT evidence."
+    },
+    {
+      "gap": "G7 MEDIUM — vm_total vs capacity, honest note",
+      "what": "When the current session's bridge_vmentry_entries > pinned kBridgeVmmapEntries=16384, a diag-note is emitted stating walk_stop, the oracle C1/S3 prediction (stop=2 when vm_total > 16384) and the three candidate explanations; explicitly a note field, no verdict impact. JSON vm_capacity mirrors it.",
+      "verified": "run1 fires the note (22761 > 16384, stop=0); run3 does not (10028 < 16384)."
+    },
+    {
+      "gap": "G4 LOW — S11_STOP display quirk",
+      "what": "When a failure line exists and the current session's chain ends with S11_STOP from module_start_return=0, a note explains: entry returned 0 AFTER the refusal, game continues UNMODDED, not a stop/unload event. Chain itself not reordered (first-seen record).",
+      "verified": "note present on run1/run3 (and rehearsal set D, whose sdiag genuinely has module_start_return=0 after its refusal — same honest condition; D's verdict stays FAILED_S6_CONVERSION); correctly absent on run2 (no sdiag, chain has no S11_STOP) and on rehearsal sets A/B/C/E."
+    },
+    {
+      "gap": "G5 LOW — fixture-name coupling",
+      "what": "New --sdiag FILE flag: explicit supplier-diag path in --from-dir mode when the fixture is not named modbridge-supplier-diag.jsonl.",
+      "verified": "run1 sdiag under its original documented name run1-sdiag.jsonl classified identically via --sdiag."
+    },
+    {
+      "gap": "G6 LOW — cumulative UE4SS.log windows",
+      "what": "Failure lines are grouped by their r4 pid on the one-pager and a window note states: window is cumulative across this boot's launches, PATH_TEST/ACTIVATION_TEST stamps carry no pid (positional attribution only), verdict precedence = LAST failure line (append-only ordering discipline). Full per-session windowing of the log stays out of scope (r4 prefixes exist only on failure lines).",
+      "verified": "run3 shows pid=317 x1 pid=341 x1 pid=355 x1; run2 shows pid=317 x1 pid=341 x1 with the note."
+    },
+    {
+      "gap": "G8 LOW — oracle C7 nuance",
+      "what": "When the current session shows bridge_exepath_source=0 WITH stat_ownmod=1 (r10 fork resolved) and conversion proceeding, a diag-note records that the fork refuses only when ALL THREE stats fail — oracle C7 wording looser than live behavior; recorded against the row for the next oracle revision.",
+      "verified": "fires on run1 and run3 (both live boots); absent on rehearsal sets (no stat_ownmod records)."
+    },
+    {
+      "gap": "G9 LOW — spanpub env shape + saturation",
+      "what": "When spanpub_cap=1 on the current session, a diag-note reports the env pair as the 64-bit low/high split (value_hex forms) and the count/total saturation at kMaxPublishedSpans=16 (both real boots saturated). spanpub_count/total/cap/env_low/env_high also ride PIDSUM and PIDJSON.",
+      "verified": "run1: env 0x409d0000/high 16, 16/119; run3: env 0x00410000/high 17, 16/127."
+    }
+  ],
+  "skipped": [
+    "E1 (code=2 START-family sibling) verdict-name mapping NOT added: not an observed class in G1's scope; all pinned code=2 details already map (FAILED_S8_CONTEXT / FAILED_S8_CONTEXT_LEASE); only an unpinned hypothetical code=2 would still fall to FAILED_code2 — left for the oracle owner.",
+    "Full per-session windowing of the UE4SS.log text (G6): not cheap — r4 pid prefixes exist only on failure lines; positional caveat note added instead (as scoped: 'PATH_TEST stamps cannot be attributed to a specific run except by position').",
+    "STIME display cap stays 24 (GAP-5 precedent kept as is)."
+  ],
+  "untouched": [
+    "Pinned baseline constants (BASE_UE4SS/ENTRY/STATUS/XWP, PIN_*_SHA, BASE_SESS_PID=273, BASE_SESS_MS=44372083) and all drift-guard logic: filtered diff = 0 lines (no re-baselining; new BASE_SDIAG defaults 0 = cut OFF)",
+    "Real-run fixtures byte-identical after the reruns (shas match LAUNCH10-RESULTS section 6 provenance: 4a4e0cf7…, d5ad9fa0…, e40bf151…, 9aeecee…, 264ba150…, f5ba1226…)",
+    "Rehearsal fixtures byte-identical (read-only --from-dir use)",
+    "Verdict precedence and all pinned-detail arms: rehearsal five-set verdicts unchanged (A/E MODS_STARTED, B/C FAILED_STATUS, D FAILED_S6_CONVERSION)"
+  ],
+  "tests": {
+    "real_runs_regression_corpus": {"result": "PASS", "runs": "run1/run2/run3 rc=0, stderr empty, zero WARN", "verdicts": "run1 FAILED_code3 -> FAILED_E2_START; run2 FAILED_code-8 -> FAILED_B7_MFA; run3 FAILED_code3 -> MINIMAL_ACCEPT_E2_REFUSAL — all SAME-or-BETTER-labeled, substance unchanged"},
+    "host_fixture_suite": {"result": "PASS", "passed": 94, "failed": 0, "rc": 0, "note": "same 94 assertions as the prior worker's suite; zero new assertions added, all green post-patch"},
+    "rehearsal_five_sets": {"result": "PASS", "sets": "A-E all rc=0, empty stderr, ZERO WARN; verdicts identical pre/post"},
+    "json_tail_validation": {"result": "PASS", "note": "python3 json.loads valid on all 8 tails; new sdiag/sessions/vm_capacity/refusal_class fields present and well-typed"},
+    "receipt": "outputs/2026-10-04-zcode-team/worker-evidence-gap-fix-2/TEST-RECEIPT.txt"
+  },
+  "constraints_honored": ["real-run corpus rerun after patching", "verdicts SAME or BETTER-labeled only", "no re-baselining", "no fixture modification", "LOCAL ONLY, no console contact"]
+}

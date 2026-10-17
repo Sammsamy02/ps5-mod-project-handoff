@@ -1,0 +1,47 @@
+{
+  "worker": "worker-vaddr-semantics",
+  "role": "Settle whether Townfall survey addresses are ELF virtual addresses or file offsets; derive runtime translation from actual segment correspondence",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "scope": {
+    "read_only": [
+      ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+      ".superpowers/native-observations/townfall-static-executable-2026-10-02/capture.json",
+      ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot-prefix.bin",
+      ".superpowers/native-dependency-spike/ue4ss-native-file-core-survey-1/ (src, run-release-1)",
+      ".superpowers/native-dependency-spike/ue4ss-native-tick-relocation-resolver-1/crate/src/",
+      "outputs/2026-10-04-zcode-team/worker-2-layout-facts/",
+      "outputs/2026-10-04-zcode-team/worker-ingame-probe-v2/"
+    ],
+    "write_only": [
+      "outputs/2026-10-04-zcode-team/worker-vaddr-semantics/"
+    ]
+  },
+  "capture": {
+    "path": ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+    "expected_sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+    "size_bytes": 194241424
+  },
+  "anchors": {
+    "GUObjectArray": "0x93ba110",
+    "UGameEngine::Tick": "0x2fac8c0",
+    "StaticConstructObject": "0x490aa0"
+  },
+  "survey_source_of_record": {
+    "stdout": ".superpowers/native-dependency-spike/ue4ss-native-file-core-survey-1/run-release-1/stdout.txt",
+    "receipt": ".superpowers/native-dependency-spike/ue4ss-native-file-core-survey-1/run-release-1/receipt.json",
+    "resolver_crate": ".superpowers/native-dependency-spike/ue4ss-native-tick-relocation-resolver-1/crate/src/"
+  },
+  "constraints": {
+    "nested_subagents": false,
+    "network_or_console": false,
+    "call_budget": 35
+  },
+  "deliverables": ["CLAIM.json", "SEGMENT-CORRESPONDENCE.md", "REPORT.md"],
+  "verdict": {
+    "question": "Are survey addresses ELF virtual addresses or file offsets?",
+    "answer": "ELF p_vaddr values (elf_image_vaddr). Proven by survey derivation code (elf_load_spans/object_cfg.rs/elf_tick.rs label bytes with p_vaddr; rip4/ip arithmetic) and byte-level re-derivation from the capture (prologues at vaddr+0x4000; 148 lea-rdi sites target 0x93ba110 with the survey's own alloc/free call evidence).",
+    "runtime_translation": "runtime = mapped_start(seg) + (vaddr - seg.p_vaddr); single bias B only if probe proves all mapped_start == B + p_vaddr. Proven today: mapped_start(LOAD0)=0x400000 (EXEC span 0x400000-0x787c000 equals rp(memsz)=0x747c000, prot --X). GUObjectArray (LOAD7 BSS, delta 0x27e110) has NO validated runtime base yet.",
+    "capture_sha256_reverified": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc"
+  },
+  "status": "analysis complete; REPORT.md written last"
+}

@@ -1,0 +1,215 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-build/final-units/runtime_start_bridge_r14_diag_spanpub.cpp	2026-10-05 21:07:07
++++ staging/runtime_start_bridge_r14_diag_spanpub.cpp	2026-10-05 21:23:05
+@@ -113,6 +113,7 @@
+ #include <sys/sysctl.h>
+ #include <sys/syscall.h> // SYS_mincore (kernel-header-sourced number, never hand-typed)
+ #include <sys/user.h>
++#include <fcntl.h> // v5.2 worker-copyin-unit: open() flag constants (header-only)
+ #include <unistd.h>
+ #include <errno.h>
+ 
+@@ -807,6 +808,204 @@
+ // worker-copyin-unit): it provides readability AND the read itself.
+ // The <sys/syscall.h> include stays harmless; no raw syscall remains.
+ 
++// ---- v5.2 (worker-copyin-unit, STAGED NEXT-candidate; fills the edit-14
++// ---- hole above): fresh per-address WRITE(2)-COPYIN owned-read probe —
++// ---- the SOLE listing-gap oracle.
++//
++// TRANSPORT (session 934 law — no raw syscall instruction anywhere; the
++// DEFINITIVE l11-1 supplier-contract facts, all status=unique): every
++// kernel touch below is an NID-resolved symbol the composed module ALREADY
++// imports — open / write / read / close / unlink (libScePosix/libkernel).
++// Added-import delta of this hunk: NONE. Contract flags for the controller:
++//   `lseek` — NOT in the contract: sink size is verified by WRITE-RETURN
++//   ACCOUNTING (rc==chunk accumulation over the page-granular chunks) plus
++//   the read-back capture check below (read IS in contract); no seek, no
++//   fstat.
++//   `sceKernelOpen`/`sceKernelClose` — NOT in the contract as such; the
++//   portable `open`/`close` C symbols ARE the in-contract imports used.
++//   The stdio mapping (fopen/fwrite — in contract) was REJECTED for this
++//   probe on safety: a buffered fwrite may CPU-copy the user buffer into
++//   the stream buffer, turning a refused source into an in-process SIGSEGV
++//   (game-fatal) instead of the kernel EFAULT this oracle is built on;
++//   whether Sony's unbuffered stdio writes directly from the user buffer is
++//   unproven. The fd `write` keeps the proven kernel-copyin semantics
++//   byte-identical (the standalone payload's `write` U-import evidence is
++//   this same wrapper class).
++//
++// SEMANTICS (worker-write-copyin design note, builds prospero-186dab02e289
++// / prospero-98d370be8eeb, standalone payload — never game-process
++// evidence): write(2) of [addr, addr+len) into a REAL owned file is a
++// kernel-mediated read + readability oracle. Image .bss / stack /
++// malloc-heap sources transfer byte-true; munmap hole / PROT_NONE /
++// DM-class 0x22C0000000 / high unmapped 0x4000000000 all refuse leaving the
++// sink byte-empty (all-or-nothing per call; partials never observed).
++// /dev/null-class sinks are VACUOUS (full count, nothing retained) — a real
++// file sink is mandatory and success requires the sink size double-verified.
++//
++// CONVENTION: the libScePosix wrappers use the classic -1/errno form
++// (errno via __error, itself a contract import; errno is a MACRO expanding
++// to (*__error()) — a '::errno' qualification is a syntax error). Raw rc
++// AND errno are captured per write and emitted; admission rests on
++// write-return accounting (rc==chunk for every page-granular chunk) plus
++// the first-page read-back check — never on the rc shape alone.
++//
++// CLEANUP LAW: the sink is a FIXED bridge-owned path under /data with the
++// modbridge- prefix convention; unlink-first clears any stale leaked sink;
++// close + unlink run on EVERY path once the sink exists (a refusal leaves
++// 0 bytes but the file exists). No sink bytes are trusted after unlink.
++//
++// SINK-FED VALIDATION SUPPORT (R-4): on READABLE the probe captures the
++// FIRST PAGE of the probed range (before cleanup) into a bounded 3-slot
++// capture store keyed by probed address — slot for Blocks[0] (the admission
++// probe) plus up to two more blocks the initializer may probe for entry
++// bytes (bounded: only blocks referenced by the two validated ids). The
++// accessor looks captures up BY ADDRESS; a miss returns 0 and the caller
++// (initializer) refuses loudly rather than reading directly.
++//
++// Returns (readable: 1 / refused: 0 / unavailable: -1) — the int codes of
++// rc_seed::CopyinProbeClass. Diagnostic tags (pool_copyin_probe_*):
++//   pool_copyin_probe_fresh  1 readable / 0 refused / 2 unavailable /
++//                            3 invalid request class
++//   pool_copyin_probe_rc     raw write(2) rc of the last chunk (u32;
++//                            0xFFFFFFFF encodes -1)
++//   pool_copyin_probe_errno  errno captured after that write
++//   pool_copyin_probe_sink   final sink byte count (u32; <= 16 MiB)
++static uint8_t g_write_copyin_capture[3][0x1000]; // first page per probed block
++static uint64_t g_write_copyin_capture_addr[3];   // probed range base per slot
++static uint32_t g_write_copyin_capture_len[3];    // valid bytes per slot
++static bool g_write_copyin_capture_valid[3];
++static uint32_t g_write_copyin_capture_next = 0;  // round-robin within the 3 slots
++
++extern "C" int bridge_write_copyin_capture(uint64_t addr, const uint8_t **out_bytes, uint32_t *out_len)
++{
++    if (out_bytes == nullptr || out_len == nullptr) {
++        return 0;
++    }
++    for (uint32_t i = 0; i < 3; ++i) {
++        if (g_write_copyin_capture_valid[i] && g_write_copyin_capture_addr[i] == addr) {
++            *out_bytes = g_write_copyin_capture[i];
++            *out_len = g_write_copyin_capture_len[i];
++            return 1;
++        }
++    }
++    return 0;
++}
++
++extern "C" int bridge_kernel_write_copyin_probe(uint64_t addr, uint64_t len)
++{
++    static constexpr uint64_t kPage = 0x1000;
++    static constexpr uint64_t kMaxProbeBytes = 0x1000000; // 16 MiB class budget cap
++    static const char *kSinkPath = "/data/modbridge-copyin-sink.bin";
++    if (len == 0 || len > kMaxProbeBytes) {
++        ::diagnostic_event("pool_copyin_probe_fresh", 3u); // invalid request class
++        return -1; // no calls, no sink, no target bytes touched
++    }
++    // Unlink-first law (stale-leak tolerance), then the real-file sink
++    // open. Vacuous sinks (rc==chunk with nothing retained) are refused by
++    // the sink-size verification below.
++    (void)::unlink(kSinkPath);
++    const int fd = ::open(kSinkPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
++    if (fd < 0) {
++        ::diagnostic_event("pool_copyin_probe_fresh", 2u); // unavailable (sink open class)
++        ::diagnostic_event("pool_copyin_probe_rc", 0xFFFFFFFFu);
++        ::diagnostic_event("pool_copyin_probe_errno", static_cast<uint32_t>(errno));
++        return -1; // target bytes untouched
++    }
++    uint64_t landed = 0;    // write-return accounting (rc==chunk accumulation)
++    uint64_t cursor = addr; // NOT dereferenced CPU-side: write(2) carries it
++    int verdict = -1;       // unavailable unless proven otherwise
++    uint32_t code = 2u;     // diagnostic class (unavailable default)
++    bool completed = false; // every chunk fully accounted by write returns
++    long last_rc = 0;
++    int errno_at_write = 0;
++    while (cursor < addr + len) {
++        // Page-granular step: a chunk never crosses a page boundary, so a
++        // refusal is unambiguous for that page. len==8 yields the single
++        // 8-byte probe shape.
++        const uint64_t page_remaining = kPage - (cursor & (kPage - 1));
++        const uint64_t range_left = addr + len - cursor;
++        const uint64_t chunk = page_remaining < range_left ? page_remaining : range_left;
++        errno_at_write = errno; // pre-call capture (fresh)
++        last_rc = ::write(fd, reinterpret_cast<const void *>(cursor), static_cast<size_t>(chunk));
++        errno_at_write = errno; // post-call capture
++        if (last_rc == static_cast<long>(chunk)) {
++            landed += static_cast<uint64_t>(chunk); // write-return accounting
++            cursor += chunk;
++            continue;
++        }
++        if (last_rc == -1) {
++            // Error by the wrapper convention (-1/errno):
++            //   EFAULT (14) -> REFUSED (0): the kernel refuses THIS source.
++            //     NEVER read as "unmapped": PROT_NONE and non-allowlisted
++            //     source classes refuse identically (address-class-unknown).
++            //   anything else (EPERM policy abort — never observed on this
++            //     route; EIO/EACCES/ENOSPC/... "other errors") -> UNAVAILABLE
++            //     (2): honest, never a source claim in either direction.
++            if (errno_at_write == EFAULT) {
++                code = 0u;
++                verdict = 0;
++            } else {
++                code = 2u;
++                verdict = -1;
++            }
++            break;
++        }
++        // 0 < rc < chunk: partial transfer (never observed in the campaign)
++        // — recorded honestly as unavailable with the raw rc/errno, never
++        // admitted, never claimed as a clean refusal.
++        code = 2u;
++        verdict = -1;
++        break;
++    }
++    if (verdict == -1 && landed == len) {
++        completed = true;
++    }
++    // Read-back capture on the consumed sink (the vacuity law using ONLY
++    // in-contract symbols — `read` instead of lseek/fstat): reopen O_RDONLY
++    // and read the sink's FIRST page. The read return must equal
++    // min(len, page): an empty/short read demotes to UNAVAILABLE (never
++    // admits — this is what rules out /dev/null-style vacuous sinks and a
++    // truncated file), a full read both proves bytes truly landed and fills
++    // the R-4 capture for the sink-fed validation.
++    int rfd = -1;
++    if (completed) {
++        rfd = ::open(kSinkPath, O_RDONLY);
++        if (rfd < 0) {
++            completed = false; // sink vanished between close and reopen
++        }
++    }
++    if (completed) {
++        const long expect = (len < kPage) ? static_cast<long>(len) : static_cast<long>(kPage);
++        const long got = ::read(rfd, g_write_copyin_capture[g_write_copyin_capture_next],
++                                static_cast<size_t>(0x1000));
++        if (got != expect) {
++            completed = false; // vacuous/truncated sink: never admitted
++        } else {
++            const uint32_t slot = g_write_copyin_capture_next;
++            g_write_copyin_capture_addr[slot] = addr;
++            g_write_copyin_capture_len[slot] = static_cast<uint32_t>(got);
++            g_write_copyin_capture_valid[slot] = true;
++            g_write_copyin_capture_next = (g_write_copyin_capture_next + 1u) % 3u;
++        }
++    }
++    if (completed) {
++        code = 1u;
++        verdict = 1;
++    }
++    if (rfd >= 0) {
++        ::close(rfd);
++    }
++    // Cleanup law: close + unlink ALWAYS once the sink exists (refusal
++    // paths included — an EFAULT leaves 0 bytes but the file exists).
++    ::close(fd);
++    (void)::unlink(kSinkPath);
++    ::diagnostic_event("pool_copyin_probe_fresh", code);
++    ::diagnostic_event("pool_copyin_probe_rc", static_cast<uint32_t>(last_rc));
++    ::diagnostic_event("pool_copyin_probe_errno", static_cast<uint32_t>(errno_at_write));
++    ::diagnostic_event("pool_copyin_probe_sink", static_cast<uint32_t>(landed));
++    return verdict;
++}
++
+ // L3: the pre-lease coverage gate. Recomputes EXACTLY the ranges the
+ // conversion will lease — records of the same frozen snapshot that contain
+ // `observed_base`, are kve-readable, and intersect the extent (the adapter's

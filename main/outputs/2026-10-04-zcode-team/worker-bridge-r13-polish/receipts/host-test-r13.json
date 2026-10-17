@@ -1,0 +1,32 @@
+{
+  "worker": "worker-bridge-r13-polish",
+  "date": "2026-10-04",
+  "test": "outputs/2026-10-04-zcode-team/worker-module-start-wiring/host_test_r13/test_r13.cpp",
+  "production_source": "outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_start_bridge_r13.cpp",
+  "method": "compiles the ACTUAL r13 bridge TU into the test binary (no replicas); sysctl link-mock + diagnostic-event capture + SIGSEGV shadow layer; start chain (lmf supplier ctor/capture/facts, RC conversion, context factory, Start/Stop ack, ActivationDeleter) defined as recording mocks; PLH OwnedMemory service compiled from its REAL source (.superpowers/native-dependency-spike/ue4ss-native-read-lease-1/src/OwnedMemory.cpp with -DPLH_OWNED_MEMORY_HOST_TEST, the guard that makes the provider TU non-empty on host)",
+  "host_toolchain": "Apple clang++ -std=c++20 -Wall -Wextra -fdeclspec (macOS arm64), link -undefined dynamic_lookup",
+  "runs": [
+    {
+      "cmd": "./test_r13",
+      "sections": "1 kve_path walk/capture, 2 full-path acceptance, 3 ladder + probe-rung (P3-3), 4 identity gate, 5 r12/r13 start-path deltas (P2-1 adoption, opt-ins, configured-roots attach + bridge_cfg_* events, PRX-as-input invariant, stop paths, MRS_ERR_STOP_EXN==5)",
+      "passes": 39,
+      "failures": 0,
+      "exit": 0,
+      "log": "receipts/run-main.txt"
+    },
+    {
+      "cmd": "RUN_LEASE_SECTION=1 ./test_r13",
+      "sections": "all of the above plus 6 lease registration with the REAL OwnedMemory service: quantization on an unaligned-end span inside the extent, exact-byte lease, final-partial-page lease (r11 regression), beyond-quantized-end refusal, 129-span cap saturation visible via bridge_lease_reg_spans (P3-1)",
+      "passes": 46,
+      "failures": 0,
+      "exit": 0,
+      "log": "receipts/run-lease.txt"
+    }
+  ],
+  "notes": [
+    "The r8-era section-5 lease fixture span [0x8018c000, 0x90000000) lies ABOVE the anchored extent end 0x400000+0xbc602c8=0xc0602c8, so it could never register a region; this plus the r8-era ReadRange length underflow (0x9000000 - 0x8018c000) explain why lease host validation stayed PENDING since r8.",
+    "The P3-2 static_assert now also pins the host kinfo_vmentry shim (1160B) at test compile time.",
+    "Run order inside one process requires distinct readable spans per start call: production registrations are process-lifetime and the real service refuses overlapping regions."
+  ],
+  "result": "ALL PASS"
+}

@@ -1,0 +1,269 @@
+--- /LOCAL_SCRATCH	2026-10-12 12:26:34
++++ 2026-10-08-l26-runtime/typescan-r4/candidate/src/UObjectGlobals.cpp	2026-10-12 12:32:03
+@@ -1196,7 +1196,244 @@
+         if (Slot) { Slot->ChainMatchesQuery = bFound ? 1 : 0; }
+         return bFound;
+     }
++
++    // =====================================================================================
++    // [R9-IDX] Object index for FindFirstOf/FindAllOf (generic; no new engine address).
++    // The full walk reads every UObject (~160k on Townfall, ~30-40 ms, memory bound); PC
++    // UE4SS answers from hash tables / a listener-fed cache in ~1 ms. This index stays
++    // EXACT for new objects using only console-proven mechanisms:
++    //   - a new object either APPENDS (index >= the NumElements we last synced) or REUSES
++    //     an index the engine freed, and every free is reported first to the engine-registered
++    //     delete listener (FShutdownDeleteListener::NotifyUObjectDeleted -> r9_index_note_deleted);
++    //   - each sync therefore scans only [last NumElements, current NumElements) + the freed
++    //     indices (re-checked until reused). Never the whole array again.
++    // Results are re-validated at query time exactly like the walk (slot still holds the object,
++    // not unreachable, IsValidObjectForFindXOf, class chain contains the query) and returned in
++    // index order (the walk's order). Storage lives on the engine allocator (GMalloc), never
++    // the small libc heap. Any inconsistency disables the index and the walk is used (fail closed).
++    // =====================================================================================
++    namespace r9idx
++    {
++        template <typename T>
++        struct EngineAlloc
++        {
++            using value_type = T;
++            EngineAlloc() noexcept = default;
++            template <typename U>
++            EngineAlloc(const EngineAlloc<U>&) noexcept
++            {
++            }
++            auto allocate(size_t n) -> T*
++            {
++                if (GMalloc == nullptr || *GMalloc == nullptr) { throw std::bad_alloc{}; }
++                void* p = (*GMalloc)->Malloc(n * sizeof(T), 0);
++                if (p == nullptr) { throw std::bad_alloc{}; }
++                return static_cast<T*>(p);
++            }
++            auto deallocate(T* p, size_t) noexcept -> void
++            {
++                if (p != nullptr && GMalloc != nullptr && *GMalloc != nullptr) { (*GMalloc)->Free(p); }
++            }
++            template <typename U>
++            auto operator==(const EngineAlloc<U>&) const noexcept -> bool { return true; }
++            template <typename U>
++            auto operator!=(const EngineAlloc<U>&) const noexcept -> bool { return false; }
++        };
++        template <typename T>
++        using Vec = std::vector<T, EngineAlloc<T>>;
++
++        struct State
++        {
++            std::mutex Mutex{};
++            bool Built{false};
++            bool Disabled{false};
++            int32_t SyncedNum{0};
++            Vec<UObject*> ObjAt{};
++            Vec<UClass*> ClassAt{};
++            Vec<int32_t> Dirty{};      // freed indices reported since the last sync
++            Vec<int32_t> FreeWatch{};  // freed indices still empty at the last sync
++            // class -> indices recorded under it (stale entries are skipped and compacted)
++            Vec<UClass*> Classes{};
++            Vec<Vec<int32_t>> ClassIndices{};
++            Vec<UClass*> HashKeys{};   // open addressing: class pointer -> position in Classes
++            Vec<int32_t> HashVals{};
++            uint64_t Builds{0}, Syncs{0}, Queries{0};
++        };
++        static State* const g_state = new State{};
++        static bool g_logged{false};
+ 
++        static auto ReadSlot(int32_t Index) -> UObject*
++        {
++            const auto& ObjObjects = GUObjectArray->GetObjObjects();
++            static const auto ItemSize = FUObjectItem::UEP_TotalSize();
++            const int32_t ChunkIndex = Index / TUObjectArray::NumElementsPerChunk;
++            const int32_t Within = Index % TUObjectArray::NumElementsPerChunk;
++            if (ChunkIndex >= ObjObjects.GetNumChunks()) { return nullptr; }
++            const auto& ChunksPtr = ObjObjects.GetObjects();
++            const auto Item = std::bit_cast<FUObjectItem*>(&std::bit_cast<uint8_t*>(ChunksPtr[ChunkIndex])[Within * ItemSize]);
++            return Item->GetUObject();
++        }
++        static auto SlotUnreachable(int32_t Index) -> bool
++        {
++            const auto& ObjObjects = GUObjectArray->GetObjObjects();
++            static const auto ItemSize = FUObjectItem::UEP_TotalSize();
++            const auto& ChunksPtr = ObjObjects.GetObjects();
++            const auto Item = std::bit_cast<FUObjectItem*>(&std::bit_cast<uint8_t*>(ChunksPtr[Index / TUObjectArray::NumElementsPerChunk])[(Index % TUObjectArray::NumElementsPerChunk) * ItemSize]);
++            return Item->IsUnreachable();
++        }
++        static auto HashPos(UClass* Class, size_t Mask) -> size_t
++        {
++            uint64_t h = reinterpret_cast<uintptr_t>(Class);
++            h ^= h >> 33; h *= 0xff51afd7ed558ccdULL; h ^= h >> 29;
++            return static_cast<size_t>(h) & Mask;
++        }
++        static auto Rehash(State& S, size_t NewSize) -> void
++        {
++            S.HashKeys.assign(NewSize, nullptr);
++            S.HashVals.assign(NewSize, -1);
++            for (size_t i = 0; i < S.Classes.size(); ++i)
++            {
++                size_t p = HashPos(S.Classes[i], NewSize - 1);
++                while (S.HashKeys[p] != nullptr) { p = (p + 1) & (NewSize - 1); }
++                S.HashKeys[p] = S.Classes[i];
++                S.HashVals[p] = static_cast<int32_t>(i);
++            }
++        }
++        static auto ClassSlot(State& S, UClass* Class) -> Vec<int32_t>&
++        {
++            if (S.HashKeys.empty()) { Rehash(S, 16384); }
++            const size_t Mask = S.HashKeys.size() - 1;
++            size_t p = HashPos(Class, Mask);
++            while (S.HashKeys[p] != nullptr)
++            {
++                if (S.HashKeys[p] == Class) { return S.ClassIndices[static_cast<size_t>(S.HashVals[p])]; }
++                p = (p + 1) & Mask;
++            }
++            S.Classes.push_back(Class);
++            S.ClassIndices.emplace_back();
++            S.HashKeys[p] = Class;
++            S.HashVals[p] = static_cast<int32_t>(S.Classes.size() - 1);
++            if (S.Classes.size() * 2 > S.HashKeys.size()) { Rehash(S, S.HashKeys.size() * 2); }
++            return S.ClassIndices.back();
++        }
++        static auto Record(State& S, int32_t Index, UObject* Object) -> void
++        {
++            UClass* Class = Object ? Object->GetClassPrivate() : nullptr;
++            if (S.ObjAt[Index] == Object && S.ClassAt[Index] == Class) { return; }
++            S.ObjAt[Index] = Object;
++            S.ClassAt[Index] = Class;
++            if (Object && Class) { ClassSlot(S, Class).push_back(Index); }
++        }
++        static auto Sync(State& S) -> bool
++        {
++            if (!GUObjectArray) { return false; }
++            const int32_t Num = GUObjectArray->GetObjObjects().GetNumElements();
++            if (Num < 0 || Num > 64 * 1024 * 1024) { S.Disabled = true; return false; }
++            if (static_cast<int32_t>(S.ObjAt.size()) < Num)
++            {
++                S.ObjAt.resize(static_cast<size_t>(Num) + 4096, nullptr);
++                S.ClassAt.resize(static_cast<size_t>(Num) + 4096, nullptr);
++            }
++            ++S.Syncs;
++            if (!S.Built)
++            {
++                for (int32_t i = 0; i < Num; ++i) { Record(S, i, ReadSlot(i)); }
++                S.SyncedNum = Num;
++                S.Built = true;
++                ++S.Builds;
++                S.Dirty.clear();
++                return true;
++            }
++            // freed indices: the old entry is stale (skipped at query); a reused slot is recorded now
++            for (int32_t i : S.Dirty)
++            {
++                if (i < 0 || i >= Num) { continue; }
++                S.ObjAt[i] = nullptr;
++                S.ClassAt[i] = nullptr;
++                if (UObject* O = ReadSlot(i)) { Record(S, i, O); }
++                else { S.FreeWatch.push_back(i); }
++            }
++            S.Dirty.clear();
++            size_t keep = 0;
++            for (size_t k = 0; k < S.FreeWatch.size(); ++k)
++            {
++                const int32_t i = S.FreeWatch[k];
++                if (i >= Num) { S.FreeWatch[keep++] = i; continue; }
++                if (UObject* O = ReadSlot(i)) { Record(S, i, O); }
++                else { S.FreeWatch[keep++] = i; }
++            }
++            S.FreeWatch.resize(keep);
++            for (int32_t i = S.SyncedNum; i < Num; ++i) { Record(S, i, ReadSlot(i)); }
++            S.SyncedNum = Num;
++            return true;
++        }
++        // Collect matching live objects in index order; false = index unusable (caller walks).
++        template <typename Accept>
++        static auto Query(FName ClassName, bool FirstOnly, Accept&& Out) -> bool
++        {
++            State& S = *g_state;
++            std::lock_guard Lock{S.Mutex};
++            if (S.Disabled) { return false; }
++            try
++            {
++                if (!Sync(S)) { return false; }
++                ++S.Queries;
++                Vec<int32_t> Hits{};
++                for (size_t c = 0; c < S.Classes.size(); ++c)
++                {
++                    UClass* Class = S.Classes[c];
++                    bool bMatch = false;
++                    for (UStruct* Super : TSuperStructRange(Class))
++                    {
++                        if (Super->GetNamePrivate().Equals(ClassName)) { bMatch = true; break; }
++                    }
++                    if (!bMatch) { continue; }
++                    auto& Indices = S.ClassIndices[c];
++                    size_t keep = 0;
++                    for (size_t k = 0; k < Indices.size(); ++k)
++                    {
++                        const int32_t i = Indices[k];
++                        if (S.ClassAt[i] != Class || S.ObjAt[i] == nullptr) { continue; } // stale: drop
++                        Indices[keep++] = i;
++                        UObject* O = S.ObjAt[i];
++                        if (ReadSlot(i) != O || SlotUnreachable(i)) { continue; }
++                        if (!IsValidObjectForFindXOf(O)) { continue; }
++                        Hits.push_back(i);
++                    }
++                    Indices.resize(keep);
++                }
++                std::sort(Hits.begin(), Hits.end());
++                for (int32_t i : Hits)
++                {
++                    Out(S.ObjAt[i]);
++                    if (FirstOnly) { break; }
++                }
++                if (!g_logged)
++                {
++                    g_logged = true;
++                    Output::send(STR("[R9-IDX] object index active: built from {} slots, {} classes (FindFirstOf/FindAllOf no longer walk the whole array)\n"), S.SyncedNum, S.Classes.size());
++                }
++                return true;
++            }
++            catch (...)
++            {
++                S.Disabled = true;
++                try { Output::send<LogLevel::Error>(STR("[R9-IDX] object index disabled after an exception; FindFirstOf/FindAllOf use the full walk\n")); } catch (...) {}
++                return false;
++            }
++        }
++    } // namespace r9idx
++
++    // Called by the engine-registered delete listener for every freed object index.
++    auto r9_index_note_deleted(int32_t Index) -> void
++    {
++        r9idx::State& S = *r9idx::g_state;
++        std::lock_guard Lock{S.Mutex};
++        if (!S.Built || S.Disabled) { return; }
++        if (S.Dirty.size() > 4 * 1024 * 1024) { S.Built = false; S.Dirty.clear(); S.FreeWatch.clear(); return; } // rebuild
++        S.Dirty.push_back(Index);
++    }
++
+     // [R9-PERF] lookup cost counters (read and reset by the per-second [PERF] line in LuaMod.cpp)
+     static uint64_t g_r9_walk_calls{0};
+     static uint64_t g_r9_walk_ns{0};
+@@ -1221,6 +1458,10 @@
+     {
+         const R9WalkTimer r9_walk_timer{};
+         UObject* ObjectFound{nullptr};
++        if (r9idx::Query(ClassName, true, [&](UObject* O) { ObjectFound = O; }))
++        {
++            return ObjectFound;
++        }
+         // [B1 memo fix] heap, nothrow: on allocation failure the walk runs un-memoized.
+         std::unique_ptr<FFindXofClassMemo> Memo{new (std::nothrow) FFindXofClassMemo{}};
+ #ifdef __PROSPERO__
+@@ -1427,6 +1668,10 @@
+     auto FindAllOf(FName ClassName, std::vector<UObject*>& OutStorage) -> void
+     {
+         const R9WalkTimer r9_walk_timer{};
++        if (r9idx::Query(ClassName, false, [&](UObject* O) { OutStorage.push_back(O); }))
++        {
++            return;
++        }
+         // [B1 memo fix] heap, nothrow: on allocation failure the walk runs un-memoized.
+         std::unique_ptr<FFindXofClassMemo> Memo{new (std::nothrow) FFindXofClassMemo{}};
+ #ifdef __PROSPERO__

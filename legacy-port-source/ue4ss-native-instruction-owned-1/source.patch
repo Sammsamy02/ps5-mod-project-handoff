@@ -1,0 +1,47 @@
+--- upstream/Instruction.hpp
++++ native/Instruction.hpp
+@@ -11,6 +11,10 @@
+ #include "polyhook2/Misc.hpp"
+ #include "polyhook2/MemAccessor.hpp"
+ #include <type_traits>
++#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++#include "polyhook2/OwnedMemory.hpp"
++#include <stdexcept>
++#endif
+ 
+ namespace PLH {
+ class Instruction {
+@@ -68,6 +72,25 @@
+ 
+ 		// ff 25 00 00 00 00 goes from jmp qword ptr [rip + 0] to jmp word ptr [rip + 0] on x64 -> x86
+ 		if (m_isIndirect) {
++#if defined(__PROSPERO__) || defined(PLH_OWNED_MEMORY_HOST_TEST)
++            // Only this genuine local result buffer is registered here. The
++            // indirect source must already belong to the caller's owned region.
++            size_t read = 0;
++            if (m_mode == Mode::x64) {
++                uint64_t target{};
++                OwnedMemory::ScopedRegion output(&target, sizeof(target), PLH::W);
++                if (!m_accessor.safe_mem_read(dest, reinterpret_cast<uint64_t>(&target), sizeof(target), read)
++                    || read != sizeof(target))
++                    throw std::runtime_error("PolyHook indirect destination is not readable owned memory");
++                return target;
++            }
++            uint32_t target{};
++            OwnedMemory::ScopedRegion output(&target, sizeof(target), PLH::W);
++            if (!m_accessor.safe_mem_read(dest, reinterpret_cast<uint64_t>(&target), sizeof(target), read)
++                || read != sizeof(target))
++                throw std::runtime_error("PolyHook indirect destination is not readable owned memory");
++            return static_cast<uint64_t>(target);
++#else
+ 			size_t read = 0;
+ 			if (m_mode == Mode::x64) {
+ 				// *(uint64_t*)dest;
+@@ -76,6 +99,7 @@
+ 				// *(uint32_t*)dest;
+ 				m_accessor.safe_mem_read(dest, (uint64_t)&dest, sizeof(uint32_t), read);
+ 			}
++#endif
+ 		}
+ 		return dest;
+ 	}

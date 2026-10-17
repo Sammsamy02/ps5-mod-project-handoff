@@ -1,0 +1,42 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFText.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l22-runtime/diagnostics/src/LuaFText.cpp
+@@ -1,3 +1,4 @@
++#include <L22Diagnostics/Logging.hpp>
+ #include <DynamicOutput/Output.hpp>
+ #include <LuaType/LuaFText.hpp>
+ #include <Unreal/FString.hpp>
+@@ -65,10 +66,23 @@
+             }
+             else
+             {
+-                lua.throw_error(error_overload_not_found);
++                L22Diagnostics::throw_lua_error(lua, error_overload_not_found, "FText");
+             }
+ 
+-            LuaType::FText::construct(lua, Unreal::FText(text_string));
++            try
++            {
++                LuaType::FText::construct(lua, Unreal::FText(text_string));
++            }
++            catch (const std::exception& error)
++            {
++                L22Diagnostics::error("FText Lua construction", error.what());
++                throw;
++            }
++            catch (...)
++            {
++                L22Diagnostics::error("FText Lua construction", "non-standard C++ exception");
++                throw;
++            }
+ 
+             return 1;
+         });
+@@ -76,7 +90,7 @@
+         base_object.get_metamethods().create(LuaMadeSimple::Lua::MetaMethod::Equal, []([[maybe_unused]] const LuaMadeSimple::Lua& lua) -> int {
+             if (!lua.is_userdata(1) || !lua.is_userdata(2))
+             {
+-                lua.throw_error("FText __eq metamethod called but there was not two userdata to compare");
++                L22Diagnostics::throw_lua_error(lua, "FText __eq metamethod called but there was not two userdata to compare", "FText");
+             }
+ 
+             auto text_a = lua.get_userdata<LuaType::FText>();

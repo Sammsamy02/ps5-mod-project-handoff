@@ -1,0 +1,103 @@
+# PROPOSAL PATCH — build_variants.py env-gated NB (no-bind) variant.
+# DO NOT APPLY while agent EM is live-editing the tree; apply together with
+# 01-no-tostring-bind-guard.patch AFTER EM lands.
+#
+# Base state authored against: build_variants.py sha256 549b54dd... (EE
+# state; NEXT-BUILD.md documents this as the current driver). Line numbers
+# from that state; hunks are context-anchored.
+#
+# Design decisions (rationale in agent-EO-parallel-candidate.md):
+# 1. ENV-GATED (L26_BUILD_NB=1): the standard A/B pipeline for EM's fixed
+#    build keeps its exact current shape and build weight; the NB control
+#    is an opt-in third twin-variant pair.
+# 2. NB is A-SHAPED: it carries BOTH -DMODBRIDGE_L25_ENGINE_ADD_LISTENER
+#    (CTOKEN, production registration) and -DMODBRIDGE_L27_NO_TOSTRING_BIND
+#    (NBTOKEN, Phase 4c compiled out). 'define' becomes a list.
+# 3. NB's define_units = NBTOKEN units UNION CTOKEN units, because the
+#    single-define mechanism keys units off ONE token; without the union
+#    UObjectArray.cpp would miss the CTOKEN define and compile the
+#    KNOWN-BROKEN hand-rolled registration (#else path) — NOT A-shaped.
+# 4. G4-nbtoken-present hard-fails at --execute when the guard is absent
+#    (a missing token would silently make NB == A — the same no-op refusal
+#    the driver already enforces for TOKEN/CTOKEN).
+# 5. G11/G12 control gates: NB runtime must differ from A; per-unit object
+#    deltas NB-vs-A must be EXACTLY ['unreal-unrealinitializer'] — the
+#    scientific-control guarantee (single-delta vs variant A).
+# 6. The A/B pair receipt (G9/G10) is untouched.
+
+--- a/outputs/2026-10-08-l26-runtime/build_variants.py
++++ b/outputs/2026-10-08-l26-runtime/build_variants.py
+@@ -64,6 +64,10 @@
+ CTOKEN='MODBRIDGE_L25_ENGINE_ADD_LISTENER'
++# [Seeds][L27] no-bind control (agent-EO parallel candidate, 2026-10-09):
++# EI's Phase 4c engine ToStringInternal admission/bind compiled out;
++# A-shaped otherwise (CTOKEN on). Diagnostic-only, env-gated (L26_BUILD_NB).
++NBTOKEN='MODBRIDGE_L27_NO_TOSTRING_BIND'
+ PAIR_ROOT=ROOT/'outputs/2026-10-08-l26-build-variants'
+@@ -85,6 +89,24 @@
+  {'key':'B','dir':PAIR_ROOT/'l26-B','artifact':'runtime-l26-B.o',
+@@
+   'twin_status':'MAC_ONLY_IDENTICAL_L26_VARIANT_B_RUNTIME_PAIR_SKIP_DELETE_LISTENER'},
+ )
++# agent-EO: the NB no-bind diagnostic control. Appended ONLY when
++# L26_BUILD_NB=1 so the default A/B pipeline (and EM's fixed-build run)
++# stays byte-identical in behavior and cost.
++NB_VARIANT={'key':'NB','dir':PAIR_ROOT/'l26-NB','artifact':'runtime-l26-NB.o',
++ 'token':NBTOKEN,
++ 'define':['-D'+CTOKEN,'-D'+NBTOKEN],
++ 'registration':'engine-call via admission-verified engine FUObjectArray::Add/RemoveUObjectDeleteListener (variant C; A-shaped)',
++ 'label':'l26-NB no-bind diagnostic control: A-shaped (C-on) with EI Phase 4c ToString bind compiled out via '+NBTOKEN,
++ 'unsafe':True,
++ 'safety':'DIAGNOSTIC CONTROL ONLY: the engine ToStringInternal bind is compiled out (legacy Kismet route owns FName::ToString); never promote as production and never leave resident.',
++ 'status':'MAC_ONLY_L26_VARIANT_NB_COMPLETE_LINK_NO_TOSTRING_BIND',
++ 'twin_status':'MAC_ONLY_IDENTICAL_L26_VARIANT_NB_RUNTIME_PAIR_NO_TOSTRING_BIND'}
++if os.environ.get('L26_BUILD_NB')=='1':
++    VARIANTS=VARIANTS+(NB_VARIANT,)
+ UNSAFE_NOTE=('UNSAFE FOR LONG-TERM USE: this variant compiles with '+TOKEN+
+@@ -439,9 +461,12 @@
+-    define_units=set(targets['define_units']) if variant['define'] else set()
++    define_units=set(targets['define_units']) if variant['define'] else set()
++    defines=list(variant['define']) if isinstance(variant['define'],(list,tuple)) else ([variant['define']] if variant['define'] else [])
+@@ -441,7 +466,7 @@
+-            'define':variant['define'] or '(none)',
++            'define':' '.join(defines) if defines else '(none)',
+@@ -443,7 +468,7 @@
+-            'unsafe':variant['unsafe'],'safety':UNSAFE_NOTE if variant['unsafe'] else 'normal production configuration',
++            'unsafe':variant['unsafe'],'safety':variant.get('safety') or (UNSAFE_NOTE if variant['unsafe'] else 'normal production configuration'),
+@@ -463,7 +488,7 @@
+-            if u['name'] in define_units:argv[1:1]=[variant['define']]
++            if u['name'] in define_units:argv[1:1]=defines
+@@ -652,6 +677,17 @@
+     targets_b=token_targets(sel,q['composed_path'] if q.get('composed_has_token') else None,TOKEN)
+     targets_c=token_targets(sel,None,CTOKEN)
+-    targets_map={TOKEN:targets_b,CTOKEN:targets_c}
++    targets_map={TOKEN:targets_b,CTOKEN:targets_c}
++    if any(v['token']==NBTOKEN for v in VARIANTS):
++        targets_nb=token_targets(sel,None,NBTOKEN)
++        # NB carries CTOKEN too: the union guarantees UObjectArray.cpp and
++        # every other CTOKEN unit still gets the production define (a macro
++        # only guards its own sites, so the extra -DNBTOKEN on non-guard
++        # units is inert).
++        targets_map[NBTOKEN]={'token_files':targets_nb['token_files'],'token_units':targets_nb['token_units'],
++                              'shared_new_headers':targets_nb['shared_new_headers'],'conservative':targets_nb['conservative'],
++                              'define_units':sorted(set(targets_nb['define_units'])|set(targets_c['define_units']))}
++        record('G4-nbtoken-present',bool(targets_nb['token_files']),{'token':NBTOKEN,'token_files':targets_nb['token_files']})
++        if execute and not targets_nb['token_files']:
++            raise RuntimeError('token '+NBTOKEN+' not found in the tree: the EO no-bind guard has not landed; variant NB would silently equal variant A')
+@@ -668,6 +704,19 @@
+     built={}
+     for variant in VARIANTS:built[variant['key']]=build_variant(variant,sel,targets_map[variant['token']],record,execute,steps)
+     pair_receipt(built,merged_targets,record,execute,steps,root)
++    if 'NB' in built and execute:
++        # agent-EO control gates: NB must differ from A, and the delta must
++        # be confined to exactly the guard's one unit — the single-delta
++        # guarantee that makes NB a clean control for the Phase 4c question.
++        ha=Path(built['A']['results'][0]['runtime']['path']).read_bytes()
++        hnb=Path(built['NB']['results'][0]['runtime']['path']).read_bytes()
++        record('G11-nb-control-differs-from-A',ha!=hnb,{'A':built['A']['results'][0]['runtime'].get('sha256'),'NB':built['NB']['results'][0]['runtime'].get('sha256')})
++        if ha==hnb:raise RuntimeError('variants A and NB are identical: the no-bind define had no effect (guard not landed or not in the composed unit)')
++        ra=json.loads(Path(built['A']['results'][0]['composition']['path']).read_text())
++        rnb=json.loads(Path(built['NB']['results'][0]['composition']['path']).read_text())
++        deltas=[x['name'] for x,y in zip(ra['selected_units'],rnb['selected_units']) if x['object_sha256']!=y['object_sha256']]
++        record('G12-nb-deltas-exactly-unrealinitializer',deltas==['unreal-unrealinitializer'],{'deltas':deltas})
++        if deltas!=['unreal-unrealinitializer']:raise RuntimeError('NB control object deltas not exactly unreal-unrealinitializer: '+repr(deltas))

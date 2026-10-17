@@ -1,0 +1,161 @@
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -141,6 +141,19 @@
+     }
+ };
+ 
++// Caller holds Impl::mu. Cataloging an unavailable fail-closed body does
++// not reserve a DLL name against a supplied, separately guarded PE image.
++static bool reserved_builtin_module(const WinApiShim::Impl* m,
++                                    const std::string& key)
++{
++    if (m->exports.count(key)) return true;
++    auto catalog = m->raw_exports.find(key);
++    if (catalog == m->raw_exports.end()) return false;
++    for (const auto& row : catalog->second)
++        if (row.second.reviewed_for_publication) return true;
++    return false;
++}
++
+ namespace {
+ 
+ struct HostSrwLock
+@@ -220,7 +233,7 @@
+     if (key.empty() || !handle || !lookup || !owner) return false;
+     std::lock_guard guard(m->mu);
+     if (!m->builtins_registered || m->modules.count(key) ||
+-        m->raw_exports.count(key) || m->exports.count(key)) return false;
++        reserved_builtin_module(m, key)) return false;
+     try
+     {
+         m->modules.emplace(key, Impl::ModuleEntry{handle, nullptr, lookup, owner});
+@@ -247,8 +260,7 @@
+     const std::string key = ascii_module_key(dll_name);
+     if (key.empty()) return false;
+     std::lock_guard guard(m->mu);
+-    return m->modules.count(key) || m->raw_exports.count(key) ||
+-           m->exports.count(key);
++    return m->modules.count(key) || reserved_builtin_module(m, key);
+ }
+ 
+ bool WinApiShim::set_main_module(WinModule handle)
+@@ -854,7 +866,7 @@
+         for (const auto& row : m->modules)
+         {
+             if (row.second.handle != handle) continue;
+-            if (!key.empty() || m->raw_exports.count(row.first))
++            if (!key.empty() || reserved_builtin_module(m, row.first))
+             {
+                 win32_set_last_error(ERROR_INVALID_HANDLE);
+                 return nullptr; // ambiguous or shadowed by a built-in catalog
+@@ -939,7 +951,7 @@
+     std::lock_guard g(m->mu);
+     for (const auto& r : rows)
+     {
+-        if (!m->builtin_handles.count(r.dll))
++        if (r.reviewed_for_publication && !m->builtin_handles.count(r.dll))
+             m->builtin_handles.emplace(r.dll, std::make_unique<uint64_t>(0));
+         std::string key = r.sym;
+         m->raw_exports[r.dll][key] = Impl::RawExport{
+--- a/loader/tests/guest_pe_batch_test.cpp
++++ b/loader/tests/guest_pe_batch_test.cpp
+@@ -3,6 +3,7 @@
+ #include "pe_import_scan.h"
+ #include "win_api_shim.h"
+ #include "pe_types.h"
++#include "win64_bridge.h"
+ 
+ #include <cstdio>
+ #include <cstring>
+@@ -88,6 +89,31 @@
+         out->bytes = *entry.bytes;
+         out->segment = entry.segment;
+         return true;
++    }
++    return false;
++}
++struct GuestReadRange
++{
++    const char* address;
++    size_t bytes;
++};
++struct GuestReadState
++{
++    std::vector<GuestReadRange> ranges;
++};
++bool read_guest_name(void* user, const void* address, void* output, size_t bytes)
++{
++    auto& state = *static_cast<GuestReadState*>(user);
++    const uintptr_t requested = reinterpret_cast<uintptr_t>(address);
++    for (const auto& range : state.ranges)
++    {
++        const uintptr_t begin = reinterpret_cast<uintptr_t>(range.address);
++        if (requested >= begin && requested - begin <= range.bytes &&
++            bytes <= range.bytes - (requested - begin))
++        {
++            std::memcpy(output, address, bytes);
++            return true;
++        }
+     }
+     return false;
+ }
+@@ -375,6 +401,59 @@
+     unlink(provider_path.c_str());
+     rmdir(temp_folder);
+ 
++    auto crt_consumer = consumer_for(fixture, "VCRUNTIME140.dll");
++    RecordingSwitch crt_consumer_switch, crt_provider_switch;
++    SourceState crt_source;
++    crt_source.entries.push_back({"VCRUNTIME140.dll", "/mods/VCRUNTIME140.dll",
++                                  &fixture, &crt_provider_switch});
++    auto crt_closure = cap13::pe_attach_guest_closure(
++        {"/mods/crt-consumer.dll", crt_consumer.data(), crt_consumer.size(),
++         &crt_consumer_switch}, fetch_dependency, &crt_source,
++        shim, options, bank, teb);
++    check(crt_closure.ok && crt_closure.input_indices ==
++          std::vector<size_t>({1, 0}) &&
++          crt_source.requested == std::vector<std::string>({"VCRUNTIME140.dll"}),
++          "an unavailable CRT shim catalog does not block a local PE dependency");
++    check(shim.resolve("VCRUNTIME140.dll", "CxxThrowException", 0) == nullptr,
++          "attached local CRT does not expose the shim's unreviewed EH body");
++    char crt_name[] = "VCRUNTIME140.dll";
++    char start_name[] = "start_mod";
++    GuestReadState guest_names{{{crt_name, sizeof(crt_name)},
++                                {start_name, sizeof(start_name)}}};
++    cap13::WinApiShim::Hooks hooks{};
++    hooks.read_guest_bytes = read_guest_name;
++    hooks.read_guest_user = &guest_names;
++    shim.set_hooks(hooks);
++    void* get_module = shim.resolve("kernel32.dll", "GetModuleHandleA", 0);
++    void* get_proc = shim.resolve("kernel32.dll", "GetProcAddress", 0);
++    const uint64_t crt_handle = get_module ? cap13_win64_call1(
++        get_module, reinterpret_cast<uint64_t>(crt_name)) : 0;
++    const uint64_t crt_export = get_proc ? cap13_win64_call2(
++        get_proc, crt_handle, reinterpret_cast<uint64_t>(start_name)) : 0;
++    check(crt_closure.ok && crt_handle != 0 && crt_export ==
++          reinterpret_cast<uint64_t>(shim.resolve("VCRUNTIME140.dll", "start_mod", 0)),
++          "dynamic GetProcAddress finds an export in the attached copied PE");
++    check(cap13::pe_detach_guest_batch(crt_closure, teb) &&
++          cap13_win64_call1(get_module, reinterpret_cast<uint64_t>(crt_name)) == 0 &&
++          cap13_win64_call2(get_proc, crt_handle,
++                            reinterpret_cast<uint64_t>(start_name)) == 0,
++          "detached local CRT provider is no longer visible by dynamic lookup");
++
++    auto system_consumer = consumer_for(fixture, "KERNEL32.dll");
++    RecordingSwitch system_consumer_switch, system_provider_switch;
++    SourceState system_source;
++    system_source.entries.push_back({"KERNEL32.dll", "/mods/KERNEL32.dll",
++                                     &fixture, &system_provider_switch});
++    auto system_result = cap13::pe_attach_guest_closure(
++        {"/mods/system-consumer.dll", system_consumer.data(),
++         system_consumer.size(), &system_consumer_switch},
++        fetch_dependency, &system_source, shim, options, bank, teb);
++    check(!system_result.ok && system_source.requested.empty() &&
++          system_provider_switch.enters == 0 &&
++          !system_result.missing.empty() &&
++          system_result.missing[0] == "KERNEL32.dll!start_mod",
++          "reviewed system namespace stays reserved against a local DLL file");
++
+     std::printf("cases=%d failed=%d\n", checks, failures);
+     return failures ? 1 : 0;
+ }

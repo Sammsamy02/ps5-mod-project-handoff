@@ -1,0 +1,41 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/generated_include/MemberVariableLayout_SrcWrapper_FArrayProperty.hpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l23-runtime/typescan-r2/candidate/generated_include/MemberVariableLayout_SrcWrapper_FArrayProperty.hpp
+@@ -1,6 +1,14 @@
+ std::unordered_map<File::StringType, int32_t> FArrayProperty::MemberOffsets{};
+ std::unordered_map<File::StringType, BitfieldInfo> FArrayProperty::BitfieldInfos{};
+ 
++#ifdef __PROSPERO__
++FProperty* FArrayProperty::GetInner()
++{
++    const auto found = MemberOffsets.find(STR("Inner"));
++    if (found == MemberOffsets.end()) throw std::runtime_error{"Tried getting member variable 'FArrayProperty::Inner' that doesn't exist in this engine version."};
++    return NativePropertyGuard::ReadPointer(this, found->second, "FArrayProperty::Inner");
++}
++#else
+ FProperty*& FArrayProperty::GetInner()
+ {
+     static const int32_t offset = []() -> int32_t {
+@@ -10,6 +18,15 @@
+     }();
+     return *Helper::Casting::ptr_cast<FProperty**>(this, offset);
+ }
++#endif
++#ifdef __PROSPERO__
++const FProperty* FArrayProperty::GetInner() const
++{
++    const auto found = MemberOffsets.find(STR("Inner"));
++    if (found == MemberOffsets.end()) throw std::runtime_error{"Tried getting member variable 'FArrayProperty::Inner' that doesn't exist in this engine version."};
++    return NativePropertyGuard::ReadPointer(this, found->second, "FArrayProperty::Inner");
++}
++#else
+ const FProperty*& FArrayProperty::GetInner() const
+ {
+     static const int32_t offset = []() -> int32_t {
+@@ -19,6 +36,7 @@
+     }();
+     return *Helper::Casting::ptr_cast<const FProperty**>(this, offset);
+ }
++#endif
+ 
+ EArrayPropertyFlags& FArrayProperty::GetArrayFlags()
+ {

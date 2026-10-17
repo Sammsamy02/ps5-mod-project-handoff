@@ -1,0 +1,86 @@
+TEST-RECEIPT for worker-data-preflight
+tool: outputs/2026-10-04-zcode-team/worker-data-preflight/tools/data_preflight.py
+date: 2026-10-05 (local); host-only, no console contact
+python: Python 3.9.6
+
+== 1. built-in selftest (--selftest), 33 fixture checks ==
+   (every failure class, fixer round-trips, both real launch-10 incidents)
+PASS T01 clean minimal tree passes -> []
+PASS T02 incident-1 em-dash pad -> PAD_ASCII -> ['PAD_ASCII']
+PASS T03 incident-1 fix round-trip (sanitize+resync) -> pre=['PAD_ASCII'] post=CLEAN
+PASS T04 --fix pad output byte-identical to real PS5Pad-sanitized.ini -> fixed=2958 sanitized=2958 bytes
+PASS T05 incident-2 size mismatch -> FILE_SIZE_SHORT -> ['FILE_SIZE_SHORT']
+PASS T06 incident-2 fix round-trip (size sync) -> pre=['FILE_SIZE_SHORT'] post=CLEAN
+PASS T07 --fix loadlist output byte-identical to real loadlist-sizefixed.txt -> fixed=447 sizefixed=447 bytes
+PASS T08 missing file -> FILE_MISSING -> ['FILE_MISSING', 'PAD_ASCII']
+PASS T09 longer file -> FILE_SIZE_LONG -> ['FILE_SIZE_LONG', 'PAD_ASCII']
+PASS T10 longer-file fix round-trip -> pre=['FILE_SIZE_LONG', 'PAD_ASCII'] post=CLEAN
+PASS T11 duplicate path -> FILE_DUPLICATE -> ['FILE_DUPLICATE']
+PASS T12 bad header -> LOADLIST_PARSE -> ['LOADLIST_COUNTS', 'LOADLIST_PARSE']
+PASS T13 two title rows -> LOADLIST_COUNTS -> ['LOADLIST_COUNTS']
+PASS T14 control byte in field -> LOADLIST_FIELD_CONTROL -> ['LOADLIST_FIELD_CONTROL']
+PASS T15 invalid UTF-8 -> LOADLIST_PARSE -> ['LOADLIST_PARSE']
+PASS T16 backslash path -> LOADLIST_PARSE -> ['LOADLIST_PARSE']
+PASS T18 '..' segment -> LOADLIST_PARSE -> ['LOADLIST_PARSE']
+PASS T19 colon in key -> PATH_KEY_INVALID -> ['PATH_KEY_INVALID']
+PASS T20 unknown role -> ROLE_UNSUPPORTED -> ['ROLE_UNSUPPORTED']
+PASS T21 preload >8MiB -> LOADLIST_LIMIT -> ['FILE_SIZE_SHORT', 'LOADLIST_LIMIT']
+PASS T22 wrong title -> TITLE_MISMATCH -> ['TITLE_MISMATCH']
+PASS T23 engine/framework gate -> ENGINE_GATE + FRAMEWORK_GATE -> ['ENGINE_GATE', 'FRAMEWORK_GATE']
+PASS T24 pad syntax class -> PAD_SYNTAX -> ['PAD_SYNTAX']
+PASS T25 pad syntax caught >=8 distinct errors -> got 9
+PASS T26a empty pad -> PAD_SIZE_LIMIT -> ['PAD_SIZE_LIMIT']
+PASS T26b >16384-byte pad -> PAD_SIZE_LIMIT -> ['PAD_SIZE_LIMIT']
+PASS T27 NUL/DEL in pad -> PAD_ASCII -> ['PAD_ASCII']
+PASS T28 control-byte pad fix -> ASCII clean, binding error kept -> pre=['PAD_ASCII'] post=['PAD_SYNTAX']
+PASS T29 folded pad now passes the [PAD] byte gate
+PASS T30 Scripts+scripts ambiguity -> MOD_LAYOUT -> ['MOD_LAYOUT']
+PASS T31 no main.lua -> MOD_MAIN_LUA_MISSING (warn) -> ['MOD_MAIN_LUA_MISSING']
+PASS T32 malformed mods.txt -> MODS_TXT_FORMAT -> ['MODS_TXT_FORMAT']
+PASS T33 non-ue4ss path -> KEY_NOT_UE4SS warn (no error) -> ['KEY_NOT_UE4SS']
+
+SELFTEST PASS: 33/33 checks passed
+selftest rc=0
+
+== 2. real incident 1 (run1): em-dash PS5Pad.ini ==
+evidence: outputs/2026-10-04-zcode-controller/launch10-evidence/run1-ue4ss.log:48
+48:[t=60004266ms pid=317] modbridge module_start failed: runtime_start_failed code=3 detail=PS5Pad.ini must be ASCII text without control bytes
+fixture: package-v3/ue4ss/PS5Pad.ini (the exact 2960-byte em-dash file) ->
+data_preflight: tree=/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-settings-v3-package/package-v3
+               loadlist=/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-settings-v3-package/package-v3/loadlist.txt
+               declared files hashed: 7
+[ERROR] PAD_ASCII ue4ss/PS5Pad.ini: byte 0xe2 at offset 19 -- runtime throws 'PS5Pad.ini must be ASCII text without control bytes' (the launch-10 run1 gate: em-dash UTF-8 E2 80 94 trips this)
+        source: [PAD] PS5PadConfig.cpp:56-58
+VERDICT: FAILED (1 error(s), 0 warning(s))
+json findings written: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-data-preflight/default-tree-report.json
+rc=1 (1 = landmine correctly caught; this is also the DEFAULT tree run)
+
+== 3. real incident 2 (run2): loadlist 2960 vs sanitized 2958 ==
+evidence: outputs/2026-10-04-zcode-controller/launch10-evidence/run2-ue4ss.log:51
+51:[t=60249877ms pid=341] modbridge module_start failed: mfa_activate_failed code=-8 detail=size file is shorter than the load list says ue4ss/PS5Pad.ini
+fixture: PS5Pad-sanitized.ini (2958) + loadlist saying 2960 (T05 in selftest)
+-> FILE_SIZE_SHORT with detail 'file is shorter than the load list says'
+
+== 4. fixer round-trip on the default tree ==
+   file	lua_mod	ue4ss/Mods/shared/UEHelpers/UEHelpers.lua	9962
+  
+
+== AFTER (fixed copy) ==
+data_preflight: tree=/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-data-preflight/demo-fix-from-package-v3
+               loadlist=/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-data-preflight/demo-fix-from-package-v3/loadlist.txt
+               declared files hashed: 7
+VERDICT: CLEAN (0 errors, 0 warnings)
+-- --fix output vs current staged tree:
+Only in /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-data-preflight/demo-fix-from-package-v3: FIXES-DIFF.txt
+-- fixed pad == real PS5Pad-sanitized.ini:
+YES
+-- fixed loadlist == real loadlist-sizefixed.txt:
+YES
+
+== 5. input-tree safety ==
+package-v3 PS5Pad.ini sha256 (expect 1d919fbf... per its own REPORT.md):
+1d919fbfac4976f84e6c621970aaddc61493858fc5564c9481c90f94055eca1e  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-settings-v3-package/package-v3/ue4ss/PS5Pad.ini
+package-v3 loadlist.txt sha256 (expect 4d98ecd7... per its own REPORT.md):
+4d98ecd7aba1777028cca50552ef9d9616ecb070a0eb8772b8f3e40a590f5d5d  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-settings-v3-package/package-v3/loadlist.txt
+console_batch.py untouched (tool is standalone; no imports/calls):
+0

@@ -1,0 +1,47 @@
+{
+ "worker": "worker-combined-editions",
+ "date": "2026-10-05",
+ "mission": "Pre-build the launch11-combined driver + fixed editions (+ adapted one-pass runner) so the away-loop's compose is pure execution when the pad fix lands. LOCAL ONLY; no composition runs; launch10-build editions copy-from only.",
+ "verdict": "DELIVERED: three py_compile-PASS editions + EDITIONS.json + three diffs, all shas verified; admission gates proven to refuse while PENDING. Compose-readiness is CONDITIONAL on the recorded admissions (pad_defer PENDING, initializer_fold PENDING-ACK) — by design, never silent.",
+ "deliverables": {
+  "dir": "outputs/2026-10-04-zcode-controller/launch11-combined/",
+  "fixed_edition": {
+   "file": "build_runtime_composition6_fixed_l11.py",
+   "sha256": "6e943678a927db37c4b65b16d58e269e4832a63cb81befd63827198aea675108",
+   "base": "launch10-build/build_runtime_composition6_fixed_l10.py b78fb031... (= frozen 8dd92a6f + l10 linker_provided extension; allow-list {'program','luamod','cppmod','settings','asmhelper-asmhelper'} byte-carried)",
+   "delta": "EXACTLY ONE comment-block insertion (diff hunk 44a45,84); zero executable change"
+  },
+  "driver": {
+   "file": "build_runtime_composition6_l11.py",
+   "sha256": "c94110d2b8ecc3d861c89da4ba63651f06d6df24834f439f81478e0194c39c71",
+   "base": "launch10-build/build_runtime_composition6_l10.py f4103572... (on-disk proven pair)",
+   "tagged_deltas": ["L11-E1 COMPOSE6_FIXED re-pin to 6e943678", "L11-E2 initializer -> plan-A0 ARMED staging 8b0c7e99 (pairing-law required; caveat in-line)", "L11-E3 luamod -> merged staging dc687602 + comparator 813b249d pin comments", "L11-E4 PAD PLACEHOLDER comment block", "L11-E5 FOLD-1 asmhelper PLACEHOLDER comment (default OFF, 6604ce2d admissible, f5627427 rejected)"],
+   "byte_carried": "PKG_FIXED e6fbe6c5 pin, bridge CLI, 14-symbol chain, 31-header staging set, ODR/receipt/edited-landed/entry gates, artifacts hook, stage-aware lineage wrapper, diagnostic sink, D1 reuse fix"
+  },
+  "runner": {
+   "file": "launch11_one_pass.py",
+   "sha256": "c18f52ed7ac0e0372ce9c03c2c2216b5e4d95fbf61073440202d3bba2c6d9e8c",
+   "base": "launch10-build/launch10_one_pass.py 1b35567e...",
+   "adaptations": ["candidates prx-candidate-l11-{1,2}", "run dirs run-l11-{1,2}", "EDITIONS.json unit verification (14 units)", "admission_gate() refusing --full while pad_defer/initializer_fold unresolved (plan A3)", "luamod_comparator_gate(): receipt + re-measured bytes == 813b249d, source == dc687602, retained_units_replaced == [luamod,program]", "consumer_und_gate(): plan-D three mangled symbols resolve + zero R3Marshal* UND", "SeedValidation f09ec9b3 / live_module_facts 67170b21 stage-header pins byte-carried", "receipts renamed l11-*; compare-dir prx-candidate-l11-1; ODR/finalize/gate-v2/accessor/determinism stages byte-carried"]
+  },
+  "editions_json": {
+   "file": "EDITIONS.json",
+   "contents": "base shas (incl. the l10 EDITION.json drift note), edition shas, 14 verified units, comparators (M-0 813b249d, consumer UND mangled names, fold-0/6604ce2d/f5627427-rejected), admissions block (pad PENDING / initializer PENDING-ACK / fold1 OFF), 5-entry placeholder inventory, 6 exact loop edits",
+   "smoke": "verify_units() PASS on all 14 units; admission_gate() refuses PENDING with exit 1 (executed)"
+  },
+  "diffs": ["diff_fixed_l10-to-l11.diff (1 hunk, comment-only)", "diff_driver_l10-to-l11.diff (5 tagged deltas; all removals audited)", "diff_runner_l10-to-l11.diff (adaptations; all removals audited)"],
+  "freshen_deps": "freshen-deps.txt copied from launch10-build (1322 entries); merged LuaMod .d closure (1306 files) verified FULLY covered except the merged source itself (added by regen)"
+ },
+ "key_findings": [
+  "INITIALIZER LINEAGE CONFLICT (resolved structurally, decision gated): the plan-D pairing law requires the ARMED initializer (merged luamod odr-uses RC::Unreal::R3MarshalPumpPending/R3MarshalPublishGameThreadIdentity under __PROSPERO__; bridges defined only under __PROSPERO__ && UE4SS_R3_MARSHAL_MODE), but the plan's armed staging 8b0c7e99 is PRE-launch10-final-c — it lacks the GMalloc V1/V2 validators, v4 pool predicate and read_bytes_at anchor present in the shipped launch-10 unit 4a2b9400. No v4+armed fold exists on disk (verified). Driver defaults to the plan's pinned A0 staging (pure execution); the runner refuses --full until the loop consciously sets admissions.initializer_fold (ACK-PLAN-PINNED / ADMITTED-V4ARMED-FOLD / WAIVED). Precedent: worker-launch10-r3-armed composed this staging on the launch-10 pair, gate v2 GO 15/15.",
+  "FOLD-1 COMPARATOR CORRECTION ADOPTED: per worker-fold1-preverify FOLD1-READY.md + coordinator notice — editions reference ONLY 6604ce2d (basename-preserving flip) as the admissible fold-1 comparator; f5627427 recorded as REJECTED (renamed-probe basename violation). Fold-1 is a placeholder comment only; default stays fold-0 (81dd832b, byte-carried staging, reproduces under current headers).",
+  "launch10-build/EDITION.json bookkeeping drift found (recorded, NOT fixed there): it pins l10_driver_sha256 399d62c2 but the on-disk driver is f4103572 (the validator-v4 fold updated the driver after EDITION.json was written). Base chosen = on-disk file; its COMPOSE6_FIXED_SHA pin b78fb031 matches the on-disk l10 fixed edition."
+ ],
+ "non_claims": [
+  "No composition run, no packaging, no console contact, no target execution — pre-build only (mission-bound).",
+  "The M-0 luamod comparator 813b249d is worker-l11-merge's HOST measurement; it has NOT been reproduced by a launch-11 composition — the runner enforces it at post_build and STOPs on drift (plan D); no comparator widening.",
+  "No launch-11 composed-object comparator exists yet (dry-run 633a8c82 invalid on this lineage per plan D); the two passes measure it fresh and must agree byte-for-byte.",
+  "No in-game acceptance, no >8 quality claim; launch-10 editions untouched (copy-from only).",
+  "The pad unit is NOT admitted (placeholder only); --full structurally refuses until A3 resolves. Fold-1 is NOT activated."
+ ]
+}

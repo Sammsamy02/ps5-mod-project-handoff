@@ -1,0 +1,16 @@
+--- execution-v2/admission.py
++++ execution/admission.py
+@@ -249,8 +249,12 @@
+         for p in actual:
+             require(p in self.allowed, 'unqueried/unpinned actual dependency: ' + name + ':' + p)
+             pin({'path': p, 'sha256': self.allowed[p]}, 'actual dependency/' + name)
+-        if name in PENDING:
++        if name in {'program', 'unreal-unrealinitializer'}:
+             require(str(self.pins['profile_header']) in actual, 'selected profile header absent from .d: ' + name)
++        if name == 'native-layoutbinding':
++            for role in ('NativeLayoutBinding.hpp', 'NativeLayoutActiveWidths.hpp'):
++                require(str(resolved(self.records[role]['path'])) in actual,
++                        'selected binder helper absent from .d: ' + role)
+         if name == 'program':
+             require(str(self.pins['generated_header']) in actual
+                     and str(resolved(self.records['NativeLayoutDeclarations.hpp']['path'])) in actual,

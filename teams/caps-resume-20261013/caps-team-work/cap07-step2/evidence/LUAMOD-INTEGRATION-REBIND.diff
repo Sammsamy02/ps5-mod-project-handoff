@@ -1,0 +1,35 @@
+--- prior-main
++++ current-main
+@@ -164,6 +164,11 @@
+ #define UE4SS_LUAMOD_PRINTF printf_s
+ #else
+ #define UE4SS_LUAMOD_PRINTF std::printf
++#endif
++
++#ifdef __PROSPERO__
++// [CAP09] defined in src/Mod/CppMod.cpp (NativeModEngineServices.inc).
++namespace RC::Platform { void NativeModsGameThreadFrame(int source) noexcept; }
+ #endif
+ 
+ namespace RC
+@@ -7191,6 +7196,11 @@
+             process_delayed_actions<kFuncPtrMarshalExecutor>(LuaMod::m_delayed_game_thread_actions);
+ 
+             process_pending_notify_on_new_object_callbacks();
++    #ifdef __PROSPERO__
++            // [CAP09] native C++ mods: game-thread tasks + per-frame callbacks
++            // on the same data-only pump (never throws).
++            RC::Platform::NativeModsGameThreadFrame(0);
++    #endif
+ 
+             {
+                 std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+@@ -7300,6 +7310,8 @@
+                     {
+                         process_pending_notify_on_new_object_callbacks();
+                     }
++                    // [CAP09] native C++ mods (source 1 = copied-vtable Tick pump).
++                    RC::Platform::NativeModsGameThreadFrame(1);
+                     {
+                         std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+                         LuaMod::m_is_processing_actions = false;

@@ -1,0 +1,85 @@
+{
+  "worker": "worker-real-timing",
+  "date": "2026-10-05",
+  "scope": "read-only measurement of REAL launch-10 run evidence (per-writer t_ms deltas only within each sdiag pid writer); no console changes, no patches",
+  "mission": "replace the latency worker's C_comp=UNKNOWN placeholder in the '~5-10s + C_comp' launch-10 projection with numbers measured from real runs",
+  "inputs": {
+    "dir": "outputs/2026-10-04-zcode-controller/launch10-evidence/",
+    "files": {
+      "run1-sdiag.jsonl": "d5ad9fa05e9bf4f7a5d056aed43b1b2bb295d26e341698ffebfb9ba916cfae6b",
+      "run3-sdiag.jsonl": "264ba150325dbe28a1cbbdc528c782fcfbf1436eba8c5e236816e9c835224470",
+      "run1-ue4ss.log": "4a4e0cf7280b66ffe38e5fc5d55a1ca49f2ed1ba0077e50d404f8985dd4d51a0",
+      "run2-ue4ss.log": "e40bf151b3a921adb197629eac7b792bfc590c37f1f0b93432afdb8d3c280dcd",
+      "run3-ue4ss.log": "9aeeceeb709f9f0493b69703e92749c8401cabdadec2e341eae3b3e9df35b8fa",
+      "run3-runtime-status.txt": "f5ba12265b77c918d3b957fb720b3088901189fdd23ce0040c5f2b7db3baff43",
+      "loadlist-sizefixed.txt": "54e3c2a0d3ba94f4d46d2a0489c8560753cd350cace70d54d018e1d72e4139e9",
+      "PS5Pad-sanitized.ini": "6ab119b3e8aef1d881d6d1f50662548027061f5bedaf38a0fe859d2797848efe"
+    },
+    "model_source": "outputs/2026-10-04-zcode-team/worker-injection-latency/LATENCY-ANALYSIS.md (projection section 4; S## keys reference its pinned ploader main.c claims)",
+    "structural_fact": "run1-sdiag.jsonl is byte-identical to the first 548 lines of run3-sdiag.jsonl (cmp-verified): the on-console supplier-diag jsonl accumulates across boots, so run3's file holds three boot epochs (pids 317=run1, 341=run2, 355=run3), each seq restarting at 1. All deltas below are WITHIN one pid writer, never cross-writer."
+  },
+  "clock_provenance": {
+    "claim": "sdiag t_ms and the UE4SS.log [t=...ms pid=...] stamps and the PATH_TEST monotonic-ns stamps share one kernel monotonic clock (ms vs ns, same base)",
+    "evidence": [
+      "pid 317: sdiag runtime_start_failed at 60004266 == UE4SS run1 log line '[t=60004266ms pid=317]' (exact)",
+      "pid 341: sdiag mfa_activate_failed at 60249877 == UE4SS run2 log line '[t=60249877ms pid=341]' (exact)",
+      "pid 355: sdiag runtime_start_failed at 60900581 == UE4SS run3 log line '[t=60900581ms pid=355]' (exact); run3-runtime-status.txt session stamp 60900572 falls +791ms into the same module_start",
+      "PATH_TEST ns stamps / 1e6 land on the same base, e.g. 60076100108227ns = 60076100.108ms, between pid 317's refusal (60004266) and pid 341's boot (60249173)"
+    ]
+  },
+  "claims": [
+    {
+      "id": "T01",
+      "claim": "C_comp (composition module_start, entered -> module_start_return, the ploader pt_call-blocking duration) is MEASURED: 813ms (pid 317, run1), 718ms (pid 341, run2, early MFA abort), 803ms (pid 355, run3). Full-chain runs: 0.80-0.81s, reproducible across boots, ~37x under the 30s pt_call cap.",
+      "evidence": "run3-sdiag.jsonl per-pid: module_start_entered seq1 t=60003456/60249173/60899781; module_start_return seq539 t=60004269 (+813ms, pid317), seq486 t=60249891 (+718ms, pid341), seq539 t=60900584 (+803ms, pid355)"
+    },
+    {
+      "id": "T02",
+      "claim": "Earliest->latest sdiag record per pid is 5747/5744/5742 ms, but 4934/5026/4939 ms of that is the module's own worker thread running AFTER module_start_return (worker sleeps ~5.04s then runs a ~10-15ms buffered Lua probe, 88 buffered lines). That tail does NOT block ploader's pt_call and does NOT occupy the hijacked game thread.",
+      "evidence": "per-pid: worker_entry ~+695ms -> worker_sleep_complete +5731/+5732/+5736 -> buffered_lua_begin value=88 -> buffered_lua_result at +5742/+5744/+5747, all after module_start_return"
+    },
+    {
+      "id": "T03",
+      "claim": "Per-stage breakdown of the full chain (pid 355, canonical run3; pid 317 nearly identical): entry dispatch ~4ms; import validation 187 imports ~3ms; 235 static constructors 679ms (683ms pid 317) = ~84-85% of C_comp (max single-ctor gap 5ms, i.e. flat distribution); worker spawn 2ms; runtime wiring + MFA activate ~8ms; VMMAP walk #1 10028 entries 11ms (pid 317: 22761 entries, 12ms); stat checks ~7ms; lease registration 6 spans + spanpub ~8ms; VMMAP re-proof walk #2 11ms; 6 anchor pairs + c_either 16ms; cfg dirs 2ms; lmf conversion (7 anchors, 1 interval) 7ms; refusal decision +10ms; return.",
+      "evidence": "computed from run3-sdiag.jsonl seq/t_ms within pid 355 and pid 317; see TIMING.md tables"
+    },
+    {
+      "id": "T04",
+      "claim": "Projection verdict: with C_comp measured at ~0.8s the launch-10 projection becomes ~6-11s of ploader-side serial wall clock for the 2-plugin config, and its residual risk #1 (C_comp > 30s -> FAIL despite working) is CLOSED: 0.8s is 37x under the cap. The only game-thread-blocking mod cost measured is the ~0.8s composition module_start (+ path_test's trivial module_start); the user-reported 'game loads normally with 2 plugins' is consistent.",
+      "evidence": "T01/T02 numbers vs LATENCY-ANALYSIS.md section 4 model"
+    },
+    {
+      "id": "T05",
+      "claim": "NEW measured fact the projection missed: ploader's inter-plugin gap (composition refusal -> path_test module_start, same boot) is 71.8s (run1), 70.7s (run2), 70.9s (run3) - far above the 2-3s modeled for path_test readiness+attach and above the pinned-source worst case (~25s readiness S06 + ~7s attach retries). Within the ~72s measured serial chain the composition's module_start is 0.8s = ~1.1%; ~99% is ploader-side overhead (readiness/attach/load), which per source does not stop the game process except during brief attach windows. Decomposition of the 71s is NOT possible from this evidence; PATCH ploader-03 (step log) is the instrument for it.",
+      "evidence": "UE4SS logs: refusals at 60004266/60249877/60900581 vs following PATH_TEST monotonic-ns stamps 60076100108227/60320585374436/60971455045302 (same clock, see clock_provenance)"
+    },
+    {
+      "id": "T06",
+      "claim": "CORRECTION of the mission shorthand: the run3 pad failure is phase=6 = PadPhase::Open (scePadOpen) with error -2137915388 = 0x80920004 = PS5_PAD_ERROR_ALREADY_OPENED (pinned vendor constant, worker-pad-hardware-probe/src/pad_sdl_ps5.h:21), NOT 0x80A40004 and NOT 'pad service unavailable'. The pad open was refused because a handle for that user was ALREADY OPEN in the process - i.e. the game's own pad stack had already opened the pad by the time our composition tried, at the EARLIEST practical injection moment.",
+      "evidence": "run3-runtime-status.txt + run3-ue4ss.log 'phase=6, error=-2137915388'; PS5PadSource.hpp:10-11 enum (Uninitialized=0 ... Open=6); pad_sdl_ps5.h:21"
+    },
+    {
+      "id": "T07",
+      "claim": "Injection-timing fact, live: composition module_start begins at the earliest injectable point of the new game process (ploader polls pids at 50ms, S03/S07; readiness min ~1.6s, S08; module space at walk time only 10028-22761 VM entries) and the pad open fires ~790-800ms into it (bounded between lmf_intervals_found +790ms and runtime_start_failed +800ms, pid 355). The game therefore opens its pad within roughly the first ~2-28s of process life - BEFORE the earliest possible injection. All three boots failed fail-closed with no retry (single-shot; runtime-status written once at the refusal moment, t=60900572 = +791ms).",
+      "evidence": "run3-sdiag.jsonl pid 355; run3-runtime-status.txt 'session 355 60900572 ... failed'"
+    },
+    {
+      "id": "T08",
+      "claim": "Pad-defer retry-window inference (flagged inference, not measurement): the fix's window is NOT 'wait until the pad service is up' (it is already up, see T06) but 'wait until the game's exclusive handle is free', and WHEN (if ever) the game releases it is unmeasured - no successful open exists anywhere in this evidence. A fixed boot-relative delay is therefore unjustified; retry should be event-driven (re-attempt activate() on each poll/tick or on Disconnected transitions, cheap and bounded). Lower bound only: the same process was still executing injected module_starts at least ~71-73s after injection (PATH_TEST stamps), so any deferred retry lands while the game is up.",
+      "evidence": "T05/T06/T07; absence of any later pad-success record in all provided logs"
+    },
+    {
+      "id": "T09",
+      "claim": "Boot-to-boot spacing consistent with the pinned 120s idle tail (S03/S04): after each FAIL the title stays un-injected so ploader idles to its 120s cap. run1 PATH_TEST +120s -> ploader would give up ~60196100; run2 composition t0 60249173 is +53s later. run2 PATH_TEST +120s -> ~60440585; run3 t0 60899781 is +459s later (longer human gap). Consistent, not proven (ploader's own Timeout line is not in evidence).",
+      "evidence": "derived from UE4SS PATH_TEST stamps and sdiag t0 spacing"
+    }
+  ],
+  "honesty": [
+    "No game-process spawn timestamp exists in the evidence; all 'after process start' statements are bounds/inference from pinned ploader behavior (S03-S08), clearly flagged.",
+    "The ~71s inter-plugin gap is measured end-to-end but NOT decomposed; readiness/attach/load attribution inside it is inference from pinned source and is explicitly marked as exceeding the source's modeled worst case, requiring PATCH ploader-03 instrumentation to resolve.",
+    "Pre-module_start costs (composition readiness, attach, kernel load of the 30MB image) are NOT visible to sdiag (they happen before the first stamp) and remain unmeasured; the projection band '5-10s' for them is neither confirmed nor refuted, only made irrelevant to game-thread blocking by T02/T05.",
+    "C_comp is reported under BOTH definitions the mission offered; the projection-relevant one is the module_start_return delta (~0.8s), because the extra ~4.9s of sdiag records is post-return worker-thread activity (T02).",
+    "The mission's stated pad error 0x80A40004 does not match the evidence (0x80920004); the measured value and its vendor-constant name are reported (T06).",
+    "Critic-style scores are out of scope; numbers above are reproducible by re-running the extraction against the hashed inputs."
+  ]
+}

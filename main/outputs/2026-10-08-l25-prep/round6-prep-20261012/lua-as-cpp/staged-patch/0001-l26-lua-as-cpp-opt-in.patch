@@ -1,0 +1,152 @@
+--- a/outputs/2026-10-08-l26-runtime/build_variants.py
++++ b/outputs/2026-10-08-l26-runtime/build_variants.py
+@@ -151,6 +151,42 @@
+ # and NO skip token; the B skip token stays DIAGNOSTIC-ONLY (variant B) and is
+ # removed from production per the same review.
+ CTOKEN='MODBRIDGE_L25_ENGINE_ADD_LISTENER'
++# [LUA-AS-CPP] STAGED (lua-as-cpp track 2026-10-12; needs the user's/reviewer's
++# OK and its own labelled build). Compiles LuaRaw as C++ exactly like upstream
++# UE4SS's LUA_COMPILE_AS_CPP option (deps/first/LuaRaw/CMakeLists.txt:7,49-51,
++# 78 and xmake.lua:1-5,30-36): Lua errors become C++ throws, so C++
++# destructors run in every frame a Lua error crosses (PS5/FreeBSD longjmp
++# skips them). Opt-in with env L26_LUA_AS_CPP=1; unset = today's build.
++#  * every luaraw-* unit: prospero-clang -> prospero-clang++ (adds -frtti
++#    -fexceptions + libc++), -std=c11 -> -std=c++23 -DLUA_COMPILED_AS_CPP
++#    -Wno-deprecated-enum-enum-conversion, '-x c++' before -c, and NO
++#    -resource-dir (no other C++ unit has one; keeping it pulls clang's
++#    builtin stddef.h/stdarg.h ahead of the SDK's).
++#  * every unit whose BASE deps include LuaRaw/include/lua.hpp (51 in B4):
++#    -DLUA_COMPILED_AS_CPP so lua.hpp:7-15 drops its extern "C" wrapper and
++#    the callers see the C++-linkage definitions.
++#  * include-graph gate: for these units a NEW dependency is also approved
++#    when the identical file (same resolved path AND same sha256) is already
++#    a pinned dependency of the BASE build (Mac probe: 108 libc++ rows such
++#    as __config/__config_site, all BASE-pinned; 0 unpinned).
++#  * G7: the raw import delta must equal LUA_CPP_IMPORT_DELTA exactly
++#    (Mac probe: only luaraw-ldo.o references setjmp/longjmp; the 7 new C++
++#    EH references all resolve inside the runtime). Anything else fails.
++LUA_AS_CPP=os.environ.get('L26_LUA_AS_CPP')=='1'
++LUA_CPP_DEFINE='-DLUA_COMPILED_AS_CPP'
++LUA_CPP_EXPECTED_LUARAW_UNITS=33
++LUA_CPP_IMPORT_DELTA={'removed':[('U','longjmp'),('U','setjmp')],'added':[]}
++def lua_cpp_argv(argv):
++    a=list(argv)
++    assert a[0].endswith('/prospero-clang'),'luaraw unit not compiled by prospero-clang: '+a[0]
++    a[0]=a[0]+'++'
++    assert a.count('-std=c11')==1
++    i=a.index('-std=c11');a[i:i+1]=['-std=c++23',LUA_CPP_DEFINE,'-Wno-deprecated-enum-enum-conversion']
++    assert a.count('-resource-dir')==1
++    j=a.index('-resource-dir');del a[j:j+2]
++    assert a.count('-c')==1
++    a[a.index('-c'):a.index('-c')]=['-x','c++']
++    return a
+ PAIR_ROOT=ROOT/'outputs/2026-10-08-l26-build-variants'
+ QPART=HERE/'copyin-probe'
+ QCOMPOSED=PAIR_ROOT/'staging-copyin-probe'/'UnrealInitializer.cpp'
+@@ -371,7 +407,21 @@
+     else:
+         record('G12b-header-consumers-recompiled',not coverage,{'consumers_per_header':header_consumers,'gaps':coverage})
+         if coverage and not tolerate_drift:raise RuntimeError('replaced-header consumers left retained (mixed-header hazard): '+repr(coverage))
++    lua_cpp_units=[];lua_hpp_units=[];base_dep_pins={}
++    if LUA_AS_CPP:
++        lua_cpp_units=sorted(u['name'] for u in base['selected_units'] if u['name'].startswith('luaraw-'))
++        lua_hpp_units=sorted(n for n,ds in unitdeps.items() if n not in NEW_UNITS and any(str(p).endswith('/LuaRaw/include/lua.hpp') for p in ds))
++        lua_hpp_units+=sorted(n for n,spec in NEW_UNITS.items() if spec['template'] in lua_hpp_units)
++        pinned={str(Path(p['path']).resolve()):p['sha256'] for p in oldsel['source_pins']}
++        base_dep_pins={rp:pinned[rp] for rp in universe_res if rp in pinned}
++        ok=len(lua_cpp_units)==LUA_CPP_EXPECTED_LUARAW_UNITS and len(lua_hpp_units)>0 and len(base_dep_pins)>0
++        record('G-LUACPP-scope',ok,{'luaraw_units':len(lua_cpp_units),'expected_luaraw_units':LUA_CPP_EXPECTED_LUARAW_UNITS,
++               'lua_hpp_define_units':len(lua_hpp_units),'base_pinned_dependencies':len(base_dep_pins),'define':LUA_CPP_DEFINE,
++               'declared_import_delta':{k:[list(t) for t in v] for k,v in LUA_CPP_IMPORT_DELTA.items()}})
++        if not ok:raise RuntimeError('G-LUACPP-scope: unexpected Lua-as-C++ scope (a zero count or not 33 luaraw units)')
++        affected=affected+[n for n in lua_cpp_units+lua_hpp_units if n not in affected]
+     return {'oldsel':oldsel,'approved_header_identities':approved_header_identities,'changes':changes,'added':added,
++            'lua_cpp_units':set(lua_cpp_units),'lua_hpp_units':set(lua_hpp_units),'base_dep_pins':base_dep_pins,
+             'replacements':replacements,'header_specs':header_specs,'base':base,'unitdeps':unitdeps,
+             'aliases':aliases,'merged_aliases':merged_aliases,'affected':affected,'include_dirs':include_dirs,
+             'pin_drift_rows':drift_rows,'row_classifications':classifications,'unit_row_units':unit_row_units,
+@@ -907,6 +957,8 @@
+         argv=[a for i,a in enumerate(argv) if a!='-ivfsoverlay' and not(i and argv[i-1]=='-ivfsoverlay')]
+         argv[1:1]=['-ivfsoverlay',str(overlay),*[a for p in sel['include_dirs'] for a in ['-I',p]],'-I',str(Path(u['source']).parent)]
+         if u['name'] in define_units:argv[1:1]=[variant['define']]
++        if u['name'] in sel.get('lua_cpp_units',()):argv=lua_cpp_argv(argv)
++        elif u['name'] in sel.get('lua_hpp_units',()):argv[1:1]=[LUA_CPP_DEFINE]
+         routes,route_violations=header_route_check(sel,argv)
+         route_agg['units'].append(u['name'])
+         if route_violations:
+@@ -926,7 +978,8 @@
+             extra=[str(p) for p in ds if str(p.resolve()) not in oldset
+                    and not p.resolve().is_relative_to(HERE)
+                    and (p.name,sha(p)) not in sel['approved_header_identities']
+-                   and staged.get(str(p.resolve()))!=sha(p)]
++                   and staged.get(str(p.resolve()))!=sha(p)
++                   and not (u['name'] in sel.get('lua_cpp_units',()) and sel['base_dep_pins'].get(str(p.resolve()))==sha(p))]
+             if extra:raise RuntimeError('unapproved include graph additions '+u['name']+': '+repr(extra))
+         else:
+             ds=None
+@@ -993,8 +1046,17 @@
+         after=budgeted_run([LLVM/'llvm-nm','-u',runtime],pdir,'undefined')
+         before=(BASE/f'pass{passno}/undefined.stdout').read_text()
+         symbols=lambda s:{tuple(line.split()[-2:]) for line in s.splitlines() if line.split()}
+-        record('G7-import-delta-none',symbols(after)==symbols(before),{'variant':variant['key'],'pass':passno,'baseline':str(BASE/f'pass{passno}/undefined.stdout')})
+-        if symbols(after)!=symbols(before):raise RuntimeError('raw import delta must be declared before packaging')
++        if LUA_AS_CPP:
++            expected=(symbols(before)-set(LUA_CPP_IMPORT_DELTA['removed']))|set(LUA_CPP_IMPORT_DELTA['added'])
++            ok=symbols(after)==expected and len(symbols(after))>0
++            record('G7-import-delta-declared-lua-as-cpp',ok,{'variant':variant['key'],'pass':passno,'baseline':str(BASE/f'pass{passno}/undefined.stdout'),
++                   'declared':{k:[list(t) for t in v] for k,v in LUA_CPP_IMPORT_DELTA.items()},
++                   'unexpected_added':sorted([list(t) for t in symbols(after)-expected]),'unexpected_missing':sorted([list(t) for t in expected-symbols(after)]),
++                   'counts':(len(symbols(before)),len(symbols(after)))})
++            if not ok:raise RuntimeError('Lua-as-C++ raw import delta differs from the declared delta')
++        else:
++            record('G7-import-delta-none',symbols(after)==symbols(before),{'variant':variant['key'],'pass':passno,'baseline':str(BASE/f'pass{passno}/undefined.stdout')})
++            if symbols(after)!=symbols(before):raise RuntimeError('raw import delta must be declared before packaging')
+         write(pdir/'LINK-COMMAND.json',{'argv':cmd,'ordered_inputs':input_paths,'fixed_inputs':link['fixed_inputs']})
+         write(pdir/'COMPILE-RECEIPT.json',{'fresh_units':[{'name':u['name'],'command':pin(objects/(u['name']+'.command.json')),'object':pin(u['object'])} for u in units if u['name'] in sel['affected']],'retained_units':len(units)-len(sel['affected']),'header_overlay':pin(overlay)})
+         # [agent FY] DEPENDENCY-GRAPH.json + COMPOSITION-RECEIPT.json moved to
+@@ -1002,8 +1064,8 @@
+         # pins, so both files are written by the serial finisher after the
+         # passes join (content identical to the sequential driver's writes;
+         # COMPOSITION pins the DEPENDENCY-GRAPH, so the graph writes first).
+-        write(pdir/'IMPORT-DELTA.json',{'baseline':sorted([list(t) for t in symbols(before)]),'current':sorted([list(t) for t in symbols(after)]),'added':[],'removed':[],'baseline_artifact':pin(BASE/f'pass{passno}/undefined.stdout'),'qualification':'Raw runtime symbols; final PRX import identities checked during packaging.'})
+-        with _PRINT_LOCK:print(json.dumps({'variant':variant['key'],'pass':passno,'runtime':pin(runtime),'imports_changed':False}),flush=True)
++        write(pdir/'IMPORT-DELTA.json',{'baseline':sorted([list(t) for t in symbols(before)]),'current':sorted([list(t) for t in symbols(after)]),'added':sorted([list(t) for t in symbols(after)-symbols(before)]),'removed':sorted([list(t) for t in symbols(before)-symbols(after)]),'baseline_artifact':pin(BASE/f'pass{passno}/undefined.stdout'),'qualification':'Raw runtime symbols; final PRX import identities checked during packaging.'})
++        with _PRINT_LOCK:print(json.dumps({'variant':variant['key'],'pass':passno,'runtime':pin(runtime),'imports_changed':symbols(after)!=symbols(before)}),flush=True)
+         return {'passno':passno,'pdir':pdir,'units':units,'pins':pass_pins,'runtime_pin':pin(runtime),
+                 'route_summary':route_agg['representative'],'selected_count':len(units),
+                 'undefined_counts':(len(symbols(before)),len(symbols(after)))}
+--- a/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py
++++ b/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py
+@@ -46,6 +46,14 @@
+ completed (runtime twin variants) before --prepare/--execute.
+ """
+ import argparse,hashlib,json,os,shutil,subprocess,sys
++# [LUA-AS-CPP] STAGED (lua-as-cpp track 2026-10-12): with Lua compiled as C++
++# the runtime stops importing setjmp/longjmp (only luaraw-ldo.o used them),
++# so the PRX carries 205 import identities instead of 207. Same opt-in as
++# build_variants.py. NOT sufficient alone: the packager's import contract
++# (package_prx_l19.py combined_unresolved_precheck / derive_contract and
++# check_import_identity.py set equality) must drop exactly these two names.
++LUA_AS_CPP=os.environ.get('L26_LUA_AS_CPP')=='1'
++EXPECTED_IMPORTS=205 if LUA_AS_CPP else 207
+ from pathlib import Path
+ HERE=Path(__file__).resolve().parent;ROOT=HERE.parents[1]
+ sys.dont_write_bytecode=True
+@@ -333,7 +341,7 @@
+         # before the receipt is written.
+         p5=receipt['status']=='MAC_PACKAGE_CHECKS_PASS'
+         p6=static['status']=='STATIC_CHECKS_PASSED' and len(static['checks'])==20 and all(c['pass'] for c in static['checks'].values())
+-        p7=ids['status'].startswith('PASS') and ids['count']==207
++        p7=ids['status'].startswith('PASS') and ids['count']==EXPECTED_IMPORTS
+         record('P5-build-receipt-'+passno,p5,{'status':receipt['status']})
+         record('P6-static-checks-'+passno,p6,{'count':len(static['checks'])})
+         record('P7-import-identities-'+passno,p7,{'count':ids['count']})
+@@ -389,7 +397,7 @@
+     names_a={r['name'] for r in json.loads(Path(a['prx']['path']).parent.joinpath('EXACT-IMPORT-IDENTITIES.json').read_text())['imports']}
+     names_b={r['name'] for r in json.loads(Path(b['prx']['path']).parent.joinpath('EXACT-IMPORT-IDENTITIES.json').read_text())['imports']}
+     record('P10-variant-prx-differ',a['prx']['sha256']!=b['prx']['sha256'],{'A':a['prx']['sha256'],'B':b['prx']['sha256']})
+-    record('P11-import-name-sets-equal',names_a==names_b and len(names_a)==207,{'count':len(names_a)})
++    record('P11-import-name-sets-equal',names_a==names_b and len(names_a)==EXPECTED_IMPORTS,{'count':len(names_a)})
+     if a['prx']['sha256']==b['prx']['sha256']:raise RuntimeError('variant PRXes are identical: the skip-define had no effect')
+     if names_a!=names_b:raise RuntimeError('variant import name sets differ: '+repr(names_a^names_b))
+     receipt={'status':'MAC_ONLY_L26_VARIANT_PAIR_PACKAGING_RECEIPT','token':TOKEN,

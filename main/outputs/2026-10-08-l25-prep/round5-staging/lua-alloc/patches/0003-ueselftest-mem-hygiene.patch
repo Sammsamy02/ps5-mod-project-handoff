@@ -1,0 +1,55 @@
+--- outputs/2026-10-08-l25-prep/ueselftest/main.lua	2026-10-11 21:19:19
++++ outputs/2026-10-08-l25-prep/round5-staging/lua-alloc/staged/ueselftest/main.lua	2026-10-11 21:25:48
+@@ -68,6 +68,11 @@
+   -- registry exhaustion in CLAUDE-SELFTEST-RESULTS GROUP A.
+   if S.done then P("already-done-once-this-session") return end
+   S.busy = true
++  -- [IS-LUA-ALLOC 0003] bracket every run with exact allocator numbers
++  -- (Claude round-13 item 1). GetLuaMemory is the 0001 engine binding; when
++  -- absent (older PRX) the line degrades to "unavailable" and changes nothing.
++  local okm, m = pcall(function() return GetLuaMemory() end)
++  P("MEM before " .. (okm and tostring(m) or "unavailable"))
+   P("RUN start 1.." .. M)
+   S.p = 0
+   LP(2, 21)
+@@ -88,6 +93,11 @@
+   for i = S.n + 1, #T do ONE(T[i]) end
+   PFW(-1)
+   P("SUMMARY "..S.p.." of "..M.." PASS SLOW "..SLOW)
++  -- [IS-LUA-ALLOC 0003] post-run numbers: gc_kb delta vs "before" is what the
++  -- run pinned in the Lua heap; rising fails with flat gc_kb means the shared
++  -- backing store (game libc heap) refused, not Lua garbage.
++  local okm2, m2 = pcall(function() return GetLuaMemory() end)
++  P("MEM after " .. (okm2 and tostring(m2) or "unavailable"))
+   P("done")
+   S.done = true
+   S.busy = false
+--- outputs/2026-10-08-l25-prep/ueselftest/part9.lua	2026-10-10 13:46:10
++++ outputs/2026-10-08-l25-prep/round5-staging/lua-alloc/staged/ueselftest/part9.lua	2026-10-11 21:26:18
+@@ -2,18 +2,18 @@
+ -- require("partN") / dofile fallback; returns the entry list. Do not run
+ -- standalone (needs the [ST2] chassis state passed as S by the runner).
+ return {
+-{"RegisterProcessConsoleExecPostHook", function(S) local ok, a = pcall(RegisterProcessConsoleExecPostHook, function() end) if ok then return "registered" end if tostring(a):lower():find("refus", 1, true) then return "soft-refused" end return false, a end},
+-{"RegisterCallFunctionByNameWithArgumentsPreHook", function(S) local ok, a = pcall(RegisterCallFunctionByNameWithArgumentsPreHook, function() end) if ok then return "registered" end if tostring(a):lower():find("refus", 1, true) then return "soft-refused" end return false, a end},
+-{"RegisterCallFunctionByNameWithArgumentsPostHook", function(S) local ok, a = pcall(RegisterCallFunctionByNameWithArgumentsPostHook, function() end) if ok then return "registered" end if tostring(a):lower():find("refus", 1, true) then return "soft-refused" end return false, a end},
+-{"RegisterULocalPlayerExecPreHook", function(S) local ok, a = pcall(RegisterULocalPlayerExecPreHook, function() end) if ok then return "registered" end if tostring(a):lower():find("refus", 1, true) then return "soft-refused" end return false, a end},
+-{"RegisterULocalPlayerExecPostHook", function(S) local ok, a = pcall(RegisterULocalPlayerExecPostHook, function() end) if ok then return "registered" end if tostring(a):lower():find("refus", 1, true) then return "soft-refused" end return false, a end},
+-{"RegisterConsoleCommandHandler", function(S) local r = RegisterConsoleCommandHandler("st2h", function() end) return "ret=" .. tostring(r) end},
+-{"RegisterConsoleCommandGlobalHandler", function(S) local r = RegisterConsoleCommandGlobalHandler("st2g", function() end) return "ret=" .. tostring(r) end},
++{"RegisterProcessConsoleExecPostHook", function(S) if S.h.st2rp then return "once-armed" end local ok, a = pcall(RegisterProcessConsoleExecPostHook, function() end) S.h.st2rp = true if ok then return "registered" end if tostring(a):lower():find("refus", 1, true) then return "soft-refused" end return false, a end},
++{"RegisterCallFunctionByNameWithArgumentsPreHook", function(S) if S.h.st2rc1 then return "once-armed" end local ok, a = pcall(RegisterCallFunctionByNameWithArgumentsPreHook, function() end) S.h.st2rc1 = true if ok then return "registered" end if tostring(a):lower():find("refus", 1, true) then return "soft-refused" end return false, a end},
++{"RegisterCallFunctionByNameWithArgumentsPostHook", function(S) if S.h.st2rc2 then return "once-armed" end local ok, a = pcall(RegisterCallFunctionByNameWithArgumentsPostHook, function() end) S.h.st2rc2 = true if ok then return "registered" end if tostring(a):lower():find("refus", 1, true) then return "soft-refused" end return false, a end},
++{"RegisterULocalPlayerExecPreHook", function(S) if S.h.st2ru1 then return "once-armed" end local ok, a = pcall(RegisterULocalPlayerExecPreHook, function() end) S.h.st2ru1 = true if ok then return "registered" end if tostring(a):lower():find("refus", 1, true) then return "soft-refused" end return false, a end},
++{"RegisterULocalPlayerExecPostHook", function(S) if S.h.st2ru2 then return "once-armed" end local ok, a = pcall(RegisterULocalPlayerExecPostHook, function() end) S.h.st2ru2 = true if ok then return "registered" end if tostring(a):lower():find("refus", 1, true) then return "soft-refused" end return false, a end},
++{"RegisterConsoleCommandHandler", function(S) if S.h.st2rh then return "once-armed" end S.h.st2rh = true local r = RegisterConsoleCommandHandler("st2h", function() end) return "ret=" .. tostring(r) end},
++{"RegisterConsoleCommandGlobalHandler", function(S) if S.h.st2rg then return "once-armed" end S.h.st2rg = true local r = RegisterConsoleCommandGlobalHandler("st2g", function() end) return "ret=" .. tostring(r) end},
+ {"ForEachUObject", function(S) local n = 0 local ok = pcall(ForEachUObject, function(o, c, i) n = n + 1 end) if ok then return "n=" .. n end return false, "iterate-err" end},
+ {"IterateGameDirectories", function(S) local r = IterateGameDirectories() return "ret=" .. type(r) end},
+ {"IsKeyBindRegistered", function(S) local r = IsKeyBindRegistered(Key.F12) if r == true then return "true" end return false, "expected-true got " .. tostring(r) end},
+ {"RegisterKeyBind-arm-report", function(S) if S.h.armed then return "F12-armed" end return false, "arm-failed" end},
+-{"RegisterKeyBindAsync", function(S) local r = RegisterKeyBindAsync(Key.F12, function() end) return "ret=" .. tostring(r) end},
++{"RegisterKeyBindAsync", function(S) if S.h.st2rka then return "once-armed" end S.h.st2rka = true local r = RegisterKeyBindAsync(Key.F12, function() end) return "ret=" .. tostring(r) end},
+ {"ExecuteInGameThread", function(S) ExecuteInGameThread(function() end) return "queued" end},
+ {"ExecuteAsync", function(S) ExecuteAsync(function() end) return "queued" end},
+ {"ExecuteWithDelay", function(S) ExecuteWithDelay(1, function() end) return "queued" end},

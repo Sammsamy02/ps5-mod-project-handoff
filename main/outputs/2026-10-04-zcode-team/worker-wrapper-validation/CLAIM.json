@@ -1,0 +1,89 @@
+{
+  "worker": "worker-wrapper-validation",
+  "date": "2026-10-05",
+  "scope": "validation only; nothing applied to the driver or any frozen source",
+  "object_under_test": {
+    "wrapper": "_verify_lineage_stage_aware",
+    "defined_in": "outputs/2026-10-04-zcode-controller/launch10-build/build_runtime_composition6_l10.py",
+    "install_lines": "600-645 (inside package_phase)",
+    "driver_sha256": "ee154e7dd1b4ee74eba74da38463bd5ffef77c395586cea2cc09da214fd18d9d",
+    "wraps": "verify_lineage from outputs/2026-10-04-zcode-team/worker-prx-link-gaps/package_prx.py",
+    "package_prx_sha256": "e6fbe6c5011b498e0c26ee88bdc6c84aacab204b6ccad5696a78353afef5c313"
+  },
+  "verdict": "NO-GO",
+  "blocker": {
+    "defect": "the wrapper's pre-build one-TU compile calls b.run WITHOUT env_extra={'LLVM_CONFIG': str(PIN['llvm'] / 'llvm-config')}",
+    "driver_lines": "630-631",
+    "contrast": "the frozen bootstrap compile passes that env_extra on every prospero toolchain invocation (package_prx.py line 650 constructed, lines 663-668 used)",
+    "failure_chain": [
+      "prospero-clang++ execs ${SCRIPT_DIR}/clang++ (bin/prospero-clang++ line 45)",
+      "bin/clang++ line 21 derives LLVM_BINDIR via prospero-llvm-config --bindir, which requires $LLVM_CONFIG (or PATH llvm-config)",
+      "with LLVM_CONFIG unset: LLVM_BINDIR empty -> exec '/llvm-clang++' -> rc=126",
+      "Build.run raises RuntimeError on rc!=0 (package_prx.py lines 220-234)",
+      "wrapper's except Exception: recon=False (driver lines 636-637) declines silently"
+    ],
+    "measured_stderr": "bin/clang++: line 45: /llvm-clang++: No such file or directory; exec: /llvm-clang++: cannot execute: No such file or directory",
+    "consequence": "under the production environment the wrapper can NEVER supersede: the launch-10 full pass would fail at lineage with exactly the prx-candidate-l10-1 gap",
+    "direction": "fail-closed (no wrong acceptance), but the build stays blocked"
+  },
+  "proposed_fix_one_line": {
+    "where": "driver lines 630-631 (the wrapper's compile b.run call)",
+    "change": "add env_extra={'LLVM_CONFIG': str(m.PIN['llvm'] / 'llvm-config')} to that b.run call, making the pre-proof environment-identical to the packaging bootstrap compile",
+    "applied_by_this_worker": false
+  },
+  "evidence": {
+    "harness": "harness.py (same dir); raw: harness-results.json, harness-run.log",
+    "route": "package_phase executed wholesale via driver-source exec + importlib shim to a fresh REAL load of the frozen package_prx.py (only main->sentinel and, for canned cases, verify_lineage->canned swapped); package_phase exits at its own out.exists() guard AFTER installing the actual wrapper and BEFORE m.main()",
+    "cases_total": 10,
+    "cases_passed": 10,
+    "key_results": [
+      "P1 production env full-real: real verify_lineage + real tools -> compile rc=126, declined, gap retained (fail-closed confirmed, defect manifested)",
+      "P1b control env full-real: identical run + LLVM_CONFIG env -> compile rc=0, nm shows all 3 accessors DEFINED (T), superseded=True, gaps cleared; proves the missing env_extra is the ONLY blocker",
+      "N-a failed-nm, N-b failed-compile: declined, gap retained",
+      "N-c second failing check, N-d unexpected 4th added symbol, N-e empty expected_bootstrap_resolutions, N-f bridge source missing: declined with NO compile attempted",
+      "decline_record_present=False everywhere: the wrapper records nothing when it declines"
+    ]
+  },
+  "proposed_evidence_oneliner_declines": {
+    "where": "insert immediately before driver line 638 ('if recon and resolved_ok:')",
+    "line": "ev['checks'][_CHECK].setdefault('detail', {})['stage_aware_reconciliation'] = {'attempted': True, 'accepted': bool(recon and resolved_ok), 'others_failed': others_failed, 'delta_matched': bool(recon), 'preproof_compile_verified': bool(resolved_ok)}",
+    "rationale": "every decline path (others_failed, delta mismatch, missing bridge assertion, compile/nm failure) then leaves a reason in the evidence; reaching this line implies the delta check failed, so 'attempted' is always meaningful",
+    "applied_by_this_worker": false
+  },
+  "order_confirmation": {
+    "verify_lineage_before_compilation": {
+      "package_prx_main": "line 1016 evidence = verify_lineage(b); link only at line 1024 inside `if args.link and not b.gaps`",
+      "first_compilation": "link_pipeline stage 3.1, package_prx.py lines 645-671 (compiler b.run at line 667)",
+      "verify_lineage_only_runs_readelf": "package_prx.py line 415 (b.run [reader,'-h',obj], allow_fail=True) and line 425 readelf_undefined (llvm-readelf) - no compiler",
+      "wrapper_compile_is_first_compile": "driver lines 627-633, executed during verify_lineage"
+    },
+    "verify_lineage_before_prx_exists": {
+      "prx_writes": "bare-original lines 720-724, bare-sdk lines 743-747, candidate lines 750-753 - all after verify_lineage; wrapper runs before any of them",
+      "driver_entry": "package_phase ends with raise SystemExit(m.main()) at line 660; m.main is package_prx main()"
+    },
+    "flags_and_includes": {
+      "flags": "identical object: wrapper line 631 *m.CLANG_FLAGS; bootstrap line 667 *CLANG_FLAGS (frozen list lines 140-142, no -std)",
+      "std_cpp20": "injected into BOTH via _cpp20_run (driver lines 560-566)",
+      "includes": "wrapper line 629: overlay generated/probe/lifecycle/root; bootstrap lines 665-666: PIN['lineage'] generated/probe/lifecycle/root + PIN['lua_include']; PIN['lineage']=overlay param (driver line 646) = the same directory the wrapper hardcodes at line 624 in the current flow",
+      "divergences": [
+        "lua_include omitted by the wrapper: immaterial for this TU (bridge includes no Lua headers; verified include list), safe direction (future Lua-needing bridge would fail the pre-proof -> fail-closed)",
+        "env_extra LLVM_CONFIG omitted by the wrapper: THE BLOCKER (see blocker)",
+        "latent: wrapper compiles the overlay-PARAM bridge source (line 625) against the HARDCODED overlay include dirs (line 624); identical today (build_overlay pins that exact path, driver lines 466-468), a divergence in a future flow would spuriously fail or mis-root the pre-proof but can never cause a wrong supersession (the real bootstrap compile gates the actual link)"
+      ]
+    }
+  },
+  "wall_clocks_seconds": {
+    "P1-production-env-full-real": {"install": 0.149, "wrapped_call": 4.764},
+    "P1b-control-env-full-real": {"install": 0.228, "wrapped_call": 8.889},
+    "P2-production-env-canned-evidence": {"install": 0.254, "wrapped_call": 0.285},
+    "P2b-control-env-canned-evidence": {"install": 0.208, "wrapped_call": 2.754},
+    "N-a-failed-nm": {"install": 0.203, "wrapped_call": 0.002},
+    "N-b-failed-compile": {"install": 0.151, "wrapped_call": 0.002},
+    "N-c-second-failing-check": {"install": 0.158, "wrapped_call": 0.001},
+    "N-d-unexpected-4th-added": {"install": 0.032, "wrapped_call": 0.001},
+    "N-e-empty-expected-resolutions": {"install": 0.034, "wrapped_call": 0.001},
+    "N-f-bridge-missing": {"install": 0.169, "wrapped_call": 0.001}
+  },
+  "post_fix_go_procedure": "controller applies the one-line env_extra fix; re-run harness.py with P1/P2 expect_superseded flipped to True (the driver then carries LLVM_CONFIG itself, so the production-env cases must supersede); expect ALL-CASES-PASS with superseded=True and gaps cleared; only then rebuild for the full pass",
+  "isolation": "writes confined to /tmp/wrapper-validation-scratch and outputs/2026-10-04-zcode-team/worker-wrapper-validation; all real artifacts read-only"
+}

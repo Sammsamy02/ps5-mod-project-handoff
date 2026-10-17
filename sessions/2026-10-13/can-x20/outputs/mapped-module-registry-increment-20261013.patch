@@ -1,0 +1,515 @@
+--- a/loader/include/guest_pe_loader.h
++++ b/loader/include/guest_pe_loader.h
+@@ -52,11 +52,13 @@
+                                        GuestSegmentSwitch&);
+     friend GuestPeLoad pe_prepare_guest_with_shim(const void*, size_t,
+                                                   WinApiShim&, const LoadOptions&,
+-                                                  StaticTlsBank&, GuestSegmentSwitch&);
++                                                  StaticTlsBank&, GuestSegmentSwitch&,
++                                                  const char*);
+     GuestPeModule(LoadResult load, StaticTlsBank& bank,
+                   GuestSegmentSwitch& segment, std::vector<uint64_t> callbacks,
+                   bool has_static_tls);
+     static bool disable_thread_notifications(void* user);
++    static bool lookup_named_export(void* owner, const char* symbol, void** out);
+ 
+     LoadResult load_;
+     StaticTlsBank& bank_;
+@@ -66,6 +68,8 @@
+     WinApiShim* shim_ = nullptr; // shim must outlive this retained module
+     bool has_static_tls_ = false;
+     bool policy_registered_ = false;
++    bool module_registered_ = false;
++    std::string source_path_;
+ };
+ 
+ struct GuestPeLoad
+@@ -89,7 +93,8 @@
+ // and ensures guest threads are quiescent before destroying the module.
+ GuestPeLoad pe_prepare_guest_with_shim(const void* file_bytes, size_t file_size,
+                                        WinApiShim& shim, const LoadOptions& options,
+-                                       StaticTlsBank& bank, GuestSegmentSwitch& segment);
++                                       StaticTlsBank& bank, GuestSegmentSwitch& segment,
++                                       const char* source_path = nullptr);
+ 
+ } // namespace cap13
+ #endif
+--- a/loader/src/guest_pe_loader.cpp
++++ b/loader/src/guest_pe_loader.cpp
+@@ -132,6 +132,8 @@
+ {
+     if (policy_registered_ && shim_)
+         (void)shim_->unregister_thread_notification_policy(load_.image);
++    if (module_registered_ && shim_)
++        (void)shim_->unregister_mapped_module(source_path_.c_str(), load_.image, this);
+ }
+ 
+ bool GuestPeModule::disable_thread_notifications(void* user)
+@@ -139,15 +141,40 @@
+     return static_cast<GuestPeModule*>(user)->lifecycle_.disable_thread_notifications();
+ }
+ 
++bool GuestPeModule::lookup_named_export(void* owner, const char* symbol,
++                                         void** out)
++{
++    auto* module = static_cast<GuestPeModule*>(owner);
++    if (!module || !module->attached_ || !symbol || !*symbol || !out) return false;
++    void* address = module->load_.find_export(symbol);
++    if (!address) return false;
++    *out = address;
++    return true;
++}
++
+ GuestNotifyStatus GuestPeModule::process_attach(GuestTebView& teb)
+ {
+     if (attached_) return GuestNotifyStatus::WrongState;
++    if (shim_ && !source_path_.empty() && !module_registered_)
++    {
++        if (!shim_->register_mapped_module(source_path_.c_str(), load_.image,
++                                            lookup_named_export, this))
++            return GuestNotifyStatus::ModuleRegistrationFailed;
++        module_registered_ = true;
++    }
+     if (shim_ && !policy_registered_)
+     {
+         if (!shim_->register_thread_notification_policy(
+                 load_.image, has_static_tls_,
+                 disable_thread_notifications, this))
++        {
++            if (module_registered_)
++            {
++                (void)shim_->unregister_mapped_module(source_path_.c_str(), load_.image, this);
++                module_registered_ = false;
++            }
+             return GuestNotifyStatus::PolicyRegistrationFailed;
++        }
+         policy_registered_ = true;
+     }
+     const auto status = lifecycle_.process_attach(teb);
+@@ -157,6 +184,11 @@
+         (void)shim_->unregister_thread_notification_policy(load_.image);
+         policy_registered_ = false;
+     }
++    if (status != GuestNotifyStatus::Ok && module_registered_ && shim_)
++    {
++        (void)shim_->unregister_mapped_module(source_path_.c_str(), load_.image, this);
++        module_registered_ = false;
++    }
+     return status;
+ }
+ GuestNotifyStatus GuestPeModule::thread_attach(GuestTebView& teb)
+@@ -177,6 +209,11 @@
+         {
+             (void)shim_->unregister_thread_notification_policy(load_.image);
+             policy_registered_ = false;
++        }
++        if (module_registered_ && shim_)
++        {
++            (void)shim_->unregister_mapped_module(source_path_.c_str(), load_.image, this);
++            module_registered_ = false;
+         }
+     }
+     return status;
+@@ -226,11 +263,16 @@
+ 
+ GuestPeLoad pe_prepare_guest_with_shim(const void* file_bytes, size_t file_size,
+                                        WinApiShim& shim, const LoadOptions& options,
+-                                       StaticTlsBank& bank, GuestSegmentSwitch& segment)
++                                       StaticTlsBank& bank, GuestSegmentSwitch& segment,
++                                       const char* source_path)
+ {
+     GuestPeLoad result = pe_prepare_guest(file_bytes, file_size, shim,
+                                           options, bank, segment);
+-    if (result.ok) result.module->shim_ = &shim;
++    if (result.ok)
++    {
++        result.module->shim_ = &shim;
++        if (source_path) result.module->source_path_ = source_path;
++    }
+     return result;
+ }
+ 
+--- a/loader/src/guest_teb_lifecycle.h
++++ b/loader/src/guest_teb_lifecycle.h
+@@ -62,6 +62,7 @@
+     TlsPreparationFailed,
+     BackendRefused,
+     PolicyRegistrationFailed,
++    ModuleRegistrationFailed,
+     EntryReturnedFalse
+ };
+ 
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -70,6 +70,17 @@
+     void register_module(const char* name, WinModule handle,
+                          bool (*lookup)(WinModule, const char* symbol, void** out));
+ 
++    // Reserve a mapped PE by the basename of its source path. Reject any
++    // duplicate or built-in DLL name instead of replacing a live module.
++    // The lookup receives its owner context and must refuse until that PE
++    // has completed process attachment. Ordinal lookup remains unsupported.
++    using MappedLookup = bool (*)(void* owner, const char* symbol, void** out);
++    bool register_mapped_module(const char* source_path, WinModule handle,
++                                MappedLookup lookup, void* owner);
++    // Caller must quiesce guest users of the module before removing it.
++    bool unregister_mapped_module(const char* source_path, WinModule handle,
++                                  void* owner);
++
+     // The adapter registers each validated mapped DLL by its HMODULE/image
+     // base before DllMain. A non-TLS module needs a callback that actually
+     // suppresses its thread notifications; active static TLS always refuses
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -53,7 +53,11 @@
+ 
+ std::string ascii_module_key(const char* name)
+ {
+-    std::string key = name ? name : "";
++    if (!name) return {};
++    const char* basename = name;
++    for (const char* at = name; *at; ++at)
++        if (*at == '/' || *at == '\\') basename = at + 1;
++    std::string key = basename;
+     for (char& c : key)
+         if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+     return key;
+@@ -80,8 +84,11 @@
+     {
+         WinModule handle;
+         bool (*lookup)(WinModule, const char*, void**);
++        MappedLookup mapped_lookup = nullptr;
++        void* owner = nullptr;
+     };
+     std::unordered_map<std::string, ModuleEntry> modules;
++    bool builtins_registered = false;
+     struct ThreadNotificationPolicy
+     {
+         bool has_static_tls = false;
+@@ -183,8 +190,40 @@
+ {
+     if (!name || !*name || !lookup) return;
+     const std::string key = ascii_module_key(name);
++    if (key.empty()) return;
+     std::lock_guard g(m->mu);
+-    m->modules[key] = Impl::ModuleEntry{handle, lookup};
++    if (m->modules.count(key)) return;
++    m->modules.emplace(key, Impl::ModuleEntry{handle, lookup, nullptr, nullptr});
++}
++
++bool WinApiShim::register_mapped_module(const char* source_path,
++                                        WinModule handle, MappedLookup lookup,
++                                        void* owner)
++{
++    const std::string key = ascii_module_key(source_path);
++    if (key.empty() || !handle || !lookup || !owner) return false;
++    std::lock_guard guard(m->mu);
++    if (!m->builtins_registered || m->modules.count(key) ||
++        m->raw_exports.count(key) || m->exports.count(key)) return false;
++    try
++    {
++        m->modules.emplace(key, Impl::ModuleEntry{handle, nullptr, lookup, owner});
++    }
++    catch (const std::bad_alloc&) { return false; }
++    return true;
++}
++
++bool WinApiShim::unregister_mapped_module(const char* source_path,
++                                          WinModule handle, void* owner)
++{
++    const std::string key = ascii_module_key(source_path);
++    if (key.empty() || !handle || !owner) return false;
++    std::lock_guard guard(m->mu);
++    auto row = m->modules.find(key);
++    if (row == m->modules.end() || row->second.handle != handle ||
++        row->second.owner != owner || !row->second.mapped_lookup) return false;
++    m->modules.erase(row);
++    return true;
+ }
+ 
+ bool WinApiShim::register_thread_notification_policy(
+@@ -744,6 +783,7 @@
+         m->raw_exports[r.dll][key] = Impl::RawExport{
+             r.fn, r.integer_arity, r.reviewed_for_publication};
+     }
++    m->builtins_registered = true;
+ }
+ 
+ BuiltinInstallStatus WinApiShim::install_builtin_integer_wrapper(
+@@ -811,10 +851,13 @@
+     }
+     // A module's lookup may resolve forwarded imports itself. Never invoke
+     // external module code while holding the registry mutex.
+-    if (registered && symbol && selected.lookup)
++    if (registered && symbol)
+     {
+         void* out = nullptr;
+-        if (selected.lookup(selected.handle, symbol, &out) && out) return out;
++        if (selected.mapped_lookup &&
++            selected.mapped_lookup(selected.owner, symbol, &out) && out) return out;
++        if (selected.lookup && selected.lookup(selected.handle, symbol, &out) && out)
++            return out;
+     }
+ 
+     // 2) already-published built-ins, or a reviewed row eligible for lazy
+--- /dev/null
++++ b/loader/tests/mapped_module_registry_test.cpp
+@@ -0,0 +1,230 @@
++#include "guest_pe_loader.h"
++#include "pe_types.h"
++#include "win_api_shim.h"
++
++#include <cstdio>
++#include <cstring>
++#include <fstream>
++#include <iterator>
++#include <sys/mman.h>
++#include <unistd.h>
++#include <vector>
++
++namespace {
++int checks = 0;
++int failures = 0;
++void check(bool ok, const char* label)
++{
++    ++checks;
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", label);
++    if (!ok) ++failures;
++}
++std::vector<uint8_t> read_file(const char* path)
++{
++    std::ifstream file(path, std::ios::binary);
++    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
++}
++bool allocate_writable(size_t minimum, void** address, size_t* bytes, void*)
++{
++    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
++    if (minimum > page) return false;
++    void* result = mmap(nullptr, page, PROT_READ | PROT_WRITE,
++                        MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (result == MAP_FAILED) return false;
++    *address = result;
++    *bytes = page;
++    return true;
++}
++bool seal_executable(void* address, size_t bytes, void*)
++{
++    return mprotect(address, bytes, PROT_READ | PROT_EXEC) == 0;
++}
++void release_mapping(void* address, size_t bytes, void*) { munmap(address, bytes); }
++int ue4ss_calls = 0;
++extern "C" __attribute__((ms_abi)) uint64_t ue4ss_initialized()
++{
++    ++ue4ss_calls;
++    return 1;
++}
++bool lookup_ue4ss(cap13::WinModule, const char* symbol, void** out)
++{
++    if (std::strcmp(symbol, "is_ue4ss_initialized") != 0) return false;
++    *out = reinterpret_cast<void*>(&ue4ss_initialized);
++    return true;
++}
++class RecordingSwitch final : public cap13::GuestSegmentSwitch
++{
++  public:
++    bool allow = true;
++    int enters = 0;
++    int leaves = 0;
++    cap13::WinApiShim* shim = nullptr;
++    bool first_enter_saw_export = false;
++    bool enter(void* teb) override
++    {
++        ++enters;
++        if (enters == 1 && shim)
++            first_enter_saw_export = shim->resolve("fixture.dll", "start_mod", 0) != nullptr;
++        return allow && teb;
++    }
++    void leave() noexcept override { ++leaves; }
++};
++} // namespace
++
++int main(int argc, char** argv)
++{
++    if (argc != 2) return 2;
++    auto bytes = read_file(argv[1]);
++    if (bytes.empty()) return 2;
++    cap13::WinApiShim shim;
++    shim.register_builtin_exports();
++    cap13::WinApiShim::ExecutableMemoryBackend backend{};
++    backend.allocate_writable = allocate_writable;
++    backend.seal_executable = seal_executable;
++    backend.release = release_mapping;
++    check(shim.set_executable_backend(backend), "reviewed import backend configured");
++    shim.register_module("UE4SS.dll", reinterpret_cast<void*>(0x100), lookup_ue4ss);
++    cap13::LoadOptions options;
++    options.page_size = 0x1000;
++    options.allow_rwx_partition = true;
++    options.allow_no_relocs = true;
++    cap13::StaticTlsBank bank;
++    cap13::GuestTebView teb(bank);
++
++    RecordingSwitch first_segment;
++    first_segment.shim = &shim;
++    auto first = cap13::pe_prepare_guest_with_shim(
++        bytes.data(), bytes.size(), shim, options, bank, first_segment,
++        "C:\\mods\\Fixture.DLL");
++    check(first.ok && first.module &&
++          shim.resolve("fixture.dll", "start_mod", 0) == nullptr,
++          "mapped module is prepared but has no public export before attachment");
++    if (!first.ok) return 1;
++
++    // Replace the copied fixture's first import with fixture.dll!start_mod.
++    // The copied entry calls that IAT slot and returns TRUE; no source bytes
++    // are changed and no host function pointer is placed into the IAT.
++    auto consumer_bytes = bytes;
++    auto* first_import = reinterpret_cast<cap13::PeImportDescriptor*>(
++        consumer_bytes.data() + 0x600);
++    first_import->Name = 0x3100;
++    const uint64_t name_thunk = 0x3120;
++    std::memcpy(consumer_bytes.data() + 0x800, &name_thunk, sizeof(name_thunk));
++    std::memcpy(consumer_bytes.data() + 0x900, "fixture.dll", sizeof("fixture.dll"));
++    std::memcpy(consumer_bytes.data() + 0x922, "start_mod", sizeof("start_mod"));
++    const uint8_t call_import_entry[] = {
++        0x48, 0x8b, 0x05, 0x19, 0x20, 0x00, 0x00, // mov rax,[rip+0x2019] -> IAT RVA 0x3020
++        0xff, 0xd0,                         // call rax
++        0xb8, 0x01, 0x00, 0x00, 0x00,       // mov eax,1
++        0xc3                                // ret
++    };
++    std::memcpy(consumer_bytes.data() + 0x400, call_import_entry,
++                sizeof(call_import_entry));
++    RecordingSwitch consumer_segment;
++    auto early_consumer = cap13::pe_prepare_guest_with_shim(
++        consumer_bytes.data(), consumer_bytes.size(), shim, options, bank,
++        consumer_segment, "/mods/consumer.dll");
++    bool missing_provider = false;
++    for (const auto& name : early_consumer.missing)
++        if (name == "fixture.dll!start_mod") missing_provider = true;
++    check(!early_consumer.ok && missing_provider,
++          "dependent DLL refuses while provider has not completed attachment");
++
++    check(first.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok &&
++          !first_segment.first_enter_saw_export,
++          "provisional module registration stays hidden during DllMain entry");
++    void* first_export = shim.resolve("FIXTURE.DLL", "start_mod", 0);
++    check(first_export != nullptr &&
++          shim.resolve("fixture.dll", "missing_export", 0) == nullptr &&
++          shim.resolve("fixture.dll", nullptr, 1) == nullptr,
++          "attached module publishes validated named export only");
++    shim.register_module("FIXTURE.DLL", reinterpret_cast<void*>(0x300), lookup_ue4ss);
++    check(shim.resolve("fixture.dll", "start_mod", 0) == first_export &&
++          !shim.unregister_mapped_module("fixture.dll",
++                                         reinterpret_cast<void*>(0x1234),
++                                         first.module.get()) &&
++          shim.resolve("fixture.dll", "start_mod", 0) == first_export,
++          "manual duplicate and wrong-handle removal cannot replace a live mapped export");
++    uint64_t returned = UINT64_MAX;
++    check(first.module->invoke_integer_export("start_mod", teb, nullptr, 0, &returned) ==
++              cap13::GuestCallStatus::Ok && returned == 0,
++          "named export executes only through the guarded call path");
++    const int before_consumer_calls = ue4ss_calls;
++    auto consumer = cap13::pe_prepare_guest_with_shim(
++        consumer_bytes.data(), consumer_bytes.size(), shim, options, bank,
++        consumer_segment, "/mods/consumer.dll");
++    check(consumer.ok && consumer.module,
++          "dependent DLL resolves its import from the attached mapped provider");
++    if (consumer.ok)
++    {
++        check(consumer.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok &&
++              ue4ss_calls == before_consumer_calls + 1,
++              "dependent DllMain calls provider export through its resolved IAT");
++        check(consumer.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
++              "dependent module detaches before its provider");
++    }
++
++    RecordingSwitch second_segment;
++    auto second = cap13::pe_prepare_guest_with_shim(
++        bytes.data(), bytes.size(), shim, options, bank, second_segment,
++        "/other/FIXTURE.dll");
++    check(second.ok && second.module &&
++          second.module->process_attach(teb) ==
++              cap13::GuestNotifyStatus::ModuleRegistrationFailed &&
++          shim.resolve("fixture.dll", "start_mod", 0) == first_export,
++          "duplicate normalized basename refuses without replacing first module");
++    check(first.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok &&
++          shim.resolve("fixture.dll", "start_mod", 0) == nullptr,
++          "clean detach removes only its mapped export registration");
++    check(second.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok &&
++          shim.resolve("fixture.dll", "start_mod", 0) != nullptr &&
++          shim.resolve("fixture.dll", "start_mod", 0) != first_export,
++          "second image can publish after first is detached");
++    check(second.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
++          "second image detaches cleanly");
++
++    RecordingSwitch refused_segment;
++    refused_segment.allow = false;
++    auto refused = cap13::pe_prepare_guest_with_shim(
++        bytes.data(), bytes.size(), shim, options, bank, refused_segment,
++        "/mods/refused.dll");
++    check(refused.ok && refused.module &&
++          refused.module->process_attach(teb) == cap13::GuestNotifyStatus::BackendRefused &&
++          shim.resolve("refused.dll", "start_mod", 0) == nullptr,
++          "backend refusal removes provisional mapped-module registration");
++    RecordingSwitch retry_segment;
++    auto retry = cap13::pe_prepare_guest_with_shim(
++        bytes.data(), bytes.size(), shim, options, bank, retry_segment,
++        "/elsewhere/REFUSED.DLL");
++    check(retry.ok && retry.module &&
++          retry.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok &&
++          shim.resolve("refused.dll", "start_mod", 0) != nullptr,
++          "another image can attach with the same basename after refusal");
++    check(retry.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
++          "retry image detaches cleanly");
++
++    shim.register_module("manual.dll", reinterpret_cast<void*>(0x200), lookup_ue4ss);
++    RecordingSwitch collision_segment;
++    auto collision = cap13::pe_prepare_guest_with_shim(
++        bytes.data(), bytes.size(), shim, options, bank, collision_segment,
++        "/mods/manual.dll");
++    check(collision.ok && collision.module &&
++          collision.module->process_attach(teb) ==
++              cap13::GuestNotifyStatus::ModuleRegistrationFailed &&
++          shim.resolve("manual.dll", "is_ue4ss_initialized", 0) ==
++              reinterpret_cast<void*>(&ue4ss_initialized),
++          "mapped module cannot replace a manual registry entry");
++
++    RecordingSwitch reserved_segment;
++    auto reserved = cap13::pe_prepare_guest_with_shim(
++        bytes.data(), bytes.size(), shim, options, bank, reserved_segment,
++        "/mods/KERNEL32.DLL");
++    check(reserved.ok && reserved.module &&
++          reserved.module->process_attach(teb) ==
++              cap13::GuestNotifyStatus::ModuleRegistrationFailed &&
++          shim.resolve("kernel32.dll", "Sleep", 0) != nullptr,
++          "mapped module cannot replace a reviewed built-in DLL namespace");
++
++    std::printf("cases=%d failed=%d\n", checks, failures);
++    return failures ? 1 : 0;
++}
+--- /dev/null
++++ b/loader/tests/run_mapped_module_registry.py
+@@ -0,0 +1,25 @@
++#!/usr/bin/env python3
++"""Build and run mapped-module registration checks on the x64 Mac host."""
++from pathlib import Path
++import hashlib
++import subprocess
++
++root = Path(__file__).resolve().parents[1]
++fixture = root.parents[1] / "cap13/FIXTURES/cap13-ue4ss-native-mod-FIXTURE.dll"
++expected = "acc201987edcee968a052ef889cb0e8bdcc5c5cd63fcdb4c0dda699cace51bce"
++if hashlib.sha256(fixture.read_bytes()).hexdigest() != expected:
++    raise RuntimeError("synthetic fixture hash mismatch")
++out = root / "tests/mapped-module-registry-host"
++subprocess.run([
++    "clang++", "-arch", "x86_64", "-std=c++17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-pthread",
++    "-I" + str(root / "include"), "-I" + str(root / "src"),
++    str(root / "tests/mapped_module_registry_test.cpp"),
++    str(root / "src/guest_pe_loader.cpp"), str(root / "src/pe_loader.cpp"),
++    str(root / "src/pe_tls_registration.cpp"), str(root / "src/static_tls_bank.cpp"),
++    str(root / "src/guest_teb_lifecycle.cpp"), str(root / "src/win_api_shim.cpp"),
++    str(root / "src/win64_bridge.S"), "-o", str(out),
++], check=True, timeout=30)
++subprocess.run(["arch", "-x86_64", str(out), str(fixture)], check=True, timeout=20)
++if hashlib.sha256(fixture.read_bytes()).hexdigest() != expected:
++    raise RuntimeError("synthetic fixture changed")
++print(f"UNCHANGED fixture sha256={expected}")

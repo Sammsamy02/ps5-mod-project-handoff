@@ -1,0 +1,85 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUScriptStruct.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l22-runtime/diagnostics/src/LuaUScriptStruct.cpp
+@@ -1,3 +1,4 @@
++#include <L22Diagnostics/Logging.hpp>
+ #include <format>
+ 
+ #include <Helpers/Casting.hpp>
+@@ -79,7 +80,7 @@
+ 
+         table.add_pair("GetBaseAddress", [](const LuaMadeSimple::Lua& lua) -> int {
+             // Update: We are no longer storing the base so this function has no use anymore
+-            lua.throw_error("WARNING! Use of deprecated & removed function 'UScriptStruct::GetBaseAddress'!");
++            L22Diagnostics::throw_lua_error(lua, "WARNING! Use of deprecated & removed function 'UScriptStruct::GetBaseAddress'!", "nested property access/set");
+             return 0;
+         });
+ 
+@@ -170,6 +171,8 @@
+                                                      ScriptStructWrapper& struct_data,
+                                                      RC::Unreal::FName property_name) -> void
+     {
++        try
++        {
+         // Access the given property in the given UScriptStruct
+ 
+         auto property_name_str = property_name.ToString();
+@@ -180,9 +183,9 @@
+         }
+         if (!property)
+         {
+-            lua.throw_error(fmt::format("[handle_unreal_property_value]: Was unable to retrieve property '{}' mapped to '{}'",
++            L22Diagnostics::throw_lua_error(lua, fmt::format("[handle_unreal_property_value]: Was unable to retrieve property '{}' mapped to '{}'",
+                                         to_string(property_name.ToString()),
+-                                        to_string(struct_data.script_struct->GetFullName())));
++                                        to_string(struct_data.script_struct->GetFullName())), "nested property access/set");
+         }
+ 
+         auto property_type_fname = property->GetClass().GetFName();
+@@ -198,13 +201,27 @@
+         else
+         {
+             std::string property_type_name = to_string(property_type_fname.ToString());
+-            lua.throw_error(fmt::format("Tried accessing unreal property without a registered handler (via StructProperty). Property type '{}' not supported.",
+-                                        property_type_name));
++            L22Diagnostics::throw_lua_error(lua, fmt::format("Tried accessing unreal property without a registered handler (via StructProperty). Property type '{}' not supported.",
++                                        property_type_name), "nested property access/set");
++        }
++    
++        }
++        catch (const std::exception& error)
++        {
++            L22Diagnostics::error("nested property access/set", error.what());
++            throw;
++        }
++        catch (...)
++        {
++            L22Diagnostics::error("nested property access/set", "non-standard C++ exception");
++            throw;
+         }
+     }
+ 
+     auto UScriptStruct::prepare_to_handle(const LuaMadeSimple::Type::Operation operation, const LuaMadeSimple::Lua& lua) -> void
+     {
++        try
++        {
+         auto& lua_object = lua.get_userdata<UScriptStruct>();
+ 
+         Unreal::FName property_name = Unreal::FName(ensure_str(lua.get_string()), Unreal::FNAME_Find);
+@@ -218,5 +235,17 @@
+         }
+ 
+         handle_unreal_property_value(operation, lua, lua_object.get_local_cpp_object(), property_name);
++    
++        }
++        catch (const std::exception& error)
++        {
++            L22Diagnostics::error("nested property access/set", error.what());
++            throw;
++        }
++        catch (...)
++        {
++            L22Diagnostics::error("nested property access/set", "non-standard C++ exception");
++            throw;
++        }
+     }
+ } // namespace RC::LuaType

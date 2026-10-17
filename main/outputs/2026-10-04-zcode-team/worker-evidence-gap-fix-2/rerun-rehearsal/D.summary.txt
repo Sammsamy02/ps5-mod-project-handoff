@@ -1,0 +1,64 @@
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  writer=failline pid=417 t=27646987ms (first stamp for this pid)
+  writer=pathtest stamp=27658446233901ns (first stamp)
+  writer=supplier-diag-jsonl (t_ms, monotonic-ms; per-SESSION deltas — deltas NEVER cross sessions/pids; '(first t_ms)' opens each session):
+    module_start_entered t=27638412 (first t_ms)
+    entry_incoming_sp_mod16 t=27638414 +2ms
+    entry_call_sp_mod16 t=27638415 +1ms
+    constructor_count t=27638416 +1ms
+    constructor_begin t=27638417 +1ms
+    constructor_return t=27638429 +12ms
+    constructor_begin t=27638430 +1ms
+    constructor_return t=27638441 +11ms
+    constructor_begin t=27638442 +1ms
+    constructor_return t=27638453 +11ms
+    runtime_wiring_begin t=27640155 +1702ms
+    mfa_activated_low t=27640201 +46ms
+    mfa_activated_high t=27640210 +9ms
+    bridge_vmentry_entries t=27641050 +840ms
+    bridge_vm_walk_stop t=27641190 +140ms
+    bridge_kve_distinct0 t=27641191 +1ms
+    bridge_kve_distinct1 t=27641192 +1ms
+    bridge_kve_distinct2 t=27641193 +1ms
+    bridge_kve_distinct3 t=27641194 +1ms
+    bridge_kve_eboot t=27641195 +1ms
+    bridge_exepath_source t=27641210 +15ms
+    anchor_cov t=27641230 +20ms
+    anchor_match t=27641231 +1ms
+    anchor_cov t=27641232 +1ms
+  writer=runtime-status session stamp: pid=417 t=27641100ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 1 (diag_channel_open_failed/-22: 0) [r4-prefixed: 1]
+  failure lines by session (r4 pid): pid=417 x1  — window note (G6): the UE4SS.log window is CUMULATIVE across this boot's launches; failure lines carry r4 pid prefixes (per-session above), PATH_TEST/ACTIVATION_TEST stamps carry none (positional attribution only); verdict precedence = LAST failure line (append-only ordering discipline)
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=1 open_failed=0 activation_test=1; MRS_* tokens: 0
+  supplier-diag jsonl: events=48 sessions=1 pid_first=417 pid_last=417 baseline_cut=no start_ok=0 start_failed=1 lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=0 vmentry=10019 cfg_gamedir=- (file totals; value tags = last session pid=417; per-session lines follow)
+    session pid=417 events=48 t_first=27638412 t_last=27646990 start_ok=0 start_failed=1 mfa_activate_failed=- runtime_start_failed=1 extent_events=4 cfg_events=0 lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=0 vmentry=10019 vm_walk_stop=0 exepath_source=2 cfg_gamedir=- spanpub_count=- spanpub_total=- spanpub_cap=- env_low=- env_high=- stat_ownmod=- stat_ownmod_ec=- module_start_return=0
+
+stage chain (r13/r14 marker table; file-sequence order):
+  supplier-diag: S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S5_IDENTITY_ANCHORS -> S4_LEASE_REG -> S6_CONVERSION -> S11_STOP
+  ue4ss-text:    S6_CONVERSION
+  note: S7_CFG_ATTACH appears before S4/S5 — bridge_exepath_source is emitted mid-walk by the bridge (before anchors/lease); first-seen order is correct, only the stage numbering looks out of order (display quirk, no misattribution)
+  note (G4): S11_STOP in the current session's chain is module_start_return=0 AFTER the failure line — the entry returned 0 and the game continues UNMODDED (later launches ride the same boot); it is NOT a stop/unload event (display-granularity quirk, no value misattribution)
+terminal/attributed stage hits:
+  [S6_CONVERSION] derive_readable_ranges refusal (lmf_to_native_loader_facts.cpp:228-231); the launch-9 aligned-entry terminal string — in THIS config the aligned entry is disabled, so a live line belongs to supplier_composition
+     modbridge module_start failed: runtime_start_failed code=1 detail=no observed mapping interval intersects the module image extent with valid geometry
+
+status: pid=417 ms=27641100 fresh=yes states=1 ladder=[ ] last=failed code=1
+status detail: runtime_start_failed no observed mapping interval intersects the module image extent with valid geometry
+
+notable lines (verbatim, capped):
+  [ue4ss] modbridge module_start failed: runtime_start_failed code=1 detail=no observed mapping interval intersects the module image extent with valid geometry
+
+other new lines (raw, capped):
+  [ue4ss] PATH_TEST: /data/plugins/UE4SS.log writable at 27658446233901 monotonic-ns
+  [ue4ss] ACTIVATION_TEST: loadlist.txt readable, first 16 bytes: 6d6f64666f7267652d6c6f61646c6973
+
+VERDICT: FAILED_S6_CONVERSION
+NEXT: Conversion refusal at derive_readable_ranges (code=1). ATTRIBUTION: aligned_entry is DISABLED in this config (ini 1216aab6...), so this line belongs to supplier_composition — the launch-9 terminal string reappearing from the composition means the composition's standalone inputs still derive a zero-intersection extent. Report the raw line verbatim; do not replay; reconcile with worker-facts-geometry-fix evidence.

@@ -1,0 +1,669 @@
+== evidence.sh (launch-10 upgrade) fixture tests — 2026-10-05T17:20:58Z ==
+host: Darwin 24.6.0 arm64 / shell: sh
+evidence.sh sha256: 7b03ca9503a2cd229d391e3f116d27e308b9de39124ee438711319554412d7ee
+baseline source: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-prep (controller-captured launch10-prep; read-only use)
+pinned: ue4ss 7591B edf404a5... / entry 2343756B 4b33b985... / status 169B 57c40d4c... (session 273) / xwp 4362B 20cff601...
+
+=== case not_started (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  (no timestamped lines in the new content)
+  writer=runtime-status session stamp: pid=273 t=44372083ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  (no staged markers observed)
+
+status: pid=273 ms=44372083 fresh=no states=1 ladder=[ ] last=failed code=1
+status detail: runtime_start_failed no observed mapping interval intersects the module image extent with valid geometry
+
+VERDICT: NOT_STARTED
+NEXT: Nothing beyond baseline (or the stale launch-9 session 273 only) and no fresh status session. Records appear ~1 min after launch: wait and re-run. If still empty, treat as F0 (composition never ran): verify staging via FTP readback; the composition's module_start_entered marker (supplier-diag jsonl) is the launch counter.
+
+PASS [not_started] verdict NOT_STARTED
+PASS [not_started] launch-9 session 273 treated as stale baseline session
+PASS [not_started] no drift warnings at exact pinned baselines (absent: /^WARN:/)
+PASS [not_started] no timestamped lines note
+PASS [not_started] exit 0 (rc=0)
+=== case l9_terminal (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  writer=failline pid=310 t=45000111ms (first stamp for this pid)
+  writer=runtime-status session stamp: pid=310 t=45000112ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 1 (diag_channel_open_failed/-22: 0) [r4-prefixed: 1]
+  failure lines by session (r4 pid): pid=310 x1  — window note (G6): the UE4SS.log window is CUMULATIVE across this boot's launches; failure lines carry r4 pid prefixes (per-session above), PATH_TEST/ACTIVATION_TEST stamps carry none (positional attribution only); verdict precedence = LAST failure line (append-only ordering discipline)
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  ue4ss-text:    S6_CONVERSION
+terminal/attributed stage hits:
+  [S6_CONVERSION] derive_readable_ranges refusal (lmf_to_native_loader_facts.cpp:228-231); the launch-9 aligned-entry terminal string — in THIS config the aligned entry is disabled, so a live line belongs to supplier_composition
+     modbridge module_start failed: runtime_start_failed code=1 detail=no observed mapping interval intersects the module image extent with valid geometry
+
+status: pid=310 ms=45000112 fresh=yes states=1 ladder=[ ] last=failed code=1
+status detail: runtime_start_failed no observed mapping interval intersects the module image extent with valid geometry
+
+notable lines (verbatim, capped):
+  [ue4ss] modbridge module_start failed: runtime_start_failed code=1 detail=no observed mapping interval intersects the module image extent with valid geometry
+
+VERDICT: FAILED_S6_CONVERSION
+NEXT: Conversion refusal at derive_readable_ranges (code=1). ATTRIBUTION: aligned_entry is DISABLED in this config (ini 1216aab6...), so this line belongs to supplier_composition — the launch-9 terminal string reappearing from the composition means the composition's standalone inputs still derive a zero-intersection extent. Report the raw line verbatim; do not replay; reconcile with worker-facts-geometry-fix evidence.
+
+PASS [l9_terminal] verdict FAILED_S6_CONVERSION
+PASS [l9_terminal] stage attributed to derive_readable_ranges
+PASS [l9_terminal] attribution: entry disabled, composition owns the line
+PASS [l9_terminal] stage chain shows S6_CONVERSION
+PASS [l9_terminal] timing writer extracted (r4 prefix)
+PASS [l9_terminal] fresh session detected
+PASS [l9_terminal] timing guard present
+PASS [l9_terminal] no drift warnings (absent: /^WARN:/)
+PASS [l9_terminal] exit 0 (rc=0)
+=== case l10_success (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  writer=pathtest stamp=44661000000000ns (first stamp)
+  writer=supplier-diag-jsonl (t_ms, monotonic-ms; per-SESSION deltas — deltas NEVER cross sessions/pids; '(first t_ms)' opens each session):
+    module_start_entered t=1000 (first t_ms)
+    constructor_count t=1002 +2ms
+    runtime_wiring_begin t=1005 +3ms
+    mfa_activated_low t=1040 +35ms
+    bridge_vmentry_entries t=1060 +20ms
+    bridge_lease_reg_spans t=1080 +20ms
+    bridge_lease_reg t=1081 +1ms
+    anchor_c_either t=1200 +119ms
+    bridge_cfg_gamedir t=1500 +300ms
+    bridge_cfg_workdir t=1501 +1ms
+    runtime_start_ok t=1800 +299ms
+    module_start_return t=1801 +1ms
+  writer=runtime-status session stamp: pid=320 t=46000000ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 1; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=1 open_failed=0 activation_test=1; MRS_* tokens: 0
+  supplier-diag jsonl: events=12 sessions=1 pid_first=320 pid_last=320 baseline_cut=no start_ok=1 start_failed=0 lease_spans=6 lease_reg=6 anchor_count=- intervals_found=- vmentry=800 cfg_gamedir=1 (file totals; value tags = last session pid=320; per-session lines follow)
+    session pid=320 events=12 t_first=1000 t_last=1801 start_ok=1 start_failed=0 mfa_activate_failed=- runtime_start_failed=- extent_events=0 cfg_events=2 lease_spans=6 lease_reg=6 anchor_count=- intervals_found=- vmentry=800 vm_walk_stop=- exepath_source=- cfg_gamedir=1 spanpub_count=- spanpub_total=- spanpub_cap=- env_low=- env_high=- stat_ownmod=- stat_ownmod_ec=- module_start_return=0
+
+stage chain (r13/r14 marker table; file-sequence order):
+  supplier-diag: S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S4_LEASE_REG -> S5_IDENTITY_ANCHORS -> S7_CFG_ATTACH -> S9_START_ACK -> S11_STOP
+  ue4ss-text:    S10_LADDER
+
+status: pid=320 ms=46000000 fresh=yes states=3 ladder=[ activated engine-ready mods-started ] last=mods-started code=0
+
+mod-load prints ([TownfallItemSpawner]): 1 — BEST-decisive, verbatim (capped 6; absence here + mod-error lines under 'other new lines' = G3):
+  [ue4ss] [Lua] [TownfallItemSpawner] mod started
+
+other new lines (raw, capped):
+  [ue4ss] PATH_TEST: /data/plugins/UE4SS.log writable at 44661000000000 monotonic-ns
+  [ue4ss] ACTIVATION_TEST: loadlist.txt readable, first 16 bytes: 6d6f64666f7267652d6c6f61646c6973
+  [ue4ss] [Lua] [TownfallItemSpawner] mod started
+
+VERDICT: MODS_STARTED
+NEXT: FULL LADDER REACHED for the first time (beyond every launch-9/10 prediction — apply fresh-eyes skepticism and re-run to confirm). Check the mod-load prints section ([TownfallItemSpawner] verbatim) before any rung claim; the ge.5 gate now OPENS: only after this evidence may the user test OPTIONS in-game. Then FIRST-RUN-PLAYBOOK §5 rung ladder + F7 contingency table.
+
+PASS [l10_success] verdict MODS_STARTED
+PASS [l10_success] first-time ladder flagged
+PASS [l10_success] ge.5 gate opens only now
+PASS [l10_success] supplier-diag chain S1..S9
+PASS [l10_success] lease spans 6 == reg 6 (expected on this target)
+PASS [l10_success] per-stage elapsed table present
+PASS [l10_success] first t_ms marked
+PASS [l10_success] delta computed within one writer
+PASS [l10_success] cross-writer guard
+PASS [l10_success] status ladder shown
+PASS [l10_success] path_test stamp timed
+PASS [l10_success] no drift warnings (absent: /^WARN:/)
+PASS [l10_success] exit 0 (rc=0)
+=== case timing_two_writers (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  writer=pathtest stamp=1000000000000ns (first stamp)
+  writer=failline pid=400 t=5000ms (first stamp for this pid)
+  writer=pathtest stamp=2000000000000ns delta=+1000000000000ns (vs previous pathtest stamp)
+  writer=failline pid=401 t=9000ms (first stamp for this pid)
+  writer=runtime-status session stamp: pid=273 t=44372083ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 2 (diag_channel_open_failed/-22: 0) [r4-prefixed: 2]
+  failure lines by session (r4 pid): pid=400 x1  pid=401 x1  — window note (G6): the UE4SS.log window is CUMULATIVE across this boot's launches; failure lines carry r4 pid prefixes (per-session above), PATH_TEST/ACTIVATION_TEST stamps carry none (positional attribution only); verdict precedence = LAST failure line (append-only ordering discipline)
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=2 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  ue4ss-text:    S9_START_REFUSED -> S6_CONVERSION
+terminal/attributed stage hits:
+  [S9_START_REFUSED] E2 EXPECTED-REFUSAL — START-stage refusal (post-conversion: prepare/start threw; pad profile / mod source / sink open); verdict FAILED_E2_START, >= MINIMAL-ACCEPT where the session conversion quartet holds
+     modbridge module_start failed: runtime_start_failed code=3 detail=StartActivatedRuntimeWithAck returned null owner
+  [S6_CONVERSION] supplier status NoImageAnchor — identity gate never anchored
+     modbridge module_start failed: runtime_start_failed code=1 detail=no image anchor (status NoImageAnchor); refusing conversion; dlopen(NULL) is never a fallback
+
+status: pid=273 ms=44372083 fresh=no states=1 ladder=[ ] last=failed code=1
+status detail: runtime_start_failed no observed mapping interval intersects the module image extent with valid geometry
+
+notable lines (verbatim, capped):
+  [ue4ss] modbridge module_start failed: runtime_start_failed code=3 detail=StartActivatedRuntimeWithAck returned null owner
+  [ue4ss] modbridge module_start failed: runtime_start_failed code=1 detail=no image anchor (status NoImageAnchor); refusing conversion; dlopen(NULL) is never a fallback
+
+other new lines (raw, capped):
+  [ue4ss] PATH_TEST: /data/plugins/UE4SS.log writable at 1000000000000 monotonic-ns
+  [ue4ss] PATH_TEST: /data/plugins/UE4SS.log writable at 2000000000000 monotonic-ns
+
+VERDICT: FAILED_S6_CONVERSION
+NEXT: Conversion refusal at derive_readable_ranges (code=1). ATTRIBUTION: aligned_entry is DISABLED in this config (ini 1216aab6...), so this line belongs to supplier_composition — the launch-9 terminal string reappearing from the composition means the composition's standalone inputs still derive a zero-intersection extent. Report the raw line verbatim; do not replay; reconcile with worker-facts-geometry-fix evidence.
+
+PASS [timing_two_writers] pathtest first stamp
+PASS [timing_two_writers] pathtest same-writer delta (ns domain)
+PASS [timing_two_writers] failline pid=400 own sequence
+PASS [timing_two_writers] failline pid=401 own sequence (no cross-pid delta)
+PASS [timing_two_writers] per-writer guard text
+PASS [timing_two_writers] no ms/ns mixed arithmetic (absent: /delta=+\[0-9\]*ms.*ns/)
+PASS [timing_two_writers] no cross-pid failline delta (absent: /pid=401.*delta/)
+PASS [timing_two_writers] exit 0 (rc=0)
+=== case baseline_drift (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  (no timestamped lines in the new content)
+  writer=runtime-status session stamp: pid=273 t=44372083ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  (no staged markers observed)
+
+status: pid=273 ms=44372083 fresh=no states=1 ladder=[ ] last=failed code=1
+status detail: runtime_start_failed no observed mapping interval intersects the module image extent with valid geometry
+
+VERDICT: NOT_STARTED
+NEXT: Nothing beyond baseline (or the stale launch-9 session 273 only) and no fresh status session. Records appear ~1 min after launch: wait and re-run. If still empty, treat as F0 (composition never ran): verify staging via FTP readback; the composition's module_start_entered marker (supplier-diag jsonl) is the launch counter.
+WARN: baseline drift: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/baseline_drift/baselines/ue4ss-log-baseline.txt is 7645B, pinned launch10-prep size is 7591 (ue4ss) — re-fetch baselines before classifying
+WARN: baseline drift: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/baseline_drift/baselines/ue4ss-log-baseline.txt sha 4fe0ce02... != pinned edf404a56d0a9ed85e15d2b20a00bdd07e93b189d4e70a9db988d46acd22a0ff (ue4ss) — baselines are NOT the pinned launch10-prep capture
+NOTE: baseline drift: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/baseline_drift/baselines/ue4ss-log-baseline.txt is 7645B, pinned launch10-prep size is 7591 (ue4ss) — re-fetch baselines before classifying
+NOTE: baseline drift: /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/baseline_drift/baselines/ue4ss-log-baseline.txt sha 4fe0ce02... != pinned edf404a56d0a9ed85e15d2b20a00bdd07e93b189d4e70a9db988d46acd22a0ff (ue4ss) — baselines are NOT the pinned launch10-prep capture
+
+PASS [baseline_drift] size drift detected
+PASS [baseline_drift] sha drift detected (pinned hash named)
+PASS [baseline_drift] sha drift named pinned hash
+PASS [baseline_drift] re-fetch guidance
+PASS [baseline_drift] warnings surfaced as NOTE too
+PASS [baseline_drift] exit 0 (rc=0)
+=== case content_drift (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  (no timestamped lines in the new content)
+  writer=runtime-status session stamp: pid=273 t=44372083ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  (no staged markers observed)
+
+status: pid=273 ms=44372083 fresh=no states=1 ladder=[ ] last=failed code=1
+status detail: runtime_start_failed no observed mapping interval intersects the module image extent with valid geometry
+
+VERDICT: NOT_STARTED
+NEXT: Nothing beyond baseline (or the stale launch-9 session 273 only) and no fresh status session. Records appear ~1 min after launch: wait and re-run. If still empty, treat as F0 (composition never ran): verify staging via FTP readback; the composition's module_start_entered marker (supplier-diag jsonl) is the launch counter.
+WARN: baseline drift: first 7591B of UE4SS.log differ from the baseline reference head (append-only contract violated, or the wrong file was fetched)
+NOTE: baseline drift: first 7591B of UE4SS.log differ from the baseline reference head (append-only contract violated, or the wrong file was fetched)
+
+PASS [content_drift] head-window mismatch detected
+PASS [content_drift] names the append-only contract
+PASS [content_drift] exit 0 (rc=0)
+=== case shape_a_regress (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  (no timestamped lines in the new content)
+  writer=runtime-status session stamp: pid=330 t=47000000ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=1 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  ue4ss-text:    S8B_INITIALIZER
+
+status: pid=330 ms=47000000 fresh=yes states=1 ladder=[ ] last=failed code=1
+status detail: [Seeds] Required-slot seed table incomplete
+
+notable lines (verbatim, capped):
+  [ue4ss] [Seeds] Required-slot seed table incomplete: present [g_uobject_array fname_ctor_wchar static_construct_object_internal] missing [gmalloc]. Arming requires all four REQUIRED slots.
+
+VERDICT: SHAPE_A_SEEDS_GATE
+NEXT: Shape-A refusal re-fired: the ARMED SeedTable did NOT ship in this fself (launch-10 stages the armed table + GMalloc validator; the all-4 rule refused a partial table). This is NOT the expected launch-10 terminal anymore — verify the rebuild/readback (which SeedTable.h went in?) before any in-game interpretation. Nothing bound, game continues UNMODDED; never run bridge stage-1 CONVERSION vm-scan triage on it.
+
+PASS [shape_a_regress] verdict SHAPE_A_SEEDS_GATE
+PASS [shape_a_regress] re-labeled: no longer the expected terminal
+PASS [shape_a_regress] no bridge-triage guidance
+PASS [shape_a_regress] initializer stage attributed
+PASS [shape_a_regress] exit 0 (rc=0)
+=== case lease_gate_r14 (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  writer=failline pid=340 t=48000001ms (first stamp for this pid)
+  writer=runtime-status session stamp: pid=340 t=48000002ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 1 (diag_channel_open_failed/-22: 0) [r4-prefixed: 1]
+  failure lines by session (r4 pid): pid=340 x1  — window note (G6): the UE4SS.log window is CUMULATIVE across this boot's launches; failure lines carry r4 pid prefixes (per-session above), PATH_TEST/ACTIVATION_TEST stamps carry none (positional attribution only); verdict precedence = LAST failure line (append-only ordering discipline)
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  ue4ss-text:    S6_CONVERSION
+terminal/attributed stage hits:
+  [S6_CONVERSION] r14 pre-lease coverage gate (MRS_ERR_CONVERSION by design): lease would walk bytes outside the frozen-snapshot registry; gap + nearest span in bridge_lease_* tags
+     modbridge module_start failed: runtime_start_failed code=1 detail=lease coverage gap: requested [0x787c000 +0x4000) outside registered readable spans (nearest registered span ends at 0x7878000)
+
+status: pid=340 ms=48000002 fresh=yes states=1 ladder=[ ] last=failed code=1
+status detail: runtime_start_failed lease coverage gap
+
+notable lines (verbatim, capped):
+  [ue4ss] modbridge module_start failed: runtime_start_failed code=1 detail=lease coverage gap: requested [0x787c000 +0x4000) outside registered readable spans (nearest registered span ends at 0x7878000)
+
+VERDICT: FAILED_S6_LEASEGATE
+NEXT: r14 pre-lease coverage gate fired (MRS_ERR_CONVERSION by design): the frozen-snapshot registry does not cover a range the conversion would lease; gap + nearest span are in the bridge_lease_* tags (supplier-diag jsonl if the sink landed). This is the LOUD replacement of launch-8's deep PLH throw — treat as the r14 hardening working, then reconcile the registry derivation.
+
+PASS [lease_gate_r14] verdict FAILED_S6_LEASEGATE
+PASS [lease_gate_r14] names the r14 gate
+PASS [lease_gate_r14] MRS_ERR_CONVERSION-by-design note
+PASS [lease_gate_r14] loud-replacement framing
+PASS [lease_gate_r14] exit 0 (rc=0)
+=== case lease_throw_dormant (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  writer=failline pid=350 t=49000001ms (first stamp for this pid)
+  writer=runtime-status session stamp: pid=350 t=49000002ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 1 (diag_channel_open_failed/-22: 0) [r4-prefixed: 1]
+  failure lines by session (r4 pid): pid=350 x1  — window note (G6): the UE4SS.log window is CUMULATIVE across this boot's launches; failure lines carry r4 pid prefixes (per-session above), PATH_TEST/ACTIVATION_TEST stamps carry none (positional attribution only); verdict precedence = LAST failure line (append-only ordering discipline)
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  ue4ss-text:    S8_CONTEXT
+terminal/attributed stage hits:
+  [S8_CONTEXT] deep PLH lease throw (OwnedMemory.cpp) — DORMANT in r13 (launch-8 r10 threw it, pid 234); r14 replaces it with the pre-lease gate. Seeing it means the rebuild did NOT carry the r14 gate
+     modbridge module_start failed: runtime_start_failed code=2 detail=Owned read range includes unregistered bytes
+
+status: pid=350 ms=49000002 fresh=yes states=1 ladder=[ ] last=failed code=2
+status detail: runtime_start_failed Owned read range includes unregistered bytes
+
+notable lines (verbatim, capped):
+  [ue4ss] modbridge module_start failed: runtime_start_failed code=2 detail=Owned read range includes unregistered bytes
+
+VERDICT: FAILED_S8_CONTEXT_LEASE
+NEXT: Deep PLH lease throw re-appeared (code=2). The lease throw is DORMANT in r13 (launch-8's r10 threw it, pid 234) and r14 replaces it with the pre-lease gate — seeing it means the rebuild did NOT carry the r14 gate. Verify which fself actually ran (readback sha), then reconcile.
+
+PASS [lease_throw_dormant] verdict FAILED_S8_CONTEXT_LEASE
+PASS [lease_throw_dormant] dormancy stated (r13 dormant, launch-8 r10 threw)
+PASS [lease_throw_dormant] r14 gate should have caught it
+PASS [lease_throw_dormant] readback-first guidance
+PASS [lease_throw_dormant] exit 0 (rc=0)
+=== case seeds_refuted (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  (no timestamped lines in the new content)
+  writer=runtime-status session stamp: pid=360 t=50000000ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=0 refuted=1 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  ue4ss-text:    S8B_INITIALIZER
+
+status: pid=360 ms=50000000 fresh=yes states=1 ladder=[ ] last=failed code=1
+status detail: [Seeds] REFUTED: fname pool never initialized
+
+notable lines (verbatim, capped):
+  [ue4ss] [Seeds] REFUTED: fname pool never initialized (probe window uncovered)
+
+VERDICT: SEEDS_REFUTED
+NEXT: An armed seed constant is REFUTED in-game (terminal per launch, never replayed). Capture which variant: pool-never-initialized / probe-id divergence / base moved / GUA probe. Route: seed-table re-derivation with NEW ids; no bridge triage.
+
+PASS [seeds_refuted] verdict SEEDS_REFUTED
+PASS [seeds_refuted] terminal-per-launch rule
+PASS [seeds_refuted] new-ids guidance
+PASS [seeds_refuted] exit 0 (rc=0)
+=== case gmalloc_gate (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  (no timestamped lines in the new content)
+  writer=runtime-status session stamp: pid=370 t=51000000ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=1
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  ue4ss-text:    S8B_INITIALIZER
+
+status: pid=370 ms=51000000 fresh=yes states=1 ladder=[ ] last=failed code=1
+status detail: UnrealInitializer::PostInitialize: GMalloc is uninitialized.
+
+notable lines (verbatim, capped):
+  [ue4ss] UnrealInitializer::PostInitialize: GMalloc is uninitialized.
+
+VERDICT: GMALLOC_GATE
+NEXT: PostInitialize GMalloc throw: seeds armed (past Shape-A) but REQUIRED slot 3 unseeded/unvalidated; loud failed(1,<msg>), terminal even with exec pages fully R/W. Check the GMalloc V1/V2 validator diff actually shipped in the rebuild. NOT a conversion refusal.
+
+PASS [gmalloc_gate] verdict GMALLOC_GATE
+PASS [gmalloc_gate] validator-diff shipped question
+PASS [gmalloc_gate] not-a-conversion-refusal note
+PASS [gmalloc_gate] exit 0 (rc=0)
+=== case crash_shaped (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  (no timestamped lines in the new content)
+  writer=runtime-status session stamp: pid=380 t=52000000ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 2
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  (no staged markers observed)
+
+status: pid=380 ms=52000000 fresh=yes states=1 ladder=[ activated ] last=activated code=0
+
+other new lines (raw, capped):
+  [ue4ss] Finding GameEngine CDO
+  [ue4ss] Finding GameEngine::LoadMap
+
+VERDICT: CRASH_SHAPED_SUSPECTED
+NEXT: igf6-class candidate: fresh session still activated-only, no failure line, and the UE4SS.log new tail sits in the LoadMap/GameEngine vtable-walk vicinity — module likely died mid-init on an exec-page READ (FLAG-2), game surviving. Confirm with supplier-diag/observer tails above; if confirmed, first-in-launch exec-read evidence.
+
+PASS [crash_shaped] verdict CRASH_SHAPED_SUSPECTED
+PASS [crash_shaped] names FLAG-2 exec-read candidate
+PASS [crash_shaped] exit 0 (rc=0)
+=== case truncation (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  (no timestamped lines in the new content)
+  writer=runtime-status session stamp: pid=273 t=44372083ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  (no staged markers observed)
+
+status: pid=273 ms=44372083 fresh=no states=1 ladder=[ ] last=failed code=1
+status detail: runtime_start_failed no observed mapping interval intersects the module image extent with valid geometry
+
+VERDICT: NOT_STARTED
+NEXT: Nothing beyond baseline (or the stale launch-9 session 273 only) and no fresh status session. Records appear ~1 min after launch: wait and re-run. If still empty, treat as F0 (composition never ran): verify staging via FTP readback; the composition's module_start_entered marker (supplier-diag jsonl) is the launch counter.
+WARN: UE4SS.log fetched 1024B < baseline 7591B (log replaced/truncated or wrong file fetched)
+NOTE: UE4SS.log fetched 1024B < baseline 7591B (log replaced/truncated or wrong file fetched)
+
+PASS [truncation] truncation warning present
+PASS [truncation] exit 0 (rc=0)
+=== case boundary (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  (no timestamped lines in the new content)
+  writer=runtime-status session stamp: pid=273 t=44372083ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  (no staged markers observed)
+
+status: pid=273 ms=44372083 fresh=no states=1 ladder=[ ] last=failed code=1
+status detail: runtime_start_failed no observed mapping interval intersects the module image extent with valid geometry
+
+other new lines (raw, capped):
+  [ue4ss] NEWMARKER-FIRST-NEW-LINE
+
+VERDICT: UNKNOWN_NEW_LINES
+NEXT: New non-baseline lines exist but no staged marker or fresh session gives a verdict. Could be mid-launch: re-run in ~60 s. Compare the raw lines above against the STAGE-TABLE; anything unexpected = report raw to the controller.
+
+PASS [boundary] straddling baseline-region line not leaked (absent: /STRADDLERTAIL/)
+PASS [boundary] first line starting at/after the cut is present
+PASS [boundary] straddle surfaced as OTHER new content
+PASS [boundary] exit 0 (rc=0)
+=== case entry_growth (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  (no timestamped lines in the new content)
+  writer=runtime-status session stamp: pid=273 t=44372083ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  entry-history: S1_ENTRY_CTORS (entry log GREW — CONFIG-DRIFT, attribution untrusted)
+
+status: pid=273 ms=44372083 fresh=no states=1 ladder=[ ] last=failed code=1
+status detail: runtime_start_failed no observed mapping interval intersects the module image extent with valid geometry
+
+notable lines (verbatim, capped):
+  [entry] [PPSA33286] modbridge-runtime-aligned-entry/v1 build=f6530c7905934e5a8cc201aa9400ebb0 module_start_entered value=0x00000000
+
+VERDICT: NOT_STARTED
+NEXT: Nothing beyond baseline (or the stale launch-9 session 273 only) and no fresh status session. Records appear ~1 min after launch: wait and re-run. If still empty, treat as F0 (composition never ran): verify staging via FTP readback; the composition's module_start_entered marker (supplier-diag jsonl) is the launch counter.
+WARN: CONFIG-DRIFT: aligned-entry log GREW (+124B) but aligned_entry is DISABLED in the SHORTEST 2-plugin config — some other writer used the shared channel; verify ini sha 1216aab6... before attributing anything
+NOTE: CONFIG-DRIFT: aligned-entry log GREW (+124B) but aligned_entry is DISABLED in the SHORTEST 2-plugin config — some other writer used the shared channel; verify ini sha 1216aab6... before attributing anything
+
+PASS [entry_growth] CONFIG-DRIFT: entry growth detected
+PASS [entry_growth] names the disabled plugin + ini pin
+PASS [entry_growth] attribution untrusted flag
+PASS [entry_growth] exit 0 (rc=0)
+=== case diag_drift (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  (no timestamped lines in the new content)
+  writer=runtime-status session stamp: pid=273 t=44372083ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 0; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  CONFIG-DRIFT: DIAG-line count 1 (diag plugin disabled in this config)
+  supplier-diag jsonl: ABSENT (normal — sink not landed or no events)
+
+stage chain (r13/r14 marker table; file-sequence order):
+  (no staged markers observed)
+
+status: pid=273 ms=44372083 fresh=no states=1 ladder=[ ] last=failed code=1
+status detail: runtime_start_failed no observed mapping interval intersects the module image extent with valid geometry
+
+other new lines (raw, capped):
+  [ue4ss] DIAG: module_start reached at 1791159999.999 pid=301 build=sdg2-6f404cee6b94 variant=imp
+
+VERDICT: CONFIG_DRIFT
+NEXT: Disabled-plugin output in the new content (DIAG line / xwp records) with NO fresh session: the 2-plugin SHORTEST config (ini 1216aab6...) may not be what ran. Verify the ini pre-image and which PRXs executed BEFORE interpreting anything else.
+
+PASS [diag_drift] verdict CONFIG_DRIFT
+PASS [diag_drift] DIAG-line count shown
+PASS [diag_drift] config question raised
+PASS [diag_drift] exit 0 (rc=0)
+=== case l10_success_conversion (rc=0) ===
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  (no timestamped lines in the new content)
+  writer=supplier-diag-jsonl (t_ms, monotonic-ms; per-SESSION deltas — deltas NEVER cross sessions/pids; '(first t_ms)' opens each session):
+    module_start_entered t=2000 (first t_ms)
+    runtime_wiring_begin t=2005 +5ms
+    bridge_vmentry_entries t=2010 +5ms
+    bridge_exepath_source t=2020 +10ms
+    bridge_lease_reg_spans t=2030 +10ms
+    bridge_lease_reg t=2031 +1ms
+    lmf_extent_base_low t=2040 +9ms
+    lmf_extent_base_high t=2041 +1ms
+    lmf_extent_end_low t=2042 +1ms
+    lmf_extent_end_high t=2043 +1ms
+    lmf_anchor_count t=2044 +1ms
+    lmf_intervals_found t=2045 +1ms
+    anchor_c_either t=2050 +5ms
+    bridge_cfg_gamedir t=2060 +10ms
+    runtime_start_ok t=2100 +40ms
+    module_start_return t=2101 +1ms
+  writer=runtime-status session stamp: pid=421 t=61000000ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=0 refuted=0 other-seeds=0 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 4; IGW exec-write markers: 0; LoadMap-tail lines: 0
+  path_test stamps: ok=0 open_failed=0 activation_test=0; MRS_* tokens: 0
+  supplier-diag jsonl: events=16 sessions=1 pid_first=421 pid_last=421 baseline_cut=no start_ok=1 start_failed=0 lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1 vmentry=800 cfg_gamedir=1 (file totals; value tags = last session pid=421; per-session lines follow)
+    session pid=421 events=16 t_first=2000 t_last=2101 start_ok=1 start_failed=0 mfa_activate_failed=- runtime_start_failed=- extent_events=4 cfg_events=1 lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1 vmentry=800 vm_walk_stop=- exepath_source=2 cfg_gamedir=1 spanpub_count=- spanpub_total=- spanpub_cap=- env_low=- env_high=- stat_ownmod=- stat_ownmod_ec=- module_start_return=0
+
+stage chain (r13/r14 marker table; file-sequence order):
+  supplier-diag: S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S4_LEASE_REG -> S6_CONVERSION -> S5_IDENTITY_ANCHORS -> S9_START_ACK -> S11_STOP
+  ue4ss-text:    S10_LADDER
+  note: S7_CFG_ATTACH appears before S4/S5 — bridge_exepath_source is emitted mid-walk by the bridge (before anchors/lease); first-seen order is correct, only the stage numbering looks out of order (display quirk, no misattribution)
+
+status: pid=421 ms=61000000 fresh=yes states=3 ladder=[ activated engine-ready mods-started ] last=mods-started code=0
+
+mod-load prints ([TownfallItemSpawner]): 4 — BEST-decisive, verbatim (capped 6; absence here + mod-error lines under 'other new lines' = G3):
+  [ue4ss] start_mods<LuaMod> TownfallItemSpawner
+  [ue4ss] [Lua] [TownfallItemSpawner] Loaded v1.0. Clean pickup-only release. F7 opens the menu.
+  [ue4ss] [Lua] [TownfallItemSpawner] 42 spawnable pickups found. Pages=3
+  [ue4ss] [Lua] [TownfallItemSpawner] Menu created.
+
+other new lines (raw, capped):
+  [ue4ss] start_mods<LuaMod> TownfallItemSpawner
+  [ue4ss] [Lua] [TownfallItemSpawner] Loaded v1.0. Clean pickup-only release. F7 opens the menu.
+  [ue4ss] [Lua] [TownfallItemSpawner] 42 spawnable pickups found. Pages=3
+  [ue4ss] [Lua] [TownfallItemSpawner] Menu created.
+
+VERDICT: MODS_STARTED
+NEXT: FULL LADDER REACHED for the first time (beyond every launch-9/10 prediction — apply fresh-eyes skepticism and re-run to confirm). Check the mod-load prints section ([TownfallItemSpawner] verbatim) before any rung claim; the ge.5 gate now OPENS: only after this evidence may the user test OPTIONS in-game. Then FIRST-RUN-PLAYBOOK §5 rung ladder + F7 contingency table.
+{"verdict":"MODS_STARTED","refusal_class":"-","oracle_class":"","stage_chain":"S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S4_LEASE_REG -> S6_CONVERSION -> S5_IDENTITY_ANCHORS -> S9_START_ACK -> S11_STOP","failure_lines":0,"diag22":0,"gmalloc":0,"shape_a":0,"seeds_refuted":0,"stage_tags":0,"bridge_cfg":0,"observer":{"start_ok":0,"start_failed":0,"stop_result":0},"progress":4,"mod_load_lines":4,"igw":0,"crash_tail":0,"entry4_lines":0,"pathtest_stamps":0,"pathtest_open_failed":0,"diag_lines":0,"xwp_mirror":0,"status":{"present":true,"session_pid":"421","session_ms":"61000000","fresh":"yes","last_state":"mods-started","last_code":"0","ladder":" activated engine-ready mods-started"},"sdiag":{"present":true,"events":16,"sessions":1,"pid_first":"421","pid_last":"421","current_pid":"421","chain":"S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S7_CFG_ATTACH -> S4_LEASE_REG -> S6_CONVERSION -> S5_IDENTITY_ANCHORS -> S9_START_ACK -> S11_STOP","start_failed_total":0,"baseline_cut":"no","quartet":"yes","current":{"events":"16","start_failed":"0","mfa_activate_failed":"-","runtime_start_failed":"-","extent_events":"4","cfg_events":"1","lease_spans":"6","lease_reg":"6","anchor_count":"7","intervals_found":"1","vmentry":"800","vm_walk_stop":"-","exepath_source":"2","cfg_gamedir":"1","module_start_return":"0"}},"sessions":[{"pid":"421","events":16,"t_first":"2000","t_last":"2101","start_ok":1,"start_failed":0,"mfa_activate_failed":"-","runtime_start_failed":"-","extent_events":4,"cfg_events":1,"lease_spans":"6","lease_reg":"6","anchor_count":"7","intervals_found":"1","vmentry":"800","vm_walk_stop":"-","exepath_source":"2","cfg_gamedir":"1","module_start_return":"0"}],"vm_capacity":{"pinned_kBridgeVmmapEntries":16384,"current_vmentry":"800","current_vm_walk_stop":"-","exceeds_pinned":false},"sizes":{"ue4ss":7823,"entry":2343756,"xwp":4362,"sdiag":2323,"baselines":{"ue4ss":7591,"entry":2343756,"status":169,"xwp":4362,"session_pid":273,"session_ms":44372083}},"config":"shortest-2plugin-1216aab6"}
+
+PASS [l10_success_conversion] verdict MODS_STARTED
+PASS [l10_success_conversion] success chain includes S6_CONVERSION (GAP-1)
+PASS [l10_success_conversion] SDIAGSUM shows anchor_count=7 + intervals_found=1 next to spans=6 (GAP-1)
+PASS [l10_success_conversion] BEST-decisive load print verbatim on the page (GAP-2)
+PASS [l10_success_conversion] post-OPTIONS drain line verbatim (GAP-2)
+PASS [l10_success_conversion] mod-load section labeled BEST-decisive (GAP-2)
+PASS [l10_success_conversion] json tail carries mod_load_lines
+PASS [l10_success_conversion] S7-before-S4/S5 quirk annotated, not reordered (GAP-3)
+PASS [l10_success_conversion] no drift warnings (absent: /^WARN:/)
+PASS [l10_success_conversion] exit 0 (rc=0)
+
+== fixture test summary: 94 passed, 0 failed ==
+fixture shas (case UE4SS.log files):
+edf404a56d0a9ed85e15d2b20a00bdd07e93b189d4e70a9db988d46acd22a0ff  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/baseline_drift/from-dir/UE4SS.log
+80fc31e0b8068fbe023170c81444794a7024299907e129c363ffab8f9f865fa0  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/boundary/from-dir/UE4SS.log
+2f015fc89298f07c70e0b08f7ca6b770251afb56400270490256f0dd035e03a1  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/content_drift/from-dir/UE4SS.log
+7cb471dce709fb5f2486ac70007bbe0245820e1a6526013861aacfe439fdd3d7  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/crash_shaped/from-dir/UE4SS.log
+f4e40c7c1444a7c1dc3f98b4780d690ddafd5fd698a3cd2f142cdfe1d0bc6932  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/diag_drift/from-dir/UE4SS.log
+edf404a56d0a9ed85e15d2b20a00bdd07e93b189d4e70a9db988d46acd22a0ff  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/entry_growth/from-dir/UE4SS.log
+72974777526dfd15a01aa7c0f216f2bfe53e9137450e95703eb419b557d81b79  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/gmalloc_gate/from-dir/UE4SS.log
+27559bf022d4ff89ea68a06fe3aacda3b3ef102efe12757320b380a94f1837a9  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/l10_success_conversion/from-dir/UE4SS.log
+715b208b3b930c83e57dee2ae189bcb1809528fa59656ab54a60454eb561526d  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/l10_success/from-dir/UE4SS.log
+115bb0963f6d83fbe25a12243af27e7e0b6c4f7f4c689296cf560c5d3f64eb51  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/l9_terminal/from-dir/UE4SS.log
+89cdbc9ffc578ed8888c77db12d02d87b52ffa8e97f395eb8fdcc234c230a455  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/lease_gate_r14/from-dir/UE4SS.log
+345c557443bbca300a55b184f79efa7e44afbd0bdfb3eaddb21c3430a7ff2e20  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/lease_throw_dormant/from-dir/UE4SS.log
+edf404a56d0a9ed85e15d2b20a00bdd07e93b189d4e70a9db988d46acd22a0ff  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/not_started/from-dir/UE4SS.log
+4da48fabb83cb67033a3624573d41eb224bfa2d87a455869988a83e7f7ee3355  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/seeds_refuted/from-dir/UE4SS.log
+2afe1c12507f7a7580e6c85ef7a8e9a598ae021abd05ff0d35500abaecca59c6  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/shape_a_regress/from-dir/UE4SS.log
+bd73081f30534c6fa5ee60bf38e44103e6ff1ede9be30baa56783b8843df67d1  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/timing_two_writers/from-dir/UE4SS.log
+1c9187eb9d0d53442bfd7a99f5d660f8cadaec6afe36f945941e4e0230bf4025  /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/host-test/../fixtures/truncation/from-dir/UE4SS.log

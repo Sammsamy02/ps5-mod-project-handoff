@@ -1,0 +1,72 @@
+
+timing (per-writer monotonic sequences; NOT comparable across writers — plugins use different stamp formats/units and the per-writer rule forbids cross-writer subtraction):
+  writer=pathtest stamp=31277899001234ns (first stamp)
+  writer=supplier-diag-jsonl (t_ms, monotonic-ms; per-SESSION deltas — deltas NEVER cross sessions/pids; '(first t_ms)' opens each session):
+    module_start_entered t=31200455 (first t_ms)
+    constructor_count t=31200456 +1ms
+    runtime_wiring_begin t=31201801 +1345ms
+    mfa_activated_low t=31201847 +46ms
+    mfa_activated_high t=31201856 +9ms
+    bridge_vmentry_entries t=31202697 +841ms
+    bridge_vm_walk_stop t=31202834 +137ms
+    bridge_lease_reg_spans t=31202906 +72ms
+    bridge_lease_reg t=31202908 +2ms
+    lmf_extent_base_low t=31202926 +18ms
+    lmf_extent_base_high t=31202927 +1ms
+    lmf_extent_end_low t=31202928 +1ms
+    lmf_extent_end_high t=31202929 +1ms
+    lmf_anchor_count t=31202930 +1ms
+    lmf_intervals_found t=31202931 +1ms
+    bridge_cfg_gamedir t=31202936 +5ms
+    bridge_cfg_workdir t=31202937 +1ms
+    runtime_start_ok t=31237720 +34783ms
+    module_start_return t=31237761 +41ms
+  writer=runtime-status session stamp: pid=419 t=31211900ms (single point; the state lines carry no per-state timestamps — file sequence order is the only intra-status ordering)
+  GUARD: per-writer sequences only. path_test=monotonic-ns, failure lines=monotonic-ms, supplier-diag=monotonic-ms t_ms, status=monotonic-ms session stamp. NEVER subtract across writers.
+
+signatures (new lines vs launch-10 baselines):
+  stage-table markers (bridge/lmf/anchor tags): 0 (bridge_cfg/exepath diag lines: 0)
+  failure lines: 0 (diag_channel_open_failed/-22: 0) [r4-prefixed: 0]
+  initializer: shape_a=0 refuted=0 other-seeds=7 gmalloc-throw=0
+  observer events: start_ok=0 start_failed=0 stop_result=0 mfa_failed=0 lua_harness=0
+  progress markers: 4; IGW exec-write markers: 0; LoadMap-tail lines: 3
+  path_test stamps: ok=1 open_failed=0 activation_test=1; MRS_* tokens: 0
+  supplier-diag jsonl: events=19 sessions=1 pid_first=419 pid_last=419 baseline_cut=no start_ok=1 start_failed=0 lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1 vmentry=10019 cfg_gamedir=1 (file totals; value tags = last session pid=419; per-session lines follow)
+    session pid=419 events=19 t_first=31200455 t_last=31237761 start_ok=1 start_failed=0 mfa_activate_failed=- runtime_start_failed=- extent_events=4 cfg_events=2 lease_spans=6 lease_reg=6 anchor_count=7 intervals_found=1 vmentry=10019 vm_walk_stop=0 exepath_source=- cfg_gamedir=1 spanpub_count=- spanpub_total=- spanpub_cap=- env_low=- env_high=- stat_ownmod=- stat_ownmod_ec=- module_start_return=0
+
+stage chain (r13/r14 marker table; file-sequence order):
+  supplier-diag: S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S4_LEASE_REG -> S6_CONVERSION -> S7_CFG_ATTACH -> S9_START_ACK -> S11_STOP
+  ue4ss-text:    S8B_INITIALIZER -> S10_LADDER
+
+status: pid=419 ms=31211900 fresh=yes states=3 ladder=[ activated engine-ready mods-started ] last=mods-started code=0
+
+notable lines (verbatim, capped):
+  [ue4ss] [Seeds] Required-slot seed table armed (slots 0/2/3/4); the ps_scan arm and both Lua override scans are skipped
+  [ue4ss] [Seeds] Unbound by design: fname_tostring (Kismet fallback owns it), gnatives, fuobject_hash_tables_get; engine version via EngineVersionOverride settings
+  [ue4ss] [Seeds] slot 0 g_uobject_array bound at 0x97ba110 (data; identity and ABI unverified)
+  [ue4ss] [Seeds] slot 3 gmalloc bound at 0x970add8 -> 0x97089b8 (data; V1 instance + V2 vptr match; identity and ABI unverified)
+  [ue4ss] [Seeds] FName pool validated at 0x9765ec0 (CurrentBlock 37, Blocks[0] 0x80234ae0; 'None' id 0x1a2b, 'ByteProperty' id 0x35c)
+  [ue4ss] [Seeds] slot 2 FName ctor bound at 0x63d590 and behaviorally verified (ByteProperty probe id == pool id 0x35c); detour verification skipped
+  [ue4ss] [Seeds] slot 4 static_construct_object_internal bound at 0x890aa0 (code; identity and ABI unverified)
+
+mod-load prints ([TownfallItemSpawner]): 4 — BEST-decisive, verbatim (capped 6; absence here + mod-error lines under 'other new lines' = G3):
+  [ue4ss] start_mods<LuaMod> TownfallItemSpawner
+  [ue4ss] [Lua] [TownfallItemSpawner] Loaded v1.0. Clean pickup-only release. F7 opens the menu.
+  [ue4ss] [Lua] [TownfallItemSpawner] 42 spawnable pickups found. Pages=3
+  [ue4ss] [Lua] [TownfallItemSpawner] Menu created.
+
+other new lines (raw, capped):
+  [ue4ss] Timezone: UTC
+  [ue4ss] UE4SS Build Configuration: Shipping
+  [ue4ss] working directory: /data/plugins
+  [ue4ss] PATH_TEST: /data/plugins/UE4SS.log writable at 31277899001234 monotonic-ns
+  [ue4ss] ACTIVATION_TEST: loadlist.txt readable, first 16 bytes: 6d6f64666f7267652d6c6f61646c6973
+  [ue4ss] Using engine version: 5.6
+  [ue4ss] Waiting for object construction...
+  [ue4ss] Still waiting for object construction, 8231 objects constructed so far
+  [ue4ss] Locating KismetStringLibrary...
+  [ue4ss] KismetStringLibrary located: 0x8376c4a0 [n: 0x5c]
+
+VERDICT: MODS_STARTED
+NEXT: FULL LADDER REACHED for the first time (beyond every launch-9/10 prediction — apply fresh-eyes skepticism and re-run to confirm). Check the mod-load prints section ([TownfallItemSpawner] verbatim) before any rung claim; the ge.5 gate now OPENS: only after this evidence may the user test OPTIONS in-game. Then FIRST-RUN-PLAYBOOK §5 rung ladder + F7 contingency table.
+{"verdict":"MODS_STARTED","refusal_class":"-","oracle_class":"","stage_chain":"S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S4_LEASE_REG -> S6_CONVERSION -> S7_CFG_ATTACH -> S9_START_ACK -> S11_STOP","failure_lines":0,"diag22":0,"gmalloc":0,"shape_a":0,"seeds_refuted":0,"stage_tags":0,"bridge_cfg":0,"observer":{"start_ok":0,"start_failed":0,"stop_result":0},"progress":4,"mod_load_lines":4,"igw":0,"crash_tail":3,"entry4_lines":0,"pathtest_stamps":1,"pathtest_open_failed":0,"diag_lines":0,"xwp_mirror":0,"status":{"present":true,"session_pid":"419","session_ms":"31211900","fresh":"yes","last_state":"mods-started","last_code":"0","ladder":" activated engine-ready mods-started"},"sdiag":{"present":true,"events":19,"sessions":1,"pid_first":"419","pid_last":"419","current_pid":"419","chain":"S1_ENTRY_CTORS -> S2_ACTIVATION -> S3_VMMAP_WALK -> S4_LEASE_REG -> S6_CONVERSION -> S7_CFG_ATTACH -> S9_START_ACK -> S11_STOP","start_failed_total":0,"baseline_cut":"no","quartet":"yes","current":{"events":"19","start_failed":"0","mfa_activate_failed":"-","runtime_start_failed":"-","extent_events":"4","cfg_events":"2","lease_spans":"6","lease_reg":"6","anchor_count":"7","intervals_found":"1","vmentry":"10019","vm_walk_stop":"0","exepath_source":"-","cfg_gamedir":"1","module_start_return":"0"}},"sessions":[{"pid":"419","events":19,"t_first":"31200455","t_last":"31237761","start_ok":1,"start_failed":0,"mfa_activate_failed":"-","runtime_start_failed":"-","extent_events":4,"cfg_events":2,"lease_spans":"6","lease_reg":"6","anchor_count":"7","intervals_found":"1","vmentry":"10019","vm_walk_stop":"0","exepath_source":"-","cfg_gamedir":"1","module_start_return":"0"}],"vm_capacity":{"pinned_kBridgeVmmapEntries":16384,"current_vmentry":"10019","current_vm_walk_stop":"0","exceeds_pinned":false},"sizes":{"ue4ss":10873,"entry":2343756,"xwp":4362,"sdiag":2836,"baselines":{"ue4ss":7591,"entry":2343756,"status":169,"xwp":4362,"session_pid":273,"session_ms":44372083}},"config":"shortest-2plugin-1216aab6"}

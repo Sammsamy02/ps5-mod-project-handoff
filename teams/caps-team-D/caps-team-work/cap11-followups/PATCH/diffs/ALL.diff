@@ -1,0 +1,660 @@
+--- a/typescan-r4/include/Platform/NativeGuiHost.hpp
++++ b/typescan-r4/include/Platform/NativeGuiHost.hpp
+@@ -17,7 +17,11 @@
+ //   * output: ImDrawData -> clipped textured triangle batches (CanvasBatcher)
+ //     handed to a Backend, which on the console draws them into a canvas render
+ //     target shown by one UMG image (NativeGuiEngineBackend.inc); the font
+-//     atlas is uploaded once as untextured runs (ImGuiAtlasRuns).
++//     atlas is uploaded once as untextured runs (ImGuiAtlasRuns);
++//   * screen density [FU-DPI]: ImGui lays out in units (the backend's panel
++//     size) and renders at DisplayFramebufferScale = Backend::pixel_scale(),
++//     with the default font baked at exactly its drawn size and density, so
++//     one font texel is one screen pixel at any DPI.
+ // Engine-free: the Backend interface is the only engine contact; host tests
+ // implement it with a software rasteriser.
+ #pragma once
+@@ -61,6 +65,10 @@
+         size_t max_tabs_total = 64;
+         size_t max_tabs_per_mod = 16;
+         size_t max_name_bytes = 128;
++        // [FU-DPI review #2] bounds of the sharp-font bake and of the atlas upload (fail closed above them)
++        size_t max_bake_codepoints = 1024;           // all font sources of the atlas; the stock font has 224
++        int64_t max_bake_texels = int64_t{4} << 20;  // codepoints x (size x density)^2 estimate
++        int64_t max_atlas_texels = int64_t{4096} * 4096;
+     };
+ 
+     class Backend
+@@ -68,22 +76,32 @@
+       public:
+         virtual ~Backend() = default;
+         virtual void log(int32_t level, std::string_view text) = 0;
+-        // Game thread. Ensure overlay surfaces exist; report the target size.
+-        // false = not ready this frame (the frame is skipped, GUI stays open).
++        // Game thread. Ensure overlay surfaces exist; report the panel size in
++        // LAYOUT units (ImGui DisplaySize; the render target has
++        // width x pixel_scale() by height x pixel_scale() pixels).
++        // false = not ready this frame (the frame is skipped, GUI stays open,
++        // gameplay input is released until it is ready again [FU1]).
+         // *rebuilt = true when the surfaces were (re)built in this call (first
+         // build, or after a map change destroyed the old ones): every engine
+         // object the host handed out before (the atlas texture, the player
+         // the input block was applied to) is gone and must be redone. [FIX F2]
+         virtual auto prepare(int* width, int* height, bool* rebuilt) -> bool = 0;
++        // [FU-DPI] Render-target pixels per layout unit (the viewport DPI scale,
++        // e.g. 2.0 on a 4K screen), valid after a successful prepare(). The host
++        // renders ImGui at this density (DisplayFramebufferScale) and bakes the
++        // font for it, so the image is shown 1:1 and text is sharp. 1.0 =
++        // pixels are units (host tests, fallback).
++        virtual auto pixel_scale() -> float { return 1.0f; }
+         // Game thread, once: upload the atlas; return its texture id (0 = failed).
+         virtual auto create_atlas(const std::vector<Run>& runs, int width, int height) -> ImTextureID = 0;
+         // Game thread: draw this frame's batches (texture ids are atlas or 0).
+         virtual void submit(const std::vector<Batch>& batches) = 0;
+         virtual void set_visible(bool visible) = 0;
+-        // Game thread, only after a successful prepare(). blocked=true: apply
++        // Game thread. blocked=true only after a successful prepare(): apply
+         // the block to the current player; returns true only if it was really
+-        // applied (or already is for this player). blocked=false: undo exactly
+-        // what was applied (nothing if nothing was). [FIX F1]
++        // applied (or already is for this player). blocked=false at any time
++        // (also after a failed prepare() [FU1]): undo exactly what was applied
++        // (nothing if nothing was). [FIX F1]
+         virtual auto set_gameplay_input_blocked(bool blocked) -> bool = 0;
+     };
+ 
+@@ -255,7 +273,23 @@
+             if (!m_open.load()) return;
+             int w{}, h{};
+             bool rebuilt{};
+-            if (!m_backend.prepare(&w, &h, &rebuilt) || w <= 0 || h <= 0) return;
++            if (!m_backend.prepare(&w, &h, &rebuilt) || w <= 0 || h <= 0)
++            {
++                // [FU1] nothing is shown this frame (no player yet, or a surface
++                // build that failed part-way): gameplay input must not stay
++                // blocked behind an invisible window. Undo our block now; it is
++                // applied again on the first frame the surfaces are back.
++                if (m_input_blocked)
++                {
++                    m_backend.set_gameplay_input_blocked(false);
++                    m_input_blocked = false;
++                    m_backend.log(MBM_LOG_NORMAL, "[GUI] window not shown (surfaces not ready): gameplay input released until it is back");
++                }
++                return;
++            }
++            // [FU-DPI] render-target pixels per layout unit (1.0 if implausible)
++            float px_scale = m_backend.pixel_scale();
++            if (!(px_scale >= 0.25f && px_scale <= 8.0f)) px_scale = 1.0f;
+             if (rebuilt)
+             {
+                 // [FIX F2] new surfaces (first open or after a map change): the old
+@@ -281,6 +315,23 @@
+             }
+             ImGui::SetCurrentContext(m_ctx);
+             ImGuiIO& io = ImGui::GetIO();
++            if (px_scale != m_font_density)
++            {
++                // [FU-DPI] first frame, or the screen density changed: bake the
++                // font for it (between frames: the atlas is unlocked), then the
++                // atlas is uploaded again below.
++                bake_font(px_scale);       // logs one warning itself when it skips
++                m_font_density = px_scale; // one attempt per density, never every frame
++            }
++            if (!m_atlas_tex && static_cast<int64_t>(m_atlas_w) * m_atlas_h > m_cfg.max_atlas_texels)
++            {
++                // [FU-DPI review #2] never build runs / RGBA / PNG for a huge atlas on the game thread
++                m_failed = true;
++                m_backend.log(MBM_LOG_ERROR, "[GUI] refused: font atlas " + std::to_string(m_atlas_w) + "x" + std::to_string(m_atlas_h) +
++                                                     " is too large to upload; GUI disabled for this session");
++                set_open(false);
++                return;
++            }
+             if (!m_atlas_tex)
+             {
+                 const auto runs = atlas_runs(m_atlas_alpha.data(), m_atlas_w, m_atlas_h, m_cfg.atlas_levels);
+@@ -295,7 +346,10 @@
+                 io.Fonts->SetTexID(m_atlas_tex);
+                 m_backend.log(MBM_LOG_NORMAL, "[GUI] atlas uploaded runs=" + std::to_string(runs.size()));
+             }
++            // [FU-DPI] ImGui lays out in units (the same layout at any DPI); the
++            // draw data is scaled to render-target pixels by the batcher.
+             io.DisplaySize = ImVec2(static_cast<float>(w), static_cast<float>(h));
++            io.DisplayFramebufferScale = ImVec2(px_scale, px_scale);
+             io.DeltaTime = dt > 0.0001f && dt < 0.5f ? dt : 1.0f / 60.0f;
+             for (ImGuiKey k : m_release_next) io.AddKeyEvent(k, false);
+             m_release_next.clear();
+@@ -310,7 +364,9 @@
+             draw_main_window();
+             ImGui::Render();
+             BatchStats bs{};
+-            auto batches = convert(ImGui::GetDrawData(), &bs);
++            BatchOptions opt{};
++            opt.scale_x = opt.scale_y = px_scale; // [FU-DPI] clip in units, emit render-target pixels
++            auto batches = convert(ImGui::GetDrawData(), &bs, opt);
+             uint64_t tris = 0, unknown = 0;
+             std::vector<Batch> drawable;
+             drawable.reserve(batches.size());
+@@ -476,6 +532,80 @@
+             return false;
+         }
+ 
++        // [FU-DPI] Sharp text at any screen density. This backend is a legacy
++        // ImGui renderer (no ImGuiBackendFlags_RendererHasTextures), so the font
++        // atlas only holds the sizes baked into it; any other size is a scaled
++        // bitmap (before: the 13 px default font drawn at 20 units x 2.0 on a 4K
++        // screen = 3x blow-up). Bake the default font at exactly the size it is
++        // drawn at (style FontSizeBase x FontScaleMain x FontScaleDpi, rounded
++        // the way ImGui rounds it) and at `density` texels per unit, so each
++        // glyph texel is one screen pixel. Public 1.92.1 API only; the font
++        // object, its LegacySize and any font a mod added stay untouched (the
++        // bake is added, nothing is cleared). Game thread, between frames (the
++        // atlas is unlocked outside NewFrame..Render). Refreshes the CPU copy of
++        // the atlas and drops the uploaded texture so frame() uploads it again.
++        auto bake_font(float density) -> bool
++        {
++            auto skip = [&](const std::string& why) {
++                m_backend.log(MBM_LOG_WARNING, "[GUI] sharp-font bake for density " + std::to_string(density) + " skipped (" + why +
++                                                       "); text is drawn from the existing bake (softer)");
++                return false;
++            };
++            ImGuiIO& io = ImGui::GetIO();
++            ImFontAtlas* atlas = io.Fonts;
++            if (!atlas || atlas->Locked || atlas->Fonts.Size == 0) return skip("no unlocked font atlas");
++            ImFont* font = io.FontDefault ? io.FontDefault : atlas->Fonts[0];
++            const ImGuiStyle& st = ImGui::GetStyle();
++            const float base = st.FontSizeBase > 0.0f ? st.FontSizeBase : (font->LegacySize > 0.0f ? font->LegacySize : 13.0f);
++            const float size = ImGui::GetRoundedFontSize(base * st.FontScaleMain * st.FontScaleDpi);
++            if (!(size >= 1.0f && size <= 256.0f)) return skip("font size " + std::to_string(size) + " out of range");
++            // [review #2] Bound the work: count every codepoint of every font
++            // source in the atlas (a rebuild after a grow preloads all fonts),
++            // and estimate the texels this bake adds. Above either bound the
++            // extra bake is skipped (one warning, the old scaled text stays).
++            size_t codepoints = 0;
++            for (const ImFontConfig& src : atlas->Sources)
++                for (const ImWchar* r = src.GlyphRanges ? src.GlyphRanges : atlas->GetGlyphRangesDefault(); r[0]; r += 2)
++                    codepoints += r[1] >= r[0] ? static_cast<size_t>(r[1] - r[0]) + 1 : 0;
++            const double px = static_cast<double>(size) * density;
++            const double texels = static_cast<double>(codepoints) * px * px;
++            if (codepoints > m_cfg.max_bake_codepoints || texels > static_cast<double>(m_cfg.max_bake_texels))
++                return skip(std::to_string(codepoints) + " codepoints at " + std::to_string(static_cast<int>(px)) + " px exceed the bound");
++            ImFontBaked* baked = font->GetFontBaked(size, density); // density explicit: CurrentRasterizerDensity is set after the rebuild below
++            if (!baked) return skip("GetFontBaked returned nothing");
++            // Same preload ImGui does for legacy renderers at build time
++            // (ImFontAtlasBuildLegacyPreloadAllGlyphRanges), for this one size.
++            if (font->FallbackChar != 0) baked->FindGlyph(font->FallbackChar);
++            if (font->EllipsisChar != 0) baked->FindGlyph(font->EllipsisChar);
++            for (ImFontConfig* src : font->Sources)
++                for (const ImWchar* r = src->GlyphRanges ? src->GlyphRanges : atlas->GetGlyphRangesDefault(); r[0]; r += 2)
++                    for (unsigned int c = r[0]; c <= r[1] && c <= IM_UNICODE_CODEPOINT_MAX; ++c) baked->FindGlyph(static_cast<ImWchar>(c));
++            unsigned char* pixels{};
++            int w{}, h{};
++            // Rebuilt ("built" again) if the new glyphs grew the texture. Its legacy
++            // preload re-bakes LegacySize at the font's CURRENT density, which is
++            // still the previous one here (already baked: nothing extra) [review #3].
++            atlas->GetTexDataAsAlpha8(&pixels, &w, &h);
++            if (!pixels || w <= 0 || h <= 0) return skip("atlas pixels unavailable");
++            // In a legacy atlas the in-frame lookup uses the font's current
++            // density (ImGui only updates it for RendererHasTextures backends):
++            // from now on the default size hits the new bake exactly.
++            font->CurrentRasterizerDensity = density;
++            // A grown atlas leaves the old texture queued for destruction; it
++            // carries our old texture id, so ImGui would keep it forever
++            // (a legacy renderer never confirms a destroy). Clear the id: ImGui
++            // frees that CPU copy at the next NewFrame.
++            for (ImTextureData* t : atlas->TexList)
++                if (t != atlas->TexData && t->WantDestroyNextFrame) t->SetTexID(ImTextureID_Invalid);
++            m_atlas_alpha.assign(pixels, pixels + static_cast<size_t>(w) * h);
++            m_atlas_w = w;
++            m_atlas_h = h;
++            m_atlas_tex = 0; // upload the new atlas (frame() does it next)
++            m_backend.log(MBM_LOG_NORMAL, "[GUI] font baked size=" + std::to_string(static_cast<int>(size)) + " density=" + std::to_string(density) +
++                                                  " atlas=" + std::to_string(w) + "x" + std::to_string(h));
++            return true;
++        }
++
+         void revoke_mod(uint64_t token)
+         {
+             std::lock_guard g{m_mutex};
+@@ -569,6 +699,7 @@
+         bool m_failed{};
+         bool m_input_blocked{};  // a block was really applied to the current player [F1]
+         bool m_block_refused{};  // tried after this open/rebuild and it was unavailable [F1]
++        float m_font_density{};  // density the default font was last baked for (0 = not yet) [FU-DPI]
+         uint64_t m_next_id{};
+         Stats m_stats{};
+     };
+--- a/typescan-r4/include/Platform/NativeModHostCore.hpp
++++ b/typescan-r4/include/Platform/NativeModHostCore.hpp
+@@ -136,8 +136,9 @@
+         VmtEngineTick,  // copied-vtable UEngine::Tick drain (also delivers ENGINE_TICK)
+     };
+ 
+-    // [FIX F5] At most one per-frame service frame (the #11 GUI render) per
+-    // engine frame, whatever the pump cadence. The pumps can be called many
++    // [FIX F5] At most one per-frame service frame (the #11 GUI render and,
++    // [FU5], the native mods' game-thread frame) per engine frame, whatever
++    // the pump cadence. The pumps can be called many
+     // times per frame (1700-2300 calls/s seen in earlier harvests) and both
+     // pumps can be live at once. Rule:
+     //   * once the copied-vtable Tick pump (exactly one call per UEngine::Tick)
+@@ -463,7 +464,7 @@
+         }
+ 
+         // ---------------------------------------------------------------
+-        // Game thread: called once per frame by the runtime's pump(s).
++        // Game thread: called once per frame (through game_thread_pump).
+         // Runs the tasks queued BEFORE this call (tasks queued while running go
+         // to the next frame, like upstream ExecuteInGameThread), then ticks.
+         // ---------------------------------------------------------------
+@@ -506,7 +507,27 @@
+                 bump(&Counters::tick_calls);
+                 if (s != MBM_OK) fault_in_scope(cb.token, "tick", s, nullptr);
+             }
++        }
++
++        // [FU5] Game thread: the runtime's pumps call this on EVERY pump call
++        // (the marshal pump runs ~170-1,960 times per second). The ABI promises
++        // MBM_HOOK_GAME_THREAD_TICK "once per frame", so game_thread_frame
++        // (queued tasks + tick callbacks) runs only when the FrameGate says a
++        // new engine frame started (the copied-vtable Tick pump owns the frame
++        // while it is live, else the marshal pump at most every 8 ms), with
++        // dt = time since the previous frame that ran. Returns true when the
++        // frame ran (*frame_dt set) so per-frame services (#11 GUI) run in the
++        // same pump call. Not thread-safe on purpose (both pumps are on the
++        // game thread).
++        auto game_thread_pump(FrameGate::Clock::time_point now, PumpSource source, float* frame_dt = nullptr) -> bool
++        {
++            float dt = 0.0f;
++            if (!m_frame_gate.due(now, source, &dt)) return false;
++            game_thread_frame(dt, source);
++            if (frame_dt) *frame_dt = dt;
++            return true;
+         }
++        auto frame_gate_stats() const -> FrameGate::Stats { return m_frame_gate.stats(); }
+ 
+         // Engine-side hook trampolines call these with the HOST record id.
+         void dispatch_ufunction(uint64_t record, bool pre, const mbm_hook_call& call)
+@@ -1174,5 +1195,6 @@
+         uint64_t m_next_id{};
+         bool m_pump_seen{};
+         Counters m_counters{};
++        FrameGate m_frame_gate{}; // [FU5] game thread only (game_thread_pump)
+     };
+ } // namespace RC::Platform::NativeMods
+--- a/typescan-r4/candidate/src/Mod/NativeGuiEngineBackend.inc
++++ b/typescan-r4/candidate/src/Mod/NativeGuiEngineBackend.inc
+@@ -17,6 +17,9 @@
+ //              untextured runs drawn into a second render target (fallback)
+ //   input    : UE4SSProgram::register_keydown_event (pad mapping) -> GuiHost::post_key;
+ //              PlayerController SetIgnoreMoveInput / SetIgnoreLookInput while open
++//   density  : WidgetLayoutLibrary GetViewportScale -> the panel is laid out in Slate units and its render
++//              target has units x scale pixels, shown 1:1 (sharp text at any DPI) [FU-DPI]; re-checked on
++//              open and every 120 GUI frames [FU3]
+ // Every function, parameter and struct member is resolved by NAME through
+ // reflection at run time; parameter frames and struct layouts come from the
+ // engine's own FProperty data (no offset, size or address in this file). A
+@@ -104,14 +107,20 @@
+             return found;
+         }
+ 
+-        auto frame_for(UObject* target, const char* fn_name, Frame& f) -> bool
++        // Zeroed parameter frame sized from the function's own reflected ParmsSize.
++        static void frame_init(Frame& f, UFunction* fn)
+         {
+-            if (!valid(target)) return refuse(std::string("target object for ") + fn_name + " is not live");
+-            f.fn = target->GetFunctionByNameInChain(W(fn_name).c_str());
+-            if (!f.fn) return refuse(std::string("function not found: ") + fn_name);
+-            const size_t size = static_cast<size_t>(f.fn->GetParmsSize());
++            f.fn = fn;
++            const size_t size = static_cast<size_t>(fn->GetParmsSize());
+             f.storage.assign(size / sizeof(std::max_align_t) + 2, std::max_align_t{});
+             std::memset(f.data(), 0, f.storage.size() * sizeof(std::max_align_t));
++        }
++        auto frame_for(UObject* target, const char* fn_name, Frame& f) -> bool
++        {
++            if (!valid(target)) return refuse(std::string("target object for ") + fn_name + " is not live");
++            UFunction* fn = target->GetFunctionByNameInChain(W(fn_name).c_str());
++            if (!fn) return refuse(std::string("function not found: ") + fn_name);
++            frame_init(f, fn);
+             return true;
+         }
+ 
+@@ -198,10 +207,30 @@
+         UObject* m_atlas{};
+         UObject* m_blocked_pc{};  // the player the input block was applied to [F1]
+         bool m_blocked_move{}, m_blocked_look{};
+-        int m_w{}, m_h{};
++        int m_w{}, m_h{};         // panel size in Slate units (ImGui DisplaySize)
+         int m_refusals{};
+         bool m_visible{};
+         int m_panel_x{}, m_panel_y{};
++        // [FU1] true only after EVERY build step succeeded; a part-way build is never treated as built
++        bool m_built{};
++        // [FU1, review #1] part-way failures in a row (for m_failed_pc); at k_max_build_failures the GUI stops
++        // trying (fail closed) until the window is reopened or the player changes
++        static constexpr int k_max_build_failures = 3;
++        int m_build_failures{};
++        UObject* m_failed_pc{};
++        // [FU-DPI] render target in pixels = units x m_px_scale (shown 1:1 by the units-sized slot)
++        static constexpr int k_max_rt_side = 4096;
++        float m_px_scale{1.0f};   // render-target pixels per unit (1.0 in the >4096 fallback)
++        float m_scale{1.0f};      // viewport (DPI) scale the layout was built with
++        int m_rt_w{}, m_rt_h{};
++        // [FU3] cheap layout re-check while open: on open and every k_recheck_frames GUI frames
++        static constexpr int k_recheck_frames = 120;
++        int32_t m_vx{}, m_vy{};   // viewport size the layout was built with
++        int m_recheck_frames{};
++        bool m_recheck_now{};
++        // [FU2] WidgetLayoutLibrary CDO, and whether the one "scale unavailable" warning was logged
++        UObject* m_wll{};
++        bool m_scale_warned{};
+ 
+         static auto world_of(UObject* o) -> UObject*
+         {
+@@ -386,8 +415,64 @@
+             return call(canvas, f);
+         }
+ 
++        // Quiet read of PlayerController::GetViewportSize (no refusal line; callers decide).
++        auto viewport_size(int32_t* vx, int32_t* vy) -> bool
++        {
++            if (!valid(m_pc)) return false;
++            UFunction* fn = m_pc->GetFunctionByNameInChain(STR("GetViewportSize"));
++            if (!fn) return false;
++            FProperty* sx = param(fn, "SizeX");
++            FProperty* sy = param(fn, "SizeY");
++            if (!sx || !sy || static_cast<size_t>(sx->GetSize()) < sizeof(int32_t) || static_cast<size_t>(sy->GetSize()) < sizeof(int32_t)) return false;
++            Frame f;
++            frame_init(f, fn);
++            call(m_pc, f);
++            std::memcpy(vx, sx->ContainerPtrToValuePtr<void>(f.data()), sizeof(int32_t));
++            std::memcpy(vy, sy->ContainerPtrToValuePtr<void>(f.data()), sizeof(int32_t));
++            return *vx > 0 && *vy > 0;
++        }
++
++        // UMG canvas slots are laid out in Slate units, not viewport pixels: units = pixels / viewport (DPI)
++        // scale (console-proven 2026-10-13: on a 3840x2160 viewport the pixel layout put the panel off-screen).
++        // The scale comes from the engine's own WidgetLayoutLibrary::GetViewportScale, read by its reflected
++        // return type (float in UE5 today; double accepted too).
++        // [FU2] Unavailable or implausible = 1.0 with ONE warning per session. It is not a refusal (the GUI works,
++        // only layout and sharpness differ), so it never logs a "[GUI] refused" line and uses no refusal-log slot.
++        auto viewport_scale() -> float
++        {
++            std::string why;
++            double s{};
++            if (!valid(m_wll)) m_wll = find("/Script/UMG.Default__WidgetLayoutLibrary");
++            UFunction* fn = valid(m_wll) ? m_wll->GetFunctionByNameInChain(STR("GetViewportScale")) : nullptr;
++            FProperty* wc = fn ? param(fn, "WorldContextObject") : nullptr;
++            FProperty* rp = fn ? param(fn, "ReturnValue") : nullptr;
++            if (!valid(m_wll)) why = "WidgetLayoutLibrary not found";
++            else if (!fn) why = "GetViewportScale not found";
++            else if (!wc || !rp || static_cast<size_t>(wc->GetSize()) < sizeof(UObject*)) why = "GetViewportScale parameters not found";
++            else
++            {
++                Frame f;
++                frame_init(f, fn);
++                std::memcpy(wc->ContainerPtrToValuePtr<void>(f.data()), &m_pc, sizeof m_pc);
++                call(m_wll, f);
++                const void* at = rp->ContainerPtrToValuePtr<void>(f.data());
++                if (rp->IsA<Unreal::FFloatProperty>()) { float fv{}; std::memcpy(&fv, at, sizeof fv); s = fv; }
++                else if (rp->IsA<Unreal::FDoubleProperty>()) std::memcpy(&s, at, sizeof s);
++                else why = "GetViewportScale returns neither float nor double";
++                if (why.empty() && !(s >= 0.25 && s <= 8.0)) why = "GetViewportScale returned " + std::to_string(static_cast<float>(s)); // float: the to_string overload already used
++            }
++            if (why.empty()) return static_cast<float>(s);
++            if (!m_scale_warned)
++            {
++                m_scale_warned = true;
++                log(MBM_LOG_WARNING, "[GUI] viewport scale unavailable (" + why + "); laying out with scale 1.0");
++            }
++            return 1.0f;
++        }
++
+         auto build_surfaces() -> bool
+         {
++            m_built = false; // [FU1] set again only after every step succeeded
+             const auto now = std::chrono::steady_clock::now();
+             if (now < m_next_pc_probe) return false; // [NOTE N7] throttled retry
+             m_param_cache.clear();
+@@ -398,49 +483,65 @@
+                 m_next_pc_probe = now + std::chrono::milliseconds{500};
+                 return false; // not in a world yet: retry in 500 ms, no log
+             }
++            if (m_pc != m_failed_pc) m_build_failures = 0; // another player: fresh tries
++            // [FU1] a build that fails part-way is retried in 2 s, not every frame (each try may create a render
++            // target and widgets), at most k_max_build_failures times in a row; then the GUI stays off (fail
++            // closed, nothing shown, no input block) until the window is reopened or the player changes.
++            m_next_pc_probe = now + std::chrono::milliseconds{2000};
++            if (m_build_failures >= k_max_build_failures) return false;
++            if (!build_steps())
++            {
++                m_failed_pc = m_pc;
++                if (++m_build_failures == k_max_build_failures)
++                    log(MBM_LOG_WARNING, "[GUI] surfaces could not be built " + std::to_string(k_max_build_failures) +
++                                                 " times in a row; no more tries until the window is reopened or the player changes");
++                return false;
++            }
++            m_build_failures = 0;
++            m_failed_pc = nullptr;
++            m_next_pc_probe = {};
++            m_built = true; // [FU1]
++            return true;
++        }
++
++        // Every build step; false = failed part-way (build_surfaces counts it, nothing is shown).
++        auto build_steps() -> bool
++        {
+             m_krl = find("/Script/Engine.Default__KismetRenderingLibrary");
+             m_crt_cdo = find("/Script/Engine.Default__CanvasRenderTarget2D");
+             m_crt_class = find("/Script/Engine.CanvasRenderTarget2D");
+             if (!valid(m_krl) || !valid(m_crt_cdo) || !m_crt_class) return refuse("rendering library / render target class not found");
+-            // viewport size
+-            Frame vf;
+             int32_t vx{}, vy{};
+-            if (!frame_for(m_pc, "GetViewportSize", vf) || !call(m_pc, vf) || !get(vf, "SizeX", &vx) || !get(vf, "SizeY", &vy) || vx <= 0 || vy <= 0)
+-                return refuse("GetViewportSize failed");
+-            // UMG canvas slots are laid out in Slate units, not viewport pixels: units = pixels / viewport (DPI)
+-            // scale (console-proven 2026-10-13: on a 3840x2160 viewport the pixel layout put the panel off-screen).
+-            // The scale comes from the engine's own WidgetLayoutLibrary; anything implausible falls back to 1.0.
+-            float scale = 1.0f;
+-            {
+-                UObject* wll = find("/Script/UMG.Default__WidgetLayoutLibrary");
+-                Frame sf;
+-                double s{};
+-                bool got{};
+-                if (valid(wll) && frame_for(wll, "GetViewportScale", sf) && put(sf, "WorldContextObject", m_pc) && call(wll, sf))
+-                {
+-                    // read the return by its reflected type (float in UE5 today; double accepted too)
+-                    if (FProperty* rp = param(sf.fn, "ReturnValue"))
+-                    {
+-                        const void* at = rp->ContainerPtrToValuePtr<void>(sf.data());
+-                        if (rp->IsA<Unreal::FFloatProperty>()) { float fv{}; std::memcpy(&fv, at, sizeof fv); s = fv; got = true; }
+-                        else if (rp->IsA<Unreal::FDoubleProperty>()) { std::memcpy(&s, at, sizeof s); got = true; }
+-                    }
+-                }
+-                if (got && s >= 0.25 && s <= 8.0)
+-                    scale = static_cast<float>(s);
+-                else
+-                    log(MBM_LOG_WARNING, "[GUI] viewport scale unavailable; laying out with scale 1.0");
+-            }
++            if (!viewport_size(&vx, &vy)) return refuse("GetViewportSize failed");
++            const float scale = viewport_scale();
+             const int ux = std::max(1, static_cast<int>(static_cast<float>(vx) / scale));
+             const int uy = std::max(1, static_cast<int>(static_cast<float>(vy) / scale));
+-            // panel: right part of the screen, like the shipping mod menus (all in Slate units; the render target
+-            // has the same size in pixels and is shown scaled by the viewport scale, so text grows with the screen)
++            // panel: right part of the screen, like the shipping mod menus (position and size in Slate units)
+             m_w = std::min(1100, ux * 6 / 10);
+             m_h = std::min(900, uy * 8 / 10);
+             m_panel_x = ux - m_w - ux / 40;
+             m_panel_y = (uy - m_h) / 2;
+-            m_target = make_crt(m_w, m_h);
++            // [FU-DPI] The render target has units x scale PIXELS while its slot stays m_w x m_h units, so the
++            // viewport shows it 1:1 (before: a units-sized target was magnified by the scale, 2x at 4K = blurry).
++            // Capped at k_max_rt_side per side; above that it is drawn at scale 1 (softer, as before).
++            float px_scale = scale;
++            int rt_w = std::max(1, static_cast<int>(static_cast<float>(m_w) * px_scale + 0.5f));
++            int rt_h = std::max(1, static_cast<int>(static_cast<float>(m_h) * px_scale + 0.5f));
++            if (rt_w > k_max_rt_side || rt_h > k_max_rt_side)
++            {
++                log(MBM_LOG_WARNING, "[GUI] render target " + std::to_string(rt_w) + "x" + std::to_string(rt_h) + " would exceed " +
++                                             std::to_string(k_max_rt_side) + " per side; drawing at scale 1.0 (text softer)");
++                px_scale = 1.0f;
++                rt_w = std::max(1, m_w);
++                rt_h = std::max(1, m_h);
++            }
++            // [review #1] a retry after a part-way failure reuses the target it already made (same size), so
++            // retries never pile up render targets before GC; a fresh build (first open, map change, layout
++            // change) always makes a new one, as before.
++            if (!(m_build_failures > 0 && valid(m_target) && m_rt_w == rt_w && m_rt_h == rt_h)) m_target = make_crt(rt_w, rt_h);
+             if (!m_target) return false;
++            m_rt_w = rt_w;
++            m_rt_h = rt_h;
+             m_widget = construct("/Script/UMG.UserWidget", m_pc);
+             if (!m_widget) return false;
+             auto* tree = construct("/Script/UMG.WidgetTree", m_widget);
+@@ -472,12 +573,54 @@
+                 if (!frame_for(m_widget, "AddToViewport", f) || !put<int32_t>(f, "ZOrder", 10000) || !call(m_widget, f)) return false;
+             }
+             set_visibility(m_visible);
+-            log(MBM_LOG_NORMAL, "[GUI] surfaces built panel=" + std::to_string(m_w) + "x" + std::to_string(m_h) + " viewport=" + std::to_string(vx) + "x" +
+-                                        std::to_string(vy) + " scale=" + std::to_string(scale) + " units=" + std::to_string(ux) + "x" + std::to_string(uy) +
+-                                        " pos=" + std::to_string(m_panel_x) + "," + std::to_string(m_panel_y));
++            m_scale = scale;
++            m_px_scale = px_scale;
++            m_vx = vx;
++            m_vy = vy;
++            m_recheck_frames = 0;
++            m_recheck_now = false;
++            log(MBM_LOG_NORMAL, "[GUI] surfaces built panel=" + std::to_string(m_w) + "x" + std::to_string(m_h) + " rt=" + std::to_string(rt_w) + "x" +
++                                        std::to_string(rt_h) + " viewport=" + std::to_string(vx) + "x" + std::to_string(vy) + " scale=" + std::to_string(scale) +
++                                        " units=" + std::to_string(ux) + "x" + std::to_string(uy) + " pos=" + std::to_string(m_panel_x) + "," +
++                                        std::to_string(m_panel_y));
+             return true;
+         }
+ 
++        // [FU3] Cheap re-check while the window is open (on open, then every k_recheck_frames GUI frames): two
++        // reflected calls. A changed viewport size or scale means the panel must be laid out again.
++        auto layout_changed() -> bool
++        {
++            if (!m_recheck_now && ++m_recheck_frames < k_recheck_frames) return false;
++            m_recheck_now = false;
++            m_recheck_frames = 0;
++            int32_t vx{}, vy{};
++            if (!viewport_size(&vx, &vy)) return false; // unreadable now: keep the current surfaces
++            const float scale = viewport_scale();
++            if (vx == m_vx && vy == m_vy && scale == m_scale) return false;
++            log(MBM_LOG_NORMAL, "[GUI] viewport changed " + std::to_string(m_vx) + "x" + std::to_string(m_vy) + " scale=" + std::to_string(m_scale) + " -> " +
++                                        std::to_string(vx) + "x" + std::to_string(vy) + " scale=" + std::to_string(scale) + ": laying the panel out again");
++            return true;
++        }
++
++        // [FU3] The old widget is still in the viewport when the layout changes (a map change destroys it, this
++        // does not): hide it and drop its render-target / atlas references so GC can free them. Only functions the
++        // build already uses (SetBrushResourceObject, SetVisibility).
++        void retire_surfaces()
++        {
++            bool hidden{};
++            if (valid(m_widget))
++            {
++                Frame f;
++                if (frame_for(m_widget, "SetVisibility", f) && put<uint8_t>(f, "InVisibility", 1)) hidden = call(m_widget, f);
++            }
++            // [review #4] clear the brushes only once the widget is collapsed: an image with no resource paints a
++            // white box. Not hidden = keep them (the old panel stays drawn rather than turning white).
++            if (hidden && valid(m_image)) call_obj1(m_image, "SetBrushResourceObject", "ResourceObject", nullptr);
++            if (hidden && valid(m_keep_image)) call_obj1(m_keep_image, "SetBrushResourceObject", "ResourceObject", nullptr);
++            m_target = m_widget = m_image = m_keep_image = m_atlas = nullptr;
++            m_built = false;
++        }
++
+         void set_visibility(bool v)
+         {
+             if (!valid(m_widget)) return;
+@@ -500,19 +643,30 @@
+         auto prepare(int* w, int* h, bool* rebuilt) -> bool override
+         {
+             *rebuilt = false;
+-            if (!valid(m_target) || !valid(m_widget) || !valid(m_image) || !valid(m_pc))
++            // [FU1] a part-way build (m_built false) is never "built": no frame, no input block, retried
++            bool live = m_built && valid(m_target) && valid(m_widget) && valid(m_image) && valid(m_pc);
++            if (live && layout_changed()) // [FU3] resolution / DPI scale changed while running
+             {
++                retire_surfaces();
++                live = false;
++            }
++            if (!live)
++            {
+                 m_atlas = nullptr; // surfaces gone (map change): atlas must be re-referenced too
+                 if (!build_surfaces()) return false;
+                 *rebuilt = true; // [FIX F2] the host re-uploads the atlas and redoes the input block
+             }
+-            *w = m_w;
++            *w = m_w; // Slate units; the render target is m_rt_w x m_rt_h pixels
+             *h = m_h;
+             return true;
+         }
+ 
++        auto pixel_scale() -> float override { return m_px_scale; } // [FU-DPI]
++
+         auto create_atlas(const std::vector<Run>& runs, int w, int h) -> ImTextureID override
+         {
++            // [review #2] fail closed instead of a huge RGBA / PNG allocation on the game thread (the host checks too)
++            if (w <= 0 || h <= 0 || static_cast<int64_t>(w) * h > int64_t{4096} * 4096) return 0;
+             // primary: the engine's own PNG import -> UTexture2D with real alpha
+             std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4, 255);
+             {
+@@ -576,6 +730,11 @@
+         void set_visible(bool v) override
+         {
+             m_visible = v;
++            if (v)
++            {
++                m_recheck_now = true;  // [FU3] re-check the layout on every open
++                m_build_failures = 0;  // [FU1] every open gets fresh build tries
++            }
+             set_visibility(v);
+         }
+ 
+--- a/typescan-r4/candidate/src/Mod/NativeModEngineServices.inc
++++ b/typescan-r4/candidate/src/Mod/NativeModEngineServices.inc
+@@ -472,30 +472,25 @@
+ 
+ namespace RC::Platform
+ {
+-    // Called by the runtime's data-only game-thread pumps (LuaMod.cpp):
+-    // source 0 = R3 FuncPtr-marshal carrier drain, 1 = copied-vtable Tick drain.
+-    // Must never throw into engine code.
++    // Called by the runtime's data-only game-thread pumps (LuaMod.cpp) on every
++    // pump call: source 0 = R3 FuncPtr-marshal carrier drain, 1 = copied-vtable
++    // Tick drain. Must never throw into engine code.
+     void NativeModsGameThreadFrame(int source) noexcept
+     {
+         try
+         {
+             using namespace NativeMods;
+-            static std::chrono::steady_clock::time_point last{};
+             const auto now = std::chrono::steady_clock::now();
+-            const float dt = last.time_since_epoch().count() == 0 ? 0.0f : std::chrono::duration<float>(now - last).count();
+-            last = now;
+             Runtime::pump_seen.store(true, std::memory_order_release);
+             if (source == 1) Runtime::vmt_seen.store(true, std::memory_order_release);
+             const auto pump = source == 1 ? PumpSource::VmtEngineTick : PumpSource::GameThreadPump;
+-            runtime_host().game_thread_frame(dt, pump);
+-            // [FIX F5] the per-frame service (#11 GUI render) runs at most once per
+-            // engine frame, not once per pump call (FrameGate, NativeModHostCore.hpp).
+-            if (auto* after = Runtime::after_frame.load(std::memory_order_acquire))
+-            {
+-                static FrameGate gate;
+-                float frame_dt = 0.0f;
+-                if (gate.due(now, pump, &frame_dt)) after(frame_dt);
+-            }
++            // [FIX F5 + FU5] the native mods' frame work (queued tasks, GAME_THREAD_TICK /
++            // ENGINE_TICK callbacks) AND the per-frame service (#11 GUI render) run at most
++            // once per engine frame, not once per pump call: one FrameGate, owned by the
++            // host (NativeModHostCore.hpp game_thread_pump), decides for both.
++            float frame_dt = 0.0f;
++            if (!runtime_host().game_thread_pump(now, pump, &frame_dt)) return;
++            if (auto* after = Runtime::after_frame.load(std::memory_order_acquire)) after(frame_dt);
+         }
+         catch (...)
+         {

@@ -1,0 +1,680 @@
+--- /dev/null
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l18-local-xom/units/CodeImageCache.hpp
+@@ -0,0 +1,121 @@
++#pragma once
++#include "CodeImageSha256.hpp"
++#include "CopyinSink.hpp"
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++#include <cerrno>
++
++// Startup-only streaming authentication; sparse immutable proofs, never a
++// readable-memory service. Ops owns public Open/Pread/Close and steady time.
++namespace rc::codecache {
++constexpr size_t kMaxPins=4,kMaxLoads=16,kMaxPhdrs=32,kChunk=16384;
++constexpr uint64_t kBudgetMs=60000;
++struct Pin { uint32_t id;const char* name;uint64_t linked;const uint8_t* bytes;size_t size; };
++struct Profile { const char* path;const char* sha256;uint64_t size,extent,base;const Pin* pins;size_t count; };
++struct Segment { uint64_t vaddr,offset,filesz,memsz;uint32_t flags,index; };
++struct ReportedSegment { uint64_t start=0,end=0;uint32_t protection=0; };
++struct Entry { uint32_t id=0;const char* name=nullptr;uint64_t linked=0,runtime=0,offset=0;size_t size=0,collected=0;uint32_t segment=0;uint8_t bytes[64]{}; };
++struct Metadata { bool ready=false;uint64_t base=0,extent=0,size=0,generation=0,start_ms=0,deadline_ms=0;char sha256[65]{};size_t count=0,segment_count=0;Entry entries[kMaxPins]{};Segment segments[kMaxLoads]{};bool module_info=false;uint32_t base_source=0;size_t reported_count=0;ReportedSegment reported[4]{}; };
++struct Result { bool ok=false;const char* reason="invalid code-image profile";int64_t open_raw=-1,read_raw=0;int open_error=0,read_error=0,close_raw=0,close_error=0;uint32_t failed_io_op=0;uint64_t bytes_read=0,start_ms=0,deadline_ms=0;size_t verified_pins=0; };
++inline uint16_t ld16(const uint8_t*p){return uint16_t(p[0])|uint16_t(uint16_t(p[1])<<8);}
++inline uint32_t ld32(const uint8_t*p){uint32_t v=0;for(unsigned i=0;i<4;++i)v|=uint32_t(p[i])<<(i*8);return v;}
++inline uint64_t ld64(const uint8_t*p){uint64_t v=0;for(unsigned i=0;i<8;++i)v|=uint64_t(p[i])<<(i*8);return v;}
++inline bool hex_pin(const char*p){if(!p)return false;for(unsigned i=0;i<64;++i)if(!((p[i]>='0'&&p[i]<='9')||(p[i]>='a'&&p[i]<='f')||(p[i]>='A'&&p[i]<='F')))return false;return p[64]=='\0';}
++inline const Entry* named_entry(const Metadata&m,uint64_t address,size_t n) noexcept {
++ if(!m.ready)return nullptr;
++ for(size_t i=0;i<m.count;++i){const auto&e=m.entries[i];if(e.runtime!=address||e.size!=n)continue;
++  if(e.segment>=m.segment_count)return nullptr;const auto&s=m.segments[e.segment];
++  if(!(s.flags&1u)||(s.flags&2u)||e.linked<s.vaddr||e.linked-s.vaddr>s.filesz||n>s.filesz-(e.linked-s.vaddr))return nullptr;
++  if(m.module_info){bool covered=false;for(size_t j=0;j<m.reported_count;++j){const auto&r=m.reported[j];if(r.start<=address&&r.end>address&&n<=r.end-address&&(r.protection&4u)&&!(r.protection&2u))covered=true;}if(!covered)return nullptr;}
++  return &e;
++ }return nullptr;
++}
++
++class Cache {
++ static bool headers(const Profile&p,const uint8_t*bytes,size_t n,Metadata&m,Result&r){
++  r.reason="invalid or unsupported ELF header";
++  if(n<64||std::memcmp(bytes,"\177ELF",4)!=0||bytes[4]!=2||bytes[5]!=1||bytes[6]!=1||ld16(bytes+18)!=62||ld32(bytes+20)!=1||ld16(bytes+52)!=64)return false;
++  const uint64_t off=ld64(bytes+32);const size_t width=ld16(bytes+54),count=ld16(bytes+56);
++  r.reason="ELF program-header table exceeds fixed checked bounds";
++  if(width!=56||!count||count>kMaxPhdrs||off>n||count>(n-size_t(off))/width)return false;
++  uint64_t extent=0;
++  for(size_t i=0;i<count;++i){const auto*h=bytes+off+i*width;if(ld32(h)!=1)continue;
++   Segment s{ld64(h+16),ld64(h+8),ld64(h+32),ld64(h+40),ld32(h+4),uint32_t(i)};
++   r.reason="PT_LOAD file or virtual bounds overflow/truncation";
++   if(s.filesz>s.memsz||s.offset>p.size||s.filesz>p.size-s.offset||s.memsz>UINT64_MAX-s.vaddr||s.vaddr>UINT64_MAX-p.base||s.memsz>UINT64_MAX-p.base-s.vaddr)return false;
++   if(!s.memsz)continue;
++   if(m.segment_count==kMaxLoads){r.reason="PT_LOAD count exceeds fixed cache limit";return false;}
++   for(size_t j=0;j<m.segment_count;++j){const auto&old=m.segments[j];if(s.vaddr<old.vaddr+old.memsz&&old.vaddr<s.vaddr+s.memsz){r.reason="overlapping virtual PT_LOAD bounds";return false;}}
++   m.segments[m.segment_count++]=s;if(s.vaddr+s.memsz>extent)extent=s.vaddr+s.memsz;
++  }
++  if(!m.segment_count||extent!=p.extent){r.reason="authenticated ELF extent differs from profile";return false;}
++  for(size_t i=0;i<p.count;++i){const auto&pin=p.pins[i];Entry e{};e.id=pin.id;e.name=pin.name;e.linked=pin.linked;e.runtime=p.base+pin.linked;e.size=pin.size;
++   size_t hits=0;for(size_t j=0;j<m.segment_count;++j){const auto&s=m.segments[j];if(pin.linked<s.vaddr)continue;const uint64_t delta=pin.linked-s.vaddr;
++    if(delta>s.filesz||pin.size>s.filesz-delta)continue;
++    if(!(s.flags&1u)||(s.flags&2u)){r.reason="function pin is not in immutable executable PT_LOAD";return false;}
++    e.offset=s.offset+delta;e.segment=uint32_t(j);++hits;
++   }
++   if(hits!=1){r.reason="function prefix is not fully file-backed in exactly one executable PT_LOAD";return false;}
++   m.entries[i]=e;
++  }return true;
++ }
++ template<class Ops>struct FileOwner { Ops&ops;Result&r;int fd;
++  void close(){if(fd<0)return;const int consumed=fd;fd=-1;errno=0;r.close_raw=ops.close(consumed);r.close_error=l13_sink::error(r.close_raw,errno);if(r.close_raw!=0&&!r.close_error)r.close_error=EIO;if(r.close_raw!=0||r.close_error)r.failed_io_op=4;}
++  ~FileOwner(){close();}
++ };
++public:
++ Metadata metadata{};
++ void clear() noexcept {metadata={};}
++ bool identity(uint64_t module_base)const noexcept{return metadata.ready&&module_base!=0&&module_base==metadata.base;}
++ const Entry* entry(uint64_t address,size_t n)const noexcept{return named_entry(metadata,address,n);}
++ const Entry* prefix(uint64_t address,const uint8_t*expected,size_t n)const noexcept{
++  const auto*e=entry(address,n);if(!e||!expected||std::memcmp(e->bytes,expected,n)!=0)return nullptr;
++  return e;
++ }
++ template<class Ops>
++ Result prepare(const Profile&p,uint64_t observed,uint64_t resolved,uint64_t resolved_end,uint64_t generation,Ops&ops){
++  clear();Result r{};r.start_ms=ops.now_ms();r.deadline_ms=r.start_ms>UINT64_MAX-kBudgetMs?UINT64_MAX:r.start_ms+kBudgetMs;
++  if(!p.path||p.path[0]!='/'||!hex_pin(p.sha256)||p.size<64||p.size>uint64_t(INT64_MAX)||!p.extent||!p.base||!p.pins||!p.count||p.count>kMaxPins)return r;
++  if(!observed||observed!=p.base||resolved!=observed||p.extent>UINT64_MAX-observed||resolved_end!=observed+p.extent){r.reason="actual startup base/extent differs from pinned image";return r;}
++  for(size_t i=0;i<p.count;++i){const auto&pin=p.pins[i];if(!pin.id||!pin.name||!pin.bytes||!pin.size||pin.size>64||pin.linked>UINT64_MAX-observed||pin.size>UINT64_MAX-observed-pin.linked)return r;for(size_t j=0;j<i;++j)if(pin.id==p.pins[j].id||pin.linked==p.pins[j].linked){r.reason="duplicate function pin";return r;}}
++  const auto expired=[&](){return ops.now_ms()>=r.deadline_ms;};
++  if(expired()){r.reason="code-image shared deadline expired before open";return r;}
++  errno=0;r.open_raw=ops.open(p.path);r.open_error=l13_sink::error(r.open_raw,errno);
++  if(r.open_error||r.open_raw<0||r.open_raw>INT32_MAX){if(!r.open_error)r.open_error=EIO;r.failed_io_op=1;r.reason="code-image startup open failed";return r;}
++  FileOwner<Ops>owner{ops,r,int(r.open_raw)};Metadata candidate{};candidate.base=observed;candidate.extent=p.extent;candidate.size=p.size;candidate.generation=generation;candidate.start_ms=r.start_ms;candidate.deadline_ms=r.deadline_ms;candidate.count=p.count;
++  const bool proved=[&](){
++   uint8_t chunk[kChunk];codehash::Sha256State sha;codehash::sha256_init(&sha);uint64_t offset=0;bool parsed=false;
++   while(offset<p.size){const size_t wanted=p.size-offset<kChunk?size_t(p.size-offset):kChunk;size_t have=0;
++    while(have<wanted){if(expired()){r.reason="code-image shared deadline expired before read";return false;}
++     errno=0;r.read_raw=ops.pread(owner.fd,chunk+have,wanted-have,offset+have);r.read_error=l13_sink::error(r.read_raw,errno);
++     if(r.read_error||r.read_raw<=0||uint64_t(r.read_raw)>wanted-have){r.reason=r.read_error?"code-image startup read failed":"code-image truncated or invalid read count";if(!r.read_error)r.read_error=EIO;r.failed_io_op=3;return false;}
++     const size_t got=size_t(r.read_raw);r.bytes_read+=got;
++     if(expired()){r.reason="code-image shared deadline expired after read";return false;}
++     codehash::sha256_update(&sha,chunk+have,got);have+=got;
++     if(expired()){r.reason="code-image shared deadline expired after hash chunk";return false;}
++    }
++    if(!parsed){if(!headers(p,chunk,have,candidate,r))return false;parsed=true;}
++    for(size_t i=0;i<candidate.count;++i){auto&e=candidate.entries[i];const uint64_t hi=offset+have,entry_hi=e.offset+e.size;
++     const uint64_t lo=offset>e.offset?offset:e.offset,end=hi<entry_hi?hi:entry_hi;
++     if(lo<end){const size_t n=size_t(end-lo);std::memcpy(e.bytes+size_t(lo-e.offset),chunk+size_t(lo-offset),n);e.collected+=n;}
++    }offset+=have;if(expired()){r.reason="code-image shared deadline expired after prefix extraction";return false;}
++   }
++   if(expired()){r.reason="code-image shared deadline expired before EOF check";return false;}
++   errno=0;r.read_raw=ops.pread(owner.fd,chunk,1,p.size);r.read_error=l13_sink::error(r.read_raw,errno);
++   if(r.read_error||r.read_raw!=0){r.reason="code-image trailing byte or EOF-read failure";if(r.read_raw<0&&!r.read_error)r.read_error=EIO;if(r.read_error)r.failed_io_op=3;return false;}
++   if(expired()){r.reason="code-image shared deadline expired after EOF check";return false;}
++   uint8_t digest[32];codehash::sha256_final(&sha,digest);const char hex[]="0123456789abcdef";
++   for(size_t i=0;i<32;++i){candidate.sha256[i*2]=hex[digest[i]>>4];candidate.sha256[i*2+1]=hex[digest[i]&15u];}candidate.sha256[64]=0;
++   if(!codehash::sha256_hex_equal(candidate.sha256,p.sha256)){r.reason="whole code-image SHA256 mismatch";return false;}
++   for(size_t i=0;i<candidate.count;++i){const auto&e=candidate.entries[i];if(e.collected!=e.size||std::memcmp(e.bytes,p.pins[i].bytes,e.size)!=0){r.reason="authenticated function prefix mismatches profile";return false;}++r.verified_pins;}
++   if(expired()){r.reason="code-image shared deadline expired before publication";return false;}return true;
++  }();
++  owner.close();
++  if(r.close_raw!=0||r.close_error){r.reason="code-image close failed; consumed once without retry";return r;}
++  if(!proved)return r;
++  if(expired()){r.reason="code-image shared deadline expired after close";return r;}
++  candidate.ready=true;metadata=candidate;r.ok=true;r.reason="whole image authenticated; all function prefixes cached; fd closed";return r;
++ }
++};
++}
+--- /dev/null
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l18-local-xom/units/CodeImageSha256.hpp
+@@ -0,0 +1,153 @@
++#pragma once
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++// Exact retained streaming SHA primitive; no scanner or crypto dependency.
++namespace rc::codehash {
++    // ---- compact SHA-256 (FIPS 180-4) --------------------------------------
++    // Streaming implementation so the PRX hashes the eboot in chunks if it
++    // ever reads it incrementally; the host test hashes the whole 194 MB in
++    // one update. No dynamic allocation.
++    struct Sha256State
++    {
++        uint32_t h[8];
++        uint64_t total_len;
++        uint8_t block[64];
++        size_t block_len;
++    };
++
++    inline void sha256_init(Sha256State *s) noexcept
++    {
++        static constexpr uint32_t kInit[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
++                                              0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
++        for (int i = 0; i < 8; ++i)
++            s->h[i] = kInit[i];
++        s->total_len = 0;
++        s->block_len = 0;
++    }
++
++    inline uint32_t sha256_rotr(uint32_t x, uint32_t n) noexcept
++    {
++        return (x >> n) | (x << (32 - n));
++    }
++
++    inline void sha256_compress(uint32_t h[8], const uint8_t p[64]) noexcept
++    {
++        static constexpr uint32_t kK[64] = {
++            0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
++            0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
++            0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
++            0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
++            0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
++            0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
++            0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
++            0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
++        uint32_t w[64];
++        for (int i = 0; i < 16; ++i)
++        {
++            w[i] = (uint32_t(p[i * 4]) << 24) | (uint32_t(p[i * 4 + 1]) << 16) |
++                   (uint32_t(p[i * 4 + 2]) << 8) | uint32_t(p[i * 4 + 3]);
++        }
++        for (int i = 16; i < 64; ++i)
++        {
++            const uint32_t s0 = sha256_rotr(w[i - 15], 7) ^ sha256_rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
++            const uint32_t s1 = sha256_rotr(w[i - 2], 17) ^ sha256_rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
++            w[i] = w[i - 16] + s0 + w[i - 7] + s1;
++        }
++        uint32_t a = h[0], b = h[1], c = h[2], d = h[3];
++        uint32_t e = h[4], f = h[5], g = h[6], hh = h[7];
++        for (int i = 0; i < 64; ++i)
++        {
++            const uint32_t S1 = sha256_rotr(e, 6) ^ sha256_rotr(e, 11) ^ sha256_rotr(e, 25);
++            const uint32_t ch = (e & f) ^ (~e & g);
++            const uint32_t t1 = hh + S1 + ch + kK[i] + w[i];
++            const uint32_t S0 = sha256_rotr(a, 2) ^ sha256_rotr(a, 13) ^ sha256_rotr(a, 22);
++            const uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
++            const uint32_t t2 = S0 + maj;
++            hh = g; g = f; f = e; e = d + t1;
++            d = c; c = b; b = a; a = t1 + t2;
++        }
++        h[0] += a; h[1] += b; h[2] += c; h[3] += d;
++        h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
++    }
++
++    inline void sha256_update(Sha256State *s, const uint8_t *data, size_t n) noexcept
++    {
++        s->total_len += n;
++        while (n > 0)
++        {
++            const size_t take = 64 - s->block_len < n ? 64 - s->block_len : n;
++            std::memcpy(s->block + s->block_len, data, take);
++            s->block_len += take;
++            data += take;
++            n -= take;
++            if (s->block_len == 64)
++            {
++                sha256_compress(s->h, s->block);
++                s->block_len = 0;
++            }
++        }
++    }
++
++    inline void sha256_final(Sha256State *s, uint8_t out[32]) noexcept
++    {
++        const uint64_t bits = s->total_len * 8;
++        // Manual padding (do not route through update: it mutates total_len).
++        s->block[s->block_len++] = 0x80;
++        if (s->block_len > 56)
++        {
++            std::memset(s->block + s->block_len, 0, 64 - s->block_len);
++            sha256_compress(s->h, s->block);
++            s->block_len = 0;
++        }
++        std::memset(s->block + s->block_len, 0, 56 - s->block_len);
++        for (int i = 0; i < 8; ++i)
++        {
++            s->block[56 + i] = uint8_t(bits >> (56 - 8 * i));
++        }
++        sha256_compress(s->h, s->block);
++        for (int i = 0; i < 8; ++i)
++        {
++            out[i * 4] = uint8_t(s->h[i] >> 24);
++            out[i * 4 + 1] = uint8_t(s->h[i] >> 16);
++            out[i * 4 + 2] = uint8_t(s->h[i] >> 8);
++            out[i * 4 + 3] = uint8_t(s->h[i]);
++        }
++    }
++
++    // One-shot: lowercase hex digest (65 chars with NUL).
++    inline void sha256_hex(const uint8_t *data, size_t n, char out[65]) noexcept
++    {
++        Sha256State st;
++        sha256_init(&st);
++        sha256_update(&st, data, n);
++        uint8_t digest[32];
++        sha256_final(&st, digest);
++        static constexpr char kHex[] = "0123456789abcdef";
++        for (int i = 0; i < 32; ++i)
++        {
++            out[i * 2] = kHex[digest[i] >> 4];
++            out[i * 2 + 1] = kHex[digest[i] & 0xF];
++        }
++        out[64] = '\0';
++    }
++
++    // Case-insensitive 64-hex-char comparison (accepts upper-case pins).
++    inline bool sha256_hex_equal(const char *a, const char *b) noexcept
++    {
++        if (a == nullptr || b == nullptr)
++            return false;
++        for (int i = 0; i < 64; ++i)
++        {
++            char x = a[i], y = b[i];
++            if (x >= 'A' && x <= 'F')
++                x = char(x - 'A' + 'a');
++            if (y >= 'A' && y <= 'F')
++                y = char(y - 'A' + 'a');
++            if (x != y || x == '\0')
++                return false;
++        }
++        return true;
++    }
++
++}
+--- /dev/null
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l18-local-xom/units/CodeSignatureProfile.hpp
+@@ -0,0 +1,17 @@
++#pragma once
++#include "CodeImageCache.hpp"
++#include "FNameAbiProfile.hpp"
++#include "SeedTable.h"
++// Generated retained Townfall profile inputs; path is configured, not observed.
++namespace rc::codeprofile {
++namespace seeds=RC::Unreal::UnrealInitializer::SeedTable;
++inline constexpr uint8_t kScoPrefix[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0x58,0x02,0x00,0x00,0x48,0x8b,0x05,0x4d,0x14};
++inline constexpr codecache::Pin kPins[]={
++ {1,"fname_ctor_wchar",seeds::kFNameCtorWchar.label,fnameprofile::kPrefix,sizeof(fnameprofile::kPrefix)},
++ {2,"static_construct_object_internal",seeds::kStaticConstructObject.label,kScoPrefix,sizeof(kScoPrefix)}
++};
++inline constexpr codecache::Profile kProfile{
++ "/data/homebrew/Silent Hill Townfall PPSA33286/decrypted/eboot.bin",
++ seeds::kImageSha256.data(),194241424ull,0xbc602c8ull,seeds::kBaseObserved,kPins,2
++};
++}
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l17-local-lifecycle/units/NativeFNameChecks.hpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l18-local-xom/units/NativeFNameChecks.hpp
+@@ -3,21 +3,34 @@
+ #include "PoolAdmissionEngine.hpp"
+ #include "SeedValidation.hpp"
+ namespace rc::fnameabi {
+-struct Check { bool ok=false; const char* reason="unproved native FName"; };
++struct Check { bool ok=false; const char* reason="unproved native FName"; const char* source="none"; };
+ 
+ // Code-prefix verification is distinct from heap admission. It NEVER reads
+-// executable memory with the CPU or changes protection. Existing kernel
+-// copyin captures provide owned bytes, or this gate refuses the first call.
++// executable memory with the CPU or changes protection. Both paths require
++// fresh startup image identity. Only positively mapped immutable XOM may use
++// the authenticated disk prefix; readable/unknown mappings need fresh copyin.
+ template<class Ops>
+ Check signature(Ops& ops,pooladmission::Budget& budget,uint64_t address,const uint8_t* expected,size_t size) {
+     using namespace pooladmission;
+     if(!expected || size==0 || size>64 || !valid_range(address,size))return {false,"invalid constructor profile"};
+     if(budget.expired(ops.now_ms()))return {false,"constructor signature deadline expired"};
+     if(ops.known_fault(address,size))return {false,"constructor prefix has recorded copyin fault"};
++    if(!ops.code_identity(address,size))return {false,"constructor startup image identity/base unavailable or mismatched"};
+     const auto q=ops.query(address);
++    ops.log_region(address,size,q);
+     if(q.kind==QueryKind::Unmapped)return {false,"constructor unmapped"};
+     if(q.kind==QueryKind::Available && (q.start>address || q.end<=address || size>q.end-address || !(q.protection&4u) || !(q.flags&0x10u)))
+         return {false,"constructor lacks full committed executable mapping"};
++    if(budget.expired(ops.now_ms()))return {false,"constructor signature deadline expired"};
++    if(q.kind==QueryKind::Available && !(q.protection&1u)) {
++        if(q.protection&2u)return {false,"constructor non-readable executable mapping is writable"};
++        ops.log_code_segment(address,size,"authenticated-disk-XOM-signature");
++        if(!ops.cached_code_signature(address,expected,size))return {false,"constructor authenticated XOM prefix unavailable or mismatched"};
++        if(ops.known_fault(address,size))return {false,"constructor prefix has recorded copyin fault"};
++        if(budget.expired(ops.now_ms()))return {false,"constructor signature deadline expired"};
++        return {true,"constructor authenticated image prefix matched in positively mapped XOM","authenticated-disk-XOM-signature"};
++    }
++    ops.log_code_segment(address,size,"fresh-live-copyin");
+     // A previous capture is not proof that these are the bytes still present
+     // immediately before this first call. Demand a fresh, successful probe.
+     if(budget.expired(ops.now_ms()))return {false,"constructor signature deadline expired"};
+@@ -30,7 +43,7 @@
+     if(ops.known_fault(address,size))return {false,"constructor prefix has recorded copyin fault"};
+     if(budget.expired(ops.now_ms()))return {false,"constructor signature deadline expired"};
+     for(size_t i=0;i<size;++i)if(bytes[i]!=expected[i])return {false,"constructor live prologue mismatch"};
+-    return {true,"constructor live prologue matched owned capture"};
++    return {true,"constructor live prologue matched owned capture","fresh-live-copyin"};
+ }
+ 
+ // A bootstrap ToString through admitted pool storage. No reflected call,
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l17-local-lifecycle/units/UnrealInitializer.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l18-local-xom/units/UnrealInitializer.cpp
+@@ -74,6 +74,7 @@
+ #include "SeedValidation.hpp"
+ #include "NativeFNameAdapter.hpp"
+ #include "NativeFNameChecks.hpp"
++#include "CodeImageCache.hpp"
+ #include "CopyinStartup.hpp"
+ #include "FNameAbiProfile.hpp"
+ #include <string>
+@@ -704,9 +705,10 @@
+         static constexpr bool kExecWritabilityVerdictGating = false;
+ 
+         // FNAME-VERDICT section 5: per-launch base check via the module's own
+-        // MainExe view (data-side, no code bytes). 0 = views unavailable, in
+-        // which case the table base stands and the pool chain is the only
+-        // refutation layer.
++        // MainExe view (data-side, no code bytes). The selected ModuleSnapshot
++        // plants the adapter's validated resolved ModuleImage base in Views;
++        // mapped.image_base=0 is a different scan ABI field. Missing views
++        // now refuse both code-signature routes instead of supplying a base.
+         static auto module_view_base() -> uint64_t
+         {
+             const auto& source = StaticStorage::GlobalConfig.ModuleSource;
+@@ -768,6 +770,8 @@
+         extern "C" int bridge_kernel_write_copyin_probe_until(uint64_t, uint64_t, uint64_t);
+         extern "C" int bridge_copyin_range_faulted(uint64_t, uint64_t);
+         extern "C" void bridge_copyin_initializer_complete(void);
++        extern "C" int bridge_code_cache_context(uint64_t,const rc::codecache::Metadata**);
++        extern "C" int bridge_code_cache_signature(uint64_t,uint64_t,const uint8_t*,size_t);
+ 
+         extern "C" int bridge_image_range(uint64_t,size_t,rc::imagecoverage::Hit*);
+         static const char* l14_verdict(admission::Verdict v) {
+@@ -789,6 +793,47 @@
+         }
+         struct L13AdmissionOps
+         {
++            const rc::codecache::Metadata* code_image = nullptr;
++            uint64_t code_module_base = 0;
++            auto code_identity(uint64_t address,size_t length) -> bool
++            {
++                const rc::codecache::Metadata* image = nullptr;
++                const uint64_t actual_base = module_view_base();
++                if(bridge_code_cache_context(actual_base,&image)!=1)
++                {
++                    code_image=nullptr;code_module_base=0;return false;
++                }
++                code_image=image;code_module_base=actual_base;
++                // Common to live and disk proof: a named fully file-backed
++                // executable PT_LOAD and any obtained real module segment
++                // must agree before the signature gate queries or reads code.
++                return rc::codecache::named_entry(*image,address,length)!=nullptr;
++            }
++            auto cached_code_signature(uint64_t address,const uint8_t* expected,size_t length) -> bool
++            {
++                return bridge_code_cache_signature(module_view_base(),address,expected,length)==1;
++            }
++            auto log_code_segment(uint64_t address,size_t length,const char* source) -> void
++            {
++                if(!code_image)return;
++                const auto* entry=rc::codecache::named_entry(*code_image,address,length);
++                if(!entry)return;
++                const auto& segment=code_image->segments[entry->segment];
++                const uint64_t start=code_image->base+segment.vaddr;
++                // Every value below is authenticated owned cache metadata or
++                // a retained module-info observation; no target text read.
++                Output::send(STR("[Seeds][L18] code-signature={} pin={} needed=[0x{:X},0x{:X}) profile-PT_LOAD={} ELF-flags=0x{:X} bounds=[0x{:X},0x{:X}) file-end=0x{:X} prefix-file-offset=0x{:X} image-SHA256={} startup-observed-base=0x{:X} module-view-base=0x{:X} base-source={} module-info={}\n"),
++                    ensure_str(source),ensure_str(entry->name),address,address+length,segment.index,segment.flags,
++                    start,start+segment.memsz,start+segment.filesz,entry->offset,ensure_str(code_image->sha256),
++                    code_image->base,code_module_base,code_image->base_source,code_image->module_info);
++                for(size_t i=0;i<code_image->reported_count;++i)
++                {
++                    const auto& reported=code_image->reported[i];
++                    if(reported.start<=address&&reported.end>address&&length<=reported.end-address)
++                        Output::send(STR("[Seeds][L18] code module-segment={} bounds=[0x{:X},0x{:X}) protection=0x{:X}\n"),
++                            i,reported.start,reported.end,reported.protection);
++                }
++            }
+             bool shadow_enabled = true;
+             unsigned oracle_calls = 0;
+             bool shadow_considered = false;
+@@ -919,11 +964,23 @@
+ 
+             // ---- Phase 1: per-launch base check (FNAME-VERDICT section 5) ----
+             const uint64_t derived_base = module_view_base();
+-            if (derived_base != 0 && derived_base != base)
+-            {
+-                seed_refused(fmt::format("module MainExe view base 0x{:X} != seed table base_observed 0x{:X} (image moved)", derived_base, base));
+-            }
+-
++            if (derived_base == 0 || derived_base != base)
++            {
++                seed_refused(fmt::format("nonzero module MainExe view required; base 0x{:X} != seed table base_observed 0x{:X}", derived_base, base));
++            }
++            const rc::codecache::Metadata* startup_image=nullptr;
++            if(bridge_code_cache_context(derived_base,&startup_image)!=1||!startup_image)
++                seed_refused("fresh startup whole-image identity/base unavailable or mismatched");
++            L13AdmissionOps admission_ops;
++            admission::Budget admission_budget(startup_image->start_ms);
++            admission_budget.deadline_ms=startup_image->deadline_ms;
++            if(admission_budget.expired(admission_ops.now_ms()))
++                seed_refused("shared code-image/admission deadline expired before initializer checks");
++            if(!admission_ops.code_identity(base+SeedTableNS::kFNameCtorWchar.label,sizeof(rc::fnameprofile::kPrefix)))
++                seed_refused("FName prefix contradicts authenticated executable PT_LOAD or obtained module segment");
++
++            if(admission_budget.expired(admission_ops.now_ms()))
++                seed_refused("shared code-image/admission deadline expired before data-slot reads");
+             // ---- Phase 2: data-slot probes (admission-grade, never identity) ----
+             require_present(SeedTableNS::kGUObjectArray);
+             const uint64_t gua_runtime = base + SeedTableNS::kGUObjectArray.label;
+@@ -992,16 +1049,17 @@
+             Output::send(STR("[Seeds] slot 3 gmalloc bound at {} -> {} (data; V1 instance + V2 vptr match; identity and ABI unverified)\n"),
+                          reinterpret_cast<void*>(gmalloc_runtime), reinterpret_cast<void*>(malloc_ptr));
+ 
+-            // This one admission deadline also covers metadata preparation,
+-            // settings IO, all needed entry proofs and every retry sleep.
++            // This one admission deadline began at startup cache preparation;
++            // context/worker delay, settings IO, entry proofs and every retry
++            // sleep consume its remaining time. OS calls are not preemptible.
+             // The legacy per-scan setting must never multiply this budget.
+             (void)validation_budget;
+-            L13AdmissionOps admission_ops;
+-            admission::Budget admission_budget(admission_ops.now_ms());
+ 
+             L14TotalAdmissionLog total_admission{admission_ops,admission_budget};
+             require_present(SeedTableNS::kFNameCtorWchar);
+             const uint64_t pool_runtime = base + SeedTableNS::kFNamePoolLabel;
++            if(admission_budget.expired(admission_ops.now_ms()))
++                seed_refused("shared code-image/admission deadline expired before settings IO");
+             const auto setting = read_pool_admission("/data/plugins/UE4SS-settings.ini");
+             admission_ops.shadow_enabled = setting.mode != PoolAdmissionMode::Oracle;
+             Output::send(STR("[Seeds][L14] pool admission: one total {}ms budget; mode={}; image-segment proof with VirtualQuery cross-check; heap VirtualQuery first; collect-all independent checks\n"),
+@@ -1033,20 +1091,21 @@
+             // mutate the pool on a miss (NameTypes.hpp:319 vs :315-318).
+             const uint64_t ctor_runtime = base + SeedTableNS::kFNameCtorWchar.label;
+             // Read-path guard: code seeds are CALL-ONLY. The ctor is assigned
+-            // and invoked only after an owned kernel-copyin prologue match.
++            // and invoked only after the identity-gated prologue match.
+             // No direct CPU data read or protection change of exec-only text
+             // exists on this path (readable spans never cover this text).
+             if (const auto cls = rc_seed::classify_seed_address(ctor_runtime, base); cls != rc_seed::SeedAddressClass::CodeCallOnly)
+             {
+                 seed_refused(fmt::format("slot 2 FName ctor 0x{:X}: seed class {} (expected exec-only call-only); refusing bind", ctor_runtime, rc_seed::seed_class_name(cls)));
+             }
+-            // Do not CPU-read execute-only pages or fall back to disk bytes.
+-            // This dedicated gate only compares OWNED live kernel-copyin bytes.
++            // READ/inconclusive VQ require fresh owned live copyin. Only a
++            // positively mapped committed XOM range uses the authenticated
++            // static prefix; recorded/readable copyin faults never fall back.
+             L15BindingLog binding_log{admission_ops,admission_budget};
+             const auto signature=rc::fnameabi::signature(admission_ops,admission_budget,ctor_runtime,
+                 rc::fnameprofile::kPrefix,sizeof(rc::fnameprofile::kPrefix));
+             if(!signature.ok) seed_refused(signature.reason);
+-            Output::send(STR("[Seeds][L15] FName constructor live prologue matched: 32 owned bytes at 0x{:X}; native ABI out/UTF16/mode; no-length overload\n"),ctor_runtime);
++            Output::send(STR("[Seeds][L18] FName constructor signature matched: source={} 32 bytes at 0x{:X}; native ABI out/UTF16/mode; no-length overload\n"),ensure_str(signature.source),ctor_runtime);
+             CheckStartupWait();
+             if(admission_budget.expired(admission_ops.now_ms()))seed_refused("FName constructor shared admission deadline expired before first call");
+             const auto native_ctor=std::bit_cast<rc::fnameabi::Ctor>(ctor_runtime);
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l17-local-lifecycle/units/runtime_start_bridge_r14_diag_spanpub.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l18-local-xom/units/runtime_start_bridge_r14_diag_spanpub.cpp
+@@ -896,6 +896,8 @@
+ // require a late create/reopen; positional readback uses the same descriptor.
+ #include "CopyinSink.hpp"
+ #include "CopyinStartup.hpp"
++#include "CodeSignatureProfile.hpp"
++#include "ImageCoverage.hpp"
+ extern "C" int64_t sceKernelPread(int, void *, size_t, int64_t);
+ extern "C" int sceKernelUnlink(const char *);
+ extern "C" int sceKernelIsInSandbox(void);
+@@ -915,19 +917,23 @@
+ static void l13_format_probe_sink(char *, uint64_t, uint32_t);
+ static void bridge_copyin_directory_release();
+ 
+-static void bridge_copyin_path_diagnostic(const char *path)
++static void bridge_ascii_diagnostic(const char *path,const char* length_tag,const char* word_tag)
+ {
+     // Lossless ASCII, four little-endian bytes per repeated word. Length and
+     // word order reconstruct the exact path without a new text logger/import.
+     size_t n = 0;
+     while (path[n] != '\0') ++n;
+-    ::diagnostic_event("pool_copyin_path_len", static_cast<uint32_t>(n));
++    ::diagnostic_event(length_tag, static_cast<uint32_t>(n));
+     for (size_t i = 0; i < n; i += 4) {
+         uint32_t word = 0;
+         for (size_t j = 0; j < 4 && i + j < n; ++j)
+             word |= uint32_t(static_cast<unsigned char>(path[i + j])) << (8 * j);
+-        ::diagnostic_event("pool_copyin_path_word", word);
+-    }
++        ::diagnostic_event(word_tag, word);
++    }
++}
++static void bridge_copyin_path_diagnostic(const char* path)
++{
++    bridge_ascii_diagnostic(path,"pool_copyin_path_len","pool_copyin_path_word");
+ }
+ // Read-only public API observations. Jail/sandbox unavailability remains
+ // UNKNOWN; uid0 is not evidence of a restored root, prison or credential set.
+@@ -1126,6 +1132,82 @@
+ {
+     if (!g_copyin_initializer_owner.allows()) return 1; // fail closed, no ledger read
+     return g_copyin_faults.overlaps(addr, len) ? 1 : 0;
++}
++
++// L18: the loader prepares one authenticated sparse cache before constructing
++// the worker. It stays immutable until failed-start cleanup or joined stop.
++static rc::codecache::Cache g_code_cache;
++static void bridge_code_cache_clear_after_join() noexcept { g_code_cache.clear(); }
++static void bridge_startup_resources_release()
++{
++    bridge_copyin_directory_release();
++    bridge_code_cache_clear_after_join();
++}
++static rc::codecache::Result bridge_code_cache_prepare(uint64_t observed_base,
++    uint64_t resolved_base,uint64_t resolved_end,uint32_t base_source,
++    bool module_info=false,const rc::imagecoverage::Mapping* modules=nullptr,size_t module_count=0)
++{
++    struct Ops {
++        int open(const char* path) { return sceKernelOpen(path,O_RDONLY|O_NOFOLLOW,0); }
++        int64_t pread(int fd,void* bytes,size_t length,uint64_t offset) {
++            return sceKernelPread(fd,bytes,length,static_cast<int64_t>(offset));
++        }
++        int close(int fd) { return sceKernelClose(fd); }
++        uint64_t now_ms() { return bridge_copyin_now_ms(); }
++    } ops;
++    auto result=g_code_cache.prepare(rc::codeprofile::kProfile,observed_base,
++        resolved_base,resolved_end,g_copyin_generation,ops);
++    if(result.ok) {
++        auto& m=g_code_cache.metadata;m.base_source=base_source;m.module_info=module_info;
++        if(module_info && modules && module_count>0 && module_count<=4) {
++            for(size_t i=0;i<module_count;++i) {
++                if(!modules[i].start||modules[i].end<=modules[i].start) {
++                    result.ok=false;result.reason="loaded module-info segment bounds invalid";break;
++                }
++                m.reported[m.reported_count++]={modules[i].start,modules[i].end,modules[i].protection};
++            }
++        } else if(module_info) {
++            result.ok=false;result.reason="loaded module-info segment geometry unavailable";
++        }
++        if(!result.ok)g_code_cache.clear();
++    }
++    ::diagnostic_event("code_image_cache_ok",result.ok?1u:0u);
++    ::diagnostic_event("code_image_source_configured",1u);
++    ::diagnostic_event("code_image_open_fd",static_cast<uint32_t>(result.open_raw));
++    ::diagnostic_event("code_image_open_errno",static_cast<uint32_t>(result.open_error));
++    ::diagnostic_event("code_image_read_errno",static_cast<uint32_t>(result.read_error));
++    ::diagnostic_event("code_image_read_raw_low",static_cast<uint32_t>(result.read_raw));
++    ::diagnostic_event("code_image_read_raw_high",static_cast<uint32_t>(uint64_t(result.read_raw)>>32));
++    ::diagnostic_event("code_image_bytes_read_low",static_cast<uint32_t>(result.bytes_read));
++    ::diagnostic_event("code_image_bytes_read_high",static_cast<uint32_t>(result.bytes_read>>32));
++    ::diagnostic_event("code_image_close_raw",static_cast<uint32_t>(result.close_raw));
++    ::diagnostic_event("code_image_close_errno",static_cast<uint32_t>(result.close_error));
++    ::diagnostic_event("code_image_verified_pins",static_cast<uint32_t>(result.verified_pins));
++    ::diagnostic_event("code_image_elapsed_ms",static_cast<uint32_t>(ops.now_ms()-result.start_ms));
++    ::diagnostic_event("code_image_shared_budget_ms",60000u);
++    bridge_ascii_diagnostic(rc::codeprofile::kProfile.path,"code_image_path_len","code_image_path_word");
++    bridge_ascii_diagnostic(result.reason,"code_image_reason_len","code_image_reason_word");
++    if(result.failed_io_op) {
++        const int64_t raw=result.failed_io_op==1?result.open_raw:result.failed_io_op==4?result.close_raw:result.read_raw;
++        const int error=result.failed_io_op==1?result.open_error:result.failed_io_op==4?result.close_error:result.read_error;
++        ::diagnostic_event("code_image_file_context",1u);
++        bridge_copyin_file_failure(result.failed_io_op,rc::codeprofile::kProfile.path,O_RDONLY|O_NOFOLLOW,raw,error,1u);
++    }
++    return result;
++}
++extern "C" int bridge_code_cache_context(uint64_t module_base,const rc::codecache::Metadata** out)
++{
++    if(out)*out=nullptr;
++    if(!out||!g_copyin_initializer_owner.allows())return 0;
++    if(!g_code_cache.identity(module_base))return 0;
++    *out=&g_code_cache.metadata;return 1;
++}
++extern "C" int bridge_code_cache_signature(uint64_t module_base,uint64_t address,
++    const uint8_t* expected,size_t length)
++{
++    if(!g_copyin_initializer_owner.allows())return 0;
++    if(!g_code_cache.identity(module_base)||bridge_copyin_range_faulted(address,length))return 0;
++    return g_code_cache.prefix(address,expected,length)?1:0;
+ }
+ extern "C" int bridge_write_copyin_capture(uint64_t addr, const uint8_t **out_bytes, uint32_t *out_len)
+ {
+@@ -1521,7 +1603,7 @@
+     auto &slot = owner_slot();
+     if (!slot)
+     {
+-        bridge_copyin_directory_release();
++        bridge_startup_resources_release();
+         return 0;  // nothing started; nothing to join
+     }
+     bool stopped = false;
+@@ -1536,10 +1618,10 @@
+         slot.reset();
+         // RuntimeOwner destruction stops/joins the initializer (or terminates
+         // rather than returning). Only after that may its probe descriptors close.
+-        bridge_copyin_directory_release();
++        bridge_startup_resources_release();
+         return MRS_ERR_STOP_EXN;
+     }
+-    if (stopped || !slot) bridge_copyin_directory_release();
++    if (stopped || !slot) bridge_startup_resources_release();
+     return stopped ? 0 : 1;
+ }
+ 
+@@ -1576,7 +1658,7 @@
+     // No runtime_active bit is published on a failed start, so entry teardown
+     // cannot release the retained directory. This scope closes on all empty-
+     // owner exits and exceptions, while a started owner keeps its directory.
+-    return l13_sink::with_startup_cleanup(slot, bridge_copyin_directory_release, [&]() -> int {
++    return l13_sink::with_startup_cleanup(slot, bridge_startup_resources_release, [&]() -> int {
+     // ---- Stage 1: live module facts -> NativeLoaderFacts (noexcept capture,
+     // conversion wrapper records refusals instead of throwing).
+     try
+@@ -1745,6 +1827,19 @@
+             ::diagnostic_event("lmf_intervals_found", (uint32_t)image.readable_ranges.size());
+         }
+ 
++        // L18: all code-signature bytes and their full-image identity are
++        // acquired through one opened file stream NOW. The absolute 60s
++        // deadline starts here and remains the initializer's admission budget.
++        const auto code_cache=bridge_code_cache_prepare(
++            reinterpret_cast<uint64_t>(supplier->facts().observed_base),
++            converted.resolved_image_base,converted.resolved_image_end,
++            static_cast<uint32_t>(supplier->facts().identity_source),
++            g_loaded_module_info,g_loaded_module_segments,g_loaded_module_segment_count);
++        if(!code_cache.ok) {
++            copy_detail(detail,detail_capacity,code_cache.reason);
++            return MRS_ERR_CONTEXT;
++        }
++
+         // ---- Stage 2: NativeProgramContext build + validation. Throws on
+         // refused/invalid facts or missing regular files (both paths must
+         // exist NOW, while /data is still reachable in module_start).

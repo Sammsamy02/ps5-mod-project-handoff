@@ -1,0 +1,13 @@
+#define MB_OWNED_REPORT_PATH "/tmp/modbridge-owned-dll-candidate.jsonl"
+#define MB_OWNED_BUILD_ID "58e94961b6f34bd7a84bab72c30eb570"
+#define MB_OWNED_STDOUT 1
+#define MB_OWNED_ENTRY 1
+#define MB_OWNED_CLOCK 0
+#define MB_OWNED_WORKERS 1
+#define MB_OWNED_SYNC 0
+#define MB_OWNED_INIT_ONCE 0
+#define MB_OWNED_MUTEX 0
+#define MB_OWNED_FILEIO 1
+#define MB_OWNED_FILEIO_ROOT "/data/modbridge"
+#define MB_OWNED_REJECT_WORKER_START 0
+#define MB_OWNED_REJECT_ATTACH 0

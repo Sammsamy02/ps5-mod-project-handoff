@@ -1,0 +1,159 @@
+--- a/outputs/2026-10-04-zcode-team/worker-s1-adapter/src/lmf_to_native_loader_facts.hpp
++++ b/outputs/2026-10-04-zcode-team/worker-s1-adapter/src/lmf_to_native_loader_facts.hpp
+@@ -6,13 +6,23 @@
+ // context `RC::Platform::NativeLoaderFacts`
+ // (.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/include/NativeLoaderContext.hpp).
+ //
++// IN-GAME UPDATE (worker-supplier-ingame-update, checkpoint
++// zcode_ingame_v1_results, 2026-10-04): a second, explicitly-opt-in identity
++// route is accepted. When the supplier's identity came from the VMMAP spans +
++// in-memory ELF base scan (IdentitySource::VmScan, vm_scan.chosen), the
++// adapter may plant images[MainExe].base from the scan result behind
++// LmfConversionOptions::allow_vm_scan_base_as_module_image_base. This mirrors
++// the observed in-game reality (exec-handle raw 0, DT_DEBUG dead, module-info
++// domain mismatch; KERN_PROC_VMMAP the only proven source).
++//
+ // Hard conversion contract (from the controller brief + worker-1 REPORT.md
+ // "Typed contract for the controller", cross-checked against the ACTUAL
+ // immutable headers; deviations are listed in REPORT.md):
+-//   * Convert ONLY when supplier.facts().status == Ok (full facts).
+-//     RetainFailed / NoImageAnchor / ModuleInfoNotObtained (degraded
+-//     retention+identity) and every other status are REFUSED — degraded
+-//     observations may never be presented as validated engine facts.
++//   * Convert ONLY when supplier.facts().status == Ok (full facts), OR —
++//     new, explicit opt-in — a ModuleInfoNotObtained snapshot whose identity
++//     is VmScan-derived (see above). RetainFailed / NoImageAnchor and every
++//     other status are REFUSED — degraded observations may never be
++//     presented as validated engine facts.
+ //   * game_executable_path <- snapshot.executable_path (sysctl
+ //     KERN_PROC_PATHNAME, authoritative). Empty -> refuse, never fabricate,
+ //     never silently fall back to the link-map image name.
+@@ -28,25 +38,25 @@
+ //     geometric base of ModuleInput.images[MainExe], which is where the
+ //     immutable chain actually consumes it.
+ //   * The resolved base is snapshot.module_info.image_span_begin when
+-//     obtained. The rtld observed_base may substitute ONLY behind the
+-//     explicit opt-in flag allow_observed_base_as_module_image_base
+-//     (default: refuse); such a conversion is surfaced with
+-//     LmfImageBaseProvenance::ObservedBaseOptIn (weaker provenance).
++//     obtained. The VMMAP scan chosen_base may resolve it ONLY behind the
++//     explicit opt-in flag allow_vm_scan_base_as_module_image_base for a
++//     VmScan-identity snapshot (provenance LmfImageBaseProvenance::
++//     VmScanBase); the rtld observed_base remains available ONLY behind the
++//     separate, older opt-in (ObservedBaseOptIn).
+ //   * mapped.text_base is NEVER supplied: it stays at its default 0
+ //     (unresolved). Identifying the executable segment requires parsing
+-//     mapped ELF program headers, a dereference worker-1's supplier
+-//     intentionally never performs. Downstream, OwnedMappedImageCaller
+-//     requires a contained, registered readable+executable text_base, so
+-//     MakeNativeProgramContext cannot complete until a target-verified
+-//     text_base is supplied by a future owner (host-proven; REPORT.md).
++//     mapped ELF program headers; the SUPPLIER now does span-validated phdr
++//     parsing for identity, but the adapter does not relay a text base
++//     without a target-verified joined fact (unchanged gate).
+ //   * readable_ranges are derived (integer arithmetic only, never
+ //     dereferenced) from the snapshot's observed mappings, clamped and
+ //     coalesced into the module image extent. No mappings -> refuse
+ //     (ModuleSnapshot requires non-empty ranges).
+ //   * ModuleInput.lifetime is a shared_ptr aliasing the supplier itself:
+-//     the supplier owns the genuine RTLD_NOLOAD loader reference and MUST
+-//     OUTLIVE the entire scan lease; call supplier.release() only AFTER the
+-//     lease ends. The by-reference overloads below create a NON-OWNING
++//     the supplier owns the genuine RTLD_NOLOAD loader reference when one
++//     exists (VmScan captures own none — degraded, recorded) and MUST
++//     OUTLIVE the entire scan lease; call supplier.release() only AFTER
++//     the lease ends. The by-reference overloads below create a NON-OWNING
+ //     alias (the empty-owner aliasing constructor), so this lifetime rule is
+ //     purely a caller obligation — use the shared_ptr overload for a
+ //     genuine owning alias.
+@@ -72,7 +82,8 @@
+ 
+ enum class LmfConversionError : uint8_t {
+     None = 0,
+-    // Supplier status gate: only Ok (full facts) may convert.
++    // Supplier status gate: only Ok (full facts) — or, behind the explicit
++    // vm-scan opt-in, a VmScan-identity ModuleInfoNotObtained — may convert.
+     SupplierNotCaptured,
+     SupplierAlreadyReleased,
+     SupplierInvalidArgument,
+@@ -102,6 +113,10 @@
+     ModuleInfoSpan,
+     // Explicit opt-in fallback: rtld-reported anchor base, weaker provenance.
+     ObservedBaseOptIn,
++    // Explicit opt-in (in-game update): VMMAP span + in-memory ELF scan
++    // chosen base (checkpoint zcode_ingame_v1_results; the observed primary
++    // identity route in-game).
++    VmScanBase,
+ };
+ 
+ struct LmfConversionOptions {
+@@ -109,6 +124,12 @@
+     // the module image base when the Ok snapshot lacks obtained module info.
+     // This never converts a supplier whose status itself is not Ok.
+     bool allow_observed_base_as_module_image_base = false;
++    // Explicit opt-in, default REFUSE (in-game update): allow the VMMAP+
++    // in-memory-ELF-scan chosen base (IdentitySource::VmScan) to resolve the
++    // module image base of a ModuleInfoNotObtained snapshot. Without it, a
++    // VmScan-identity snapshot converts never — the same refusal as before
++    // this update.
++    bool allow_vm_scan_base_as_module_image_base = false;
+ };
+ 
+ struct LmfConversionResult {
+--- a/outputs/2026-10-04-zcode-team/worker-s1-adapter/src/lmf_to_native_loader_facts.cpp
++++ b/outputs/2026-10-04-zcode-team/worker-s1-adapter/src/lmf_to_native_loader_facts.cpp
+@@ -10,6 +10,7 @@
+ 
+ #include <algorithm>
+ #include <cstddef>
++#include <cstdint>
+ #include <stdexcept>
+ #include <string>
+ #include <utility>
+@@ -115,8 +116,20 @@
+         return;
+     }
+ 
+-    // Status gate: ONLY Ok (full facts) converts.
+-    if (snapshot.status != lmf::Status::Ok) {
++    // Status gate: ONLY Ok (full facts) converts. IN-GAME UPDATE (checkpoint
++    // zcode_ingame_v1_results): one explicit opt-in exception — a
++    // ModuleInfoNotObtained snapshot whose identity is VmScan-derived
++    // (VMMAP spans + in-memory ELF scan, the observed primary in-game route)
++    // may convert behind allow_vm_scan_base_as_module_image_base so the scan
++    // result can plant images[MainExe].base. Every other degraded status is
++    // still refused verbatim.
++    const bool vm_scan_eligible =
++        snapshot.identity_source == lmf::IdentitySource::VmScan &&
++        snapshot.vm_scan.chosen && snapshot.vm_scan.chosen_base != 0;
++    const bool vm_scan_conversion =
++        snapshot.status == lmf::Status::ModuleInfoNotObtained &&
++        options.allow_vm_scan_base_as_module_image_base && vm_scan_eligible;
++    if (snapshot.status != lmf::Status::Ok && !vm_scan_conversion) {
+         const auto [code, message] = status_error(snapshot.status);
+         result.error = code;
+         result.error_message = message;
+@@ -151,6 +164,23 @@
+         extent.base = snapshot.module_info.image_span_begin;
+         extent.end = snapshot.module_info.image_span_end;
+         result.image_base_provenance = LmfImageBaseProvenance::ModuleInfoSpan;
++    } else if (vm_scan_conversion) {
++        // IN-GAME UPDATE: the scan's chosen base is a span-validated in-memory
++        // ELF header address (provenance "v2_elf_base_scan"); the extent is
++        // the PT_LOAD vaddr extent (mode-1 bias: header at span start, vaddrs
++        // relative to it — identical to how the scan resolves the dynamic
++        // address under mode 1; mode 2 extents are already absolute).
++        const uint64_t base = snapshot.vm_scan.chosen_base;
++        const uint64_t extent_bytes = snapshot.vm_scan.chosen_extent;
++        if (extent_bytes == 0 ||
++            extent_bytes > UINT64_MAX - base) {
++            result.error = LmfConversionError::InvalidModuleImageSpan;
++            result.error_message = "vm-scan image span is empty or unrepresentable";
++            return;
++        }
++        extent.base = base;
++        extent.end = base + extent_bytes;
++        result.image_base_provenance = LmfImageBaseProvenance::VmScanBase;
+     } else {
+         // Ok snapshot without module info: weaker-provenance observed base is
+         // allowed ONLY behind the explicit opt-in flag (default: refuse).

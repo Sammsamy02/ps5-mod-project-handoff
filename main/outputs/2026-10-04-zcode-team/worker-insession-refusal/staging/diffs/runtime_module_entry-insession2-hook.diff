@@ -1,0 +1,125 @@
+STAGED DIFF — NOT APPLIED (composition-time hook, worker-insession-refusal 2026-10-05)
+
+Target TU: the composed module entry, exact staging copy
+  outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/staging/lineage-overlay-2-d1-c4/lifecycle/runtime_module_entry.c
+Four additions (the new units
+  insession_cmd2_core.{h,c} and insession_cmd2_service.{h,cpp}
+are ADDED UNITS of worker-insession-refusal (staging/); this diff only wires
+the lifecycle). Every added line is one call; no existing line is modified.
+
+--- a/lifecycle/runtime_module_entry.c
++++ b/lifecycle/runtime_module_entry.c
+@@ (include block, alongside "runtime_start_bridge.h") @@
+ #include "lifecycle.h"
+ #include "../probe/probe_api.h"
+ #include "../diagnostic.h"
+ #include "runtime_start_bridge.h"
++#include "insession_cmd2_service.h" // worker-insession-refusal: refusal-surviving in-session service
+ #include <modforge_activation.h>
+
+@@ module_start, AFTER probe_lifecycle_start returned 0, immediately BEFORE
+@@ start_composed_runtime() (the line `start_composed_runtime();`):
+     start_composed_runtime();
+-    diagnostic_event("module_start_return", 0);
++    /* worker-insession-refusal: the poll thread exists BEFORE any seeds work
++       (consume_required_slot_seeds runs inside the wiring below) and survives
++       every recoverable wiring failure; dispatch stays held (idle open-tries
++       only) until settle_startup() right below. */
++    insession_cmd2_service_start();
++    start_composed_runtime();
++    /* Dispatch unheld AFTER the wiring outcome is known (refusal or ok):
++       before this fires the poll thread can never race the wiring thread's
++       startup diagnostic_event burst (diagnostic.c single-writer law). */
++    insession_cmd2_settle_startup();
++    diagnostic_event("module_start_return", 0);
+     return leave_entry(0);
+
+ (The non-zero probe_lifecycle_start path is UNCHANGED: no service start, no
+ join — on that terminal path the loader may unload the DSO and the service
+ must never have existed.)
+
+@@ start_composed_runtime, the mfa_activate failure branch (after
+@@ runtime_failure("mfa_activate_failed", ...); before `return;`):
++        insession_cmd2_note_initializer_refused();
+         return; /* game continues UNMODDED; module_start returns 0 */
+
+@@ start_composed_runtime, the start-failure branches (BOTH arms:
+@@ `if (start_result == MRS_ERR_START) { ... }` after
+@@ write_ue4ss_log_line(...), and the trailing else { runtime_failure(...); }
+@@ before each branch's end):
++        insession_cmd2_note_initializer_refused();
+
+@@ module_stop, immediately AFTER the entry guard succeeds, BEFORE the
+@@ runtime stop (so no command can dispatch while the runtime is torn down,
+@@ and the join cannot outlive the diagnostic channel):
+     if (runtime_active) {
++    /* worker-insession-refusal: kill + join the in-session poll thread first
++       (max join latency: one 10 ms slice + one bounded command effect). */
++    insession_cmd2_service_stop();
+         diagnostic_event("runtime_stop_begin", 0);
+
+(Span-correct form: the call goes at the TOP of module_stop's body, before
+the `if (runtime_active)` block, so the service also stops on boots where
+wiring never produced an active owner.)
+
+PLACEMENT LAW (why these points):
+- service_start sits BETWEEN constructor success and start_composed_runtime:
+  before it, a seeds refusal cannot yet exist; after it, the thread is
+  guaranteed alive across EVERY recoverable refusal (mfa_activate_failed,
+  MRS_ERR_CONVERSION/CONTEXT/START from prepare, and the ASYNC init-thread
+  refusal surfaced after module_start returned 0 — see the companion diff
+  runtime_owner-insession2-refused.diff).
+- settle_startup AFTER start_composed_runtime returns: dispatch is held for
+  the whole wiring window; the settle happens whether the wiring succeeded
+  or refused (both are "the outcome is known").
+- note_initializer_refused at each acknowledged failure branch gives the
+  boot an observable refused-mode triage line and records the flag the
+  host-test directive names ("works when the initializer refused flag is
+  set"). The ASYNC refusal (init thread, post-return) is covered by the
+  companion diff.
+- service_stop at the top of module_stop: the poll thread is joined before
+  the runtime owner stop and LONG before probe_lifecycle_stop closes the
+  diagnostic channel, so nothing dispatches mid-teardown and no effect can
+  outlive the channel.
+
+REGISTRATION HOOK (composition-time, NOT a diff of this file — the right TU
+depends on where worker-io-controls lands its batched controls; the pool
+target needs SeedTable.h visibility, e.g. the bridge TU after the span
+publication walk, or the initializer staging beside SeedValidation.hpp):
+
+    #include "insession_cmd2_service.h"
+    ...
+    insession_cmd2_register_pool_probe_target(
+        SeedTable::kBaseObserved + SeedTable::kFNamePoolLabel,   // absolute runtime pool address
+        (uint32_t)rc_seed::kFNameBlockCapacityBytes);            // 0x20000
+    insession_cmd2_register_io_control(0, bridge_io_control_a);  // op "a"
+    insession_cmd2_register_io_control(1, bridge_io_control_b);  // op "b"
+    insession_cmd2_register_io_control(2, bridge_io_control_c);  // op "c"
+    insession_cmd2_register_io_control(3, bridge_io_control_d);  // op "d"
+
+The io-controls symbol names are the ABI worker-io-controls must publish
+(int (*)(char *tags_out, unsigned cap)); until that unit lands, the slots
+stay NULL and io_probe replies "controls not wired" — the service is
+complete and linkable without them. Unregistered pool target: pool_probe
+replies "target not registered". Registration is atomic and legal before or
+after service_start.
+
+COMPOSITION NOTES (for the integrating worker, not this worker):
+- v2 SUPERSEDES the v1 event-loop hook: apply worker-insession-diag's
+  ue4ssprogram-eventloop-hook.diff OR this service, never both (at most ONE
+  in-session diagnostic_event consumer; the intake rename is atomic so two
+  pollers could never double-execute, but the sink single-writer law is kept
+  by construction this way). Grammar v2 accepts every grammar-v1 input.
+- The four new units compile like the existing bootstrap units
+  (insession_cmd2_core.c is C, like diagnostic.c; the service TU is C++ and
+  includes NO UE4SS header at all — no Output.hpp, no UE4SSProgram.hpp).
+- Per-build import audit stays mandatory (PLOADER-IMPORT-ANALYSIS.md §4):
+  the new TUs reference EXISTING contract members only —
+  sceKernelOpen/sceKernelClose/sceKernelWrite (libkernel/libkernel),
+  read/rename/pthread_create/pthread_join/nanosleep/getpid/clock_gettime
+  (libkernel/libScePosix), strcmp/strlen (libSceLibcInternal) — so the
+  derived contract must come out at exactly 196 strong again; any drift is
+  a stop.
+- bridge_kernel_write_copyin_probe must resolve INTRA-PRX (the worker-
+  copyin-unit bridge hunk, present from composition6-4 onward). A missing
+  definition is a link STOP, never a fallback.

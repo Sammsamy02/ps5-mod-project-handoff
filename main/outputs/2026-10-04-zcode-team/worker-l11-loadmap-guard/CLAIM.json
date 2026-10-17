@@ -1,0 +1,87 @@
+{
+ "worker": "worker-l11-loadmap-guard",
+ "date": "2026-10-05",
+ "round": "restart-completion (r2 supersedes the lost first attempt's staging; first-attempt artifacts preserved in place)",
+ "mission": "launch-11 post-arm LoadMap registration blocker: determine whether LuaMod::on_program_start's first eager detour arm routes through the folded WalkRxGuard (fold-0, unit object 81dd832b, shipped) or an unguarded copy; stage the fix if unguarded; host-verify refusal+survival vs proceed; document honestly what the unchanged mod loses without LoadMap hooks.",
+ "verdict": {
+  "routing": "NEITHER the guarded site NOR an unguarded raw copy: the LuaMod-side LoadMap arm routes through the OWNED-MEMORY accessor layer of the composed launch-10/11 units",
+  "crash_class": "the mission's assumed igf6 crash class DOES NOT EXIST on this path as composed \u2014 no naked exec read, no throw; the arm soft-refuses (hook() false, one PLH SEV log + one Output Error line per arm, ERROR_ID return that LuaMod.cpp:7357 ignores) in EVERY world, because live game text is never registered in the owned-memory registry",
+  "guard_relationship": "the WalkRxGuard (fold-0 81dd832b) covers ASMHelper::get_first_instruction_at_address \u2014 hit only by the INITIALIZER's earlier resolve walks that assign the LoadMap address; the LuaMod arm never calls it, and does not need to",
+  "consequence": "no LoadMap-arm fix is required for crash safety; the staged defer (r2) remains justified for R3D 5.3-item-3 obligation closure, log hygiene (ONE loud Warning instead of ~19 per-arm failure pairs per boot), and explicit process-lifetime loss declaration"
+ },
+ "evidence": [
+  {
+   "id": "E1",
+   "claim": "LuaMod LoadMap arm path",
+   "pins": [
+    "worker-l11-marshal-integration/staging/luamod-l11-marshal-consumer/LuaMod.cpp:7313-7357 (on_program_start; LoadMapPre first eager arm at :7324, after the marshal consumer at :7321)",
+    "ue4ss-unreal-native-build-1/port/unreal/src/Hooks/Hooks.cpp:211-218 (RegisterLoadMapPreCallback -> GetDetourInstance<LoadMap>()->AddCallback)",
+    "port/unreal/include/Unreal/Hooks/Internal/DetourInstance.hpp:151-172 InstallHook (is_ready flag check only, no exec access; PLH::x64Detour constructed), :176-188 ActivateHook -> hook(), :198-206 AddCallback EnsureHooked-fail -> Error log :205 -> ERROR_ID",
+    "port/unreal/include/Unreal/Hooks/Internal/IHook.hpp:33 class IHook : public MemAccessor (the detour object IS the accessor)"
+   ]
+  },
+  {
+   "id": "E2",
+   "claim": "the composed detour layer is owned-memory-mediated",
+   "pins": [
+    "l10wg run-a receipt selected_runtime_units: polyhook-source-polyhook-x64Detour = owned-default-detour-1/port/x64Detour.cpp 5bb9cea4ac6a; ZydisDisassembler = owned-detour-1/port/sources facfea22; native-owned-memory = read-lease-1/src/OwnedMemory.cpp d824528d; polyhook-owned-trampoline 99aa5e47",
+    "owned-default-detour-1/port/x64Detour.cpp:351 (disassemble(m_fnAddress,...,100)), :354-356 empty-insts refusal BEFORE any protect/write, :491-492 MemoryProtector+isGood gate, :447-522 owned patch/rollback path",
+    "owned-detour-1/port/sources/ZydisDisassembler.cpp:57-69 (reads via accessor.safe_mem_read into an owned ScopedRegion; non-owned source -> empty insVec)",
+    "read-lease-1/src/OwnedMemory.cpp:76-83 copy() (both extents must be OWNED+permitted; 'No pointer is dereferenced until both explicitly owned extents pass'), :84-96 protect() (non-owned -> UNSET, status=false)",
+    "read-lease-1/include/polyhook2/OwnedMemoryAllocatorBridge.hpp (registry holds only allocator-owned mappings; no game-text registration anywhere \u2014 no record_* callers outside the lease implementation; owned-mapped scan sources are file-backed images, tick-file-owner-1/src/OwnedMappedScanSource.cpp)"
+   ]
+  },
+  {
+   "id": "E3",
+   "claim": "guard fold-0 shipped and refuses EARLIER (initializer walks), loudly, with zero syscalls",
+   "pins": [
+    "worker-launch10-walkguard-prep/REPORT.md (fold-0 object 81dd832b, 5x-reproduced; composed runtime 49fd49e7 byte-identical to launch-11 dry-compose; +11,392 B vs launch-10 = exactly the guarded object)",
+    "walkguard-prep/staging/asmhelper-guard/ASMHelper.guarded.cpp:29-35 coverage note (guarded: get_first_instruction_at_address walk sites; NOT covered: PLH x64Detour disasm+write phases \u2014 named, and now measured moot for crash class), :231-239 refuse_and_throw ([WalkRxGuard] REFUSED Error + throw, zero syscalls at fold-0)",
+    "initializer-l10-r3/UnrealInitializer.cpp:1752-1758 (LoadMap walk), :1847-1861 (DIFF-2 R3 deferral, pump_pending=true), :2190-2192 R3MarshalPumpPending(); the initializer's catch(...) at :2061 disarms the gate and RETHROWS -> module-entry failed-status ack chain (walkguard-prep lineage-overlay runtime_module_entry.c:228-255)"
+   ]
+  },
+  {
+   "id": "E4",
+   "claim": "DRAIN-TRACE's XD pin was a different-lineage file",
+   "pins": [
+    "worker-executedrain-trace/CLAIM.json pins ue4ss-native-polyhook-sources-1/port/polyhook/sources/x64Detour.cpp 0619d2b4 (hook() at :322-325, no isGood gate at the source patch \u2014 raw Zydis branch); the COMPOSED unit in every launch-10/11 receipt is 5bb9cea4 (hook() at :351, owned patch/rollback at :447-522, isGood gates). DRAIN-TRACE C1/C2's exec-read/exec-write characterization does not describe the composed layer. Raw DRAIN-TRACE left unchanged per contract; this claim supersedes for the launch-11 base."
+   ]
+  },
+  {
+   "id": "E5",
+   "claim": "host verification (r2, 5/5 phases, ASan clean, exit 0)",
+   "pins": [
+    "host-test/receipt.json",
+    "host-test/test_detour_refusal_r2.cpp (sources compiled from the EXACT composed receipt shas; asmjit/asmtk archives source-identical via detour-host-deps pin 89da3fbb2d25==composed)",
+    "phases: exec-only-denied (PROT_NONE -> soft refusal, zero dereference, survival); readable-unregistered (raw R|X mmap -> registry-based refusal, zero mutation, still running); owned readable+writeable (REAL end-to-end arm: hook, patch, trampoline-original, restore); write-refused R3 (isGood false, zero writes, survival); copy-refused rollback (restored, trampoline released, survival)"
+   ]
+  },
+  {
+   "id": "E6",
+   "claim": "staged fix (r2)",
+   "pins": [
+    "staging/luamod-l11-loadmap-defer-r2/LuaMod.cpp 9a7a37d6c8377c02",
+    "diffs/l11-loadmap-defer-r2.diff d2ad2818db4b7338",
+    "round-trip: patch -p1 on a fresh byte-verified marshal-consumer staging copy reproduces the staged r2 source BYTE-IDENTICALLY (work/roundtrip)",
+    "compile gate: frozen 172-token argv (dry-run luamod-argv.json; only source/-o/-MF redirected): control == 854a476bdd4f9985 (marshal-integration consumer object, byte-identical, 4th independent reproduction); r2 object 3eeba02fd92efd99 (NEW); both exit 0, 0 errors, 23 baseline warnings each; llvm-nm undefined sets IDENTICAL (work/und-control-r2.txt == work/und-defer-r2.txt) \u2014 zero new imports (R3MarshalPumpPending already UND in control, resolved by the initializer bridge at link)"
+   ]
+  },
+  {
+   "id": "E7",
+   "claim": "what the unchanged mod loses without LoadMap hooks",
+   "pins": [
+    "worker-itemspawner-bundle main.lua:731-747: pcall(RegisterLoadMapPreHook, ...) \u2014 per-map reset: closes the menu if open, clears ui.root/tree/canvas/panel/inner/box/title/divider/controls, rowTexts/sectionTexts, items, ownedActors, resets page/selectedIndex/busy/status",
+    "API inventory: worker-itemspawner-lua-audit/LUA-API-MATRIX.md lists RegisterLoadMapPreHook",
+    "loss in the R3 world: registration still SUCCEEDS Lua-side (appends to m_load_map_pre_callbacks; mod loads cleanly) but the engine-side detour never arms, so the callback is NEVER invoked -> stale cross-map UI refs and item/ownedActor caches, menu stays open across map loads, stale selection/busy state until manually rebuilt; with r2 this loss is stated in ONE loud Warning line at boot"
+   ]
+  }
+ ],
+ "honest_bounds": [
+  "host-only verification: proves the detour-layer mechanics; no console contact, no composition run, no packaging",
+  "the fold-0 walk refusal aborts the boot BEFORE on_program_start (loud failed ack), so the r2 gate is reachable only in worlds where the walks were admitted (fold-1) or seeded \u2014 stated in the staged comment",
+  "the W-works-style full-arm proceed (Phase 1) is proven on registry-BACKED host pages; live console game text is never registry-backed, so on-target arming of detour-class hooks remains structurally refused by the owned layer in every world \u2014 this is a launch-11-brief finding for the DIFF-1/carrier owner, not silently widened scope",
+  "RUNBOOK 5.2's 'arms a detour and throws under BOTH_FAIL' is inaccurate for the composed layer (soft refusal, no throw); its 'no Lua ever loads' outcome remains true at fold-0 but from the earlier walk refusal, not from a LuaMod-arm throw",
+  "never claimed: >8 quality, completion, in-game acceptance; critic scores do not replace these receipts"
+ ],
+ "deliverable_order": "CLAIM.json first; ANALYSIS.md; DIFF.md; host-test/receipt.json; REPORT.md last"
+}

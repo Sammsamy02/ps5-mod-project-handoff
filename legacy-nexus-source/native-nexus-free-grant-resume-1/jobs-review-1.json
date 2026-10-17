@@ -1,0 +1,18 @@
+{
+  "review": "focused read-only review of frozen resume jobs implementation",
+  "result": "no blocking correctness issue found",
+  "reviewed": {
+    "source": "outputs/ps5-mod-bridge/native-host/jobs.cpp",
+    "source_sha256": "9563876834d5dc505c7cb3968525db781ef4415cb97e9144f4f3c2a05b2d7934",
+    "header": "outputs/ps5-mod-bridge/native-host/jobs.h",
+    "header_sha256": "31fdb3071584f8657896a1c367d3d7347876c9d8757f0805fa2be61e2441e6e0",
+    "contract": "docs/superpowers/plans/2026-10-02-native-nexus-free-grant-resume.md"
+  },
+  "reviewed_boundaries": {
+    "grant_parser": "The flat JSON parser accepts only one nxm property and bounded ASCII content; URI parsing requires the exact nxm scheme/game/mods/id/files/id shape, canonical positive signed-63 values and exactly one literal key/expires/user_id query field. Percent decoding is bounded and rejects malformed escapes, nonprintable bytes and raw plus-space conversion. Fragments, ports, userinfo, extra paths/query fields and scope mismatch fail closed.",
+    "resume_admission": "The ABI validates structure, span overlap, cookie/CSRF/Origin and lowercase job ID; it performs fresh account admission, searches only same-cookie ownership, and only accepts a needs_nexus_authorization record with no pending grant. Parsed scope must match retained game/mod/file. The same ID, source, kind, idempotency key and slot are retained; full source capacity does not block resume.",
+    "commit_and_cleanup": "Parsed and staged grants are wiped through RAII. Output is serialized before fresh account/session, storage/directory, expiry and monotonic-time gates; failures clear output length and output RAII wipes its full capacity. The final record assignment is non-failing and follows all gates. Free, bindings_clear and fail_record erase stored grants.",
+    "worker_consume": "run_one copies then clears the queued grant before resolution, builds a distinct typed grant whose domain does not alias the source domain, and wipes both local grant structures immediately after resolver return and before archive transfer. Authorization-required is preserved for the late-link expiry case; account and other resolver failures are not broadly remapped."
+  },
+  "evidence_scope": "Static review only. No tests, builds, provider calls, credentials, console operations or source edits were made. The owner reported focused component controls for initial and late-link expiry/fresh retry; this review does not independently claim that execution evidence."
+}

@@ -1,0 +1,139 @@
+{
+  "worker": "worker-composition-replace-mechanics",
+  "date": "2026-10-04",
+  "toolchain": {
+    "ld_lld": "outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin/ld.lld (LLVM 21.1.8)",
+    "ld_lld_sha256": "0c4381c70e4229b9988e120710de371c031cedd1d6da8f415a9aa7bac21a3620"
+  },
+  "script_copy": {
+    "path": "rehearsal_build_runtime_composition4_fixed.py",
+    "sha256": "36cc8199b7e5a2528badd4da53ff3750075cbbe4d76ca115490b50a008ed8ff3",
+    "matches_driver_pin": "36cc8199b7e5a2528badd4da53ff3750075cbbe4d76ca115490b50a008ed8ff3",
+    "modified": false
+  },
+  "ld_r_duplicate_symbol_tests": {
+    "invocation_pattern": "ld.lld -m elf_x86_64 -r <objs> -Map=<map> -o <out>  (identical to build_runtime_composition4_fixed.py line 165)",
+    "T1_strong_plus_strong": {
+      "files": [
+        "host_strong.o",
+        "extra_dup_strong.o"
+      ],
+      "result": "ld.lld: error: duplicate symbol: retained_fn",
+      "exit": 1
+    },
+    "T2_strong_retained_weak_extra": {
+      "files": [
+        "host_strong.o",
+        "extra_dup_weak.o"
+      ],
+      "result": "links; STRONG body wins (disassembly +0x1)",
+      "exit": 0
+    },
+    "T3_weak_plus_weak": {
+      "files": [
+        "host_weak.o",
+        "extra_weak2.o"
+      ],
+      "result": "links; FIRST object wins (disassembly +0x190=+400 = host body)",
+      "exit": 0
+    },
+    "T4_weak_retained_strong_extra": {
+      "files": [
+        "host_weak.o",
+        "extra_strong_wt.o"
+      ],
+      "result": "links; STRONG extra body wins (disassembly +0x1f4=+500)",
+      "exit": 0
+    },
+    "T5_order_flip_strong_extra_first": {
+      "files": [
+        "extra_strong_wt.o",
+        "host_weak.o"
+      ],
+      "result": "links; strong still wins",
+      "exit": 0
+    },
+    "T6_order_flip_weak_extra_first": {
+      "files": [
+        "extra_dup_weak.o",
+        "host_strong.o"
+      ],
+      "result": "links; strong still wins",
+      "exit": 0
+    }
+  },
+  "run_refusal_probe_1": {
+    "output_dir": "rehearsal/refusal-probe-run-1",
+    "injected_flag": "--replace-runtime-unit program=outputs/2026-10-04-zcode-team/worker-composition-replace-mechanics/staging/UE4SSProgram.rehearsal-copy.cpp",
+    "result": "ValueError: Bad replace-runtime-unit spec (target must be a freshly compiled affected unit): program=...",
+    "refusal_site": "build_runtime_composition4_fixed.py line 79",
+    "all_input_hash_gates_passed_before_refusal": true,
+    "stdout_stderr": "rehearsal/refusal-probe-run-1.{stdout,stderr}"
+  },
+  "run_R2_staging_path_redirect": {
+    "output_dir": "rehearsal/composition-rehearsal-run-1",
+    "receipt": {
+      "status": "NATIVE_SELECTED_TICK_FILE_WITNESS_RELOCATABLE_COMPOSED",
+      "runtime_sha256": "14d5446fd0b53e61ac3229200c19e5a4a14bf9033ce9d05796c14c6b77a5c4ba",
+      "runtime_bytes": 117779560,
+      "freshly_compiled_units": [
+        "unreal-unrealinitializer",
+        "native-ownedmappedscansource",
+        "native-psscanbinding",
+        "native-ownedmappedcandidateselection",
+        "native-loadercontext",
+        "native-programfactory",
+        "native-ownedserializedelfsource",
+        "lmf-live-module-facts",
+        "lmf-sce-ops",
+        "lmf-loader-adapter",
+        "lmf-base-scan",
+        "native-query-harness",
+        "module-runtime-ack-supplier",
+        "runtime_owner",
+        "ue4ss_backend"
+      ],
+      "retained_runtime_units": 353
+    },
+    "lmf_loader_adapter_source": "staging/lmf_to_native_loader_facts.staging.cpp (byte-identical to frozen W/src, sha256 b6d13bf9da24384a19edb5bf4cead635e305369b723ff1c70fc684d9b97f4410)",
+    "per_unit_object_comparison_vs_run3": "12 of 13 fresh units BIT-IDENTICAL to composition-4 run-3; only lmf-loader-adapter.o differs (8 bytes: embedded __FILE__ source-path string)",
+    "undefined_current_set_equals_run3": true
+  },
+  "run_R3_staging_header_override_and_content_change": {
+    "output_dir": "rehearsal/composition-rehearsal-run-2-r3",
+    "receipt": {
+      "status": "NATIVE_SELECTED_TICK_FILE_WITNESS_RELOCATABLE_COMPOSED",
+      "runtime_sha256": "a6f7c01a0ce7e12bcd97188a3fc96940dc965c7650dd891a3347bac395c80c2e",
+      "runtime_bytes": 117779760,
+      "freshly_compiled_units": [
+        "unreal-unrealinitializer",
+        "native-ownedmappedscansource",
+        "native-psscanbinding",
+        "native-ownedmappedcandidateselection",
+        "native-loadercontext",
+        "native-programfactory",
+        "native-ownedserializedelfsource",
+        "lmf-live-module-facts",
+        "lmf-sce-ops",
+        "lmf-loader-adapter",
+        "lmf-base-scan",
+        "native-query-harness",
+        "module-runtime-ack-supplier",
+        "runtime_owner",
+        "ue4ss_backend"
+      ],
+      "retained_runtime_units": 353,
+      "marker_export": "wc_rm_rehearsal_marker T (llvm-nm extern-only defined-only on composed object)",
+      "staging_header_won": true,
+      "delta_added": [
+        "sceKernelGetModuleInfo"
+      ]
+    },
+    "fixtures": [
+      "staging-r3/lmf_to_native_loader_facts.cpp (frozen copy + appended marker fn + #error guard)",
+      "staging-r3/lmf_to_native_loader_facts.hpp (frozen copy + #define WCRM_REHEARSAL_STAGING_HEADER 1)"
+    ],
+    "proof": "compile succeeded (no #error) => quoted-include same-dir rule picked the STAGING header over pinned -I W/include copy; .d lists staging-r3 header and NOT W/include header; staging cpp+hpp auto-pinned in receipt.extra_pinned_dependencies; wc_rm_rehearsal_marker exported by composed object; no new undefined imports"
+  },
+  "frozen_tree_writes": "none \u2014 all runs consumed real spike trees read-only and wrote only under this worker dir"
+}

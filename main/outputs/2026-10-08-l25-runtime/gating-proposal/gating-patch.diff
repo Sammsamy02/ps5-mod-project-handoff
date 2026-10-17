@@ -1,0 +1,24 @@
+--- a/lifecycle/runtime_start_bridge.cpp
++++ b/lifecycle/runtime_start_bridge.cpp
+@@ -1118,6 +1118,21 @@
+         ::diagnostic_event("copyin_probe_attempts_total", g_copyin_probe_attempts);
+     }
+     // Keep both owned captures and fault evidence for the rest of initialization.
++    // [L26 gating proposal] Admission is complete and the bank is retired:
++    // no legitimate copyin consumer remains for this launch (agent-Q l25
++    // probe: no post-admission caller exists across the composed runtime;
++    // seed refusals are terminal-per-launch; runtime FName goes through the
++    // native ctor; the next launch re-runs prepare() in a new process).
++    // Disarm the owner gate NOW instead of holding it armed until shutdown:
++    // probe_until and every gate sibling then fail closed (-1 / 0 / faulted)
++    // for the rest of the session. Idempotent with the shutdown fallback:
++    // the init thread's CopyinOwnerScope destructor calls
++    // bridge_copyin_initializer_leave(), whose allows() guard makes that a
++    // no-op. In a gated build the shutdown-time copyin_probe_gate_released /
++    // copyin_probe_attempts_late_total events never fire; this event is the
++    // positive proof the gate closed at admission.
++    ::diagnostic_event("copyin_probe_gate_l26_early_release", 1u);
++    g_copyin_initializer_owner.leave();
+ }
+ extern "C" void bridge_copyin_initializer_leave(void)
+ {

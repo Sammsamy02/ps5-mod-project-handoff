@@ -1,0 +1,141 @@
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -45,6 +45,14 @@
+ 
+ using WinThreadFn = uint32_t (*)(void*); // unsigned __stdcall, x64: Win64 call
+ 
++std::string ascii_module_key(const char* name)
++{
++    std::string key = name ? name : "";
++    for (char& c : key)
++        if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
++    return key;
++}
++
+ } // namespace
+ 
+ struct WinApiShim::Impl
+@@ -98,8 +106,10 @@
+ void WinApiShim::register_module(const char* name, WinModule handle,
+                                  bool (*lookup)(WinModule, const char*, void**))
+ {
++    if (!name || !*name || !lookup) return;
++    const std::string key = ascii_module_key(name);
+     std::lock_guard g(m->mu);
+-    m->modules[name] = Impl::ModuleEntry{handle, lookup};
++    m->modules[key] = Impl::ModuleEntry{handle, lookup};
+ }
+ 
+ // ===================== T1 implementations =====================
+@@ -351,20 +361,31 @@
+ 
+ void* WinApiShim::resolve(const char* dll_name, const char* symbol, uint64_t ordinal)
+ {
++    const std::string dll = ascii_module_key(dll_name);
++    if (dll.empty()) return nullptr;
++
++    // 1) registered modules first (UE4SS.dll surface, mapped PE mods)
++    Impl::ModuleEntry selected{};
++    bool registered = false;
++    {
++        std::lock_guard g(m->mu);
++        auto mod = m->modules.find(dll);
++        if (mod != m->modules.end())
++        {
++            selected = mod->second;
++            registered = true;
++        }
++    }
++    // A module's lookup may resolve forwarded imports itself. Never invoke
++    // external module code while holding the registry mutex.
++    if (registered && symbol && selected.lookup)
++    {
++        void* out = nullptr;
++        if (selected.lookup(selected.handle, symbol, &out) && out) return out;
++    }
++
++    // 2) built-in rows
+     std::lock_guard g(m->mu);
+-    std::string dll = dll_name ? dll_name : "";
+-    for (auto& c : dll)
+-        if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+-
+-    // 1) registered modules first (UE4SS.dll surface, mapped PE mods)
+-    auto mod = m->modules.find(dll);
+-    if (mod != m->modules.end() && symbol && mod->second.lookup)
+-    {
+-        void* out = nullptr;
+-        if (mod->second.lookup(mod->second.handle, symbol, &out)) return out;
+-    }
+-
+-    // 2) built-in rows
+     auto ex = m->exports.find(dll);
+     if (ex != m->exports.end())
+     {
+--- /dev/null
++++ b/loader/tests/import_registry_test.cpp
+@@ -0,0 +1,46 @@
++#include "win_api_shim.h"
++
++#include <cstdint>
++#include <cstdio>
++
++static int failures = 0;
++static cap13::WinApiShim* active = nullptr;
++static bool reentered = false;
++
++static void check(bool condition, const char* label)
++{
++    std::printf("%s %s\n", condition ? "PASS" : "FAIL", label);
++    std::fflush(stdout);
++    if (!condition) ++failures;
++}
++
++static bool lookup(cap13::WinModule handle, const char* name, void** out)
++{
++    if (handle != reinterpret_cast<void*>(0x1234)) return false;
++    reentered = active->resolve("KERNEL32.DLL", "Sleep", 0) != nullptr;
++    if (name[0] == 'F' && name[1] == 'n' && name[2] == '\0')
++    {
++        *out = reinterpret_cast<void*>(0x5678);
++        return true;
++    }
++    return false;
++}
++
++int main()
++{
++    cap13::WinApiShim shim;
++    active = &shim;
++    shim.register_builtin_exports();
++    shim.register_module("UE4SS.DLL", reinterpret_cast<void*>(0x1234), lookup);
++    check(shim.resolve("ue4ss.dll", "Fn", 0) == reinterpret_cast<void*>(0x5678),
++          "registered module names use ASCII case-insensitive lookup");
++    check(reentered, "module lookup may resolve a built-in import recursively");
++    check(shim.resolve("ue4ss.dll", "Missing", 0) == nullptr,
++          "missing registered export remains unresolved");
++    shim.register_module(nullptr, reinterpret_cast<void*>(0x1234), lookup);
++    shim.register_module("", reinterpret_cast<void*>(0x1234), lookup);
++    check(shim.resolve(nullptr, "Fn", 0) == nullptr,
++          "invalid module names do not create registrations");
++    std::printf("TOTAL: %d failed\n", failures);
++    return failures ? 1 : 0;
++}
+--- /dev/null
++++ b/loader/tests/run_import_registry.py
+@@ -0,0 +1,15 @@
++#!/usr/bin/env python3
++"""Build and run isolated import-registry host tests."""
++import subprocess
++from pathlib import Path
++
++root = Path(__file__).resolve().parents[1]
++out = root / 'tests/import-registry-host'
++subprocess.run([
++    'clang++', '-arch', 'x86_64', '-std=c++17', '-O1', '-g', '-Wall',
++    '-Wextra', '-Werror', '-pthread', '-I' + str(root / 'src'),
++    '-I' + str(root / 'include'),
++    str(root / 'tests/import_registry_test.cpp'),
++    str(root / 'src/win_api_shim.cpp'), '-o', str(out),
++], check=True, timeout=30)
++subprocess.run(['arch', '-x86_64', str(out)], check=True, timeout=5)

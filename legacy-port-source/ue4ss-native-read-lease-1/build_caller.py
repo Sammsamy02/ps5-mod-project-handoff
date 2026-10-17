@@ -1,0 +1,9 @@
+from pathlib import Path
+import json,subprocess,os,sys
+w=Path(__file__).resolve().parent;b=w.parent;out=w/sys.argv[1];out.mkdir(exist_ok=False)
+profile=json.loads((b/'ue4ss-native-instruction-owned-1/native-consumers-1/unreal-unrealinitializer/command.json').read_text());env=dict(os.environ,LLVM_CONFIG=profile['LLVM_CONFIG']);args=profile['argv'][:];args=args[:args.index('-c')];args[1:1]=['-I',str(w/'include'),'-I',str(b/'ue4ss-native-ps-scan-abi-1/include')]
+incs=[w/'include',b/'ue4ss-native-ps-scan-abi-1/include',b/'ue4ss-unreal-native-build-1/port/unreal/include',b/'ue4ss-unreal-native-build-1/port/ue4ss/include',b/'ue4ss-unreal-native-build-1/port/first/include',b/'ue4ss-unreal-native-build-1/source-dependencies/ue4ss/deps/first/Helpers/include',b/'ue4ss-unreal-native-build-1/source-dependencies/ue4ss/deps/first/SinglePassSigScanner/include',b/'ue4ss-polyhook-platform-port-1/patched/include',b/'ue4ss-unreal-native-build-1/source-dependencies/polyhook']
+host=['/usr/bin/clang++','-std=c++23','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer','-DPLH_OWNED_MEMORY_HOST_TEST','-DRC_HELPERS_BUILD_STATIC','-DRC_SINGLE_PASS_SIG_SCANNER_BUILD_STATIC',*[v for p in incs for v in ['-I',str(p)]]];rows=[]
+for name,cmd in [('host-build',host+[str(w/'tests/caller_controls.cpp'),str(w/'src/OwnedMemory.cpp'),'-o',str(out/'caller-controls')]),('host-run',[str(out/'caller-controls')]),('native-compile',args+['-c',str(w/'tests/caller_controls.cpp'),'-o',str(out/'native-caller.o')])]:
+ p=subprocess.run(cmd,env=env,capture_output=True,text=True,timeout=120);rows.append({'name':name,'argv':cmd,'exit':p.returncode,'stdout':p.stdout,'stderr':p.stderr});(out/'commands.json').write_text(json.dumps(rows,indent=2)+'\n');print(name,p.returncode,p.stdout.strip(),p.stderr[-1600:]if p.returncode else'',flush=True)
+ if p.returncode:raise SystemExit(p.returncode)

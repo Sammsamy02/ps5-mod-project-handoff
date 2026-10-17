@@ -1,0 +1,39 @@
+--- a/mono/mini/mini-posix.c
++++ b/mono/mini/mini-posix.c
+@@ -156,7 +156,7 @@
+ 		/* The hash is only modified during startup, so no need for locking */
+ 		struct sigaction *handler = (struct sigaction*)g_hash_table_lookup (mono_saved_signal_handlers, GINT_TO_POINTER (signo));
+ 		if (remove && handler)
+-			g_hash_table_remove (mono_saved_signal_handlers, GINT_TO_POINTER (signo));
++			g_hash_table_steal (mono_saved_signal_handlers, GINT_TO_POINTER (signo));
+ 		return handler;
+ 	}
+ 	return NULL;
+@@ -197,7 +197,7 @@
+  *
+  *   Call the original signal handler for the signal given by the arguments, which
+  * should be the same as for a signal handler. Returns TRUE if the original handler
+- * was called, false otherwise.
++ * was called or its ignored disposition was respected, false otherwise.
+  */
+ gboolean
+ MONO_SIG_HANDLER_SIGNATURE (mono_chain_signal)
+@@ -205,7 +205,9 @@
+ 	int signal = MONO_SIG_HANDLER_GET_SIGNO ();
+ 	struct sigaction *saved_handler = (struct sigaction *)get_saved_signal_handler (signal, FALSE);
+ 
+-	if (saved_handler && saved_handler->sa_handler) {
++	if (saved_handler && saved_handler->sa_handler != SIG_DFL) {
++		if (saved_handler->sa_handler == SIG_IGN)
++			return TRUE;
+ 		if (!(saved_handler->sa_flags & SA_SIGINFO)) {
+ 			saved_handler->sa_handler (signal);
+ 		} else {
+@@ -415,6 +417,7 @@
+ 		sigaction (signo, &sa, NULL);
+ 	} else {
+ 		g_assert (sigaction (signo, saved_action, NULL) != -1);
++		g_free (saved_action);
+ 	}
+ }
+ 

@@ -1,0 +1,266 @@
+--- /dev/null
++++ b/loader/include/guest_pe_dynamic_source.h
+@@ -0,0 +1,34 @@
++// Adapter from the guarded LoadLibraryA hook to a caller-owned PE source.
++#ifndef CAP13_GUEST_PE_DYNAMIC_SOURCE_H
++#define CAP13_GUEST_PE_DYNAMIC_SOURCE_H
++
++#include "guest_pe_batch.h"
++#include "win_api_shim.h"
++
++#include <string>
++#include <vector>
++
++namespace cap13 {
++
++// Configure before guest entry. All pointers and the retained vector must
++// outlive dynamic loads. Reserve retained capacity before invoking guest code;
++// this callback refuses when no slot is available, before any PE attach.
++// After quiescing guest threads, detach retained batches in reverse order.
++struct GuestPeDynamicLoadContext
++{
++    FetchPeDependency fetch = nullptr;
++    void* fetch_user = nullptr;
++    WinApiShim* shim = nullptr;
++    LoadOptions options{};
++    StaticTlsBank* bank = nullptr;
++    GuestTebView* teb = nullptr;
++    std::vector<GuestPeBatchResult>* retained = nullptr;
++    std::string last_error;
++};
++
++// WinApiShim::Hooks.load_pe callback. Returns the root PE's HMODULE only
++// after its entire static dependency closure has attached successfully.
++WinModule pe_load_guest_from_source(void* user, const char* dll_basename);
++
++} // namespace cap13
++#endif // CAP13_GUEST_PE_DYNAMIC_SOURCE_H
+--- a/loader/include/guest_pe_loader.h
++++ b/loader/include/guest_pe_loader.h
+@@ -38,6 +38,13 @@
+     GuestNotifyStatus thread_attach(GuestTebView& teb);
+     GuestNotifyStatus thread_detach(GuestTebView& teb);
+     GuestNotifyStatus process_detach(GuestTebView& teb);
++
++    // Opaque Windows HMODULE for an attached mapped PE. Null before attach
++    // and after detach. The image remains owned by this module's load result.
++    void* mapped_handle() const
++    {
++        return attached_.load() ? load_.image : nullptr;
++    }
+ 
+     // All-integer/pointer signatures only, zero through six arguments.
+     // The caller serializes module notifications and export calls.
+--- /dev/null
++++ b/loader/src/guest_pe_dynamic_source.cpp
+@@ -0,0 +1,88 @@
++#include "guest_pe_dynamic_source.h"
++
++#include <cstring>
++#include <utility>
++
++namespace cap13 {
++namespace {
++
++bool same_basename(const char* requested, const char* path)
++{
++    if (!requested || !*requested || !path || !*path) return false;
++    for (const char* at = requested; *at; ++at)
++        if (*at == '/' || *at == '\\' || *at == ':' ||
++            static_cast<unsigned char>(*at) < 0x20) return false;
++    const char* basename = path;
++    for (const char* at = path; *at; ++at)
++        if (*at == '/' || *at == '\\') basename = at + 1;
++    for (; *requested && *basename; ++requested, ++basename)
++    {
++        const char left = *requested >= 'A' && *requested <= 'Z' ?
++            char(*requested - 'A' + 'a') : *requested;
++        const char right = *basename >= 'A' && *basename <= 'Z' ?
++            char(*basename - 'A' + 'a') : *basename;
++        if (left != right) return false;
++    }
++    return !*requested && !*basename;
++}
++
++} // namespace
++
++WinModule pe_load_guest_from_source(void* user, const char* dll_basename)
++{
++    if (!user) return nullptr;
++    auto& context = *static_cast<GuestPeDynamicLoadContext*>(user);
++    context.last_error.clear();
++    if (!context.fetch || !context.shim || !context.bank || !context.teb ||
++        !context.retained || !dll_basename || !*dll_basename)
++    {
++        context.last_error = "invalid dynamic PE load context";
++        return nullptr;
++    }
++    if (context.retained->size() >= context.retained->capacity())
++    {
++        context.last_error = "dynamic PE retention capacity exhausted";
++        return nullptr;
++    }
++    GuestPeFetchedDependency root;
++    if (!context.fetch(context.fetch_user, dll_basename, &root))
++    {
++        context.last_error = "dynamic PE basename unavailable from source";
++        return nullptr;
++    }
++    if (!same_basename(dll_basename, root.source_path.c_str()) ||
++        root.bytes.empty() || !root.segment)
++    {
++        context.last_error = "dynamic PE source returned a mismatched basename or invalid image";
++        return nullptr;
++    }
++    GuestPeBatchResult result = pe_attach_guest_closure(
++        {root.source_path.c_str(), root.bytes.data(), root.bytes.size(),
++         root.segment}, context.fetch, context.fetch_user, *context.shim,
++        context.options, *context.bank, *context.teb);
++    if (!result.ok)
++    {
++        context.last_error = result.reason;
++        if (result.rollback_failed)
++            context.retained->push_back(std::move(result));
++        return nullptr;
++    }
++    WinModule root_handle = nullptr;
++    for (size_t i = 0; i < result.input_indices.size(); ++i)
++        if (result.input_indices[i] == 0 && result.modules[i])
++        {
++            root_handle = result.modules[i]->mapped_handle();
++            break;
++        }
++    if (!root_handle)
++    {
++        context.last_error = "attached dynamic PE root has no mapped handle";
++        if (!pe_detach_guest_batch(result, *context.teb))
++            context.retained->push_back(std::move(result));
++        return nullptr;
++    }
++    context.retained->push_back(std::move(result));
++    return root_handle;
++}
++
++} // namespace cap13
+--- a/loader/tests/guest_pe_batch_test.cpp
++++ b/loader/tests/guest_pe_batch_test.cpp
+@@ -1,5 +1,6 @@
+ #include "guest_pe_batch.h"
+ #include "guest_pe_directory_source.h"
++#include "guest_pe_dynamic_source.h"
+ #include "guest_read_map.h"
+ #include "pe_import_scan.h"
+ #include "win_api_shim.h"
+@@ -540,6 +541,102 @@
+               "detached PE image is revoked from the read map");
+     }
+ 
++    char dynamic_template[] = "/tmp/cap13-dynamic-XXXXXX";
++    char* dynamic_folder = mkdtemp(dynamic_template);
++    if (!dynamic_folder) return 2;
++    const std::string dynamic_path = std::string(dynamic_folder) + "/late.dll";
++    {
++        std::ofstream stream(dynamic_path, std::ios::binary);
++        stream.write(reinterpret_cast<const char*>(fixture.data()), fixture.size());
++    }
++    RecordingSwitch dynamic_loader_switch;
++    cap13::GuestPeDirectorySource dynamic_directory(dynamic_folder,
++                                                     &dynamic_loader_switch);
++    std::vector<cap13::GuestPeBatchResult> retained_dynamic;
++    retained_dynamic.reserve(2);
++    cap13::GuestPeDynamicLoadContext dynamic_context{};
++    dynamic_context.fetch = cap13::GuestPeDirectorySource::fetch;
++    dynamic_context.fetch_user = &dynamic_directory;
++    dynamic_context.shim = &shim;
++    dynamic_context.options = options;
++    dynamic_context.bank = &bank;
++    dynamic_context.teb = &teb;
++    dynamic_context.retained = &retained_dynamic;
++    cap13::WinApiShim::Hooks dynamic_hooks{};
++    dynamic_hooks.load_pe = cap13::pe_load_guest_from_source;
++    dynamic_hooks.load_user = &dynamic_context;
++    shim.set_hooks(dynamic_hooks);
++    char dynamic_request[] = "late.dll";
++    check(read_map.add(&dynamic_request, dynamic_request,
++                       sizeof(dynamic_request)),
++          "dynamic DLL request string enters the bounded guest read map");
++    void* load_library = shim.resolve("kernel32.dll", "LoadLibraryA", 0);
++    const uint64_t loaded_handle = load_library ? cap13_win64_call1(
++        load_library, reinterpret_cast<uint64_t>(dynamic_request)) : 0;
++    check(dynamic_directory.ready() && loaded_handle &&
++          retained_dynamic.size() == 1 && retained_dynamic[0].ok &&
++          dynamic_loader_switch.enters == 1 &&
++          dynamic_context.last_error.empty(),
++          "LoadLibraryA attaches an unchanged PE from the bounded directory source");
++    if (loaded_handle && retained_dynamic.size() == 1)
++    {
++        uint8_t first_byte = 0;
++        check(read_map.read(reinterpret_cast<void*>(loaded_handle),
++                            &first_byte, 1) &&
++              shim.resolve("late.dll", "start_mod", 0) != nullptr,
++              "dynamically attached PE publishes its image and named export");
++        check(cap13::pe_detach_guest_batch(retained_dynamic[0], teb) &&
++              !read_map.read(reinterpret_cast<void*>(loaded_handle),
++                             &first_byte, 1) &&
++              shim.resolve("late.dll", "start_mod", 0) == nullptr,
++              "dynamic batch detach revokes its image and export");
++    }
++    SourceState wrong_dynamic_source;
++    RecordingSwitch wrong_dynamic_switch;
++    wrong_dynamic_source.entries.push_back({"wrong.dll", "/mods/late.dll",
++                                            &fixture, &wrong_dynamic_switch});
++    dynamic_context.fetch = fetch_dependency;
++    dynamic_context.fetch_user = &wrong_dynamic_source;
++    check(cap13::pe_load_guest_from_source(&dynamic_context, "wrong.dll") ==
++              nullptr && wrong_dynamic_switch.enters == 0 &&
++          dynamic_context.last_error.find("basename") != std::string::npos,
++          "dynamic source cannot substitute a PE under a different basename");
++    dynamic_context.fetch = cap13::GuestPeDirectorySource::fetch;
++    dynamic_context.fetch_user = &dynamic_directory;
++    retained_dynamic.emplace_back();
++    const int before_full = dynamic_loader_switch.enters;
++    check(cap13::pe_load_guest_from_source(&dynamic_context, "late.dll") ==
++              nullptr && dynamic_loader_switch.enters == before_full &&
++          dynamic_context.last_error.find("capacity") != std::string::npos,
++          "full retention storage refuses before another PE attach");
++    retained_dynamic.pop_back();
++    RecordingSwitch dynamic_fail_switch, dynamic_rollback_switch;
++    dynamic_rollback_switch.allow_until = 1;
++    SourceState dynamic_failure_source;
++    dynamic_failure_source.entries.push_back(
++        {"badroot.dll", "/mods/badroot.dll", &failed_consumer,
++         &dynamic_fail_switch});
++    dynamic_failure_source.entries.push_back(
++        {"provider.dll", "/mods/provider.dll", &fixture,
++         &dynamic_rollback_switch});
++    dynamic_context.fetch = fetch_dependency;
++    dynamic_context.fetch_user = &dynamic_failure_source;
++    check(cap13::pe_load_guest_from_source(&dynamic_context, "badroot.dll") ==
++              nullptr && retained_dynamic.size() == 2 &&
++          retained_dynamic[1].rollback_failed &&
++          retained_dynamic[1].modules.size() == 1 &&
++          shim.resolve("provider.dll", "start_mod", 0) != nullptr,
++          "dynamic load retains a provider when rollback cannot detach it");
++    dynamic_rollback_switch.allow_until = 1000;
++    check(cap13::pe_detach_guest_batch(retained_dynamic[1], teb) &&
++          retained_dynamic[1].modules.empty() &&
++          shim.resolve("provider.dll", "start_mod", 0) == nullptr,
++          "retained dynamic rollback can be cleaned after backend recovery");
++    check(read_map.remove(&dynamic_request),
++          "dynamic request range is revoked after use");
++    unlink(dynamic_path.c_str());
++    rmdir(dynamic_folder);
++
+     std::printf("cases=%d failed=%d\n", checks, failures);
+     return failures ? 1 : 0;
+ }
+--- a/loader/tests/run_guest_pe_batch.py
++++ b/loader/tests/run_guest_pe_batch.py
+@@ -32,6 +32,7 @@
+     str(root / "tests/guest_pe_batch_test.cpp"),
+     str(root / "src/guest_pe_batch.cpp"), str(root / "src/pe_import_scan.cpp"),
+     str(root / "src/guest_pe_directory_source.cpp"),
++    str(root / "src/guest_pe_dynamic_source.cpp"),
+     str(root / "src/guest_pe_loader.cpp"),
+     str(root / "src/pe_loader.cpp"), str(root / "src/pe_tls_registration.cpp"),
+     str(root / "src/static_tls_bank.cpp"), str(root / "src/guest_teb_lifecycle.cpp"),

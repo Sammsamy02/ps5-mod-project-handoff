@@ -1,0 +1,33 @@
+--- a/loader/src/pe_loader.cpp
++++ b/loader/src/pe_loader.cpp
+@@ -30,12 +30,29 @@
+ 
+ namespace cap13 {
+ 
++namespace {
++#if CAP13_HAS_MMAP
++#if defined(MAP_ANONYMOUS)
++constexpr int kAnonymousMapFlag = MAP_ANONYMOUS;
++#elif defined(MAP_ANON)
++constexpr int kAnonymousMapFlag = MAP_ANON;
++#elif defined(__PROSPERO__)
++// ps5-payload-sdk v0.43 sys/mman.h defines MAP_ANON as 0x1000 only
++// when __BSD_VISIBLE; strict _XOPEN_SOURCE builds hide both spellings.
++constexpr int kAnonymousMapFlag = 0x1000;
++#else
++#error "anonymous mmap flag is unavailable on this POSIX target"
++#endif
++#endif
++} // namespace
++
+ namespace Os
+ {
+     void* alloc_rw(size_t size)
+     {
+ #if CAP13_HAS_MMAP
+-        void* p = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++        void* p = mmap(nullptr, size, PROT_READ | PROT_WRITE,
++                       MAP_PRIVATE | kAnonymousMapFlag, -1, 0);
+         return p == MAP_FAILED ? nullptr : p;
+ #else
+         (void)size;

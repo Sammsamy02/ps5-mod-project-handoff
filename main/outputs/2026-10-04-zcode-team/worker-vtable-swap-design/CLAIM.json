@@ -1,0 +1,73 @@
+{
+  "worker": "worker-vtable-swap-design",
+  "date": "2026-10-04",
+  "task": "Design the dispatch-data (vtable/table-swap) hook architecture NOW as the hedge for the exec-writability W-fails/R-works branch: map the swap surface (EngineTick, ProcessEvent, GNatives, FC-1 alternative), design the thunk (module-owned, calls original via saved entry), sketch the port integration ranked by blast radius, and state honestly what cannot be vtable-swapped.",
+  "scope": {
+    "allowed": "read-only mining of retained worker reports, console record copies, pinned-image segment derivations, and composed-runtime sources under the workspace root; design authoring under outputs/2026-10-04-zcode-team/worker-vtable-swap-design/",
+    "forbidden": "console contact, nested subagents, execution of any probe, modification of any frozen or wiring file, replay of failed/reserved jobs"
+  },
+  "claims": [
+    {
+      "id": "VS-1",
+      "claim": "The vtable-swap premise 'vtables live in WRITABLE data (RW spans), swaps need NO mprotect' is FALSE for this target. The live VMMAP census shows the RELRO-covered RW segment L3 mapped READ-ONLY (prot=1) at runtime: runtime [0x82bc000,0x953c000) prot=1, which is exactly L3 ([vaddr 0x7ebc000,0x913c000), PT_GNU_RELRO ph4 covers it) under the proven uniform bias 0x400000. UE vtables (.data.rel.ro) live there by toolchain convention (offline confirmation still owed). A vtable-slot swap therefore needs ONE new in-game fact: mprotect R->RW on a DATA page (never exec). The write itself is an 8-byte aligned store; exec pages are never written or read.",
+      "evidence": "console/igf6-results.jsonl build igf3-de0c0cb644d3 seq 4 exp v1_vmmap_page (span [0x82bc000,0x953c000) prot=1); worker-vaddr-semantics/SEGMENT-CORRESPONDENCE.md section 2 rows L1/L3/L7 and ph4 RELRO note (line 25), section 5; L0/L1/L3/L7 all match the single-bias model against that record, and igf4 gua_read rt_addr 0x97ba110 = 0x400000+0x93ba110 validates L7's bias (console/igf6-results.jsonl igf4 seq 6)."
+    },
+    {
+      "id": "VS-2",
+      "claim": "Data reads AND writes in serviced writable memory are proven in-game: igf4 read 96 B at GUObjectArray runtime 0x97ba110 and performed a same-value 96 B writeback + restore inside span [0x970c000,0x9a34000) prot=3, rc=0. This is the write class the swap backend writes with; the RELRO'd vtable page (prot=1) is the one class still unproven for writes (VS-1).",
+      "evidence": "console/igf6-results.jsonl build igf4-4891869337b4 seq 6 (gua_read, span_prot 0x3) and seq 7 (gua_writeback, restored:1, method same_value_writeback_96B_8byte_stores)."
+    },
+    {
+      "id": "VS-3",
+      "claim": "EngineTick (C4) is a single-slot, single-class swap: the runtime already resolves the live UGameEngine instance and walks its vtable data-side (vptr load + slot load at UnrealVirtualBaseVC.hpp:114-115/132-133); a swap replaces the Tick slot (offset from UEngine::VTableLayoutMap) with a module-owned thunk and calls the original via the saved entry. The initializer already cross-checks vtable-vs-scan addresses (staged UnrealInitializer.cpp:1315-1378). Coverage is complete for UGameEngine::Tick because the engine dispatches Tick virtually through the instance vtable and there is exactly one engine class involved. This is the lowest-risk, highest-value swap and should be the first real swap target with the loud-throw path intact.",
+      "evidence": "worker-query-s2-arm/staging/UnrealInitializer.cpp:1312-1400 (walk 1315, cross-check 1318-1349, resolve 1352-1378, registration 1383-1397); worker-tick-address-validation/TICK-VALIDATION-PATH.md steps 15-16 and section 6; worker-tick-witness-design/TICK-WITNESS-DESIGN.md section 6 item 2."
+    },
+    {
+      "id": "VS-4",
+      "claim": "ProcessEvent (C8) is NOT a single-slot swap: every compiled-in UClass has its own vtable COPY of the ProcessEvent slot. Swapping only the walked UObject CDO's vtable covers plain-UObject dispatch only. Full coverage of Lua RegisterHook (which registers through RegisterProcessEventPreCallback, LuaMod.cpp:4542-4556) requires enumerating UClass CDOs via the (seed-bound, data-side) GUObjectArray, deduplicating vptrs, and swapping each slot whose current value identity-matches the resolved ProcessEvent address. The identity check is also the safety gate: any slot whose value differs (override or wrong walk) is refused loudly, never blind-written.",
+      "evidence": "SIGNATURES-INVENTORY.md C8 row (line 129) and section 3b (ProcessEvent is the vtable-walk binding, line 149); port/unreal/src/Mod/LuaMod.cpp:4542-4556; port/unreal/src/Hooks/Hooks.cpp:83-106; vtable-copy semantics: UnrealVirtualBaseVC.hpp:114-115 (vptr is read PER INSTANCE)."
+    },
+    {
+      "id": "VS-5",
+      "claim": "The thunk needs NO allocation, NO new imports, and NO code writes anywhere: replacement functions are ordinary static functions in the modbridge PRX's own RX pages (the module's code demonstrably executes in-game), per-target saved originals live in module .bss, and the swap is an 8-byte aligned store into the (temporarily RW) table slot. SysV AMD64 ABI throughout (PS5; no ms_abi switch needed). TDetourInstance::Invoke already calls the original through the Trampoline word (DetourInstance.hpp:487,499), so a swap backend that writes the saved original entry into Trampoline preserves the entire callback machinery (pre/post callbacks, GC, PROSPERO invocation scopes) unchanged.",
+      "evidence": "DetourInstance.hpp:149-169 (InstallHook ctor shape), :474-512 (Invoke + FnCast(Trampoline,...)), :621-630 (StaticHookFn as the redirect entry + NativeInvocationCount), import audit: no mmap/memory-syscall row in the frozen contract (worker-import-audit-weakify/AUDIT-RESULTS.md section 2.4; mprotect import-unavailable per worker-exec-writability/CLAIM.json EW-4)."
+    },
+    {
+      "id": "VS-6",
+      "claim": "Zero-syscall tier exists and should be designed in parallel: UFunction::GetFunctionHookData already replaces a UFunction's FuncPtr with UnrealScriptFunctionHook via SetFuncPtr (UFunction.cpp:78-90) -- a pure data write into a heap object, the same mechanism as a vtable swap but on RW heap pages with no mprotect. Routing Lua RegisterHook to this path instead of the ProcessEvent detour (LuaMod.cpp:4542-4556) would give per-function hooks with zero mprotect dependence. EngineTick has NO equivalent (C++ virtual, not a UFunction), so the tick swap keeps its D-1 data-mprotect dependency; both-fail fallback is a polling thread (exec-writability section 7.3).",
+      "evidence": "port/unreal/src/UFunction.cpp:78-90; port/unreal/src/UFunctionStructs.cpp (UnrealScriptFunctionHook, GNatives guards at :210,:301); worker-exec-writability/EXEC-WRITABILITY-PROBE-DESIGN.md section 7.3."
+    },
+    {
+      "id": "VS-7",
+      "claim": "What CANNOT be vtable-swapped, honestly: (1) FName constructor verification (C1) -- the ctor is reached by direct E8 rel32 call sites (9 sites materialized), not by any dispatch table; the detour's role is verification-only and the already-prepared FC-1 byte-equality validator replaces it without interception (launchable once RX works). (2) The GLOBAL ProcessInternal / ProcessLocalScriptFunction detours (E5) -- those functions are reached via UFunction FuncPtr values, not vtables; per-function FuncPtr swaps can substitute, the global interception is lost. (3) StaticConstructObject, CallFunctionByNameWithArguments, ULocalPlayerExec -- direct/static call targets, not dispatch-table reachable (and not-on-path as consumers). (4) GNatives (slot 8) is swappable in principle but its address was never bound and its segment class is unverified -- designed but address-unproven. Cost to the ladder: E4 needs the full ProcessEvent vtable family (or the R3 routing change) to avoid silent per-class coverage holes; E5 global interception is degraded to per-function.",
+      "evidence": "worker-fname-fc1-materialize/FC1-CHECKS.md sections 1-2 (9 E8 call sites, expected bytes); Metadata.hpp:173-188 (ProcessInternal/ProcessLocalScriptFunction metadata), :245-260 (CallFunctionByNameWithArguments/ULocalPlayerExec), :261+ (FNameConstructor); SIGNATURES-INVENTORY.md slot 8 row (line 81) and E5 row (line 168)."
+    },
+    {
+      "id": "VS-8",
+      "claim": "Thread-safety of the swap moment is structurally sound but bounded: an aligned 8-byte store is atomic on x86-64, so readers see either the original or the thunk, never a torn entry; in-flight executions of the original are unaffected because no instruction byte changes (this eliminates PLH's prologue-patch race). Required ordering: saved-original committed (and thunk state fully armed) BEFORE the slot store, release/acquire discipline, fresh mapscan verification after the store, same-value readback, and re-protect R. Restore-on-unload is out of scope by port precedent (PROSPERO DeactivateHook already refuses to unhook, DetourInstance.hpp:191-205, 216-225): hooks live for process lifetime, restore discipline is for the WRITE WINDOW, not for teardown.",
+      "evidence": "DetourInstance.hpp:191-205 and :216-225 (PROSPERO no-unhook precedent); igf discipline (map-verify -> write -> readback -> restore-verify, anomaly fail-closed) per worker-exec-writability/EXEC-WRITABILITY-PROBE-DESIGN.md section 7.2 sketch and constraints C-2/C-3/C-4."
+    },
+    {
+      "id": "VS-9",
+      "claim": "The D-1 open fact: mprotect R->RW on a prot=1 DATA page of the RELRO region (syscall 74, the only mechanism; mprotect is import-unavailable per EW-4) is UNVERIFIED on this kernel and carries igf5-class residual risk if syscall 74 is ring-0-fatal in general. Mitigations designed in: target selection inside the image's own data span far from every hook table, same-value writeback first (igf4 pattern -- zero semantic delta), write-through records localizing any fault, RX/success of IGW-1 does NOT answer D-1 (different page class). If syscall 74 is fatal in general, vtable swaps die with detours and only VS-6's heap tier + polling survive; if only exec pages are special, swaps work. A swap-backend integration must therefore gate every install on a fresh trusted mapscan of the exact target span.",
+      "evidence": "worker-exec-writability/EXEC-WRITABILITY-EVIDENCE.md sections 2-4 (no mprotect rc/errno ever recorded; igf5 crash correlate; FreeBSD-generic speculation marked); SDK sys/syscall.h:82 (SYS_mprotect 74) per EVIDENCE section 3 item 5; igf4 same-value writeback record (VS-2)."
+    },
+    {
+      "id": "VS-10",
+      "claim": "Integration shape, ranked by blast radius: R1 = a DispatchDataDetour backend behind the exact x64Detour interface (ctor(fnAddress, fnCallback, &Trampoline), hook(), unHook(), isHooked()), selected by a PROSPERO typedef at DetourInstance.hpp:164-166 -- one new class + one typedef, zero changes to Invoke/callbacks/GC/scopes. R2 = slot capture: the vtable walks already compute the slot address (UnrealVirtualBaseVC.hpp:114-115/132-133); a PROSPERO-only recorder stores (slot_addr, original_entry) into the backend registry keyed by resolved entry address. R3 = route Lua RegisterHook through UFunction FuncPtr swaps (composition-side LuaMod.cpp change, zero mprotect). R4 = full ProcessEvent class-family swap with registration-time coverage verification. C1 = FC-1 validator swap-in replacing the detour (independent of R1-R4). EngineTick remains the first real swap under the loud-throw path.",
+      "evidence": "DetourInstance.hpp:164-169 (the single construction site), :282-288 (EnsureHooked failure -> ERROR_ID path preserved); staging UnrealInitializer.cpp:1383-1387 (loud throw preserved); worker-fname-fc1-materialize/FC1-CHECKS.md (validator prepared); LuaMod.cpp:4542-4556 (the R3 change site)."
+    }
+  ],
+  "non_claims": [
+    "No claim that any swap has been built, staged, or executed; this is a design hedge, PROPOSALS ONLY.",
+    "No claim that mprotect R->RW on a data page succeeds on this firmware (VS-9: unverified, D-1 open).",
+    "No claim of which ELF section physically hosts the vtables; .data.rel.ro-in-L3 is toolchain convention plus live-VMMAP consistency, with the offline witness-method confirmation and the live vptr read as the actual authorities.",
+    "No claim about UE5.6 vtable indices; slot offsets come from the port's VTableLayoutMap data (VTableLayout.ini) at runtime, which FLAG-2's code-probe concern does not affect (the probe is separate from the swap).",
+    "No acceptance or quality claim of any kind; nothing here substitutes for regression tests or director review."
+  ],
+  "deliverables": [
+    "CLAIM.json (this file, first)",
+    "VTABLE-SWAP-DESIGN.md (per-hook table + memory-permission ground truth + thunk design + integration ranking + honest limits)",
+    "REPORT.md (last)"
+  ]
+}

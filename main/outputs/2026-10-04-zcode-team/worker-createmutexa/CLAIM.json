@@ -1,0 +1,24 @@
+{
+  "worker": "worker-createmutexa",
+  "date": "2026-10-04",
+  "task": "Propose and prototype CreateMutexA (ANSI) shim as a thin adapter over the existing wide-char mutex family (CreateMutexW path). UE4SS.dll imports CreateMutexA per census; it is currently unbound.",
+  "scope": {
+    "write_root": "outputs/2026-10-04-zcode-team/worker-createmutexa/",
+    "read_only_sources": [
+      "outputs/ps5-mod-bridge/windows-services/mb_win_mutex_abi.c",
+      "outputs/ps5-mod-bridge/windows-services/mb_win_mutex_abi.h",
+      "outputs/ps5-mod-bridge/windows-services/mb_win_mutex.c",
+      "outputs/ps5-mod-bridge/windows-services/mb_win_mutex.h"
+    ],
+    "deliverables": [
+      "CLAIM.json",
+      "mb_win_mutex_abi_a_shim.diff (integration diff: binder entry + shim function)",
+      "shim/mb_win_mutex_a.c (proposed shim implementation)",
+      "shim/test_createmutexa.c (host test)",
+      "selftest.sh + selftest receipt",
+      "REPORT.md"
+    ]
+  },
+  "design_summary": "CreateMutexA(lpMutexAttributes, bInitialOwner, lpName) converts the CP_ACP ANSI name to UTF-16 by zero-extending each byte (PS5 target has no locale/ACP tables; CP_ACP byte->WCHAR cast is the specified conversion), then delegates to the existing wide-char CreateMutexW implementation. NULL name stays NULL. Buffer is stack/heap-free via fixed-size local when name fits, else error like the W path.",
+  "constraints": "No nested subagents, no network, proposal-only under worker dir; canonical sources untouched."
+}

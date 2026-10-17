@@ -1,0 +1,21 @@
+--- a/configure.ac
++++ b/configure.ac
+@@ -3469,8 +3469,17 @@
+ 
+ 	AC_CHECK_DECL(pipe2,             [AC_DEFINE(HAVE_PIPE2, 1, [pipe2])])
+ 	AC_CHECK_FUNC(getmntinfo,        [AC_DEFINE(HAVE_GETMNTINFO, 1, [getmntinfo])], [], [[#include <unistd.h>]])
+-	AC_CHECK_FUNC(strcpy_s,          [AC_DEFINE(HAVE_STRCPY_S, 1, [strcpy_s])])
++	# A linker import alone does not make an API usable.  The public Prospero
++	# SDK exports strcpy_s but its string.h does not declare it; use CoreFX's
++	# existing strlcpy/snprintf fallback unless both declaration and link exist.
++	AC_CHECK_DECL(strcpy_s, [
++		AC_CHECK_FUNC(strcpy_s, [AC_DEFINE(HAVE_STRCPY_S, 1, [strcpy_s])])
++	], [], [[#include <string.h>]])
+ 	AC_CHECK_FUNC(strlcpy,           [AC_DEFINE(HAVE_STRLCPY, 1, [strlcpy])])
++	# GetLine needs an implemented and declared line reader.  fgetln returns
++	# borrowed storage, so its fallback also requires the public stream lock.
++	AC_CHECK_FUNCS([getline fgetln flockfile funlockfile])
++	AC_CHECK_DECLS([getline, fgetln, flockfile, funlockfile], [], [], [[#include <stdio.h>]])
+ 	AC_CHECK_FUNC(posix_fadvise,     [AC_DEFINE(HAVE_POSIX_ADVISE, 1, [posix_fadvise])]) # the define is called HAVE_POSIX_ADVISE in corefx, not a typo
+ 	AC_CHECK_FUNC(ioctl,             [AC_DEFINE(HAVE_IOCTL, 1, [ioctl])])
+ 	AC_CHECK_FUNC(sched_getaffinity, [AC_DEFINE(HAVE_SCHED_GETAFFINITY, 1, [sched_getaffinity])])

@@ -1,0 +1,43 @@
+{
+  "worker": "worker-launch10-staging-packet",
+  "date": "2026-10-04",
+  "task": "Prepare the exact console staging packet for launch-10 using the just-fixed batch tool: add a 'stage-launch10' flow to the controller-owned console_batch.py (ONE file changes on console: /data/plugins/modbridge_supplier_composition.prx <- the rebuilt launch-10 composition FSELF; ploader.ini STAYS the 2-plugin config sha 1216aab6... and must never be touched), write the controller runner wrapper, extend selftest + fake-drive suites (0 failures, no regression of 430/0 + 117/0), and deliver the packet.",
+  "scope": [
+    "console_batch.py patched IN PLACE (controller-owned, from the delivered staging-order revision 6940971e...): NEW L10 constants block (target PRX, pinned ini sha 1216aab6..., baseline paths; <L10_FSELF_LOCAL_PATH>/<L10_FSELF_SHA256> runtime globals defaulting EMPTY so the flow refuses placeholders), NEW l10_readback_law (readback vs the LOCAL FSELF: full byte identity OR ONLY the ftpsrv SHT-strip tail-artifact class — segment-covered prefix via sht_prefix_end, body 64..end byte-identical, header diff inside SHT_HDR_ALLOWED, e_shnum zeroed), NEW build_stage_launch10 (9 steps l10.0..l10.7), NEW _l10_restore_old_prx_once (ride.9c guard law, launch-10 form: ONE bounded byte-exact restore of the OLD PRX from the saved pre-image on ANY failed verification, never a second attempt), CLI subparser stage-launch10 with --fself/--expect-sha, FLOWS registry + docstring + plan --only list",
+    "Flow step order (order law): l10.0 preflight (BUILD-ID identity, placeholders = loud refusal) -> l10.0b G0 reachability (pldmgr 8084 /list_payloads, existing pattern) -> l10.1 INI FREEZE read-only (RETR ploader.ini, must byte-equal 1216aab6... BEFORE any console change) -> l10.2 PRE-IMAGE + console .bak FIRST (old PRX readback sha+size saved) -> l10.3 upload EXACTLY ONCE to the FINAL name (no alias, no re-STOR; ambiguity -> bounded restore + refusal) -> l10.4 readback content law vs the LOCAL file (mismatch -> restore + refusal) -> l10.5 ini STILL byte-equal 1216aab6... (drift -> restore + refusal; the flow issues NO ini write) -> l10.6 fresh baselines re-fetched into the run dir (UE4SS.log, runtime-status, entry log, /data/modbridge-supplier-diag.jsonl; absence recorded honestly) -> l10.7 GO/NO-GO summary (rescue step; verdict in l10-go-nogo.json; next launch stays USER-driven)",
+    "NO ini write exists anywhere in the flow (asserted by selftest: no step carries a ploader.ini -T command); the ini is only ever READ at l10.1/l10.5",
+    "run_stage_launch10.sh: thin wrapper with plan|stage|post modes; stage refuses to run while the <L10_FSELF_LOCAL_PATH>/<L10_FSELF_SHA256> placeholders are unfilled; post fetches the post-launch evidence files (UE4SS.log, runtime-status, entry log, supplier-diag) into a timestamped dir and re-proves ploader.ini is STILL 1216aab6... after the launch; the tool never launches the game",
+    "Selftest section A5 added: step-order assertions, no-ini-STOR assertion, exactly-one-upload-STOR assertion, .bak-before-upload assertion, rescue GO/NO-GO, plan anchors, 7 content-law fixtures on a synthetic ELF (identity, SHT-strip prefix pass; truncated/body/header/length/empty fail), placeholder refusal, BUILD-ID mismatch refusal, pinned-identity preflight pass",
+    "tests/fake_console_drive.py extended: launch-10 state on the fake console (seeded OLD PRX pre-image bytes, staged-content SHT-strip readback channel, one-shot readback corruptor, ini RETR counter + drift-after-freeze hook, composition STOR audit log); NEW scenarios (a) happy path (.bak -> ONE FSELF STOR -> content-law readback -> ini STILL byte-equal -> baselines -> GO), (b) upload-verify mismatch (l10.4 FAIL -> OLD PRX restored byte-exact, FSELF stored exactly once, ini untouched, NO-GO), (c) ini drift between freeze and re-check (refusal + restore, drifted bytes remain — the flow never reconciles the ini itself), (d) missing local FSELF and unfilled placeholders (refusal at ZERO console writes)"
+  ],
+  "non_goals": [
+    "No console/network contact (LOCAL ONLY; every verification ran against the in-process fake console or in plan/dry mode)",
+    "The tool NEVER launches the game — the launch window is the user's, by law and by construction",
+    "No ini republish and no restore-ini replay; the flow does not reconcile an externally drifted ini, it refuses",
+    "No behavior change to any existing flow (dll7/dll8/e2e/stage-ridealongs/stage-observer/stage-qdrv1/stage-settings/rollback-ridealongs/restore-ini/game-evidence/all) or to their delivered fixtures",
+    "The launch-10 FSELF identity is deliberately NOT pinned here — the build has not landed; the placeholders are the controller's to fill"
+  ],
+  "inputs_read": [
+    "console_batch.py (delivered staging-order revision, sha 6940971e...7432040c, full read of flow/guard/restore-law machinery)",
+    "tests/fake_console_drive.py (full)",
+    "worker-staging-order/DIFF.md + REPORT.md (files-first/config-last order law, ride.9c pre-publish guard law, restore-ini flow)",
+    "Controller launch-10 staging facts (single-file replacement, pinned 2-plugin ini sha 1216aab61236b0fc9734b1647c96e03db48beb3d333efe174ca08e97abededa0, ftp 2121 / pldmgr 8084, SHT-strip readback artifact class, launch10-prep baselines)"
+  ],
+  "verification": {
+    "selftest": "462 ok, 0 failed (exit 0) — was 430/0 at the staging-order revision (+32 launch-10 checks)",
+    "fake_drive": "143 checks ok, 0 failed (exit 0) — was 117/0 (+26 launch-10 scenario checks)",
+    "plan_mode": "plan --only stage-launch10 inspected: freeze -> pre-image/.bak -> upload-once -> law readback -> ini still-check -> baselines -> GO/NO-GO, with no ini STOR anywhere",
+    "wrapper": "bash -n clean; plan mode runs; stage mode refuses unfilled placeholders",
+    "receipt": "SELFTEST-RECEIPT.txt (both suites + plan preview, exit codes recorded)"
+  },
+  "status": "complete",
+  "honesty": "Host-side logic verified only, against a simulated console; the new steps' real behavior against the actual ftpsrv/pldmgr services is unproven until the controller runs them. The content law's SHT-strip branch is derived from the established §3 semantics but is verified against a LOCAL FSELF (no separate bare-sdk reference is pinned for launch-10) — if the real build's readback shape matches neither full identity nor the modeled artifact class, l10.4 refuses and restores (safe by construction, but staging would need reconciliation). The 2-plugin ini sha 1216aab6... is pinned from the controller's staging facts; its exact bytes were not available locally, so the fake exercises the ini law via a same-shape fixture with its own sha. On a failed STOR (curl rc!=0) the tool cannot know whether bytes landed; it performs ONE bounded restore of the pre-image and reports honestly — that restore path is fake-tested only in the readback-mismatch variant, not the curl-failure variant.",
+  "deliverables": {
+    "console_batch.py (in place, controller-owned)": "extended tool, NEW sha256 b982f794201a0d4dbde113c39274aefca41242a4625ca6c240aac2183f639303 (pre-change: 6940971eb3de879637e14824f9953445b36bb21496af6022e61096fa7432040c)",
+    "tests/fake_console_drive.py (in place)": "extended fake console, NEW sha256 f2134f0a1b5011120719dc2286db93ae162d2571b627dd514ffeeeb2babbdcde (pre-change: bd309ccb84d679bb4bbba8434d8fddd6ba4c49611d07a3521866ecd9ec8b4281)",
+    "run_stage_launch10.sh": "controller wrapper: plan|stage|post; placeholders documented inline",
+    "DIFF.md": "unified diff of both files vs the pre-change snapshots",
+    "SELFTEST-RECEIPT.txt": "full pass output: selftest 462/0 + fake-drive 143/0 + plan preview, exit codes 0/0/0",
+    "REPORT.md": "honest report: flow contract, laws applied, limits, placeholder instructions"
+  }
+}

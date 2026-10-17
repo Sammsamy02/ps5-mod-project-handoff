@@ -1,0 +1,18 @@
+# cc1 readback-constants check — worker-ninth-slot-ini-adoption, 2026-10-05T07:10:47Z
+# Law: STAGE-PLAN-COMBINED §3 / worker-v3-startup-diag (same recipe the tool enforces
+# for qdrv1/observer/xwp/fc1): readback = segment-covered prefix of the bare-sdk
+# ELF, end = max(p_offset+p_filesz); body = sha256(readback[64:end]).
+
+bare run1 == run2: True | bare bytes: 73088 | sha: e72366c497d8ffa4a76f3f2f01bb898a0d41c2434813429be1408dc2c15a7f71
+computed readback end (max p_offset+p_filesz): 71528 == pinned 71528: True
+PREFIX-LAW body sha256(bare[64:71528]) = 131ff1c20093216f708dc2d1f7c340fdd0bb894476c01166522ab1aa99045e67
+DELIVERED brief constant sha256(bare[64:EOF]) = 1d17a27db4cea8182673360aef06ac2e47dd0eb81993b2226a181b3fd6d6e868 (bytes 64..73088 — whole tail incl. SHT region)
+brief/STAGE-PLAN pinned constant              = 1d17a27db4cea8182673360aef06ac2e47dd0eb81993b2226a181b3fd6d6e868
+delivered constant reproduced as bare[64:EOF]: True
+
+RESOLUTION: the ftpsrv channel serves ONLY the 71528-byte segment-covered prefix, so a
+real readback can never hash to the delivered 1d17a27d... constant (wrong window:
+whole-tail instead of prefix body). CC1['readback_body_sha'] is pinned to the
+PREFIX-LAW value 131ff1c2... (host-recomputed, run1==run2); the delivered constant is
+retained as CC1['readback_body_sha_as_delivered'] for provenance. Length 71528 and
+every other CC1 constant verified byte-identical to the brief. Law NOT widened.

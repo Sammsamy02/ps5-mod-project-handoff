@@ -1,0 +1,22 @@
+# Cumulative source-only native observer stage
+
+Nothing applied, compiled, linked or managed-executed. This cumulative stage starts from the genuine original candidate SHA121f2383e02e77e638dff31cd0e4b75fdd58df1715f77e7f3a1b6cacc01123da, incorporating the reviewed bridge and the new observer. Existing bridge-stage and genuine originals remain immutable. DESIGN.md's final approved corrections supersede its earlier per-thread serial/Run-only proposal.
+
+The internal same-image header exposes begin(kind,cookie,token), finish(token,observation), abort(token); it adds no managed import or Mono host. RunImports observes the real ABI1 then real RuntimeProbe0/echo-cookie sequence, exactly once each. NoNativeCalls rejects any observed native entry; it does not prove a managed exception. Provider-local global atomic CAS issuance refuses permanently at uint64 maximum; combine issuance with TLS address and active admission identity. Token uniqueness is restricted to a genuinely retained loaded provider lifetime. TLS address alone is not lifetime thread identity. Full window state is by value in TLS; no host stack pointer is retained.
+
+Absent windows yield no accepted observation. Duplicate/out-of-order/reentrant calls, nested begin, mismatched tokens/admission/cookie, native failures or observed shutdown refuse acceptance. Entry/exit counters saturate. Both callback admission boundaries cancel observer state; old bridge admission restoration cannot restore old proof. Every actual C return path records its native outcome. Existing ABI return1 and RuntimeProbe statuses0/-3/-4/-5 remain unchanged outside windows; failed RuntimeProbe still leaves reply unchanged. NoNativeCalls must surround the actual future Throw invocation, not a manufactured exception.
+
+Future real same-image host uses begin immediately before actual mono_runtime_invoke, checks real exception first after invocation, then consumes finish (or aborts on early exit). Caller must reject the whole observation after any refusal. It separately proves the actual artifact/method, managed return type/rooting/result or exception class. Direct native calls can reproduce the observed sequence; native observation alone never establishes managed origin. Resolver lookup, ambient process lookup and direct diagnostic calls are not PInvoke proof. The provider image/domain/thread/GC lifetimes must remain genuinely admitted through cleanup. The observer supplies no lease or GC implementation. Target TLS, atomic implementation, calling convention, final symbol retention and resolver behavior remain unproved. No lock-free atomic claim is made.
+
+Run from the repository root:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -B outputs/2026-10-12-caps-prep-chatgpt/cap10/invocation-observer-stage/test_stage.py
+PYTHONDONTWRITEBYTECODE=1 python3 -B outputs/2026-10-12-caps-prep-chatgpt/cap10/invocation-observer-stage/stage_observer.py
+```
+
+Default dry-run validates the full hash and all three complete exact-once anchors before transformation; verifies exact inverse and source re-read. Optional --derived-out only creates a new .cpp beneath this stage folder; there is no apply operation. A future build would need the internal header in its include path; no such build integration is performed. observer.patch contains the source delta, observer_fragment.inc the staged inserted code. No full derived runtime is retained.
+
+TDD-RED records four source-contract failures and one deliberate unimplemented writer stub error before implementation; TDD-GREEN records5 passing tests. The first green attempt exposed an overbroad test substring (`s_program` also matched `is_program_started`); the assertion was corrected to match the identifier exactly before the final green receipt. Source tests cover cumulative/inverse transformation, empty/drift/reapply/anchor refusals, header/accounting guards and output boundaries; they do not execute C++, concurrency, TLS, native paths or Mono. stage-receipt records one real-source CLI dry-run. WRITE-CHECK records one temporary full derived write (removed), three refusals, and original unchanged. An earlier RED assertion temporarily printed full original bytes; that log was replaced with concise assertions before retained receipts were produced; no full source copy remains in deliverables.
+
+One independent source reviewer will review this stage. B7 is independent; capability10 alone never holds Stellar Blade.

@@ -1,0 +1,76 @@
+{
+  "worker": "worker-code-anchor-reads",
+  "team": "2026-10-04-zcode-team",
+  "role": "worker-code-anchor-reads (ZCode team; deep budget <=80 calls)",
+  "claimed_at": "2026-10-04",
+  "task": "Build ONE focused ploader PRX (igf5- build, same module name/path/log path, same 7-verbatim-import packaging) that resolves the ONLY remaining unresolved check from the anchor-validation (igf4) run: reads the 16 code-anchor bytes at Tick 0x33ac8c0 and SCO 0x890aa0 (VMMAP reports the exec span execute-only, prot=0x4) and compares them against the retained-image expected prologues; plus the GUA predicate replay with the corrected GC-order check once worker-predicate-gc-fix delivers (TBD hook otherwise).",
+  "method_controller_ordered": "mprotect-FIRST-then-read-then-restore-then-compare. NEVER a raw read of a page whose VMMAP protection lacks READ. sceKernelMprotect-equivalent adds PROT_READ|PROT_EXEC on exactly the 16 KiB page(s) containing each anchor, reads, restores the original protection, verifies restoration; refusal record + NO read if mprotect fails; anomaly record if restore fails. No raw-read-then-hope-for-fault-recovery.",
+  "inputs_read_only": [
+    "outputs/2026-10-04-zcode-team/worker-anchor-validation/ (igf4 sources, expected_bytes_tick_sco.txt, harness Packager.dll, RECEIPT/STAGE-PLAN lineage)",
+    "outputs/2026-10-04-zcode-team/worker-expected-bytes/EXPECTED-BYTES.json (independent expected-bytes cross-check)",
+    "outputs/2026-10-04-zcode-team/worker-predicate-gc-fix/ (CLAIM only; NOT delivered at claim time)",
+    "outputs/2026-10-04-zcode-team/worker-predicate-compile/ps5/ (cross-check reference only)",
+    "outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/ (pinned SDK headers: sys/syscall.h, sys/mman.h, machine/param.h)",
+    "outputs/ps5-mod-bridge/windows-candidate/ (coordinator-cited mprotect reference; see verification_finding)",
+    ".superpowers/native-dependency-spike/native-full-runtime-aligned-entry-1/ (frozen 191-import contract + frozen lineage PRX)",
+    ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin (retained image, via its published sha256)"
+  ],
+  "outputs_planned": [
+    "CLAIM.json",
+    "src/ (vendored byte-identical lineage + anchor_pages.{h,c}, sys_mprotect_shim.h, code_anchor_probe.cpp, module_entry.c variant)",
+    "build_code_anchor_probe.py",
+    "check_code_anchor_artifact.py",
+    "tests/ (host checks: page-range math, diff-mask, JSONL writer validity)",
+    "determinism/run1 + run2 (two-run determinism)",
+    "modbridge_ingame_facts.prx (final deliverable)",
+    "RECEIPT.md",
+    "STAGE-PLAN-CODE-ANCHOR.md",
+    "REPORT.md (last)"
+  ],
+  "controller_corrections_applied": [
+    "1 mprotect BEFORE read, never raw-read exec-only: the igf4 task's 'direct read, fall through on fault' ordering is REJECTED; fault recovery is impossible (no signal/sigaction importable within the frozen contract; a raw read fault kills the process before any code can react). The probe executes mprotect -> read -> restore -> compare, in that order, per anchor.",
+    "2 only the specific 16 KiB page(s) containing the two anchors are changed (never the whole exec span); PROT_READ is ADDED while PROT_EXEC is preserved (new prot = 0x5)",
+    "3 current protection is queried first (current-invocation sysctl KERN_PROC_VMMAP covering span via the lineage mapscan; checkpoint constant 0x4 only as labeled fallback when the map is untrusted) and used as the restore value",
+    "4 restoration is verified; failure is recorded as an anomaly in the anchor record and the summary",
+    "5 if mprotect fails, the specific errno is recorded and NO read is attempted (refusal record)",
+    "6 coordinator's 'verify sceKernelMprotect is in the pinned SDK's import set' was verified and is NEGATIVE - see verification_findings; the implemented mechanism is documented for controller sign-off BEFORE staging"
+  ],
+  "verification_findings": {
+    "sceKernelMprotect_import_row": "ABSENT everywhere in-workspace: not among the frozen 191-contract rows (console-proven import family); not declared in pinned ps5-payload-sdk v0.43 (grep of the whole SDK: zero hits); not among the observed/decoded exports of the retained libkernel.sprx (strict-metadata.json has zero mprotect strings).",
+    "coordinator_windows_candidate_claim": "outputs/ps5-mod-bridge/windows-candidate/test_owned_runtime.c:26 uses HOST-POSIX mprotect(2) inside the Windows loader emulation - it is NOT a console sceKernelMprotect import. The cited evidence does not exist on the console side.",
+    "pinned_sdk_constants_verified": {
+      "SYS_mprotect": "74 at sdk-v0.43/ps5-payload-sdk/target/include/sys/syscall.h:82",
+      "PROT_NONE_READ_WRITE_EXEC": "0x00/0x01/0x02/0x04 at .../sys/mman.h:52-55 (VMMAP prot=0x4 == PROT_EXEC exactly)",
+      "mprotect_signature": "int mprotect(const void *, size_t, int) at .../sys/mman.h:263 (FreeBSD ABI)",
+      "PAGE_SHIFT": "14 (=> 16 KiB pages) at .../machine/param.h:99, matching the controller's 16 KiB directive"
+    },
+    "implemented_mechanism": "header-provenanced inline x86-64 syscall shim (syscall number taken from the pinned SDK's own sys/syscall.h at build time; PROT_* from its sys/mman.h): NO new import identity is introduced - the 7-verbatim-import packaging is preserved EXACTLY. The shim is 3-arg mprotect only, records errno, nothing else.",
+    "numbering_preservation_evidence": "the console-proven lineage calls plain FreeBSD-named wrappers getpid(20) and sysctl(202) successfully in v2/v3 runs - the low FreeBSD syscall numbers are preserved on this console; SYS_mprotect=74 sits in the same preserved range.",
+    "residual_risk_for_controller_signoff": "the kernel syscall number itself cannot be verified on-host. If this console renumbered syscall 74, the first mprotect could behave unexpectedly (most likely ENOSYS refusal, recorded, no read). This residual risk is explicitly surfaced in STAGE-PLAN/REPORT and requires controller acceptance BEFORE staging. The refusal path is safe by construction (no read without mprotect success)."
+  },
+  "probe_contract": {
+    "module": "modbridge_ingame_facts (UNCHANGED)",
+    "log_path": "/data/modbridge-ingame-facts.jsonl (UNCHANGED, replaces igf4 log)",
+    "imports": "the SAME 7 verbatim frozen-contract rows (__error, sceKernelOpen, sceKernelWrite, sceKernelClose, sysctl, getpid, clock_gettime); zero weak; forbidden-symbol gate unchanged",
+    "entry_marker_first": true,
+    "sequence": {
+      "1": "entry marker (module_entry.c lineage contract)",
+      "2": "startup (init-array bounded walk)",
+      "3": "mapscan (current-invocation VMMAP, internal-only; coverage + restore-prot source)",
+      "4": "tick_anchor at 0x33ac8c0: mprotect page 0x33ac000 +READ -> read 16 bytes -> restore -> compare vs 554889e54157415641554154534881ec",
+      "5": "sco_anchor at 0x890aa0: mprotect page 0x890000 +READ -> read 16 bytes -> restore -> compare vs same expected prologue",
+      "6": "gua_pred_replay: with corrected GC-order predicate when worker-predicate-gc-fix has delivered at build time; otherwise status=tbd record, GUA memory untouched",
+      "7": "summary incl anchors_confirmed, mprotect anomalies, promotion_gate_indicator (+ _anchors_only)"
+    },
+    "per_anchor_fields": ["method_used", "orig_prot", "orig_prot_source", "page_start", "page_size", "mprotect_called", "mprotect_rc", "mprotect_errno_hex", "read_performed", "bytes_read_hex", "expected_bytes_hex", "byte_match", "diff_mask", "restore_called", "restore_rc", "mprotect_restored", "anomaly", "refusal"]
+  },
+  "expected_bytes": {
+    "tick": {"rt": "0x33ac8c0", "profile_vaddr": "0x2fac8c0", "file_offset": "0x2fb08c0", "expected16_hex": "554889e54157415641554154534881ec"},
+    "sco": {"rt": "0x890aa0", "profile_vaddr": "0x490aa0", "file_offset": "0x494aa0", "expected16_hex": "554889e54157415641554154534881ec"},
+    "image_sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+    "cross_worker_agreement_required": "worker-expected-bytes/EXPECTED-BYTES.json anchors[0..1] bytes_hex[0:32] must equal the igf4 evidence hex (loud build check)"
+  },
+  "bounds": "no nested subagents; no network; no console (controller stages+launches); existing files elsewhere read-only (vendored copies byte-verified, Packager.dll used in place, never rebuilt); write only under outputs/2026-10-04-zcode-team/worker-code-anchor-reads/; CLAIM.json first; two-run determinism; entry marker first; no VMMAP dump, no base scan, no experiments beyond the two anchor reads + the predicate-replay hook; REPORT.md last",
+  "native_executed": false,
+  "in_game_results": false
+}

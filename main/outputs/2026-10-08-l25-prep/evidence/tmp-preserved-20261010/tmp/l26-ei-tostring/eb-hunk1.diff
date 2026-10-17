@@ -1,0 +1,41 @@
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UObjectGlobals.cpp	2026-10-08 23:41:56
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UObjectGlobals.cpp
+@@ -637,6 +637,22 @@
+     // Diagnostic: '[FFO] query-fallback [n:X]' logs once per constructed
+     // name index when the fallback engages, so names-resolve-but-mismatch
+     // is visible instead of silent.
++    // l27 (agent-EB, fname-rootfix): the marker now also prints the
++    // constructed Number and a 24-char ToString tail. Byte-level ground
++    // truth (DECISION-MEMO.md): slot 2's sret decode is CORRECT, Find/Add
++    // share one id space, and a suffix-less Find can only return {0,0} or
++    // {id,0}. Therefore on the next launch exactly ONE of these shapes is
++    // possible, and each names the real bug:
++    //   ts:'<other name>'  -> the ctor INPUT string was corrupted before the
++    //                          call (ToCharTypePtr/ensure_str family; v7's
++    //                          S1/S2/S3/U2 all threw GetPackageNameFromLongName
++    //                          on dotted paths, proving that layer mangles).
++    //   ts:'' or garbage   -> n:X is likely a VALID id and the Kismet
++    //                          Conv_NameToString route (the mismatch
++    //                          detector's ToString) is the liar.
++    //   num:!=0            -> the only decode-side failure shape (a rebind
++    //                          of slot 2 to the raw core 0x242470, whose
++    //                          return IS id|(id<<32)); expected 0 here.
+     static uint32_t g_ffo_query_fallback_indices[128]{};
+     static int32_t g_ffo_query_fallback_count = 0;
+     static auto LogFindXOfQueryFallback(FName Result) -> void
+@@ -650,7 +666,14 @@
+             }
+             if (g_ffo_query_fallback_count >= 128) { return; }
+             g_ffo_query_fallback_indices[g_ffo_query_fallback_count++] = query_index;
+-            Output::send<LogLevel::Error>(STR("[FFO] query-fallback [n:{:X}]\n"), query_index);
++            auto rendered = ensure_str(Result.ToString());
++            if (rendered.size() > 24) { rendered = rendered.substr(0, 24); }
++            for (char& c : rendered)
++            {
++                if (c == '\n' || c == '\r') { c = ' '; } // one line per marker (wide-char log writer law)
++            }
++            Output::send<LogLevel::Error>(STR("[FFO] query-fallback [n:{:X} num:{} ts:'{}']\n"),
++                                          query_index, Result.GetNumber(), rendered);
+         }
+         catch (...)
+         {

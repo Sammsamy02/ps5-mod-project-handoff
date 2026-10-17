@@ -1,0 +1,2625 @@
+diff --git a/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/conformance.lua b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/conformance.lua
+new file mode 100644
+index 0000000..04d8aa1
+--- /dev/null
++++ b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/conformance.lua
+@@ -0,0 +1,464 @@
++-- LOCAL TEST TOOLING ONLY. Not a mod, never autoloaded or deployed.
++-- Loading this file only returns a runner. Every engine call needs new({enabled=true}),
++-- explicit case/risk selection, fixture context and an independent thread witness.
++-- A caller-provided "engine" label is not authenticated engine evidence.
++local M = {}
++local SCHEMA = "modbridge.ue4ss-conformance/1"
++local SUITE = "townfall-itemspawner-v1-17-surfaces-v1"
++local RELEASE = "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658"
++local HELPER = "5a8f6609e555eee4a535f51d21fcdef768ac654bf4d4abe283c719b1c12215a7"
++local NULL = {}
++local ARRAY = {}
++local BINDINGS = {"RegisterKeyBind", "RegisterLoadMapPreHook", "print", "ExecuteInGameThread",
++    "FindFirstOf", "require", "CreateInvalidObject", "FindAllOf", "StaticFindObject",
++    "FName", "StaticConstructObject", "FText", "LoadAsset"}
++local KEY_NAMES = {"F7", "UP_ARROW", "DOWN_ARROW", "RETURN", "LEFT_ARROW", "RIGHT_ARROW"}
++local Session = {}; Session.__index = Session
++local cases = {}
++
++local function encode(v, active)
++    if v == NULL or v == nil then return "null" end
++    local kind = type(v)
++    if kind == "boolean" then return v and "true" or "false" end
++    if kind == "number" then
++        assert(v == v and v ~= math.huge and v ~= -math.huge, "nonfinite JSON number")
++        return string.format("%.17g", v)
++    end
++    if kind == "string" then
++        return '"' .. v:gsub('[%z\1-\31\\"]', function(c)
++            local escaped = {['"']='\\"', ['\\']='\\\\', ['\n']='\\n', ['\r']='\\r', ['\t']='\\t'}
++            return escaped[c] or string.format("\\u%04x", string.byte(c))
++        end) .. '"'
++    end
++    assert(kind == "table", "unserializable result: " .. kind)
++    active = active or {}; assert(not active[v], "cyclic JSON result"); active[v] = true
++    local length, count, array = #v, 0, true
++    for k in pairs(v) do count=count+1; if type(k) ~= "number" or k < 1 or k % 1 ~= 0 or k > length then array=false end end
++    array = array and count == length and (length > 0 or getmetatable(v)==ARRAY)
++    local parts = {}
++    if array then for i=1,length do parts[#parts+1]=encode(v[i], active) end
++    else
++        local keys = {}; for k in pairs(v) do assert(type(k)=="string", "JSON object key must be string"); keys[#keys+1]=k end
++        table.sort(keys)
++        for _,k in ipairs(keys) do parts[#parts+1]=encode(k, active)..":"..encode(v[k], active) end
++    end
++    active[v] = nil
++    return (array and "[" or "{") .. table.concat(parts, ",") .. (array and "]" or "}")
++end
++local function same(a,b) return encode(a) == encode(b) end
++local function stop(status, reason, value, failure)
++    error({status=status, reason=reason, value=value, failure=failure}, 0)
++end
++local function need(condition, label) if not condition then stop("skipped", "missing explicit context: " .. label) end end
++local function check(condition, label) if not condition then error(label, 0) end end
++local function number(v, name) check(type(v)=="number", name .. " must be numeric"); return v end
++local function xyz(v) return {X=number(v.X,"X"),Y=number(v.Y,"Y"),Z=number(v.Z,"Z")} end
++local function xy(v) return {X=number(v.X,"X"),Y=number(v.Y,"Y")} end
++local function add(id, api, permission, bindings, run, options)
++    local c = {id=id,api=api,order=#cases+1,permission=permission,bindings=bindings,run=run}
++    for k,v in pairs(options or {}) do c[k]=v end
++    cases[#cases+1]=c
++end
++function Session:object(v, label)
++    local kind=type(v)
++    need(kind=="userdata" or (self.cfg.evidence=="host-fixture" and kind=="table"), label .. " (native userdata required for engine evidence)")
++    return v
++end
++function Session:result_object(v, label)
++    local kind=type(v)
++    check(kind=="userdata" or (self.cfg.evidence=="host-fixture" and kind=="table"), "unexpected native result: "..label.." ("..kind..")")
++    return v
++end
++function Session:valid(v) return v:IsValid() == true end
++function Session:guard()
++    local callback = self.cfg.thread_guard
++    if type(callback) ~= "function" then return nil, "independent game-thread witness unavailable" end
++    local ok, witness = pcall(callback)
++    if not ok then return nil, "game-thread witness error: " .. tostring(witness) end
++    if type(witness) ~= "table" or witness.in_game_thread ~= true then return nil, "game-thread witness did not prove this thread" end
++    local equal = witness.thread_id ~= nil and witness.thread_id == witness.known_game_thread_id
++    if not equal then return nil, "native thread identity not independently matched" end
++    if self.cfg.evidence == "engine" and (witness.kind ~= "independent-native" or type(witness.proof_id) ~= "string" or witness.proof_id == "") then
++        return nil, "Lua booleans/dispatch assumptions are not independent native thread proof"
++    end
++    return {verified=self.cfg.evidence=="engine",in_game_thread=true}, {
++        thread_id=tostring(witness.thread_id),known_game_thread_id=tostring(witness.known_game_thread_id),proof_id=tostring(witness.proof_id or "host-fixture")}
++end
++function Session:callback_guard()
++    local guard, why = self:guard()
++    return guard, guard and nil or why
++end
++function Session:cleanup(kind, context, object)
++    local ok, witness = pcall(self.cfg.cleanup, kind, context, object)
++    if not ok then stop("failed", nil, {cleanup_verified=false}, "cleanup failed: " .. tostring(witness)) end
++    if type(witness) ~= "table" or witness.ok ~= true or witness.verified ~= true then
++        stop("observed", "cleanup receipt pending", {cleanup_verified=false})
++    end
++    if self.cfg.evidence=="engine" and (witness.evidence~="engine" or type(witness.proof_id)~="string" or witness.proof_id=="") then
++        stop("observed", "independent engine cleanup receipt pending", {cleanup_verified=false})
++    end
++end
++
++-- The first 17 cases follow the release's chunk/F7/UMG/later asset path.
++-- Branch-dependent first use is described separately in manifest.json.
++add("register_keys.accept", "RegisterKeyBind", "register_keys", {"RegisterKeyBind"}, function(s)
++    need(type(s.ctx.registration_plan_id)=="string", "isolated registration lifetime/teardown plan")
++    need(type(Key)=="table", "Key constants")
++    s.key_registered=true
++    local codes={}
++    for _,name in ipairs(KEY_NAMES) do
++        local key=Key[name]; check(type(key)=="number" and key%1==0 and key>=0 and key<=255,"invalid Key."..name)
++        codes[#codes+1]={name=name,code=key}
++        RegisterKeyBind(key,function()
++            if s.closed then return end
++            local guard,why=s:callback_guard()
++            if not guard then s.key_error=why; return end
++            s.key_counts[name]=(s.key_counts[name] or 0)+1
++            s.key_order[#s.key_order+1]=name
++        end)
++    end
++    return {accepted=codes, delivery_proved=false}
++end)
++add("loadmap.accept", "RegisterLoadMapPreHook", "register_map_hook", {"RegisterLoadMapPreHook"}, function(s)
++    need(type(s.ctx.registration_plan_id)=="string", "isolated hook lifetime/teardown plan")
++    RegisterLoadMapPreHook(function()
++        if s.closed then return end
++        local guard,why=s:callback_guard()
++        if not guard then s.map_error=why; return end
++        s.map_count=s.map_count+1
++    end)
++    s.map_registered=true
++    return {accepted=true,delivery_proved=false,mod_registration_optional=true}
++end)
++add("print.emit", "print", "print", {"print"}, function(s)
++    need(type(s.ctx.print_marker)=="string" and s.ctx.print_marker~="", "unique captured-log marker")
++    local message="[TownfallItemSpawner] "..s.ctx.print_marker.."\n"
++    local values=table.pack(print(message)); s.print_message=message;s.print_returns=values.n
++    return {returned_values=values.n,message=message,output_capture_pending=true}, "observed", "independent output capture pending"
++end, {finish=function(s)
++    if not s.print_message or type(s.cfg.print_capture)~="function" then return nil end
++    local witness=s.cfg.print_capture(s.print_message)
++    if type(witness)=="table" and witness.observed==true and witness.text==s.print_message and type(witness.proof_id)=="string"
++        and (s.cfg.evidence~="engine" or witness.evidence=="engine") then
++        return {returned_values=s.print_returns,message=s.print_message,output_captured=true}
++    end
++    return nil
++end})
++add("game_thread.delivery", "ExecuteInGameThread", "dispatch", {"ExecuteInGameThread"}, function(s)
++    need(type(s.ctx.registration_plan_id)=="string", "carrier/lifetime plan")
++    ExecuteInGameThread(function()
++        if s.closed then return end
++        local guard,why=s:callback_guard()
++        if not guard then s.dispatch_error=why; return end
++        s.dispatch_count=s.dispatch_count+1
++    end)
++    s.dispatch_registered=true
++    return {queued=true,callback_count=0}, "observed", "callback delivery pending"
++end, {finish=function(s)
++    if s.dispatch_error then stop("failed",nil,{callback_count=s.dispatch_count},s.dispatch_error) end
++    if not s.dispatch_registered or s.dispatch_count==0 then stop("skipped","callback never independently witnessed",{callback_count=s.dispatch_count}) end
++    check(s.dispatch_count==1,"dispatch delivered more than once")
++    return {queued=true,callback_count=s.dispatch_count,callback_thread_verified=true}
++end})
++add("database.findfirst", "FindFirstOf", "engine_read", {"FindFirstOf"}, function(s)
++    local expected=s:object(s.ctx.database,"ItemDatabaseSubsystem")
++    local actual=s:result_object(FindFirstOf("ItemDatabaseSubsystem"),"FindFirstOf result")
++    check(s:valid(actual),"database invalid");check(actual==expected,"database differs from controlled fixture")
++    return {class="ItemDatabaseSubsystem",valid=true,same_as_fixture=true}
++end)
++add("object.validity", "UObject:IsValid", "engine_read", {}, function(s)
++    local db=s:object(s.ctx.database,"live database")
++    check(s:valid(db),"live fixture IsValid was not true")
++    return {live_valid=true}
++end)
++add("object.read", "UObject.__index / __newindex", "engine_read", {}, function(s)
++    local pc=s:object(s.ctx.controller,"PlayerController")
++    local pawn=s:object(s.ctx.pawn,"Pawn")
++    local actual=s:result_object(pc.Pawn,"pc.Pawn property")
++    check(s:valid(actual) and actual==pawn,"Pawn property differs from fixture")
++    return {property="Pawn",valid=true,same_as_fixture=true}
++end)
++add("strings.native", "FName/FText/FString:ToString", "engine_read", {}, function(s)
++    need(type(s.ctx.strings)=="table", "native FName/FText/FString fixtures")
++    local results={}
++    for _,name in ipairs({"FName","FText","FString"}) do
++        local fixture=s.ctx.strings[name];need(type(fixture)=="table" and type(fixture.expected)=="string",name)
++        local value=s:object(fixture.value,name.." userdata")
++        local text=value:ToString();check(type(text)=="string" and text==fixture.expected,name.." ToString mismatch")
++        results[name]=text
++    end
++    return results
++end)
++add("require.helper", "require", "engine_read", {"require"}, function(s)
++    need(s.ctx.helper_fixture_ready==true,"pinned UEHelpers source and controlled controller context")
++    local a=require("UEHelpers");local b=require("UEHelpers")
++    check(type(a)=="table" and type(a.GetPlayerController)=="function","UEHelpers export missing")
++    check(a==b,"UEHelpers require cache changed")
++    s.helper=a
++    return {module="UEHelpers",export_function=true,cached_same_table=true}
++end)
++add("object.invalid", "CreateInvalidObject", "engine_read", {"CreateInvalidObject"}, function(s)
++    need(s.ctx.invalid_fixture_ready==true,"invalid-wrapper fixture")
++    local object=s:result_object(CreateInvalidObject(),"invalid wrapper")
++    check(object:IsValid()==false,"CreateInvalidObject IsValid was not false")
++    return {invalid_wrapper=true,IsValid=false}
++end, {covers={"UObject:IsValid"}})
++add("controller.findall", "FindAllOf", "engine_read", {"FindAllOf"}, function(s)
++    local expected=s:object(s.ctx.controller,"controlled controller")
++    need(type(s.ctx.expected_controller_count)=="number", "deterministic controller count")
++    local controllers=FindAllOf("PlayerController");local fallback=false
++    if not controllers then controllers=FindAllOf("Controller");fallback=true end
++    check(type(controllers)=="table","controller collection not a table")
++    local found,valid_count=false,0
++    for _,object in ipairs(controllers) do
++        s:result_object(object,"enumerated controller")
++        if s:valid(object) then valid_count=valid_count+1 end
++        if object==expected then found=true end
++    end
++    check(#controllers==s.ctx.expected_controller_count and found,"controller enumeration mismatch")
++    return {count=#controllers,valid_count=valid_count,contains_fixture=found,fallback_on_falsy=fallback}
++end, {covers={"UScriptStruct / array / OUT marshalling"}})
++add("findobject.umg", "StaticFindObject", "engine_read", {"StaticFindObject"}, function(s)
++    need(type(s.ctx.static_objects)=="table", "pinned UMG class/default-object fixtures")
++    local result={}
++    for _,path in ipairs({"/Script/UMG.Default__WidgetBlueprintLibrary","/Script/UMG.UserWidget","/Script/UMG.TextBlock"}) do
++        local expected=s:object(s.ctx.static_objects[path],path)
++        local object=s:result_object(StaticFindObject(path),path.." result")
++        check(s:valid(object) and object==expected,"StaticFindObject path mismatch: "..path)
++        result[#result+1]={path=path,valid=true,same_as_fixture=true}
++    end
++    return result
++end)
++add("fname.add-default", "FName", "name_pool", {"FName"}, function(s)
++    need(type(s.ctx.name_plan_id)=="string", "isolated name-pool fixture/lifetime plan")
++    local object=s:result_object(FName("TownfallItemSpawnerRoot"),"default Add1 FName")
++    local text=object:ToString();check(text=="TownfallItemSpawnerRoot","default Add1 roundtrip mismatch")
++    s.construct_name=object
++    return {text=text,mode="default Add1",roundtrip=true}
++end)
++add("construct.umg", "StaticConstructObject", "construct", {"StaticConstructObject"}, function(s)
++    local ctx=s.ctx.construct;need(type(ctx)=="table", "owned UMG construction context")
++    need(type(ctx.cleanup_plan_id)=="string" and type(s.cfg.cleanup)=="function", "construction cleanup plan/receipt callback")
++    local class=s:object(ctx.class,"UMG class");local outer=s:object(ctx.outer,"owned UMG outer")
++    local name=s:object(ctx.name or s.construct_name,"FName argument")
++    local ok,object=pcall(StaticConstructObject,class,outer,name)
++    if not ok then error(object,0) end
++    -- Cleanup runs even when validity/type verification later fails.
++    local valid_ok,valid=pcall(function()return s:valid(s:result_object(object,"constructed UMG object")) end)
++    s:cleanup("construct",ctx,object)
++    if not valid_ok then error(valid,0) end
++    check(valid,"constructed object invalid")
++    return {valid=true,argument_count=3,cleanup_verified=true}
++end)
++add("marshal.struct-write", "UScriptStruct / array / OUT marshalling", "property_write", {}, function(s)
++    local widget=s:object(s.ctx.textblock,"owned TextBlock")
++    need(s.ctx.textblock_owned==true,"exclusive widget ownership for snapshot/write/revert")
++    check(s:valid(widget),"TextBlock invalid")
++    local before={shadow=xy(widget.ShadowOffset),font_size=number(widget.Font.Size,"Font.Size")}
++    local written={shadow={X=1,Y=1},font_size=13};local readback
++    local ok,why=pcall(function()
++        widget.ShadowOffset={X=1,Y=1};widget.Font.Size=13
++        readback={shadow=xy(widget.ShadowOffset),font_size=number(widget.Font.Size,"Font.Size")}
++        check(same(readback,written),"writable property readback mismatch")
++    end)
++    local restored
++    local restore_ok,restore_error=pcall(function()
++        widget.ShadowOffset={X=before.shadow.X,Y=before.shadow.Y};widget.Font.Size=before.font_size
++        restored={shadow=xy(widget.ShadowOffset),font_size=number(widget.Font.Size,"Font.Size")}
++        check(same(restored,before),"property restoration readback mismatch")
++    end)
++    local value={before=before,written=written,readback=readback or NULL,restored=restored or NULL,cleanup_verified=restore_ok}
++    if not restore_ok then stop("failed",nil,value,"cleanup failed: "..tostring(restore_error)..(ok and "" or "; original: "..tostring(why))) end
++    if not ok then stop("failed",nil,value,tostring(why)) end
++    return value
++end, {covers={"UObject.__index / __newindex"}})
++add("ftext.roundtrip", "FText", "text", {"FText"}, function(s)
++    need(type(s.ctx.text_plan_id)=="string", "native text ownership fixture")
++    local text="Townfall conformance \206\177\240\159\152\128"
++    local object=s:result_object(FText(text),"FText userdata")
++    local actual=object:ToString();check(actual==text,"FText UTF-8/UTF-16 roundtrip mismatch")
++    return {text=actual,roundtrip=true}
++end, {covers={"FName/FText/FString:ToString"}})
++add("loadasset.fallback", "LoadAsset", "load_asset", {"LoadAsset","StaticFindObject"}, function(s)
++    local ctx=s.ctx.asset;need(type(ctx)=="table" and type(ctx.path)=="string", "explicit cooked pickup asset path")
++    need(type(ctx.cleanup_plan_id)=="string" and type(s.cfg.cleanup)=="function", "asset-load lifetime/reset plan and cleanup receipt")
++    local before=s:result_object(StaticFindObject(ctx.path),"pre-load lookup")
++    check(before:IsValid()==false,"asset already loaded; fallback fixture not satisfied")
++    local returns=table.pack(pcall(LoadAsset,ctx.path))
++    -- Read engine values before cleanup can destroy/unload their backing state.
++    local ok,value=pcall(function()
++        if not returns[1] then error(returns[2],0) end
++        local lookup=s:result_object(StaticFindObject(ctx.path),"post-load lookup")
++        local valid=s:valid(lookup);check(valid,"LoadAsset fallback did not make class findable")
++        return {path=ctx.path,returned_values=returns.n-1,returned_object_valid=s:valid(s:result_object(returns[2],"LoadAsset returned object")),
++            asset_found=returns[3]==nil and NULL or returns[3],asset_loaded=returns[4]==nil and NULL or returns[4],
++            post_lookup_valid=valid,cleanup_verified=true}
++    end)
++    local cleanup_ok,cleanup_error=pcall(function()s:cleanup("load_asset",ctx,returns[1] and returns[2] or nil) end)
++    if not cleanup_ok then
++        if not ok then
++            local original=tostring(value)
++            if type(cleanup_error)=="table" then cleanup_error.failure=(cleanup_error.failure or cleanup_error.reason or "cleanup pending").."; original: "..original end
++        end
++        error(cleanup_error,0)
++    end
++    if not ok then error(value,0) end
++    return value
++end)
++
++-- Additional cases distinguish acceptance from delivery and known full-API differences.
++add("register_keys.delivery", "RegisterKeyBind", "register_keys", {}, function(s) return {pending=true},"observed","manual key delivery pending" end,
++{finish=function(s)
++    if s.key_error then stop("failed",nil,{counts=s.key_counts},s.key_error) end
++    if not s.key_registered or #s.key_order==0 then stop("skipped","six real key events not witnessed",{counts=s.key_counts}) end
++    check(same(s.key_order,KEY_NAMES),"key events differ from required once-each F7/UP/DOWN/RETURN/LEFT/RIGHT order")
++    return {counts=s.key_counts,order=s.key_order,callback_thread_verified=true}
++end})
++add("loadmap.delivery", "RegisterLoadMapPreHook", "register_map_hook", {}, function(s) return {pending=true},"observed","manual map transition pending" end,
++{finish=function(s)
++    if s.map_error then stop("failed",nil,{callback_count=s.map_count},s.map_error) end
++    if not s.map_registered or s.map_count==0 then stop("skipped","actual map-prehook event not witnessed",{callback_count=s.map_count}) end
++    check(s.map_count==1,"map prehook delivered more than once")
++    return {callback_count=s.map_count,callback_thread_verified=true}
++end})
++add("require.searchers", "require", "engine_read", {}, function(s)
++    need(s.ctx.helper_fixture_ready==true,"pinned loader context")
++    check(type(package)=="table" and type(package.searchers)=="table","package.searchers missing")
++    local types={};for _,searcher in ipairs(package.searchers) do types[#types+1]=type(searcher) end
++    return {count=#package.searchers,types=types},"observed","inventory only; disk/C-loading behavior still unproved"
++end)
++add("fname.find-existing", "FName", "name_pool", {"FName"}, function(s)
++    need(type(s.ctx.known_name)=="string" and s.ctx.known_name~="", "existing native name fixture")
++    local name=s:result_object(FName(s.ctx.known_name,0),"Find0 FName")
++    local text=name:ToString();check(text==s.ctx.known_name,"existing Find0 name mismatch")
++    return {text=text,mode=0,roundtrip=true}
++end)
++add("fname.replace2", "FName", "name_pool", {"FName"}, function(s)
++    need(type(s.ctx.known_name)=="string" and type(s.ctx.name_plan_id)=="string", "Replace2 existing-name fixture/lifetime plan")
++    local ok,value=pcall(FName,s.ctx.known_name,2)
++    local result={mode=2,call_succeeded=ok,error=ok and NULL or tostring(value)}
++    if ok then result.text=s:result_object(value,"Replace2 FName"):ToString() end
++    return result,"observed","full-API Replace2 observation; PC contract/evidence pending"
++end)
++add("fname.unicode", "FName", "name_pool", {"FName"}, function(s)
++    need(type(s.ctx.name_plan_id)=="string", "Unicode name-pool fixture/lifetime plan")
++    local text="TownfallConformance_\206\177_\240\159\152\128"
++    local name=s:result_object(FName(text),"UTF16 FName")
++    check(name:ToString()==text,"FName Unicode roundtrip mismatch")
++    return {text=text,roundtrip=true}
++end)
++add("marshal.trace-out", "UScriptStruct / array / OUT marshalling", "trace", {}, function(s)
++    local ctx=s.ctx.trace;need(type(ctx)=="table" and type(ctx.expected)=="table", "controlled ground trace and explicit expected OUT values")
++    local pawn=s:object(ctx.pawn,"trace pawn");local system=s:object(ctx.system,"KismetSystemLibrary")
++    need(type(ctx.start)=="table" and type(ctx.finish)=="table", "frozen trace vectors")
++    local start,finish=xyz(ctx.start),xyz(ctx.finish);local hit={};local transparent={R=0,G=0,B=0,A=0}
++    local has_hit=system:LineTraceSingle(pawn,start,finish,0,false,{pawn},0,hit,true,transparent,transparent,0)
++    check(type(has_hit)=="boolean","trace return not boolean")
++    local result={has_hit=has_hit,point=(hit.ImpactPoint or hit.Location) and xyz(hit.ImpactPoint or hit.Location) or NULL,
++        normal=hit.ImpactNormal and xyz(hit.ImpactNormal) or NULL}
++    check(same(result,ctx.expected),"trace OUT result differs from controlled fixture")
++    return result
++end)
++
++function Session:record(spec, value, status, reason, failure)
++    local prior=self.results[spec.id]
++    local r={schema=SCHEMA,kind="case",id=spec.id,api=spec.api,order=spec.order,
++        evidence=self.cfg.evidence,status=status or (self.cfg.evidence=="engine" and "proved" or "fixture-pass"),
++        value=value or NULL,error=failure or NULL,reason=reason or NULL,
++        guard=prior and prior.guard or self.current_guard or {verified=false,in_game_thread=false}}
++    local volatile=prior and prior.volatile or self.current_volatile
++    if volatile then r.volatile=volatile end
++    self.results[spec.id]=r
++end
++function Session:invoke(spec, callback)
++    local ok,value,status,reason=pcall(callback,self)
++    if ok then self:record(spec,value,status,reason)
++    elseif type(value)=="table" and value.status then self:record(spec,value.value,value.status,value.reason,value.failure)
++    else self:record(spec,nil,"failed",nil,tostring(value)) end
++end
++function Session:run()
++    assert(not self.started and not self.closed,"single-use session")
++    self.started=true
++    for _,spec in ipairs(cases) do
++        self.current_guard=nil;self.current_volatile=nil
++        local why,unavailable
++        if not self.selected[spec.id] then why="case not selected"
++        elseif self.cfg.allow[spec.permission]~=true then why="permission disabled: "..spec.permission
++        else
++            for _,name in ipairs(spec.bindings) do if rawget(_G,name)==nil then unavailable=name;break end end
++            if not unavailable then
++                local guard,detail=self:guard()
++                if not guard then why=detail else self.current_guard=guard;self.current_volatile=detail end
++            end
++        end
++        if unavailable then self:record(spec,nil,"unavailable","binding unavailable: "..unavailable)
++        elseif why then self:record(spec,nil,"skipped",why)
++        else self:invoke(spec,spec.run) end
++    end
++    return self
++end
++function Session:finish()
++    assert(self.started and not self.closed,"run once, then finish once after approved manual observations")
++    for _,spec in ipairs(cases) do
++        local r=self.results[spec.id]
++        if spec.finish and (r.status=="observed" or r.status=="fixture-pass" or r.status=="proved") then
++            -- No API is scheduled at finish; only callback/capture observations are finalized.
++            self.current_guard=r.guard;self.current_volatile=r.volatile
++            local ok,value=pcall(spec.finish,self)
++            if ok and value~=nil then self:record(spec,value)
++            elseif not ok then
++                if type(value)=="table" and value.status then self:record(spec,value.value,value.status,value.reason,value.failure)
++                else self:record(spec,nil,"failed",nil,tostring(value)) end
++            end
++        end
++    end
++    self.closed=true
++    local meta=self.cfg.metadata or {};local selected_ids=setmetatable({},ARRAY)
++    for _,spec in ipairs(cases) do if self.selected[spec.id] then selected_ids[#selected_ids+1]=spec.id end end
++    local att=meta.attestations or {}
++    if self.cfg.evidence~="engine" then att={real_engine=false,release_immutable=false,independent_thread_witness=false,controlled_object_context=false} end
++    local header={schema=SCHEMA,kind="run",suite_id=SUITE,run_id=meta.run_id or "unspecified",
++        side=self.cfg.side or "host",evidence=self.cfg.evidence,mod_release_sha256=meta.mod_release_sha256 or RELEASE,
++        helper_sha256=meta.helper_sha256 or HELPER,script_sha256=meta.script_sha256 or NULL,
++        game_id=meta.game_id or "Townfall",content_build=meta.content_build or "unspecified",
++        scenario_id=meta.scenario_id or "unspecified",context_id=meta.context_id or "unspecified",
++        runtime_build=meta.runtime_build or "unspecified",runtime_sha256=meta.runtime_sha256 or NULL,
++        game_binary_sha256=meta.game_binary_sha256 or NULL,
++        attestations=att,selected_case_ids=selected_ids}
++    self.cfg.emit(encode(header))
++    for _,name in ipairs(BINDINGS) do
++        local object=rawget(_G,name)
++        self.cfg.emit(encode({schema=SCHEMA,kind="binding",name=name,binding_present=object~=nil,lua_type=type(object),behavior_proved=false}))
++    end
++    local status_counts={}
++    for _,spec in ipairs(cases) do
++        local result=self.results[spec.id];status_counts[result.status]=(status_counts[result.status] or 0)+1
++        self.cfg.emit(encode(result))
++    end
++    self.cfg.emit(encode({schema=SCHEMA,kind="end",complete=true,case_count=#cases,status_counts=status_counts}))
++    return self.results
++end
++function M.new(cfg)
++    if type(cfg)~="table" or cfg.enabled~=true then return nil,"disabled" end
++    if type(cfg.emit)~="function" then return nil,"explicit JSONL sink required" end
++    if cfg.evidence~="engine" and cfg.evidence~="host-fixture" then return nil,"evidence must be engine or host-fixture" end
++    if cfg.evidence=="engine" then
++        local att=cfg.metadata and cfg.metadata.attestations or {}
++        for _,flag in ipairs({"real_engine","release_immutable","independent_thread_witness","controlled_object_context"}) do
++            if att[flag]~=true then return nil,"missing independently receipted attestation: "..flag end
++        end
++    end
++    cfg.allow=cfg.allow or {};cfg.context=cfg.context or {}
++    local selected,known={},{}
++    for _,spec in ipairs(cases) do known[spec.id]=true;if cfg.select==nil then selected[spec.id]=true end end
++    for _,id in ipairs(cfg.select or {}) do if not known[id] or selected[id] then return nil,"unknown/duplicate case selection" end;selected[id]=true end
++    return setmetatable({cfg=cfg,ctx=cfg.context,selected=selected,results={},key_counts={},key_order={},map_count=0,dispatch_count=0},Session)
++end
++function M.case_plan()
++    local plan={}
++    for _,spec in ipairs(cases) do plan[#plan+1]={id=spec.id,api=spec.api,order=spec.order,permission=spec.permission,
++        requires_thread=true,covers=spec.covers or setmetatable({},ARRAY)} end
++    return plan
++end
++M.bindings=BINDINGS;M.schema=SCHEMA;M.suite_id=SUITE;M.json=encode
++return M
+diff --git a/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/compare.py b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/compare.py
+new file mode 100644
+index 0000000..5bb055a
+--- /dev/null
++++ b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/compare.py
+@@ -0,0 +1,274 @@
++#!/usr/bin/env python3
++"""Local, fail-closed comparison of future controlled UE4SS PC/PS5 records.
++
++No network or engine access. 0=complete matching evidence, 1=substantive
++difference/failure, 2=invalid/incomplete/reference pending. A match covers this
++case suite only and is never a claim that the unmodified mod worked end to end.
++"""
++import argparse
++import csv
++import json
++from pathlib import Path
++import re
++import sys
++
++SCHEMA = "modbridge.ue4ss-conformance/1"
++PLAN_SCHEMA = "modbridge.ue4ss-conformance-plan/1"
++STATUSES = {"unavailable", "skipped", "failed", "observed", "proved", "fixture-pass"}
++VOLATILE = {"identity", "object_address", "thread_id", "known_game_thread_id",
++            "proof_id", "duration_ms", "timestamp_utc"}
++COMMON_METADATA = ("suite_id", "mod_release_sha256", "helper_sha256", "script_sha256",
++                   "game_id", "content_build", "scenario_id", "context_id", "selected_case_ids")
++PLATFORM_METADATA = {"run_id", "side", "runtime_build", "runtime_sha256", "game_binary_sha256"}
++ATTESTATIONS = ("real_engine", "release_immutable", "independent_thread_witness", "controlled_object_context")
++
++
++class InvalidRecords(ValueError):
++    pass
++
++
++def object_without_duplicates(pairs):
++    result = {}
++    for key, value in pairs:
++        if key in result:
++            raise InvalidRecords("duplicate JSON key: " + key)
++        result[key] = value
++    return result
++
++
++def decode(text):
++    def nonfinite(value):
++        raise InvalidRecords("nonfinite JSON number: " + value)
++    return json.loads(text, object_pairs_hook=object_without_duplicates, parse_constant=nonfinite)
++
++
++def same_json(a, b):
++    # Preserve JSON boolean/number/string types; Python's True == 1 is too loose.
++    return json.dumps(a, sort_keys=True, ensure_ascii=False, allow_nan=False) == json.dumps(
++        b, sort_keys=True, ensure_ascii=False, allow_nan=False)
++
++
++def load_plan(path):
++    plan = decode(path.read_text(encoding="utf-8"))
++    if not isinstance(plan, dict) or plan.get("schema") != PLAN_SCHEMA or not isinstance(plan.get("cases"), list) or not plan["cases"]:
++        raise InvalidRecords("invalid case manifest")
++    if any(not isinstance(case, dict) for case in plan["cases"]):
++        raise InvalidRecords("manifest cases must be objects")
++    ids = [case.get("id") for case in plan["cases"]]
++    orders = [case.get("order") for case in plan["cases"]]
++    if any(not isinstance(x, str) or not x for x in ids) or len(set(ids)) != len(ids):
++        raise InvalidRecords("manifest case IDs must be unique strings")
++    if any(type(order) is not int for order in orders) or orders != list(range(1, len(ids) + 1)):
++        raise InvalidRecords("manifest case order must be contiguous and explicit")
++    if any(not isinstance(case.get("api"), str) for case in plan["cases"]):
++        raise InvalidRecords("manifest API missing")
++    return plan
++
++
++def read_records(path):
++    if path.suffix.lower() == ".tsv":
++        with path.open(encoding="utf-8", newline="") as stream:
++            reader = csv.DictReader(stream, delimiter="\t")
++            if reader.fieldnames != ["record_json"]:
++                raise InvalidRecords("TSV input must have one lossless record_json column")
++            records = []
++            for row in reader:
++                if None in row or not row.get("record_json"):
++                    raise InvalidRecords("malformed TSV record")
++                records.append(decode(row["record_json"]))
++    else:
++        records = [decode(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
++    if not records:
++        raise InvalidRecords("empty record stream")
++    return records
++
++
++def normalized(record, removed):
++    """Do not regex-rewrite addresses, IDs, text, numbers, or errors in a payload."""
++    result = dict(record)
++    if "volatile" in result:
++        volatile = result["volatile"]
++        if not isinstance(volatile, dict) or set(volatile) - VOLATILE:
++            raise InvalidRecords("unknown volatile field: " + repr(volatile))
++        if any(isinstance(v, (dict, list)) for v in volatile.values()):
++            raise InvalidRecords("volatile values must be scalar metadata")
++        removed.update("volatile." + key for key in volatile)
++        del result["volatile"]
++    return result
++
++
++def validate(records, plan, side, removed):
++    for record in records:
++        if not isinstance(record, dict) or record.get("schema") != SCHEMA:
++            raise InvalidRecords(side + ": unknown record schema")
++        if record.get("kind") not in {"run", "binding", "case", "end"}:
++            raise InvalidRecords(side + ": unknown record kind")
++        normalized(record, removed)
++    if records[0]["kind"] != "run" or records[-1]["kind"] != "end":
++        raise InvalidRecords(side + ": missing run header or final end record")
++    if sum(r["kind"] == "run" for r in records) != 1 or sum(r["kind"] == "end" for r in records) != 1:
++        raise InvalidRecords(side + ": duplicate run/end records")
++    header = records[0]
++    for key in COMMON_METADATA + tuple(PLATFORM_METADATA) + ("evidence", "attestations"):
++        if key not in header or header[key] in (None, ""):
++            raise InvalidRecords(side + ": required run metadata missing: " + key)
++    for key in ("mod_release_sha256", "helper_sha256", "script_sha256", "runtime_sha256", "game_binary_sha256"):
++        if not isinstance(header[key], str) or re.fullmatch(r"[0-9a-f]{64}", header[key]) is None:
++            raise InvalidRecords(side + ": invalid SHA-256 metadata: " + key)
++    if header["evidence"] not in {"engine", "host-fixture"}:
++        raise InvalidRecords(side + ": unknown evidence basis")
++    if header["side"] not in {"pc", "ps5", "host"}:
++        raise InvalidRecords(side + ": unknown platform side")
++    if not isinstance(header["attestations"], dict):
++        raise InvalidRecords(side + ": attestations must be explicit")
++    expected = [c["id"] for c in plan["cases"]]
++    selected = header["selected_case_ids"]
++    if not isinstance(selected, list) or any(not isinstance(x, str) or x not in expected for x in selected) or len(set(selected)) != len(selected):
++        raise InvalidRecords(side + ": unknown or duplicate selected case")
++    cases = [r for r in records if r["kind"] == "case"]
++    if [r.get("id") for r in cases] != expected:
++        raise InvalidRecords(side + ": missing/extra/duplicate/out-of-order cases")
++    bindings = [r for r in records if r["kind"] == "binding"]
++    if any(r["kind"] == "binding" for r in records[next((i for i, r in enumerate(records) if r["kind"] == "case"), len(records)):]):
++        raise InvalidRecords(side + ": binding inventory must precede case records")
++    if "bindings" in plan and [r.get("name") for r in bindings] != plan["bindings"]:
++        raise InvalidRecords(side + ": missing/unknown binding inventory")
++    for case, spec in zip(cases, plan["cases"]):
++        if case.get("api") != spec["api"] or type(case.get("order")) is not int or case.get("order") != spec["order"]:
++            raise InvalidRecords(side + ": case API/order differs from manifest: " + spec["id"])
++        if case.get("status") not in STATUSES or case.get("evidence") not in {"engine", "host-fixture"}:
++            raise InvalidRecords(side + ": unknown parity/evidence status: " + spec["id"])
++        if "value" not in case or "error" not in case or "reason" not in case:
++            raise InvalidRecords(side + ": case terminal fields missing: " + spec["id"])
++        if case["status"] == "proved" and (case["error"] is not None or case["reason"] is not None):
++            raise InvalidRecords(side + ": proved case carries an error/skip reason: " + spec["id"])
++        if "guard" in case and not isinstance(case["guard"], dict):
++            raise InvalidRecords(side + ": guard must be an object: " + spec["id"])
++    if records[-1].get("complete") is not True or type(records[-1].get("case_count")) is not int or records[-1].get("case_count") != len(cases):
++        raise InvalidRecords(side + ": incomplete or inconsistent end record")
++    return header, bindings, cases
++
++
++def metadata_view(header, removed):
++    # Runtime build and platform executable hashes differ by platform; preserve
++    # them in the report as provenance, not by deleting them from the raw input.
++    return {k: v for k, v in normalized(header, removed).items() if k not in PLATFORM_METADATA}
++
++
++def compare(plan, reference, candidate, removed):
++    pc, pc_bindings, pc_cases = validate(reference, plan, "reference", removed)
++    ps5, ps5_bindings, ps5_cases = validate(candidate, plan, "candidate", removed)
++    issues, incomplete, different = [], [], []
++    if pc["side"] != "pc" or ps5["side"] != "ps5":
++        incomplete.append("reference must be PC and candidate must be PS5")
++    for label, header in (("reference", pc), ("candidate", ps5)):
++        if header["evidence"] != "engine":
++            incomplete.append(label + " is fixture-only")
++        for flag in ATTESTATIONS:
++            if header["attestations"].get(flag) is not True:
++                incomplete.append(label + " lacks attestation: " + flag)
++        if header["selected_case_ids"] != [c["id"] for c in plan["cases"]]:
++            incomplete.append(label + " did not select the full suite")
++        for field, wanted in (("suite_id", plan["suite_id"]), ("mod_release_sha256", plan["release_sha256"]),
++                              ("helper_sha256", plan["helper_sha256"]), ("script_sha256", plan["script_sha256"])):
++            if header[field] != wanted:
++                different.append(label + " manifest mismatch: " + field)
++        pins = plan.get("platform_pins", {}).get(header["side"], {})
++        for field, wanted in pins.items():
++            if header.get(field) != wanted:
++                different.append(label + " platform provenance mismatch: " + field)
++    pc_meta, ps5_meta = metadata_view(pc, removed), metadata_view(ps5, removed)
++    if not same_json(pc_meta, ps5_meta):
++        fields = sorted(k for k in set(pc_meta) | set(ps5_meta) if not same_json(pc_meta.get(k), ps5_meta.get(k)))
++        # Evidence/attestations are an incomplete-evidence decision, not an
++        # invented behavioral mismatch between synthetic and engine data.
++        behavioral_fields = [k for k in fields if k not in {"evidence", "attestations"}]
++        if behavioral_fields:
++            different.append("run metadata differs: " + ", ".join(behavioral_fields))
++        issues.append({"run_metadata_fields": fields, "reference": pc_meta, "candidate": ps5_meta})
++    if not same_json([normalized(r, removed) for r in pc_bindings], [normalized(r, removed) for r in ps5_bindings]):
++        different.append("binding availability inventory differs (presence is not behavioral proof)")
++        issues.append({"reference_bindings": pc_bindings, "candidate_bindings": ps5_bindings})
++    rows = []
++    for spec, a, b in zip(plan["cases"], pc_cases, ps5_cases):
++        a_norm, b_norm = normalized(a, removed), normalized(b, removed)
++        row = {"id": spec["id"], "api": spec["api"], "reference_status": a["status"],
++               "candidate_status": b["status"], "verdict": "match", "details": []}
++        for label, record in (("reference", a), ("candidate", b)):
++            if record["status"] == "failed":
++                row["verdict"] = "different"
++                row["details"].append(label + " failed: " + str(record["error"]))
++            elif record["status"] != "proved" or record["evidence"] != "engine":
++                if row["verdict"] != "different":
++                    row["verdict"] = "incomplete"
++                row["details"].append(label + " lacks proved engine behavior")
++            if spec.get("requires_thread", True) and record["status"] == "proved":
++                guard = record.get("guard", {})
++                if guard.get("verified") is not True or guard.get("in_game_thread") is not True:
++                    if row["verdict"] != "different":
++                        row["verdict"] = "incomplete"
++                    row["details"].append(label + " lacks independent game-thread proof")
++        # Status/evidence differences alone signal pending proof; compare all
++        # remaining fields, including errors, reasons, arguments and readbacks.
++        a_behavior = {k: v for k, v in a_norm.items() if k not in {"status", "evidence"}}
++        b_behavior = {k: v for k, v in b_norm.items() if k not in {"status", "evidence"}}
++        if not same_json(a_behavior, b_behavior):
++            row["verdict"] = "different"
++            row["details"].append({"reference": a_behavior, "candidate": b_behavior})
++        rows.append(row)
++        if row["verdict"] == "different":
++            different.append(spec["id"])
++        elif row["verdict"] == "incomplete":
++            incomplete.append(spec["id"])
++    verdict = "different" if different else "incomplete" if incomplete else "match"
++    return {"verdict": verdict, "scope": "this case suite only; original mod/menu/spawn acceptance remains separate",
++            "different": different, "incomplete": incomplete, "issues": issues, "cases": rows,
++            "reference_provenance": pc, "candidate_provenance": ps5}
++
++
++def write_reports(report, json_path, tsv_path):
++    body = json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
++    if json_path:
++        json_path.write_text(body, encoding="utf-8")
++    else:
++        print(body, end="")
++    if tsv_path:
++        with tsv_path.open("w", encoding="utf-8", newline="") as stream:
++            writer = csv.writer(stream, delimiter="\t")
++            writer.writerow(["id", "api", "verdict", "reference_status", "candidate_status", "details_json"])
++            for case in report.get("cases", []):
++                writer.writerow([case.get(k, "") for k in ("id", "api", "verdict", "reference_status", "candidate_status")]
++                                + [json.dumps(case.get("details", []), ensure_ascii=False, allow_nan=False)])
++
++
++def main(argv=None):
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--manifest", type=Path, default=Path(__file__).with_name("manifest.json"))
++    parser.add_argument("--reference", type=Path, help="future same-game controlled PC JSONL or TSV capture")
++    parser.add_argument("--candidate", type=Path, required=True, help="PS5 JSONL or TSV capture")
++    parser.add_argument("--json", type=Path, help="verdict JSON output")
++    parser.add_argument("--tsv", type=Path, help="per-case TSV output")
++    args = parser.parse_args(argv)
++    removed = set()
++    try:
++        plan = load_plan(args.manifest)
++        candidate = read_records(args.candidate)
++        validate(candidate, plan, "candidate", removed)
++        if args.reference is None:
++            report = {"verdict": "reference_pending", "reason": "same-game PC reference unavailable; no parity decision",
++                      "cases": [], "candidate_provenance": candidate[0]}
++        else:
++            report = compare(plan, read_records(args.reference), candidate, removed)
++    except (OSError, ValueError, TypeError, KeyError) as error:
++        report = {"verdict": "invalid_records", "error": str(error), "cases": []}
++    report["schema"] = "modbridge.ue4ss-conformance-comparison/1"
++    report["authenticity"] = "record labels are declarations, not authentication; independent harvested receipts are required"
++    report["normalized_fields"] = sorted(removed)
++    report["inputs"] = {"manifest": str(args.manifest), "reference": str(args.reference) if args.reference else None,
++                        "candidate": str(args.candidate)}
++    write_reports(report, args.json, args.tsv)
++    return 0 if report["verdict"] == "match" else 1 if report["verdict"] == "different" else 2
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/manifest.json b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/manifest.json
+new file mode 100644
+index 0000000..8b676f2
+--- /dev/null
++++ b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/manifest.json
+@@ -0,0 +1,1145 @@
++{
++  "schema": "modbridge.ue4ss-conformance-plan/1",
++  "suite_id": "townfall-itemspawner-v1-17-surfaces-v1",
++  "release_sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
++  "helper_sha256": "5a8f6609e555eee4a535f51d21fcdef768ac654bf4d4abe283c719b1c12215a7",
++  "script_sha256": "f0c782c5798b3f85b813be945146bb5666649349e60cddd96043b722447aebc0",
++  "bindings": [
++    "RegisterKeyBind",
++    "RegisterLoadMapPreHook",
++    "print",
++    "ExecuteInGameThread",
++    "FindFirstOf",
++    "require",
++    "CreateInvalidObject",
++    "FindAllOf",
++    "StaticFindObject",
++    "FName",
++    "StaticConstructObject",
++    "FText",
++    "LoadAsset"
++  ],
++  "cases": [
++    {
++      "api": "RegisterKeyBind",
++      "covers": [],
++      "id": "register_keys.accept",
++      "order": 1,
++      "permission": "register_keys",
++      "requires_thread": true,
++      "release_usage": "main.lua 694,698,703,708,713,722: original six key codes/order; isolated callback registration only",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "chunk"
++    },
++    {
++      "api": "RegisterLoadMapPreHook",
++      "covers": [],
++      "id": "loadmap.accept",
++      "order": 2,
++      "permission": "register_map_hook",
++      "requires_thread": true,
++      "release_usage": "main.lua 731: optional pcall registers hook; delivery separately required",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "chunk"
++    },
++    {
++      "api": "print",
++      "covers": [],
++      "id": "print.emit",
++      "order": 3,
++      "permission": "print",
++      "requires_thread": true,
++      "release_usage": "main.lua 6/746: exact tag + string + newline shape; independent log capture required",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "chunk"
++    },
++    {
++      "api": "ExecuteInGameThread",
++      "covers": [],
++      "id": "game_thread.delivery",
++      "order": 4,
++      "permission": "dispatch",
++      "requires_thread": true,
++      "release_usage": "main.lua 695/700/705/710/716/725: default executor callback; native game-thread delivery separately witnessed",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "F7/UMG"
++    },
++    {
++      "api": "FindFirstOf",
++      "covers": [],
++      "id": "database.findfirst",
++      "order": 5,
++      "permission": "engine_read",
++      "requires_thread": true,
++      "release_usage": "main.lua 64: F7 scan runs before buildUI/require",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "F7/UMG"
++    },
++    {
++      "api": "UObject:IsValid",
++      "covers": [],
++      "id": "object.validity",
++      "order": 6,
++      "permission": "engine_read",
++      "requires_thread": true,
++      "release_usage": "main.lua 8-11: nil guard and IsValid()==true; invalid wrapper separately tested",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "F7/UMG"
++    },
++    {
++      "api": "UObject.__index / __newindex",
++      "covers": [],
++      "id": "object.read",
++      "order": 7,
++      "permission": "engine_read",
++      "requires_thread": true,
++      "release_usage": "main.lua 31: Pawn property selected as representative __index read; method lookup also occurs earlier at IsValid",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "F7/UMG"
++    },
++    {
++      "api": "FName/FText/FString:ToString",
++      "covers": [],
++      "id": "strings.native",
++      "order": 8,
++      "permission": "engine_read",
++      "requires_thread": true,
++      "release_usage": "main.lua 57-60/163/168/313: Lua strings bypass ToString; native FName/FText/FString need real userdata fixtures",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "F7/UMG"
++    },
++    {
++      "api": "require",
++      "covers": [],
++      "id": "require.helper",
++      "order": 9,
++      "permission": "engine_read",
++      "requires_thread": true,
++      "release_usage": "main.lua 15: UEHelpers imported inside getPlayerController; module init creates two invalid caches",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "F7/UMG"
++    },
++    {
++      "api": "CreateInvalidObject",
++      "covers": [
++        "UObject:IsValid"
++      ],
++      "id": "object.invalid",
++      "order": 10,
++      "permission": "engine_read",
++      "requires_thread": true,
++      "release_usage": "UEHelpers.lua 35/45/81: invalid wrappers on import and failed controller lookup",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "F7/UMG"
++    },
++    {
++      "api": "FindAllOf",
++      "covers": [
++        "UScriptStruct / array / OUT marshalling"
++      ],
++      "id": "controller.findall",
++      "order": 11,
++      "permission": "engine_read",
++      "requires_thread": true,
++      "release_usage": "UEHelpers.lua 72: PlayerController or Controller fallback only if falsy, not empty table",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "F7/UMG"
++    },
++    {
++      "api": "StaticFindObject",
++      "covers": [],
++      "id": "findobject.umg",
++      "order": 12,
++      "permission": "engine_read",
++      "requires_thread": true,
++      "release_usage": "main.lua 499/506/455: WidgetBlueprintLibrary, UserWidget, TextBlock paths",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "F7/UMG"
++    },
++    {
++      "api": "FName",
++      "covers": [],
++      "id": "fname.add-default",
++      "order": 13,
++      "permission": "name_pool",
++      "requires_thread": true,
++      "release_usage": "main.lua 50/516: default Add1 constructor; not Replace2",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "F7/UMG"
++    },
++    {
++      "api": "StaticConstructObject",
++      "covers": [],
++      "id": "construct.umg",
++      "order": 14,
++      "permission": "construct",
++      "requires_thread": true,
++      "release_usage": "main.lua 50/516: exactly class, outer, FName; owned fixture plus verified cleanup required",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "F7/UMG"
++    },
++    {
++      "api": "UScriptStruct / array / OUT marshalling",
++      "covers": [
++        "UObject.__index / __newindex"
++      ],
++      "id": "marshal.struct-write",
++      "order": 15,
++      "permission": "property_write",
++      "requires_thread": true,
++      "release_usage": "main.lua 470/483: nested Font.Size and ShadowOffset writes with independent scalar snapshot, readback, restore",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "F7/UMG"
++    },
++    {
++      "api": "FText",
++      "covers": [
++        "FName/FText/FString:ToString"
++      ],
++      "id": "ftext.roundtrip",
++      "order": 16,
++      "permission": "text",
++      "requires_thread": true,
++      "release_usage": "main.lua 434/469: native FText construction + ToString; representative Unicode extension",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "F7/UMG"
++    },
++    {
++      "api": "LoadAsset",
++      "covers": [],
++      "id": "loadasset.fallback",
++      "order": 17,
++      "permission": "load_asset",
++      "requires_thread": true,
++      "release_usage": "main.lua 283-286: invalid initial lookup, LoadAsset(path), second lookup; returned object/found/loaded flags retained",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "asset/explicit extensions"
++    },
++    {
++      "api": "RegisterKeyBind",
++      "covers": [],
++      "id": "register_keys.delivery",
++      "order": 18,
++      "permission": "register_keys",
++      "requires_thread": true,
++      "release_usage": "explicit once-each F7,UP_ARROW,DOWN_ARROW,RETURN,LEFT_ARROW,RIGHT_ARROW manual event order; callback guards",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "asset/explicit extensions"
++    },
++    {
++      "api": "RegisterLoadMapPreHook",
++      "covers": [],
++      "id": "loadmap.delivery",
++      "order": 19,
++      "permission": "register_map_hook",
++      "requires_thread": true,
++      "release_usage": "actual approved manual map-prehook event; registration accepted alone is insufficient",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "asset/explicit extensions"
++    },
++    {
++      "api": "require",
++      "covers": [],
++      "id": "require.searchers",
++      "order": 20,
++      "permission": "engine_read",
++      "requires_thread": true,
++      "release_usage": "loader inventory only; retained-buffer/preload route differs from PC file/C searchers; file/C behavior pending",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "asset/explicit extensions"
++    },
++    {
++      "api": "FName",
++      "covers": [],
++      "id": "fname.find-existing",
++      "order": 21,
++      "permission": "name_pool",
++      "requires_thread": true,
++      "release_usage": "explicit existing-name Find0 extension",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "asset/explicit extensions"
++    },
++    {
++      "api": "FName",
++      "covers": [],
++      "id": "fname.replace2",
++      "order": 22,
++      "permission": "name_pool",
++      "requires_thread": true,
++      "release_usage": "full-API Replace2 extension is observed only; native adapter refuses mode2 while release uses Add1",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "asset/explicit extensions"
++    },
++    {
++      "api": "FName",
++      "covers": [],
++      "id": "fname.unicode",
++      "order": 23,
++      "permission": "name_pool",
++      "requires_thread": true,
++      "release_usage": "explicit Add1 non-BMP UTF16 roundtrip extension",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "asset/explicit extensions"
++    },
++    {
++      "api": "UScriptStruct / array / OUT marshalling",
++      "covers": [],
++      "id": "marshal.trace-out",
++      "order": 24,
++      "permission": "trace",
++      "requires_thread": true,
++      "release_usage": "main.lua 245-258: 12 positional arguments, ignored pawn array, writable hit table, vectors/colors; projected OUT fields only",
++      "engine_result_pending": true,
++      "required": true,
++      "mod_flow_stage": "asset/explicit extensions"
++    }
++  ],
++  "api_count": 17,
++  "apis": [
++    {
++      "api": "RegisterKeyBind",
++      "status": "implemented-untested",
++      "used_overload_status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
++        "lines": [
++          1945
++        ]
++      },
++      "mod_lines": [
++        694,
++        698,
++        703,
++        708,
++        713,
++        722
++      ],
++      "dependency_only": false,
++      "gap": "Six PC key registrations; actual F7/navigation delivery must be proved separately. Mod did not finish loading.",
++      "case_ids": [
++        "register_keys.accept",
++        "register_keys.delivery"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "RegisterLoadMapPreHook",
++      "status": "behaves differently",
++      "used_overload_status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
++        "lines": [
++          2741
++        ]
++      },
++      "mod_lines": [
++        731
++      ],
++      "dependency_only": false,
++      "gap": "Registration stores callback; deferred LoadMap arm can permanently refuse delivery. Optional mod pcall does not prove hook behavior.",
++      "case_ids": [
++        "loadmap.accept",
++        "loadmap.delivery"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "print",
++      "status": "implemented-untested",
++      "used_overload_status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
++        "lines": [
++          1551
++        ]
++      },
++      "mod_lines": [
++        6,
++        499,
++        501
++      ],
++      "dependency_only": false,
++      "gap": "Registered global_print; no ItemSpawner Loaded line in l15. Pure diagnostic Lua is separate.",
++      "case_ids": [
++        "print.emit"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "ExecuteInGameThread",
++      "status": "behaves differently",
++      "used_overload_status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
++        "lines": [
++          5319
++        ]
++      },
++      "mod_lines": [
++        695,
++        700,
++        705,
++        710,
++        716,
++        725
++      ],
++      "dependency_only": false,
++      "gap": "Prospero uses FuncPtr-marshal carrier instead of ordinary PC queues; carrier availability/refusal and actual game-thread delivery need parity evidence.",
++      "case_ids": [
++        "game_thread.delivery"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "FindFirstOf",
++      "status": "implemented-untested",
++      "used_overload_status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
++        "lines": [
++          1662
++        ]
++      },
++      "mod_lines": [
++        21,
++        64
++      ],
++      "dependency_only": false,
++      "gap": "Object-array traversal needs real target class/name/layout validation.",
++      "case_ids": [
++        "database.findfirst"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "UObject:IsValid",
++      "status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUObject.cpp"
++      },
++      "gap": "Real target object validity/lifetime not exercised by this mod.",
++      "case_ids": [
++        "object.validity",
++        "object.invalid"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "UObject.__index / __newindex",
++      "status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUObject.cpp"
++      },
++      "gap": "Nested property reads/writes and reflected-method lookup require exact offsets/ownership.",
++      "case_ids": [
++        "object.read",
++        "marshal.struct-write"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "FName/FText/FString:ToString",
++      "status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFName.cpp"
++      },
++      "gap": "Pool anchor matching is not constructor + ToString conformance.",
++      "case_ids": [
++        "strings.native",
++        "ftext.roundtrip"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "require",
++      "status": "behaves differently",
++      "used_overload_status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
++        "lines": [
++          1163,
++          1188,
++          1199
++        ]
++      },
++      "mod_lines": [
++        15
++      ],
++      "dependency_only": false,
++      "gap": "Native branch replaces file/C searchers with package.preload plus retained-buffer searcher. Test the mod UEHelpers import; whole API filesystem/C-loading behavior differs.",
++      "case_ids": [
++        "require.helper",
++        "require.searchers"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "CreateInvalidObject",
++      "status": "implemented-untested",
++      "used_overload_status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
++        "lines": [
++          1554
++        ]
++      },
++      "mod_lines": [],
++      "dependency_only": true,
++      "gap": "Reachable through shared UEHelpers initialization and GetPlayerController fallback; wrapper implemented.",
++      "case_ids": [
++        "object.invalid"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "FindAllOf",
++      "status": "implemented-untested",
++      "used_overload_status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
++        "lines": [
++          1697
++        ]
++      },
++      "mod_lines": [],
++      "dependency_only": true,
++      "gap": "Reachable through UEHelpers.GetPlayerController; enumeration/controller validation untested.",
++      "case_ids": [
++        "controller.findall"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "StaticFindObject",
++      "status": "implemented-untested",
++      "used_overload_status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
++        "lines": [
++          1559
++        ]
++      },
++      "mod_lines": [
++        44,
++        283,
++        286,
++        499
++      ],
++      "dependency_only": false,
++      "gap": "Local object traversal, not a verified native StaticFindObject function; path/name matching untested.",
++      "case_ids": [
++        "findobject.umg"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "FName",
++      "status": "behaves differently",
++      "used_overload_status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFName.cpp"
++      },
++      "mod_lines": [
++        50,
++        516
++      ],
++      "dependency_only": false,
++      "gap": "Mod uses default Add1; output/UTF16 fix host-tested, never called in l15. Full API differs: Replace2 accepted by Lua binding is rejected by native adapter.",
++      "case_ids": [
++        "fname.add-default",
++        "fname.find-existing",
++        "fname.replace2",
++        "fname.unicode"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "StaticConstructObject",
++      "status": "implemented-untested",
++      "used_overload_status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
++        "lines": [
++          2230
++        ]
++      },
++      "mod_lines": [
++        50,
++        516
++      ],
++      "dependency_only": false,
++      "gap": "Native FStaticConstructObjectParameters layout and game ctor ABI remain unverified; used for UMG.",
++      "case_ids": [
++        "construct.umg"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "UScriptStruct / array / OUT marshalling",
++      "status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUScriptStruct.cpp"
++      },
++      "gap": "Vector, Rotator, color, margin, anchors, transform, font and HitResult; concrete native layouts/OUT semantics untested.",
++      "case_ids": [
++        "controller.findall",
++        "marshal.struct-write",
++        "marshal.trace-out"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "FText",
++      "status": "implemented-untested",
++      "used_overload_status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFText.cpp"
++      },
++      "mod_lines": [
++        434,
++        469
++      ],
++      "dependency_only": false,
++      "gap": "Native FText construction plus reflected property ownership/layout untested.",
++      "case_ids": [
++        "ftext.roundtrip"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    },
++    {
++      "api": "LoadAsset",
++      "status": "implemented-untested",
++      "used_overload_status": "implemented-untested",
++      "console_proof_this_mod": false,
++      "source": {
++        "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
++        "lines": [
++          3648
++        ]
++      },
++      "mod_lines": [
++        285
++      ],
++      "dependency_only": false,
++      "gap": "Pickup fallback requires true game thread and live asset services; not invoked in l15.",
++      "case_ids": [
++        "loadasset.fallback"
++      ],
++      "engine_behavior_proved": false,
++      "surface_scope": "selected release overloads/fields, not full UE4SS API"
++    }
++  ],
++  "game_reflected_method_count": 33,
++  "game_reflected_methods": [
++    {
++      "name": "AddChild",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        456,
++        531
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "AddToViewport",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        631
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "BeginDeferredActorSpawnFromClass",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        295
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "Create",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        510
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "FinishSpawningActor",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        303
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "GetComponentByClass",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        208
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "GetControlRotation",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        234
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "GetInteractablePickupIDActorPath",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        168
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "GetItemIDFromDeprecatedEnum",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        163
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "GetPawn",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        32
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "IsLocalPlayerController",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [],
++      "dependency_only": true,
++      "console_proven": false
++    },
++    {
++      "name": "IsPlayerController",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [],
++      "dependency_only": true,
++      "console_proven": false
++    },
++    {
++      "name": "K2_DestroyActor",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        345
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "K2_GetActorLocation",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        233
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "K2_GetPawn",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        33
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "LineTraceSingle",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        245
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetActorEnableCollision",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        330
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetActorHiddenInGame",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        329
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetAlignment",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        539
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetAnchors",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        534
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetAutoWrapText",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        476
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetBrushColor",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        547,
++        557
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetColorAndOpacity",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        364
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetContent",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        551,
++        561
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetEnabled",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        327
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetIgnoreLookInput",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        450
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetIgnoreMoveInput",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        451
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetPadding",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        460,
++        544,
++        554
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetPosition",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        540
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetShadowColorAndOpacity",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        478
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetSize",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        541
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetText",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        434,
++        469
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    },
++    {
++      "name": "SetVisibility",
++      "status": "implemented-untested",
++      "status_scope": "generic reflection route implemented; live method existence/signature/parameter layout not verified",
++      "mod_lines": [
++        632,
++        655,
++        660
++      ],
++      "dependency_only": false,
++      "console_proven": false
++    }
++  ],
++  "release": {
++    "schema": "modbridge.unmodified-mod-release/1",
++    "mod": "TownfallItemSpawner",
++    "version": "V1.0",
++    "source_url": "https://www.nexusmods.com/silenthilltownfall/mods/95?tab=files&file_id=218",
++    "source_basis": "saved Nexus intake and original ZIP; no fresh account download performed",
++    "archive_sha256": "a9f7ed004dd053e02f6206d8ed6886174f9b5aaecf55244447a2c5fb9d6fa7fb",
++    "archive_bytes": 5939,
++    "console_root": "/data/modbridge/roots/PPSA33286/ue4ss/Mods/TownfallItemSpawner",
++    "files": [
++      {
++        "path": "Scripts/main.lua",
++        "bytes": 21415,
++        "sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
++        "console_sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
++        "byte_identical": true,
++        "original_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-full-build/console-test-20261007T170125Z-b1b2fd00/provenance/original/TownfallItemSpawner/Scripts/main.lua",
++        "saved_console_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-full-build/console-test-20261007T170125Z-b1b2fd00/provenance/console/main.lua",
++        "current_original_sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
++        "current_saved_console_sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
++        "immutable_recheck": true
++      },
++      {
++        "path": "enabled.txt",
++        "bytes": 0,
++        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
++        "console_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
++        "byte_identical": true,
++        "original_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-full-build/console-test-20261007T170125Z-b1b2fd00/provenance/original/TownfallItemSpawner/enabled.txt",
++        "saved_console_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-full-build/console-test-20261007T170125Z-b1b2fd00/provenance/console/enabled.txt",
++        "current_original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
++        "current_saved_console_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
++        "immutable_recheck": true
++      }
++    ],
++    "extra_console_files": [],
++    "differences": [],
++    "change_authors": [],
++    "mod_changes_for_ps5": false,
++    "console_manifest_uploaded": false,
++    "verified_utc": "2026-10-07T17:12:06.133447+00:00"
++  },
++  "selected_source_hash_checks": [
++    {
++      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
++      "sha256": "8bd12c623bab4e35203e4faa13fb829b141a46a586a0426b47eaa32cb12f75b8",
++      "receipt_sha256": "8bd12c623bab4e35203e4faa13fb829b141a46a586a0426b47eaa32cb12f75b8",
++      "match": true
++    },
++    {
++      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFName.cpp",
++      "sha256": "a20cb4816f9516735365c3f0f6ab041f871cfd03d0cd003f7c67c6a23d06e3ea",
++      "receipt_sha256": "a20cb4816f9516735365c3f0f6ab041f871cfd03d0cd003f7c67c6a23d06e3ea",
++      "match": true
++    },
++    {
++      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFText.cpp",
++      "sha256": "2492c7802dba628071e65d2eac30710862623e0bbb7c00b2b57a611c21c4dbb5",
++      "receipt_sha256": "2492c7802dba628071e65d2eac30710862623e0bbb7c00b2b57a611c21c4dbb5",
++      "match": true
++    },
++    {
++      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUObject.cpp",
++      "sha256": "50192ef184ed2cd5267a4eb21c2466de29466419726fd1afac981258070f18e3",
++      "receipt_sha256": "50192ef184ed2cd5267a4eb21c2466de29466419726fd1afac981258070f18e3",
++      "match": true
++    },
++    {
++      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUScriptStruct.cpp",
++      "sha256": "d7896437d23331d799a1cdce0225df7cd03cc02e3052693c6d646e0a4d09d277",
++      "receipt_sha256": "d7896437d23331d799a1cdce0225df7cd03cc02e3052693c6d646e0a4d09d277",
++      "match": true
++    }
++  ],
++  "build_receipt_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l16-full-build/runs/run-l16-2/receipt.json",
++  "build_receipt_sha256": "a723df2de58cf1d01b440cf80e3fc54d91e8646bf98788b2f4c011ba43743d58",
++  "platform_pins": {
++    "ps5": {
++      "runtime_sha256": "34e43b25cb99333e472146ebd518a0d9d8418e8fe762f90084cd88c0c190c121",
++      "game_binary_sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc"
++    }
++  },
++  "pc_reference": {
++    "status": "pending",
++    "reason": "user owns PS5 only; no same-game PC capture available",
++    "platform_pins": "must be supplied with independently harvested future PC receipts before evidence is trusted"
++  },
++  "console_api_surfaces_proved": 0,
++  "console_reflected_methods_proved": 0,
++  "scope": {
++    "local_only": true,
++    "disabled_by_default": true,
++    "autoloaded": false,
++    "deployed": false,
++    "original_mod_changes": false,
++    "runtime_changes": false,
++    "network_contact": false
++  },
++  "normalization": {
++    "location": "top-level volatile object only",
++    "allowed_fields": [
++      "identity",
++      "object_address",
++      "thread_id",
++      "known_game_thread_id",
++      "proof_id",
++      "duration_ms",
++      "timestamp_utc"
++    ],
++    "never_normalized": [
++      "error",
++      "reason",
++      "value",
++      "return_count",
++      "callback_count",
++      "property_readback",
++      "cleanup_result",
++      "content/scenario/context/release/helper/script metadata"
++    ]
++  },
++  "ordering_note": "First 17 cases cover the 17 source-censused surfaces in release flow order. UObject method lookup (__index) starts with IsValid; optional/fallback branches differ. Later delivery/extensions are separate cases. The runner is not a substitute for original menu/spawn acceptance."
++}
+diff --git a/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/PROVENANCE.json b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/PROVENANCE.json
+new file mode 100644
+index 0000000..e704523
+--- /dev/null
++++ b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/PROVENANCE.json
+@@ -0,0 +1,65 @@
++{
++  "release_files": [
++    {
++      "path": "Scripts/main.lua",
++      "bytes": 21415,
++      "sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
++      "console_sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
++      "byte_identical": true,
++      "original_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-full-build/console-test-20261007T170125Z-b1b2fd00/provenance/original/TownfallItemSpawner/Scripts/main.lua",
++      "saved_console_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-full-build/console-test-20261007T170125Z-b1b2fd00/provenance/console/main.lua",
++      "current_original_sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
++      "current_saved_console_sha256": "f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658",
++      "immutable_recheck": true
++    },
++    {
++      "path": "enabled.txt",
++      "bytes": 0,
++      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
++      "console_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
++      "byte_identical": true,
++      "original_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-full-build/console-test-20261007T170125Z-b1b2fd00/provenance/original/TownfallItemSpawner/enabled.txt",
++      "saved_console_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-full-build/console-test-20261007T170125Z-b1b2fd00/provenance/console/enabled.txt",
++      "current_original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
++      "current_saved_console_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
++      "immutable_recheck": true
++    }
++  ],
++  "selected_source_hash_checks": [
++    {
++      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
++      "sha256": "8bd12c623bab4e35203e4faa13fb829b141a46a586a0426b47eaa32cb12f75b8",
++      "receipt_sha256": "8bd12c623bab4e35203e4faa13fb829b141a46a586a0426b47eaa32cb12f75b8",
++      "match": true
++    },
++    {
++      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFName.cpp",
++      "sha256": "a20cb4816f9516735365c3f0f6ab041f871cfd03d0cd003f7c67c6a23d06e3ea",
++      "receipt_sha256": "a20cb4816f9516735365c3f0f6ab041f871cfd03d0cd003f7c67c6a23d06e3ea",
++      "match": true
++    },
++    {
++      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFText.cpp",
++      "sha256": "2492c7802dba628071e65d2eac30710862623e0bbb7c00b2b57a611c21c4dbb5",
++      "receipt_sha256": "2492c7802dba628071e65d2eac30710862623e0bbb7c00b2b57a611c21c4dbb5",
++      "match": true
++    },
++    {
++      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUObject.cpp",
++      "sha256": "50192ef184ed2cd5267a4eb21c2466de29466419726fd1afac981258070f18e3",
++      "receipt_sha256": "50192ef184ed2cd5267a4eb21c2466de29466419726fd1afac981258070f18e3",
++      "match": true
++    },
++    {
++      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUScriptStruct.cpp",
++      "sha256": "d7896437d23331d799a1cdce0225df7cd03cc02e3052693c6d646e0a4d09d277",
++      "receipt_sha256": "d7896437d23331d799a1cdce0225df7cd03cc02e3052693c6d646e0a4d09d277",
++      "match": true
++    }
++  ],
++  "script_sha256": "f0c782c5798b3f85b813be945146bb5666649349e60cddd96043b722447aebc0",
++  "source_audit": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l15-full-build/console-test-20261007T170125Z-b1b2fd00/api-audit/API-GAPS.json",
++  "l16_runtime_sha256": "34e43b25cb99333e472146ebd518a0d9d8418e8fe762f90084cd88c0c190c121",
++  "console_api_proof_count": 0,
++  "pc_reference_pending": true
++}
+diff --git a/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/IMPLEMENTATION-PLAN.md b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/IMPLEMENTATION-PLAN.md
+new file mode 100644
+index 0000000..355ec71
+--- /dev/null
++++ b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/IMPLEMENTATION-PLAN.md
+@@ -0,0 +1,14 @@
++# Local Part 2 conformance tooling
++
++Goal: preserve TownfallItemSpawner V1.0 exactly as downloaded while preparing an inert Lua API probe and a strict future PC/PS5 record comparator. The parent task already authorizes this implementation locally; no deployment, original-mod edits, runtime changes, account/network access, or commits are in scope.
++
++Files: `conformance.lua` returns an opt-in runner and has no load-time engine side effects; `compare.py` reads JSONL/TSV records and writes a JSON/TSV verdict; `manifest.json` pins the cases, 17-surface census, 33 reflected-method census and source/release provenance; `tests/` exercises the actual tools locally; `README.md` and `REPORT.md` state usage, ordering and pending evidence.
++
++- [x] Verify release/console hashes and five selected binding source hashes against the saved l16 receipt.
++- [x] Write comparator tests first. Equal complete engine records may match; missing/extra/duplicate cases, host fixtures, skipped/unavailable/observed behavior, unknown normalization and metadata mismatch cannot pass.
++- [x] Implement the comparator using only Python's standard library. Normalize only an explicit whitelist inside `volatile`; retain all substantive values and errors verbatim.
++- [x] Write runner safety tests first. Loading invokes zero engine APIs; default/off or missing fixtures, risk permissions, cleanup context and independently witnessed game-thread context cannot invoke engine mutations.
++- [x] Implement the single Lua script. Emit binding presence separately from behavior; preserve original signatures and call-flow order; buffer asynchronous callback evidence until explicit finish; mark local doubles as fixture-only.
++- [x] Run the focused suite and syntax checks; review the owned-folder diff and rehash immutable source/mod files. Save local evidence and the PC reference plan without claiming engine parity.
++
++Risks covered: incomplete streams, substantive errors containing addresses, callback registration without delivery, aliasing of writable nested structs, cleanup failure, and host doubles incorrectly promoted to engine proof. Same-game PC evidence is absent. All 17 API surfaces and all 33 reflected calls remain engine-unproved after l16's pre-constructor refusal.
+diff --git a/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/README.md b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/README.md
+new file mode 100644
+index 0000000..a4008b9
+--- /dev/null
++++ b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/README.md
+@@ -0,0 +1,45 @@
++# Local UE4SS conformance tooling
++
++This folder contains one inert Lua runner and a local Python comparator for the unmodified TownfallItemSpawner V1.0 release (Nexus mod95/file218). It is separate from the release. It has not been installed, enabled, uploaded, or run in either game. Loading `conformance.lua` returns a module and invokes zero engine APIs; `new()` returns `nil, "disabled"` unless `enabled=true` is explicit.
++
++`manifest.json` pins the 24 cases, 17 API surfaces, exact runner/release/helper hashes, saved l16 binding-source hashes, and separate platform provenance. The PS5 runtime pin is the tested l16 baseline, not proof that its APIs ran. A future approved runtime needs an explicitly updated manifest/profile pin. PC pins remain pending. The two downloaded release files and saved console copies are immutable.
++
++Run local verification from the worktree root:
++
++```sh
++python3 -m unittest discover -s outputs/2026-10-07-part2-api-conformance/tests -v
++```
++
++The tests exercise the actual Python CLI and standalone Lua artifact. Lua doubles are marked `host-fixture`/`fixture-pass`; they do not establish UE4SS, Townfall, or PS5 behavior. The available standalone interpreter is Lua 5.5.1; syntax uses features available in Lua 5.4, but no target Lua 5.4 execution was performed here.
++
++The comparator reads JSONL or TSV with a single lossless `record_json` column. Each stream contains one `run` header, the ordered binding inventory, all 24 ordered terminal `case` records, and one complete `end` record. Partial case selection still emits explicit skipped rows and cannot pass full-suite comparison.
++
++```sh
++python3 outputs/2026-10-07-part2-api-conformance/compare.py \
++  --reference /absolute/path/to/future-pc.jsonl \
++  --candidate /absolute/path/to/future-ps5.jsonl \
++  --json /absolute/path/to/comparison.json \
++  --tsv /absolute/path/to/comparison.tsv
++```
++
++Omitting `--reference` returns `reference_pending`/exit2. Exit0 means the complete case suite matches with the supplied proved engine evidence; exit1 means substantive differences or failed behavior; exit2 means invalid records, incomplete proof, or a missing reference. Equal failed cases still fail. A match never establishes that the original mod's full menu/spawn behavior worked.
++
++Only declared scalar fields inside the top-level `volatile` object can be removed: `identity`, `object_address`, `thread_id`, `known_game_thread_id`, `proof_id`, `duration_ms`, and `timestamp_utc`. Unknown volatile fields are rejected. Values, argument/return counts, callback order/counts, writable readbacks, cleanup results, errors and skip reasons remain exact. Addresses embedded in errors are not rewritten. JSON duplicate keys, nonfinite numbers, unknown statuses, wrong types, boolean order/counts, missing/duplicate/extra/out-of-order cases, and mismatched manifest hashes cannot pass.
++
++PC and PS5 executable/runtime hashes are each recorded as provenance; they are not required equal across platforms. Suite, runner, immutable release, helper, game content build, scenario and controlled object context must match. Manifest platform pins are checked individually. `engine`, `proved`, thread/cleanup witnesses and attestation labels are declarations, not authentication: collect independent runtime/game/log receipts, verify their hashes, and retain them beside the records. A user can forge a JSON label; this parser cannot authenticate it.
++
++For a future separately authorized engine run, call `runner.new(config)`, `session:run()` once, and `session:finish()` once after the approved manual observations. There is no driver, auto-loader, network sink, PC orchestration or PS5 deployment here. A file/console loader, trustworthy JSONL sink, native thread witness and controlled object fixtures must actually exist first. No supplied fixture fabricates those interfaces.
++
++Required configuration contracts:
++
++- `enabled=true`, `evidence="engine"` or `"host-fixture"`, `side="pc"`, `"ps5"`, or `"host"`; explicit `emit(json_line)` sink; optional `select={case_ids}` in manifest order. Every risk permission defaults off in `allow`.
++- `metadata` supplies run ID, content build, scenario/context IDs, runtime build/SHA-256, platform game-binary SHA-256, runner SHA-256, release/helper SHA-256, and four independently receipted attestations: real engine, immutable release, independent thread witness, controlled object context.
++- `thread_guard()` must read an independent native witness for the current invocation and return `{kind="independent-native", in_game_thread=true, thread_id=..., known_game_thread_id=..., proof_id=...}`. Equal IDs alone and a Lua boolean are not an interface or proof. Every engine case and asynchronous callback checks the guard. The l16 runtime exposes no verified Lua witness used by this tool, so current engine runs are pending.
++- Fixture objects must be native `userdata` for engine evidence. Lua tables are permitted only in `host-fixture` runs, which never emit engine `proved` records. Bad API results after invocation fail; missing explicit inputs skip before invocation.
++- Callback registration/dispatch needs `context.registration_plan_id` for an isolated, reviewed lifetime/teardown session. It may affect bindings/hooks and is never enabled by default. Registration acceptance is separate from actual key, game-thread and map-prehook delivery. The runner schedules no map transitions or synthetic key events; it only records approved manual events. Callbacks become inert at finish; removing native registrations still requires the isolated mod/session teardown.
++- Construction and asset loading need exact owned class/outer/FName or cooked-path fixtures, `cleanup_plan_id`, and `cleanup(kind, context, object)` returning an independently verified cleanup receipt. Missing cleanup skips before calling; failed cleanup fails. The asset fallback requires an initially invalid lookup and preserves all returned object/found/loaded results plus the second lookup. No actor-spawn API is called by this runner.
++- Property writes need an exclusively owned TextBlock fixture and `textblock_owned=true`. The runner snapshots scalar ShadowOffset X/Y and nested Font.Size values, performs the release-shaped writes, validates readback, restores the original scalars and validates restoration even after a write/read error. This does not exercise all UMG/color/margin/anchor layouts.
++- Trace needs explicit native pawn/system objects, frozen start/end vectors and exact expected OUT point/normal values. It passes the original 12 arguments, ignored-pawn array and writable hit table. It never computes a spawn location, loads an actor class or spawns an actor automatically.
++- Native string conversions need explicit FName/FText/FString userdata and expected text; name-pool and FText construction permissions additionally require fixture/lifetime context. Replace2 is observation-only because the PC contract/reference is pending. Loader inventory is observation-only because counting searchers does not prove disk/C-loading behavior. `print_capture(message)` must independently verify the exact output string before print behavior can be proved.
++
++The first 17 cases cover the 17 surfaces in release flow order; later cases test actual callback delivery and known differences. The runner is a probe, not the original menu. Follow the release's real ladder and the pending reference plan in `REPORT.md`.
+diff --git a/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/REPORT.md b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/REPORT.md
+new file mode 100644
+index 0000000..05c46c8
+--- /dev/null
++++ b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/REPORT.md
+@@ -0,0 +1,41 @@
++# Part 2 local result
++
++Local tooling only. No network, account, console or debugger contact; no upload, original-mod/config/runtime edit, shared checkpoint write or commit. One opt-in Lua runner, one JSONL/TSV comparator and focused local tests are prepared in this folder. Neither tool has been installed or run in a game.
++
++Current engine evidence remains **0/17 API surfaces console-proven**, **13 implemented-untested + 4 with known full-API differences**, and **0/33 reflected methods console-proven**. The l16 test stopped before the FName constructor because the fresh prefix copyin returned EFAULT. Startup admission, symbol presence, host fixtures and this tooling do not fill that gap. Same-game PC reference remains pending because the user owns PS5 only.
++
++The two saved release/console files rehash identically: `Scripts/main.lua` SHA-256 `f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658`; empty `enabled.txt` SHA-256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`. No extra release files were added. Saved archive identity is `a9f7ed004dd053e02f6206d8ed6886174f9b5aaecf55244447a2c5fb9d6fa7fb` (not freshly downloaded). UEHelpers saved source SHA-256 is `5a8f6609e555eee4a535f51d21fcdef768ac654bf4d4abe283c719b1c12215a7`. All five binding source hashes match the actual l16 receipt; exact paths/digests are in `PROVENANCE.json`.
++
++| Release flow / API | Current status | Tool coverage / remaining evidence |
++|---|---|---|
++| Chunk: RegisterKeyBind | implemented-untested | Six original key codes/order; acceptance and independently guarded actual delivery are separate |
++| Chunk: RegisterLoadMapPreHook | behaves differently | Optional registration may succeed while deferred arm permanently refuses; real map event still pending |
++| Chunk: print | implemented-untested | Tag/string/newline and return count; independent exact output capture required |
++| F7: ExecuteInGameThread | behaves differently | Prospero marshal carrier differs from PC queues; accepted/queued callback is not actual native game-thread delivery |
++| F7 scan: FindFirstOf | implemented-untested | Live ItemDatabaseSubsystem must match the controlled fixture |
++| UObject:IsValid | implemented-untested | Live and invalid-wrapper semantics; target lifetime remains unproved |
++| UObject.__index / __newindex | implemented-untested | Representative Pawn read, ShadowOffset assignment and nested Font.Size write/readback/revert; method/property layouts remain unproved |
++| FName/FText/FString:ToString | implemented-untested | Real native fixtures plus constructor roundtrips; ordinary Lua strings are not conversion proof |
++| Controller lookup: require | behaves differently | UEHelpers export/cache; native preload/retained-buffer searchers replace disk/C routes; inventory alone remains observation-only |
++| UEHelpers init: CreateInvalidObject | implemented-untested | Two import cache initializers and invalid-controller fallback require actual wrappers |
++| UEHelpers: FindAllOf | implemented-untested | Enumeration and falsy-only fallback; an empty table does not trigger Controller fallback |
++| UMG: StaticFindObject | implemented-untested | Original class/default-object paths; local traversal rather than verified native finder |
++| UMG: FName | behaves differently | Release uses default Add1; Find0/Unicode/Replace2 extension cases; native Replace2 refusal preserved as an observation |
++| UMG: StaticConstructObject | implemented-untested | Original class/outer/FName arguments; explicit owned fixtures and verified cleanup |
++| UScriptStruct / array / OUT marshalling | implemented-untested | Nested Font.Size, ShadowOffset, controller arrays and original 12-argument trace with projected HitResult point/normal; all other layout/ownership behavior remains pending |
++| UMG: FText | implemented-untested | Native text constructor and roundtrip; real SetText ownership/copying remains pending |
++| Later asset fallback: LoadAsset | implemented-untested | Invalid lookup → load → second lookup, preserving three returns; explicit asset/reset context required |
++
++The release defines functions at chunk load but calls only six RegisterKeyBind registrations, optional RegisterLoadMapPreHook and the Loaded print there. F7 dispatches `toggleMenu`; `showMenu(true)` scans the database before `buildUI`. Scan conversion comes before UEHelpers/controller/UMG lookup. UEHelpers import initializes two invalid caches; its controller search falls back only on a falsy collection. Root `Create` precedes conditional StaticConstructObject fallback. UMG tree construction evaluates class lookup and FName before StaticConstructObject. Native nested font/vector writes can silently fail under the release's pcall paths, so readback/restore is explicit in the probe.
++
++Enter first resolves controller/pawn fallbacks, reads location/rotation, and performs the 12-argument ground trace. It then looks up the cooked pickup class; only an invalid class triggers LoadAsset and another lookup. BeginDeferredActorSpawnFromClass/FinishSpawningActor precede pickup validation, ItemId comparison, quantity/auto-destroy writes and enabled/visibility/collision changes; failure conditionally destroys the actor. Map cleanup occurs independently on a transition. The runner does not implement or autoexecute this actor-spawn chain. All 33 actual reflected names remain listed as untested in the manifest; the original mod must still visibly open/close/reopen its own readable UMG menu, lock/unlock input safely and spawn a real valid pickup before the broader ladder can advance.
++
++The strict comparator rejects missing, extra, duplicate or out-of-order cases and unknown parity. Presence is emitted as binding inventory with `behavior_proved=false`. Local doubles produce only `fixture-pass`; missing context/permissions/witnesses produce `skipped`, absent bindings `unavailable`, incorrect native results/readbacks/cleanup `failed`. Registration alone can prove its narrow acceptance case but cannot satisfy the separately required delivery case. Loader searcher inventory and Replace2 observations intentionally remain unproved, so a full-suite match is currently impossible. No skipped or matching failed record becomes parity.
++
++Final local verification and tool hashes are saved in `LOCAL-RECEIPT.json` and `tests.log`. These are local tool-validation receipts, not engine captures. The available standalone Lua is 5.5.1, while target Lua 5.4 execution is pending. Testing the runner with Lua objects does not prove ABI, native userdata layout, callback delivery, engine-thread identity or cleanup in Townfall.
++
++Off-by-default runtime tooling remains planned-only: crash reporting that chains the previous handler needs independently reviewed handler ownership, safe crash-context capture and bounded log lifetime; a LAN Lua console needs a real guarded Lua owner/lifetime, authenticated disabled-by-default transport and serialized dispatch through a proved carrier; a read-only debugger needs verified object/memory lifetimes, read boundaries and thread scheduling. This folder implements none of these runtime interfaces. It supplies no sandbox/credential workaround or external service connection.
++
++Preserve the authorized order: resolve the live constructor-prefix refusal and obtain native constructor/roundtrip evidence → off-by-default runtime tooling → runtime/config controller-to-original-key translation → the original mod's UMG menu → actual pickup spawn → conformance and more immutable downloaded mods → deferred B/C/A capabilities (#1/#3/#6, then #4, then #5/#2/#7/#8). Those deferred capabilities retain their three console passes across reboots, saved logs and separate user approval requirements. This local work authorizes no future console action.
++
++Future PC reference plan: obtain an explicitly authorized same-game PC run from an available PC owner; no such machine or run is present here. Pin each platform's executable/runtime hashes separately, matching game content build, exact mod/helper/runner hashes and a controlled comparable scene/save/scenario/context. Independently establish the native thread witness and owned object fixtures, collect raw logs and cleanup receipts, then record all manifest cases in order. Preserve unavailable/skipped/errors rather than manufacturing reference values. Run the local comparator on the independently harvested PC and PS5 records. Another title, mock object table, manually edited attestation or PC-shaped host output cannot establish Townfall parity.
+diff --git a/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/tests/test_compare.py b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/tests/test_compare.py
+new file mode 100644
+index 0000000..674c167
+--- /dev/null
++++ b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/tests/test_compare.py
+@@ -0,0 +1,259 @@
++"""Behavioral tests for the local comparator; records here are synthetic, never PC evidence."""
++import copy
++import csv
++import json
++import subprocess
++import sys
++import tempfile
++import unittest
++from pathlib import Path
++
++BASE = Path(__file__).resolve().parents[1]
++SCHEMA = "modbridge.ue4ss-conformance/1"
++
++
++class ComparatorTests(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.root = Path(self.tmp.name)
++        self.manifest = self.root / "manifest.json"
++        self.manifest.write_text(json.dumps({
++            "schema": "modbridge.ue4ss-conformance-plan/1", "suite_id": "test-suite",
++            "release_sha256": "a" * 64, "helper_sha256": "b" * 64,
++            "script_sha256": "d" * 64,
++            "cases": [{"id": "one", "api": "FName", "order": 1},
++                      {"id": "two", "api": "UObject.__index / __newindex", "order": 2}],
++        }))
++
++    def tearDown(self):
++        self.tmp.cleanup()
++
++    def records(self, side):
++        header = {"schema": SCHEMA, "kind": "run", "run_id": side + "-run",
++                  "side": side, "evidence": "engine", "suite_id": "test-suite",
++                  "mod_release_sha256": "a" * 64, "helper_sha256": "b" * 64,
++                  "game_id": "Townfall", "content_build": "controlled-build",
++                  "scenario_id": "paused-save-1", "context_id": "fixture-context-1",
++                  "runtime_build": side + "-runtime", "runtime_sha256": ("e" if side == "pc" else "f") * 64,
++                  "game_binary_sha256": "c" * 64,
++                  "script_sha256": "d" * 64,
++                  "attestations": {"real_engine": True, "release_immutable": True,
++                                   "independent_thread_witness": True,
++                                   "controlled_object_context": True},
++                  "selected_case_ids": ["one", "two"]}
++        one = {"schema": SCHEMA, "kind": "case", "id": "one", "api": "FName",
++               "order": 1, "status": "proved", "evidence": "engine",
++               "value": {"text": "ByteProperty", "roundtrip": True},
++               "error": None, "reason": None, "guard": {"verified": True, "in_game_thread": True}}
++        two = {"schema": SCHEMA, "kind": "case", "id": "two",
++               "api": "UObject.__index / __newindex", "order": 2,
++               "status": "proved", "evidence": "engine", "value": {"before": 12, "written": 13,
++               "readback": 13, "restored": 12}, "error": None, "reason": None,
++               "guard": {"verified": True, "in_game_thread": True}}
++        end = {"schema": SCHEMA, "kind": "end", "complete": True, "case_count": 2}
++        return [header, one, two, end]
++
++    def save(self, name, records, tsv=False):
++        path = self.root / name
++        if tsv:
++            with path.open("w", newline="") as f:
++                writer = csv.writer(f, delimiter="\t")
++                writer.writerow(["record_json"])
++                writer.writerows([[json.dumps(r, ensure_ascii=False)] for r in records])
++        else:
++            path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
++        return path
++
++    def compare(self, reference=None, candidate=None, tsv=False):
++        ref = self.save("pc.tsv" if tsv else "pc.jsonl", reference or self.records("pc"), tsv)
++        cand = self.save("ps5.jsonl", candidate or self.records("ps5"))
++        out = self.root / "result.json"
++        diff = self.root / "diff.tsv"
++        result = subprocess.run([sys.executable, str(BASE / "compare.py"), "--manifest", str(self.manifest),
++                                 "--reference", str(ref), "--candidate", str(cand),
++                                 "--json", str(out), "--tsv", str(diff)], capture_output=True, text=True)
++        report = json.loads(out.read_text()) if out.exists() else {}
++        rows = []
++        if diff.exists():
++            with diff.open() as stream:
++                rows = list(csv.DictReader(stream, delimiter="\t"))
++        return result, report, rows
++
++    def test_complete_real_engine_records_match(self):
++        # Removing the complete-case/real-engine acceptance path must fail this test.
++        result, report, rows = self.compare()
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertEqual(report.get("verdict"), "match")
++        self.assertEqual([row["verdict"] for row in rows], ["match", "match"])
++
++    def test_missing_pc_reference_is_pending(self):
++        # Treating an absent PC path as equality must fail this test.
++        cand = self.save("candidate.jsonl", self.records("ps5"))
++        out = self.root / "pending.json"
++        result = subprocess.run([sys.executable, str(BASE / "compare.py"), "--manifest", str(self.manifest),
++                                 "--candidate", str(cand), "--json", str(out)], capture_output=True, text=True)
++        self.assertEqual(result.returncode, 2)
++        self.assertEqual(json.loads(out.read_text())["verdict"], "reference_pending")
++
++    def test_missing_duplicate_extra_and_wrong_order_reject(self):
++        # Joining cases by ID while ignoring the expected sequence/coverage must fail.
++        mutations = [self.records("ps5") for _ in range(4)]
++        del mutations[0][2]
++        mutations[1].insert(2, copy.deepcopy(mutations[1][1]))
++        mutations[2][2]["id"] = "unknown"
++        mutations[3][1], mutations[3][2] = mutations[3][2], mutations[3][1]
++        for records in mutations:
++            with self.subTest(records=records):
++                result, report, _ = self.compare(candidate=records)
++                self.assertEqual(result.returncode, 2)
++                self.assertEqual(report.get("verdict"), "invalid_records")
++
++    def test_host_or_unproved_cases_never_match(self):
++        # Promoting a fake or a skipped/observed case to equality must fail.
++        for status in ["skipped", "unavailable", "observed", "fixture-pass"]:
++            pc, ps5 = self.records("pc"), self.records("ps5")
++            pc[1]["status"] = ps5[1]["status"] = status
++            result, report, _ = self.compare(pc, ps5)
++            self.assertEqual(result.returncode, 2)
++            self.assertEqual(report.get("verdict"), "incomplete")
++        pc, ps5 = self.records("pc"), self.records("ps5")
++        pc[0]["evidence"] = "host-fixture"
++        pc[1]["evidence"] = "host-fixture"
++        result, report, _ = self.compare(pc, ps5)
++        self.assertEqual(result.returncode, 2)
++        self.assertEqual(report.get("verdict"), "incomplete")
++
++    def test_substantive_numeric_and_error_differences_survive(self):
++        # Blanket numeric or hex-address erasure must fail.
++        ps5 = self.records("ps5")
++        ps5[2]["value"]["readback"] = 14
++        result, report, rows = self.compare(candidate=ps5)
++        self.assertEqual(result.returncode, 1)
++        self.assertEqual(report.get("verdict"), "different")
++        self.assertEqual(rows[1]["verdict"], "different")
++        pc, ps5 = self.records("pc"), self.records("ps5")
++        pc[1].update(status="failed", error="EFAULT at 0x1000")
++        ps5[1].update(status="failed", error="EFAULT at 0x2000")
++        result, report, _ = self.compare(pc, ps5)
++        self.assertEqual(result.returncode, 1)
++        self.assertIn("EFAULT at 0x2000", json.dumps(report))
++
++    def test_only_explicit_unstable_metadata_is_normalized(self):
++        # Dropping volatile values outside the whitelist or hiding ordinary payloads must fail.
++        pc, ps5 = self.records("pc"), self.records("ps5")
++        pc[1]["volatile"] = {"object_address": "0x1000", "duration_ms": 2, "identity": "pc-object"}
++        ps5[1]["volatile"] = {"object_address": "0x2000", "duration_ms": 9, "identity": "ps5-object"}
++        result, report, _ = self.compare(pc, ps5)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertEqual(report.get("normalized_fields"), ["volatile.duration_ms", "volatile.identity", "volatile.object_address"])
++        ps5[1]["volatile"]["result"] = False
++        result, report, _ = self.compare(pc, ps5)
++        self.assertEqual(result.returncode, 2)
++        self.assertEqual(report.get("verdict"), "invalid_records")
++        pc, ps5 = self.records("pc"), self.records("ps5")
++        pc[1]["value"]["address"] = "0x1000"
++        ps5[1]["value"]["address"] = "0x2000"
++        result, report, _ = self.compare(pc, ps5)
++        self.assertEqual(result.returncode, 1)
++
++    def test_false_attestation_failed_cleanup_or_absent_end_reject(self):
++        # A matching payload must not conceal missing prerequisites or a partial stream.
++        pc, ps5 = self.records("pc"), self.records("ps5")
++        pc[0]["attestations"]["independent_thread_witness"] = False
++        result, report, _ = self.compare(pc, ps5)
++        self.assertEqual(result.returncode, 2)
++        self.assertEqual(report.get("verdict"), "incomplete")
++        pc, ps5 = self.records("pc"), self.records("ps5")
++        pc[2]["status"] = ps5[2]["status"] = "failed"
++        pc[2]["error"] = ps5[2]["error"] = "cleanup failed"
++        result, report, _ = self.compare(pc, ps5)
++        self.assertEqual(result.returncode, 1)
++        self.assertEqual(report.get("verdict"), "different")
++        ps5 = self.records("ps5")[:-1]
++        result, report, _ = self.compare(candidate=ps5)
++        self.assertEqual(result.returncode, 2)
++        self.assertEqual(report.get("verdict"), "invalid_records")
++
++    def test_provenance_and_context_mismatch_are_substantive(self):
++        # Ignoring game/content/context or release identity must fail.
++        for field in ["content_build", "scenario_id", "context_id", "mod_release_sha256", "helper_sha256", "script_sha256"]:
++            ps5 = self.records("ps5")
++            ps5[0][field] = "e" * 64 if field.endswith("sha256") else "different"
++            result, report, _ = self.compare(candidate=ps5)
++            self.assertEqual(result.returncode, 1, field)
++            self.assertEqual(report.get("verdict"), "different")
++
++    def test_tsv_record_input_is_lossless(self):
++        # Parsing TSV as approximate string columns must fail on preserved nested JSON.
++        result, report, _ = self.compare(tsv=True)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        self.assertEqual(report.get("verdict"), "match")
++
++    def test_equal_wrong_script_hash_cannot_match_manifest(self):
++        # Equal capture labels from a different runner must not satisfy this frozen plan.
++        pc, ps5 = self.records("pc"), self.records("ps5")
++        pc[0]["script_sha256"] = ps5[0]["script_sha256"] = "9" * 64
++        result, report, _ = self.compare(pc, ps5)
++        self.assertEqual(result.returncode, 1)
++        self.assertEqual(report.get("verdict"), "different")
++        self.assertTrue(any("manifest mismatch: script_sha256" in issue for issue in report["different"]))
++
++    def test_nonfinite_or_unknown_status_is_invalid(self):
++        # Accepting permissive NaN JSON or unknown parity status must fail.
++        for field, value in [("status", "unknown"), ("value", {"bad": float("nan")})]:
++            ps5 = self.records("ps5")
++            ps5[1][field] = value
++            result, report, _ = self.compare(candidate=ps5)
++            self.assertEqual(result.returncode, 2)
++            self.assertEqual(report.get("verdict"), "invalid_records")
++
++    def test_duplicate_json_keys_are_not_silently_overwritten(self):
++        # Permissive JSON last-key-wins parsing could turn failed into proved.
++        pc = self.save("pc.jsonl", self.records("pc"))
++        cand = self.save("candidate.jsonl", self.records("ps5"))
++        cand.write_text(cand.read_text().replace('"status": "proved"', '"status": "failed", "status": "proved"', 1))
++        out = self.root / "duplicate.json"
++        result = subprocess.run([sys.executable, str(BASE / "compare.py"), "--manifest", str(self.manifest),
++                                 "--reference", str(pc), "--candidate", str(cand), "--json", str(out)],
++                                capture_output=True, text=True)
++        self.assertEqual(result.returncode, 2)
++        self.assertIn("duplicate JSON key", json.loads(out.read_text())["error"])
++
++    def test_boolean_and_numeric_payloads_do_not_compare_equal(self):
++        # Python considers True == 1; parity must retain JSON/Lua value types.
++        ps5 = self.records("ps5")
++        ps5[1]["value"]["roundtrip"] = 1
++        result, report, _ = self.compare(candidate=ps5)
++        self.assertEqual(result.returncode, 1)
++        self.assertEqual(report.get("verdict"), "different")
++
++    def test_malformed_container_types_and_boolean_counts_have_durable_invalid_reports(self):
++        # Guard/container assumptions and bool==int must never crash or pass schema validation.
++        for change in ["root", "case", "guard", "selected", "order", "count"]:
++            with self.subTest(change=change):
++                self.setUp_manifest()
++                if change == "root":
++                    self.manifest.write_text("[]")
++                elif change == "case":
++                    plan = json.loads(self.manifest.read_text())
++                    plan["cases"][0] = []
++                    self.manifest.write_text(json.dumps(plan))
++                records = self.records("ps5")
++                if change == "guard": records[1]["guard"] = None
++                if change == "selected": records[0]["selected_case_ids"] = [[]]
++                if change == "order": records[1]["order"] = True
++                if change == "count": records[-1]["case_count"] = True
++                result, report, _ = self.compare(candidate=records)
++                self.assertEqual(result.returncode, 2)
++                self.assertEqual(report.get("verdict"), "invalid_records")
++                self.assertNotIn("Traceback", result.stderr)
++
++    def setUp_manifest(self):
++        self.manifest.write_text(json.dumps({"schema": "modbridge.ue4ss-conformance-plan/1", "suite_id": "test-suite",
++            "release_sha256": "a" * 64, "helper_sha256": "b" * 64, "script_sha256": "d" * 64,
++            "cases": [{"id": "one", "api": "FName", "order": 1},
++                      {"id": "two", "api": "UObject.__index / __newindex", "order": 2}]}))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/tests/test_runner.py b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/tests/test_runner.py
+new file mode 100644
+index 0000000..cc9a496
+--- /dev/null
++++ b/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-part2-api-conformance/tests/test_runner.py
+@@ -0,0 +1,264 @@
++"""Run the real Lua artifact against controlled local doubles; never engine proof."""
++import json
++import hashlib
++from pathlib import Path
++import shutil
++import subprocess
++import tempfile
++import unittest
++
++BASE = Path(__file__).resolve().parents[1]
++LUA = shutil.which("lua")
++PRELUDE = r'''
++local calls = 0
++local runner = dofile(arg[1])
++local function config(ids)
++    return {enabled=true, evidence="host-fixture", side="host", select=ids,
++        emit=function(line) io.write(line, "\n") end,
++        metadata={run_id="host-fixture-only", game_id="Townfall", content_build="host-only",
++                  scenario_id="host-only", context_id="host-only", runtime_build="standalone-lua",
++                  runtime_sha256=string.rep("0",64),
++                  game_binary_sha256=string.rep("0",64), script_sha256=string.rep("0",64)},
++        allow={}, context={},
++        thread_guard=function() return {kind="host-fixture", in_game_thread=true,
++            thread_id="fixture", known_game_thread_id="fixture", proof_id="fixture-only"} end}
++end
++local function live()
++    return {IsValid=function() return true end}
++end
++'''
++
++
++@unittest.skipUnless(LUA, "standalone Lua unavailable; runner checks pending")
++class RunnerTests(unittest.TestCase):
++    def run_lua(self, code, before=""):
++        with tempfile.TemporaryDirectory() as temp:
++            driver = Path(temp) / "driver.lua"
++            driver.write_text(before + PRELUDE + code)
++            result = subprocess.run([LUA, str(driver), str(BASE / "conformance.lua")],
++                                    capture_output=True, text=True)
++        self.assertEqual(result.returncode, 0, result.stderr)
++        return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
++
++    def case(self, records, case_id):
++        return next(r for r in records if r.get("kind") == "case" and r.get("id") == case_id)
++
++    def test_loading_and_disabled_configuration_have_no_engine_side_effect(self):
++        # Calling engine APIs or registering callbacks while loading must fail.
++        before = r'''
++local forbidden_count=0
++local function forbidden() forbidden_count=forbidden_count+1; error("load invoked engine") end
++for _,name in ipairs({"print","require","FindFirstOf","FindAllOf","StaticFindObject",
++ "StaticConstructObject","FName","FText","LoadAsset","RegisterKeyBind",
++ "ExecuteInGameThread","RegisterLoadMapPreHook","CreateInvalidObject"}) do _G[name]=forbidden end
++'''
++        records = self.run_lua(r'''
++assert(forbidden_count==0)
++local session, reason = runner.new({enabled=false})
++assert(session==nil and reason=="disabled")
++assert(forbidden_count==0)
++io.write('{"kind":"test","calls":0}\n')
++''', before)
++        self.assertEqual(records, [{"kind": "test", "calls": 0}])
++
++    def test_presence_and_missing_context_are_not_behavioral_proof(self):
++        # Turning available symbols into proved behavior or invoking a missing fixture must fail.
++        records = self.run_lua(r'''
++FindFirstOf=function() calls=calls+1; return live() end
++FName=function() calls=calls+1; return {} end
++local c=config({"database.findfirst","fname.add-default"})
++c.allow.engine_read=true; c.allow.name_pool=true
++local s=assert(runner.new(c)); s:run(); s:finish()
++assert(calls==0)
++''')
++        self.assertEqual(self.case(records, "database.findfirst")["status"], "skipped")
++        self.assertEqual(self.case(records, "fname.add-default")["status"], "skipped")
++        binding = next(r for r in records if r.get("kind") == "binding" and r["name"] == "FName")
++        self.assertTrue(binding["binding_present"])
++        self.assertFalse(binding["behavior_proved"])
++
++    def test_dangerous_calls_require_permission_thread_and_cleanup_context(self):
++        # Removing any mutation permission, independent guard or cleanup gate must fail.
++        records = self.run_lua(r'''
++StaticConstructObject=function() calls=calls+1; return live() end
++LoadAsset=function() calls=calls+1; return live(),true,true end
++local c=config({"construct.umg","loadasset.fallback"})
++c.context.construct={class=live(),outer=live(),name=live()}
++c.context.asset={path="/Game/Test.Test_C"}
++local s=assert(runner.new(c)); s:run(); s:finish(); assert(calls==0)
++''')
++        self.assertEqual(self.case(records, "construct.umg")["status"], "skipped")
++        self.assertEqual(self.case(records, "loadasset.fallback")["status"], "skipped")
++        records = self.run_lua(r'''
++LoadAsset=function() calls=calls+1; return live(),true,true end
++StaticFindObject=function() calls=calls+1;error("must not look up before a valid guard") end
++local c=config({"loadasset.fallback"}); c.allow.load_asset=true
++c.context.asset={path="/Game/Test.Test_C",cleanup_plan_id="fixture"}
++c.thread_guard=function() return {kind="host-fixture",in_game_thread=false} end
++local s=assert(runner.new(c)); s:run(); s:finish(); assert(calls==0)
++''')
++        self.assertEqual(self.case(records, "loadasset.fallback")["status"], "skipped")
++        records = self.run_lua(r'''
++StaticConstructObject=function() calls=calls+1;return live() end
++LoadAsset=function() calls=calls+1;return live(),true,true end
++StaticFindObject=function() calls=calls+1;return live() end
++local c=config({"construct.umg","loadasset.fallback"});c.allow.construct=true;c.allow.load_asset=true
++c.context.construct={class=live(),outer=live(),name=live(),cleanup_plan_id="fixture"}
++c.context.asset={path="/Game/Test.Test_C",cleanup_plan_id="fixture"}
++local s=assert(runner.new(c));s:run();s:finish();assert(calls==0)
++''')
++        self.assertEqual(self.case(records, "construct.umg")["status"], "skipped")
++        self.assertEqual(self.case(records, "loadasset.fallback")["status"], "skipped")
++
++    def test_unexpected_native_result_is_failed_not_missing_context(self):
++        # After invoking an API, a wrong native result cannot be called a missing fixture.
++        records = self.run_lua(r'''
++FindFirstOf=function()calls=calls+1;return nil end
++local c=config({"database.findfirst"});c.allow.engine_read=true;c.context.database=live()
++local s=assert(runner.new(c));s:run();s:finish();assert(calls==1)
++''')
++        self.assertEqual(self.case(records, "database.findfirst")["status"], "failed")
++
++    def test_engine_configuration_cannot_use_a_boolean_thread_claim(self):
++        # Treating an unverified Lua boolean as native game-thread proof must fail.
++        records = self.run_lua(r'''
++FindFirstOf=function() calls=calls+1; return live() end
++local c=config({"database.findfirst"}); c.allow.engine_read=true
++c.evidence="engine"; c.side="ps5"
++c.metadata.attestations={real_engine=true,release_immutable=true,
++ independent_thread_witness=true,controlled_object_context=true}
++c.thread_guard=function() return true end
++c.context.database=live()
++local s=assert(runner.new(c)); s:run(); s:finish(); assert(calls==0)
++''')
++        self.assertEqual(self.case(records, "database.findfirst")["status"], "skipped")
++
++    def test_host_doubles_are_explicit_fixture_pass_only(self):
++        # Promoting host doubles to proved engine behavior must fail.
++        records = self.run_lua(r'''
++local db=live(); FindFirstOf=function(name) assert(name=="ItemDatabaseSubsystem"); return db end
++local c=config({"database.findfirst"}); c.allow.engine_read=true; c.context.database=db
++local s=assert(runner.new(c)); s:run(); s:finish()
++''')
++        row = self.case(records, "database.findfirst")
++        self.assertEqual(row["status"], "fixture-pass")
++        self.assertEqual(row["evidence"], "host-fixture")
++        self.assertFalse(records[0]["attestations"]["real_engine"])
++
++    def test_writable_nested_values_are_snapshotted_read_back_and_restored(self):
++        # Using a live alias as the saved value or forgetting nested restore must fail.
++        records = self.run_lua(r'''
++local widget=live(); widget.ShadowOffset={X=4,Y=5}; widget.Font={Size=12}
++local c=config({"marshal.struct-write"}); c.allow.property_write=true
++c.context.textblock=widget; c.context.textblock_owned=true
++local s=assert(runner.new(c)); s:run(); s:finish()
++assert(widget.ShadowOffset.X==4 and widget.ShadowOffset.Y==5 and widget.Font.Size==12)
++''')
++        row = self.case(records, "marshal.struct-write")
++        self.assertEqual(row["status"], "fixture-pass")
++        self.assertEqual(row["value"]["before"], {"shadow": {"X": 4, "Y": 5}, "font_size": 12})
++        self.assertEqual(row["value"]["written"], {"shadow": {"X": 1, "Y": 1}, "font_size": 13})
++        self.assertEqual(row["value"]["restored"], row["value"]["before"])
++
++    def test_failed_write_readback_still_restores_original_values(self):
++        # Returning early after failed verification and leaving a modified widget must fail.
++        records = self.run_lua(r'''
++local offset={X=4,Y=5}; local font={Size=12}; local reads=0
++local widget=setmetatable(live(),{
++ __index=function(_,key) if key=="ShadowOffset" then reads=reads+1; if reads==2 then error("readback failure") end; return offset end
++                       if key=="Font" then return font end end,
++ __newindex=function(_,key,value) if key=="ShadowOffset" then offset.X=value.X;offset.Y=value.Y else rawset(_,key,value) end end})
++local c=config({"marshal.struct-write"}); c.allow.property_write=true
++c.context.textblock=widget;c.context.textblock_owned=true
++local s=assert(runner.new(c));s:run();s:finish()
++assert(offset.X==4 and offset.Y==5 and font.Size==12)
++''')
++        row = self.case(records, "marshal.struct-write")
++        self.assertEqual(row["status"], "failed")
++        self.assertIn("readback failure", row["error"])
++        self.assertTrue(row["value"]["cleanup_verified"])
++
++    def test_cleanup_failure_is_preserved_as_failure(self):
++        # A successful native return must not conceal failed cleanup.
++        records = self.run_lua(r'''
++StaticConstructObject=function() calls=calls+1; return live() end
++local c=config({"construct.umg"});c.allow.construct=true
++c.context.construct={class=live(),outer=live(),name=live(),cleanup_plan_id="owned-fixture"}
++c.cleanup=function() error("fixture cleanup failed") end
++local s=assert(runner.new(c));s:run();s:finish();assert(calls==1)
++''')
++        row = self.case(records, "construct.umg")
++        self.assertEqual(row["status"], "failed")
++        self.assertIn("fixture cleanup failed", row["error"])
++
++    def test_registration_is_separate_from_delivered_callbacks(self):
++        # Reporting registered/queued callbacks as delivered game-thread work must fail.
++        records = self.run_lua(r'''
++Key={F7=118,UP_ARROW=38,DOWN_ARROW=40,RETURN=13,LEFT_ARROW=37,RIGHT_ARROW=39}
++RegisterKeyBind=function() end;RegisterLoadMapPreHook=function() end;ExecuteInGameThread=function() end
++local c=config({"register_keys.accept","loadmap.accept","game_thread.delivery","register_keys.delivery","loadmap.delivery"})
++c.allow.register_keys=true;c.allow.register_map_hook=true;c.allow.dispatch=true
++c.context.registration_plan_id="isolated-fixture-session"
++local s=assert(runner.new(c));s:run();s:finish()
++''')
++        self.assertEqual(self.case(records, "register_keys.accept")["status"], "fixture-pass")
++        self.assertEqual(self.case(records, "game_thread.delivery")["status"], "skipped")
++        self.assertEqual(self.case(records, "register_keys.delivery")["status"], "skipped")
++        self.assertEqual(self.case(records, "loadmap.delivery")["status"], "skipped")
++
++    def test_exact_trace_arguments_and_out_write_are_observed_with_context(self):
++        # Losing the OUT table, argument order, or ignored-actor array must fail.
++        records = self.run_lua(r'''
++local pawn=live();local system=live()
++system.LineTraceSingle=function(self,p,s,e,ch,complex,actors,debug,hit,ignore,c1,c2,time)
++ assert(self==system and p==pawn and s.X==10 and e.Z==0 and ch==0 and complex==false)
++ assert(#actors==1 and actors[1]==pawn and debug==0 and ignore==true and c1.A==0 and c2.A==0 and time==0)
++ hit.ImpactPoint={X=10,Y=20,Z=0};hit.ImpactNormal={X=0,Y=0,Z=1};return true
++end
++local c=config({"marshal.trace-out"});c.allow.trace=true
++c.context.trace={pawn=pawn,system=system,start={X=10,Y=20,Z=50},finish={X=10,Y=20,Z=0},
++ expected={has_hit=true,point={X=10,Y=20,Z=0},normal={X=0,Y=0,Z=1}}}
++local s=assert(runner.new(c));s:run();s:finish()
++''')
++        self.assertEqual(self.case(records, "marshal.trace-out")["status"], "fixture-pass")
++
++    def test_callable_constructor_and_replace2_error_are_not_hidden(self):
++        # Requiring type(function) for native callable constructors or swallowing errors must fail.
++        records = self.run_lua(r'''
++FName=setmetatable({}, {__call=function(_,text,mode)
++ if mode==2 then error("invalid EFindName at 0x2345") end
++ return {ToString=function()return text end}
++end})
++local c=config({"fname.add-default","fname.replace2"});c.allow.name_pool=true
++c.context.name_plan_id="fixture-name-pool";c.context.known_name="ByteProperty"
++local s=assert(runner.new(c));s:run();s:finish()
++''')
++        self.assertEqual(self.case(records, "fname.add-default")["status"], "fixture-pass")
++        row = self.case(records, "fname.replace2")
++        self.assertEqual(row["status"], "observed")
++        self.assertIn("invalid EFindName at 0x2345", row["value"]["error"])
++
++    def test_inert_stream_matches_frozen_manifest_and_remains_fixture_only(self):
++        # Stale cases, malformed empty selections or promotion of an inert host run must fail.
++        manifest=json.loads((BASE / "manifest.json").read_text())
++        digest=hashlib.sha256((BASE / "conformance.lua").read_bytes()).hexdigest()
++        self.assertEqual(manifest["script_sha256"],digest)
++        for selected in ["nil", "{}"]:
++            records=self.run_lua('local c=config('+selected+'); c.metadata.script_sha256="'+digest+'"; '
++                                 'local s=assert(runner.new(c));s:run();s:finish()')
++            self.assertEqual([r["id"] for r in records if r["kind"]=="case"],
++                             [c["id"] for c in manifest["cases"]])
++            self.assertEqual(records[-1]["case_count"],24)
++            self.assertTrue(all(r["status"]=="skipped" for r in records if r["kind"]=="case"))
++            self.assertIsInstance(records[0]["selected_case_ids"],list)
++            with tempfile.TemporaryDirectory() as temp:
++                path=Path(temp)/"fixture-only.jsonl"
++                path.write_text("".join(json.dumps(r)+"\n" for r in records))
++                result=subprocess.run(["python3",str(BASE/"compare.py"),"--manifest",str(BASE/"manifest.json"),
++                                       "--reference",str(path),"--candidate",str(path)],capture_output=True,text=True)
++                self.assertEqual(result.returncode,2,result.stderr)
++                self.assertEqual(json.loads(result.stdout)["verdict"],"incomplete")
++
++
++if __name__ == "__main__":
++    unittest.main()

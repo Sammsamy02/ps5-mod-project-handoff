@@ -1,0 +1,280 @@
+# PROPOSAL PATCH (PARKED) - P1 fault-ledger desaturation. DO NOT APPLY
+# WITHOUT READING parked/P1-fault-ledger/NOTES.md (owner FX, 2026-10-10).
+# Changes admission-adjacent behavior: needs a console session with the
+# ToString-bind context to validate; NEVER apply without that plan.
+#
+# Authored against (base states, verified at authoring time):
+#   outputs/2026-10-08-l26-runtime/copyin-probe/candidate/lifecycle/runtime_start_bridge.cpp
+#     sha256 94f81a17d6904b9edfe8b06e8e4284268fbd4c738f96ac4475931225e719274c (EE-gated candidate)
+#   frozen lineage CopyinSink.hpp (l19-r4 overlay-2; identical bytes in every
+#     l24/l25/l26 package lineage) sha256 2018c9bdc63b8f2001aeadcc44ab698d0d5c54c08652e5fc0c78f45c0fa65d98
+#   outputs/2026-10-08-l26-runtime/copyin-probe/MANIFEST.json (pre-patch state)
+#   outputs/2026-10-08-l26-runtime/l26_packaging_driver.py
+#     sha256 086e514960277e3a0882dce640584075de82a62fc0df27a07fdc264736fe23a7
+#
+# Result states (post-patch, verified by construction in /tmp):
+#   bridge candidate -> a35c7f9111b1f91cead80a05d489db04f6d4a25bb32b6bf0bee09879785baca1
+#   new CopyinSink.hpp candidate -> 0b113b1c19b4eac7f9959567487845c8639a28937f94a4881103dcbb163e69cd
+#   host clang++ -std=c++20 syntax + self-test runtime run of the new header: PASS
+#
+# Contents (4 hunks, apply from the worktree root with: patch -p1 --fuzz=0):
+#   1. NEW FILE outputs/2026-10-08-l26-runtime/copyin-probe/candidate/CopyinSink.hpp
+#      (a) record() rejects invalid ranges loudly (rejected_invalid counter +
+#          RecordResult::InvalidRange), never saturates on them;
+#      (b) overlaps() no longer consults `saturated`; capacity saturation is
+#          queryable ONLY via saturated_capacity(), which the admission gate
+#          bridge_copyin_range_faulted never calls; invalid QUERY ranges
+#          still fail closed (unchanged);
+#      (c) constexpr self_test_mask() + static_assert(==0xF) compile-time
+#          regression hook exercising record(invalid)+queries on a clean ledger.
+#   2. runtime_start_bridge.cpp: record() call-site handles RecordResult with
+#      one-shot loud diagnostic_events (copyin_fault_ledger_reject_invalid /
+#      copyin_fault_ledger_full); one-shot [ST] unit-test line
+#      (copyin_fault_ledger_st=15 / _st_pass=1) emitted from
+#      bridge_copyin_directory_prepare, before any admission probe activity.
+#      The fail-closed owner-gate line in bridge_copyin_range_faulted is
+#      BYTE-UNCHANGED - real faults still refuse.
+#   3. copyin-probe/MANIFEST.json: bridge candidate pin 94f81a17 -> a35c7f91;
+#      new base_files.copyinsink entry (base 2018c9bd, candidate 0b113b1c);
+#      l27_fledger_note documents the composition chain step.
+#   4. l26_packaging_driver.py: EQ-pattern lineage_overlays destination
+#      'CopyinSink.hpp' wiring (hard-error if the manifest entry is missing);
+#      lineage_source_pins repointed for the staged sink.
+
+--- /dev/null
++++ b/outputs/2026-10-08-l26-runtime/copyin-probe/candidate/CopyinSink.hpp
+@@ -0,0 +1,95 @@
++#pragma once
++#include <cstdint>
++#include <cerrno>
++
++// Shared by the production bridge and host tests. Error recognition precedes
++// count arithmetic, so zero-extended SCE errors can never become byte counts.
++namespace l13_sink {
++inline int error(int64_t raw, int saved_errno) noexcept
++{
++    const uint32_t bits = static_cast<uint32_t>(raw);
++    if (raw >= INT32_MIN && raw <= UINT32_MAX &&
++        (bits & 0xffff0000u) == 0x80020000u)
++        return static_cast<int>(bits & 0xffffu);
++    if (raw == -1) return saved_errno;
++    if (raw < -1 && raw >= -INT32_MAX) return static_cast<int>(-raw);
++    return raw < 0 ? EIO : 0;
++}
++// [L27][FX] valid_range is constexpr so the FaultLedger self-test below can
++// run in constant expressions (behavior identical to the l13 inline form).
++constexpr bool valid_range(uint64_t addr, uint64_t len) noexcept
++{
++    return len != 0 && len <= 0x1000000u && addr <= UINT64_MAX - len;
++}
++// [L27][FX fault-ledger desaturation] record() outcome, made explicit so no
++// caller-visible state change can hide inside record(): the pre-fix ledger
++// saturated (poisoning EVERY overlaps() query) on an INVALID record range and
++// at capacity, and a saturated ledger was indistinguishable from a real
++// recorded fault at the bridge_copyin_range_faulted admission gate — the
++// "known_fault TRUE with zero recorded probes" false-positive class.
++enum class RecordResult : uint8_t { Recorded, AlreadyKnown, Full, InvalidRange };
++struct FaultLedger {
++    struct Range { uint64_t lo, hi; } ranges[64]{};
++    uint32_t count = 0;
++    bool saturated = false;        // capacity-only: 64 real faulted ranges recorded
++    uint32_t rejected_invalid = 0; // invalid-range record() attempts; never recorded
++    constexpr RecordResult record(uint64_t addr, uint64_t len) noexcept
++    {
++        // (a) An INVALID range is not a fault and must never saturate the
++        // ledger: reject, count, and let the caller log once. The only
++        // record() call site today (the EFAULT arm of
++        // bridge_kernel_write_copyin_probe_until) sits behind valid_range(),
++        // so this arm is a loud guard for future callers and host tests.
++        if (!valid_range(addr, len)) { ++rejected_invalid; return RecordResult::InvalidRange; }
++        for (uint32_t i = 0; i < count; ++i)
++            if (ranges[i].lo <= addr && ranges[i].hi >= addr + len) return RecordResult::AlreadyKnown;
++        if (count == 64) { saturated = true; return RecordResult::Full; }
++        ranges[count++] = {addr, addr + len};
++        return RecordResult::Recorded;
++    }
++    // (b) REAL recorded faults only. Capacity saturation no longer answers
++    // for every query: it is observable ONLY via saturated_capacity(), an
++    // accessor the admission gate (bridge_copyin_range_faulted) deliberately
++    // does not consult, so a full ledger can never masquerade as a recorded
++    // fault. An unqueryable (invalid) range still fails closed, unchanged.
++    constexpr bool overlaps(uint64_t addr, uint64_t len) const noexcept
++    {
++        if (!valid_range(addr, len)) return true;
++        for (uint32_t i = 0; i < count; ++i)
++            if (addr < ranges[i].hi && ranges[i].lo < addr + len) return true;
++        return false;
++    }
++    constexpr bool saturated_capacity() const noexcept { return saturated; }
++    // (c) Regression self-test ([ST] fault-ledger unit test): record(invalid)
++    // + queries on a CLEAN ledger. Bit semantics (all set = pass):
++    //   bit0 invalid record() rejected without recording or saturating
++    //   bit1 clean-ledger non-overlap query returns false
++    //   bit2 a real recorded fault still overlaps; non-overlap still false
++    //   bit3 saturation queryable only via saturated_capacity(); a
++    //        non-saturated non-overlap query stays false after both records
++    static constexpr uint32_t self_test_mask() noexcept
++    {
++        FaultLedger ledger{};
++        const uint32_t mask_invalid =
++            (ledger.record(0, 0) == RecordResult::InvalidRange
++             && ledger.record(UINT64_MAX, 2) == RecordResult::InvalidRange
++             && ledger.count == 0 && !ledger.saturated
++             && ledger.rejected_invalid == 2) ? 1u : 0u;
++        const uint32_t mask_clean = (!ledger.overlaps(0x1000, 32)) ? 2u : 0u;
++        const uint32_t mask_real =
++            (ledger.record(0x2000, 32) == RecordResult::Recorded
++             && ledger.overlaps(0x2000, 32)
++             && ledger.overlaps(0x2010, 16)
++             && !ledger.overlaps(0x3000, 16)) ? 4u : 0u;
++        const uint32_t mask_sat =
++            (!ledger.saturated_capacity()
++             && !ledger.overlaps(0x5000, 16)) ? 8u : 0u;
++        return mask_invalid | mask_clean | mask_real | mask_sat;
++    }
++};
++static_assert(l13_sink::FaultLedger::self_test_mask() == 0xFu,
++              "fault-ledger desaturation regression: record(invalid) must not "
++              "poison overlaps(); real recorded faults must still refuse; "
++              "capacity saturation must be observable only via "
++              "saturated_capacity()");
++} // namespace l13_sink
+
+--- a/outputs/2026-10-08-l26-runtime/copyin-probe/candidate/lifecycle/runtime_start_bridge.cpp
++++ b/outputs/2026-10-08-l26-runtime/copyin-probe/candidate/lifecycle/runtime_start_bridge.cpp
+@@ -908,6 +908,11 @@
+ static uint64_t g_copyin_generation = 0;
+ static uint32_t g_copyin_pid = 0;
+ static l13_sink::FaultLedger g_copyin_faults;
++// [L27][FX fault-ledger desaturation] one-shot guards for the two
++// never-normal record() outcomes (invalid range rejected; capacity full).
++// Both are LOUD: no ledger state change may ever again be silent.
++static bool g_copyin_fault_ledger_invalid_logged = false;
++static bool g_copyin_fault_ledger_full_logged = false;
+ // [L25 item 7] copyin probe liveness counters (agent-Q). The l24 diagnostic
+ // vocabulary was init-only, so nothing recorded the probe's post-admission
+ // behavior (l25-prep/agent-F-crash-forensics.md). These counters are pure
+@@ -985,9 +990,26 @@
+     ::diagnostic_event("copyin_file_raw_hi", static_cast<uint32_t>(uint64_t(raw) >> 32));
+     ::diagnostic_event("copyin_file_errno", static_cast<uint32_t>(err));
+     bridge_copyin_credentials(phase);
++}
++// [L27][FX] (c) [ST] fault-ledger one-shot unit-test line: proves at runtime
++// that record(invalid) no longer poisons overlaps() (the 15:36Z session's
++// 'known_fault TRUE with zero recorded probes' false-positive class) while
++// real recorded faults still refuse. Runs on a LOCAL ledger; the production
++// g_copyin_faults state is never touched. Expected console signature:
++//   copyin_fault_ledger_st=15 (all four mask bits) and _st_pass=1
++// in supplier-diag.jsonl, before any admission probe activity.
++static void bridge_fault_ledger_self_test()
++{
++    static bool logged = false;
++    if (logged) return;
++    logged = true;
++    const uint32_t mask = l13_sink::FaultLedger::self_test_mask();
++    ::diagnostic_event("copyin_fault_ledger_st", mask);
++    ::diagnostic_event("copyin_fault_ledger_st_pass", mask == 0xFu ? 1u : 0u);
+ }
+ static void bridge_copyin_directory_prepare()
+ {
++    bridge_fault_ledger_self_test();
+     if (g_copyin_parent_fd >= 0) return;
+     g_copyin_initializer_owner.prepare();
+     bridge_copyin_credentials(1u);
+@@ -1383,7 +1405,21 @@
+         if (err != 0 || raw < 0) {
+             if (err == EFAULT) {
+                 faulted = true;
+-                g_copyin_faults.record(addr, len);
++                // [L27][FX fault-ledger desaturation]: record() no longer
++                // saturates on invalid ranges (rejected+counted) and capacity
++                // saturation is observable only via saturated_capacity(); the
++                // admission gate bridge_copyin_range_faulted never consults
++                // saturation. Log the two never-normal outcomes once, loudly.
++                const auto ledger_outcome = g_copyin_faults.record(addr, len);
++                if (ledger_outcome == l13_sink::RecordResult::InvalidRange
++                    && !g_copyin_fault_ledger_invalid_logged) {
++                    g_copyin_fault_ledger_invalid_logged = true;
++                    ::diagnostic_event("copyin_fault_ledger_reject_invalid", g_copyin_faults.rejected_invalid);
++                } else if (ledger_outcome == l13_sink::RecordResult::Full
++                    && !g_copyin_fault_ledger_full_logged) {
++                    g_copyin_fault_ledger_full_logged = true;
++                    ::diagnostic_event("copyin_fault_ledger_full", g_copyin_faults.count);
++                }
+                 ::diagnostic_event("pool_copyin_probe_fault_off", static_cast<uint32_t>(landed));
+                 ::diagnostic_event("pool_copyin_fault_addr_lo", static_cast<uint32_t>(cursor));
+                 ::diagnostic_event("pool_copyin_fault_addr_hi", static_cast<uint32_t>(cursor >> 32));
+
+--- a/outputs/2026-10-08-l26-runtime/copyin-probe/MANIFEST.json
++++ b/outputs/2026-10-08-l26-runtime/copyin-probe/MANIFEST.json
+@@ -18,10 +18,17 @@
+       "base_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l24-package/lineage/lifecycle/runtime_start_bridge.cpp",
+       "base_sha256": "89e4b64344fe0acd5cb5cf30156420f3f73c994f7ccdc949ab66b50a1a6f0eac",
+       "candidate_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/copyin-probe/candidate/lifecycle/runtime_start_bridge.cpp",
+-      "candidate_sha256": "94f81a17d6904b9edfe8b06e8e4284268fbd4c738f96ac4475931225e719274c",
++      "candidate_sha256": "a35c7f9111b1f91cead80a05d489db04f6d4a25bb32b6bf0bee09879785baca1",
+       "patch": "patches/runtime_start_bridge-copyin-probe-liveness.patch",
+       "patch_sha256": "6771e33e022dd5511d47f53db6111ab4e150647eb3f64f429d31406bc8bb8297",
+       "ownership": "packaging-side lineage file (NOT consumed by build_runtime.py); wire at the l26 packaging step"
++    },
++    "copyinsink": {
++      "base_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l19-r4-full-build/driver/staging/lineage-overlay-2/CopyinSink.hpp",
++      "base_sha256": "2018c9bdc63b8f2001aeadcc44ab698d0d5c54c08652e5fc0c78f45c0fa65d98",
++      "candidate_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/copyin-probe/candidate/CopyinSink.hpp",
++      "candidate_sha256": "0b113b1c19b4eac7f9959567487845c8639a28937f94a4881103dcbb163e69cd",
++      "ownership": "lineage-root header consumed by the bridge TU at packaging; wired by l26_packaging_driver.py as a lineage_overlays destination 'CopyinSink.hpp' (EQ pattern) that shadows the frozen copytree file"
+     }
+   },
+   "new_diagnostic_tags": [
+@@ -75,5 +82,13 @@
+     "what": "hunk 3 (note_admission_complete insertion) re-anchored onto the EQ phase-armor completion wrap (try { copyin_cleanup.complete(); <insert> L25 send } catch ...) \u2014 same immediately-after-complete() position; hunks 1/2 byte-identical to Q's overlay; added lines unchanged except indentation inside the try block",
+     "why": "the 2026-10-09 11:36 run showed Phase 5/6 admission throws unwind silently (seed_refused throws without logging); the armor wraps completion so any complete()/send failure logs '[Seeds] Phase 6 completion exception' before rethrowing",
+     "base_note": "base_sha256 deliberately left at Q-era c4364dd7 (expectation, not invariant): the current armored candidate 5f7ae2bc differs, so build_variants always composes via the patch-rebased path (adopting Q's ready candidate would silently drop the EM stringfix + EQ armor). Patch sha updated to the EQ re-anchored c5c081fe."
++  },
++  "l27_fledger_note": {
++    "date": "2026-10-10",
++    "by": "agent FX (parked P1 patch set, outputs/2026-10-08-l25-prep/parked/P1-fault-ledger/)",
++    "change": "fault-ledger desaturation applied to the wired bridge candidate a35c7f91... (prev 94f81a17): (a) FaultLedger::record() no longer saturates on an INVALID range (rejects, counts rejected_invalid, returns RecordResult::InvalidRange); (b) overlaps() no longer consults the saturated flag - capacity saturation is observable ONLY via the new saturated_capacity() accessor, which the admission gate bridge_copyin_range_faulted never calls; (c) [ST] one-shot self-test line copyin_fault_ledger_st/copyin_fault_ledger_st_pass emitted from bridge_copyin_directory_prepare, plus a compile-time static_assert (self_test_mask()==0xF) in the new CopyinSink.hpp candidate. The fail-closed owner-gate line in bridge_copyin_range_faulted is byte-unchanged; real recorded faults still refuse. New header candidate: copyin-probe/candidate/CopyinSink.hpp sha 0b113b1c (base: frozen lineage-overlay-2 CopyinSink.hpp 2018c9bd), wired at packaging via lineage_overlays destination 'CopyinSink.hpp'.",
++    "composition_chain_step": "94f81a17 (EE gated) + FX fault-ledger desaturation = a35c7f91",
++    "root_cause_context": "tonight's 15:36Z [Seeds][L27] refusal was actually the owner-gate fail-closed path (agent-EM root cause, l27_ei_stringfix in typescan-r4/CHANGES.json); this change removes the REMAINING latent false-positive mechanism in the ledger itself (EO candidate mechanism: record() saturating on an invalid range / capacity, overlaps() conflating saturation with a real hit)",
++    "console_contact": false
+   }
+ }
+
+--- a/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py
++++ b/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py
+@@ -156,6 +156,34 @@
+         'wired_outer_bridge':{'path':qb['candidate_path'],'sha256':qb['candidate_sha256']},
+         'ue4ss_side':'composed by build_variants.py (see copyin_probe_wiring in the variant build receipts / VARIANT-MARKER.json)',
+         'import_delta':qman.get('import_delta'),'console_contact':False}}
++
++    # [L27][FX fault-ledger desaturation] CopyinSink.hpp overlay (EQ
++    # pattern): the wired bridge candidate includes the desaturated
++    # FaultLedger header, so the staged lineage must compile THAT candidate,
++    # never the frozen l19 overlay-2 copy (2018c9bd...). The controller
++    # writes stage/<destination> AFTER the lineage copytree, so destination
++    # 'CopyinSink.hpp' shadows the frozen root file the copytree placed
++    # there. A missing manifest entry is a HARD error: silently compiling
++    # the pre-desaturation ledger is exactly the silent-drift class this
++    # driver refuses.
++    if 'copyinsink' not in qman['base_files']:
++        raise RuntimeError('copyin-probe MANIFEST missing the copyinsink base_files entry (fault-ledger candidate wiring, agent FX); refusing to stage the frozen pre-desaturation CopyinSink.hpp')
++    qs=qman['base_files']['copyinsink']
++    lineage_sink=Path(qs['base_path'])
++    if not (lineage_sink.exists() and sha(lineage_sink)==qs['base_sha256']):
++        raise RuntimeError('frozen lineage CopyinSink.hpp no longer matches the copyinsink base pin: expected '+qs['base_sha256'])
++    if not (Path(qs['candidate_path']).exists() and sha(qs['candidate_path'])==qs['candidate_sha256']):
++        raise RuntimeError('fault-ledger candidate CopyinSink.hpp pin drift (expected '+qs['candidate_sha256']+')')
++    m['lineage_overlays'].append({'path':qs['candidate_path'],'sha256':qs['candidate_sha256'],
++                                  'bytes':Path(qs['candidate_path']).stat().st_size,'destination':'CopyinSink.hpp'})
++    # keep lineage_source_pins honest: the staged sink is now the candidate.
++    m['lineage_source_pins']=[(pinrow(qs['candidate_path'])
++                               if Path(r.get('path','')).name=='CopyinSink.hpp' and r.get('sha256')==qs['base_sha256']
++                               else r) for r in m['lineage_source_pins']]
++    m['fault_ledger_overlay']={'candidate':{'path':qs['candidate_path'],'sha256':qs['candidate_sha256']},
++        'replaces_frozen_lineage':{'path':qs['base_path'],'sha256':qs['base_sha256']},
++        'note':'[L27][FX] fault-ledger desaturation: invalid record() rejected loudly (never saturates), capacity saturation accessor-only (the admission gate does not consult it), real recorded faults still refuse; [ST] copyin_fault_ledger_st self-test line from the bridge',
++        'console_contact':False}
+     # pin remapping
+     l24build=str(ROOT/'outputs/2026-10-08-l24-build-r2')+'/'
+     l24pkg=str(L24PKG)+'/'

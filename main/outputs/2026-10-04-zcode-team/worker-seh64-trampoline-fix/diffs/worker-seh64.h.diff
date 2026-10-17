@@ -1,0 +1,167 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-seh64-trampoline-fix/diffs/worker-seh64.h.orig	2026-10-05 05:27:37
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-seh64-trampoline-fix/vendor/windows-candidate/tests/worker-seh64.h	2026-10-05 06:12:48
+@@ -13,13 +13,26 @@
+  *   guarded frames, __finally during unwind, target-frame transfer;
+  *   dynamic registration: RtlAddFunctionTable/RtlRemoveFunctionTable over a
+  *   bridge (non-PE) address - the win64cc frames have no .pdata (design 5a);
+- *   state owner: SetUnhandledExceptionFilter previous-pointer semantics.
+- * Unique error codes -130..-137 (moduleenum -100..-104, crtstartup -90..-97,
++ *   state owner: SetUnhandledExceptionFilter previous-pointer semantics;
++ *   guard-funclet alignment discharge (trampoline review F-1, worker-
++ *   seh64-trampoline-fix): a real non-constant FILTER funclet and a
++ *   __finally funclet that each (a) verify Win64 call-site stack alignment
++ *   from inside the funclet via a naked rsp probe (callee entry rsp ==
++ *   8 (mod 16), prologue-shape independent) and (b) force a 16-byte-aligned
++ *   __m128 stack spill + aligned global store (movaps class - the class the
++ *   constant-filter census never compiled). Codes -138 (filter guard) and
++ *   -139 (finally guard).
++ * Unique error codes -130..-139 (moduleenum -100..-104, crtstartup -90..-97,
+  * fileio -80..-89, vm -110..-117). Layout mirrors are contracts: offsets
+  * match windows-services/mb_win_seh64.h exactly. Documented boundaries:
+- * filters/bodies here touch globals only (guard-rsp local addressing is out
+- * of scope); floating state is not restored; unhandled exceptions report
+- * through the owner instead of terminating like real Windows. */
++ * filters/bodies here touch globals and their own funclet locals only
++ * (guard-rsp PARENT-local addressing is out of scope); floating state is
++ * not restored; unhandled exceptions report through the owner instead of
++ * terminating like real Windows. */
++/* 16-byte-aligned 4-float vector: assignment/spill compiles to the movaps
++ * class (aligned vector moves) - no intrinsic header needed (this SDK's
++ * fixture compiles are -ffreestanding with no compiler header dir). */
++typedef float mb_seh_v4 __attribute__((__vector_size__(16), __aligned__(16)));
+ typedef __UINT8_TYPE__ mb_seh_u8;
+ typedef unsigned short mb_seh_u16;
+ typedef __UINT32_TYPE__ mb_seh_u32;
+@@ -73,6 +86,45 @@
+ static mb_seh_context mb_seh_probe_ctx;
+ static struct mb_seh_runtime_function mb_seh_dyn[2];
+ static mb_seh_i32 mb_seh_last_chance(void *ptrs) { (void)ptrs; return 1; }
++/* Naked rsp probe (F-1 discharge): at a naked function's entry the return
++ * address is already pushed, so rsp here is exactly caller_call_site - 8.
++ * The Win64 ABI requires every call-site rsp == 0 (mod 16), i.e. THIS entry
++ * rsp == 8 (mod 16), independent of any caller prologue shape. A funclet
++ * entered with inverted alignment (review F-1) shifts all of its call sites
++ * by 8 and this check fails deterministically. */
++__attribute__((naked, noinline, used)) static void mb_seh_sp_probe(mb_seh_u64 *out) {
++    __asm__ volatile(
++        "movq %rsp, %rax\n\t"
++        "movq %rax, (%rcx)\n\t"
++        "ret\n\t");
++}
++static __attribute__((aligned(16))) mb_seh_u32 mb_seh_sse_buf[4];
++static __attribute__((aligned(16))) mb_seh_u32 mb_seh_sse_buf2[4];
++static volatile mb_seh_u32 mb_seh_sse_filter_ok, mb_seh_sse_finally_ok;
++static volatile mb_seh_u64 mb_seh_sse_probe_rsp;
++/* Aligned SSE filter funclet (-138): forced 16-byte-aligned __m128 spill
++ * (movaps class) through a local, aligned global store round-trip, and the
++ * naked-probe call-site alignment check. Invoked by the owner's guard
++ * trampoline during the search pass. */
++__attribute__((noinline)) static mb_seh_i32 mb_seh_filter_sse(void) {
++    volatile mb_seh_v4 spill;
++    mb_seh_v4 v;
++    mb_seh_u64 probe = 0;
++    unsigned i;
++    static const mb_seh_u32 mb_seh_sse_want[4] = {
++        0x3F800000u /*1.0f*/, 0x40000000u /*2.0f*/,
++        0x40400000u /*3.0f*/, 0x40800000u /*4.0f*/ };
++    v[0] = 1.0f; v[1] = 2.0f; v[2] = 3.0f; v[3] = 4.0f;
++    spill = v; /* aligned __m128-class stack spill */
++    *(volatile mb_seh_v4 *)mb_seh_sse_buf = spill; /* aligned global store */
++    mb_seh_sp_probe(&probe);
++    mb_seh_sse_probe_rsp = probe;
++    if ((probe & 15) != 8) return 0; /* funclet frame not Win64-aligned */
++    for (i = 0; i < 4; ++i)
++        if (mb_seh_sse_buf[i] != mb_seh_sse_want[i]) return 0;
++    mb_seh_sse_filter_ok = 1;
++    return 1;
++}
+ /* disable_tail_calls keeps a real frame here: a tail call would turn the
+  * probe into a jmp thunk and the walker-kit checks would lose their frame. */
+ __attribute__((noinline, disable_tail_calls)) static mb_seh_u64 mb_seh_probe(void) {
+@@ -113,6 +165,59 @@
+     if (finally_ran != 1 || cross_handled != 1) return -135;
+     return 1;
+ }
++/* Aligned SSE filter guard (-138, trampoline review F-1): a REAL non-constant
++ * filter funclet invoked through the guard trampoline during the search
++ * pass. If the funclet entry alignment is inverted the funclet itself
++ * returns 0 (probe check) or faults on the aligned spill; either way the
++ * exception goes unhandled, RaiseException returns, and this frame must
++ * retire with -138. */
++__attribute__((noinline, disable_tail_calls)) static mb_seh_i32 mb_seh_guard_sse_filter(void) {
++    mb_seh_sse_filter_ok = 0;
++    __try {
++        RaiseException(0xE0005E68u, 0, 0, (const mb_seh_u64 *)0);
++        return -138; /* handled path must transfer, never return here */
++    } __except (mb_seh_filter_sse()) {
++        if (!mb_seh_sse_filter_ok) return -138;
++    }
++    if (!mb_seh_sse_filter_ok) return -138;
++    return 1;
++}
++/* Aligned SSE __finally guard (-139, trampoline review F-1): the unwind-pass
++ * guard-trampoline invocation of a __finally funclet that forces the same
++ * aligned spill + naked rsp probe inside the funclet body. */
++__attribute__((noinline, disable_tail_calls)) static mb_seh_i32 mb_seh_guard_sse_finally(void) {
++    volatile mb_seh_u32 fin_done = 0;
++    mb_seh_sse_finally_ok = 0;
++    __try {
++        __try {
++            RaiseException(0xE0005E69u, 0, 0, (const mb_seh_u64 *)0);
++            return -139; /* must transfer, never return here */
++        } __finally {
++            volatile mb_seh_v4 spill;
++            mb_seh_v4 v;
++            mb_seh_u64 probe = 0;
++            unsigned i;
++            static const mb_seh_u32 mb_seh_sse_want2[4] = {
++                0x40A00000u /*5.0f*/, 0x40C00000u /*6.0f*/,
++                0x40E00000u /*7.0f*/, 0x41000000u /*8.0f*/ };
++            v[0] = 5.0f; v[1] = 6.0f; v[2] = 7.0f; v[3] = 8.0f;
++            spill = v; /* aligned __m128-class stack spill */
++            *(volatile mb_seh_v4 *)mb_seh_sse_buf2 = spill;
++            mb_seh_sp_probe(&probe);
++            mb_seh_sse_probe_rsp = probe;
++            if ((probe & 15) == 8) {
++                for (i = 0; i < 4; ++i)
++                    if (mb_seh_sse_buf2[i] != mb_seh_sse_want2[i]) goto fin_bad;
++                mb_seh_sse_finally_ok = 1;
++            }
++        fin_bad:;
++        }
++    } __except (1) {
++        fin_done = 1;
++    }
++    if (fin_done != 1 || !mb_seh_sse_finally_ok) return -139;
++    return 1;
++}
+ static mb_seh_i32 mb_worker_seh64_exercise(void) {
+     /* Stack-walker kit over this image's real unwind data (-130..-132). */
+     mb_seh_u64 base = 0;
+@@ -145,8 +250,6 @@
+     mb_seh_runtime_function cr = *(mb_seh_runtime_function *)caller_entry;
+     if (copy.rip < base + cr.begin_address || copy.rip >= base + cr.end_address) return -132;
+     if (!dctx.control_pc || !dctx.establisher_frame || !dctx.frame_rsp) return -132;
+-    /* BISECT-1: kit only */
+-    if (mb_seh_probe_ctx.rip) return 1;
+     /* Same-frame raise/dispatch/recover (-133/-134). */
+     mb_seh_i32 same = mb_seh_guard_same();
+     if (same != 1) return same;
+@@ -176,6 +279,17 @@
+     if (prev) return -137;
+     prev = SetUnhandledExceptionFilter((void *)0);
+     if (prev != (void *)&mb_seh_last_chance) return -137;
++    /* Guard-funclet alignment discharge (F-1): real filter funclet with an
++     * aligned SSE spill (-138), then the __finally funclet variant during
++     * the unwind pass (-139). */
++    {
++        mb_seh_i32 sse_filter = mb_seh_guard_sse_filter();
++        if (sse_filter != 1) return sse_filter;
++    }
++    {
++        mb_seh_i32 sse_fin = mb_seh_guard_sse_finally();
++        if (sse_fin != 1) return sse_fin;
++    }
+     return 1;
+ }
+ #endif

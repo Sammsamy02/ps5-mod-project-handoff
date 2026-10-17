@@ -1,0 +1,271 @@
+--- r2/tests/active-width-host/controls.cpp
++++ r3/tests/active-width-host/controls.cpp
+@@ -1,62 +1,228 @@
+ #include "NativeLayoutBinding.hpp"
+ #include <NativeLayoutEngineIncludes.hpp>
+ #include <NativeLayoutWidths.hpp>
++#include "NativeLayoutActiveWidths.hpp"
+ #include <iostream>
+-#include "NativeLayoutActiveWidths.hpp"
++#include <map>
+ namespace RC::Platform::NativeLayouts {
+ auto GetAccessorWidth(std::string_view cls,std::string_view key) noexcept -> std::optional<uint32_t> {
+- if(cls=="UStruct"&&key=="MinAlignment")return 4;
+- if(cls=="FallbackControl"&&key=="Known")return 4;
+- return std::nullopt;
+-}
++if(cls=="FArrayProperty"&&key=="Inner")return 8;
++if(cls=="FBoolProperty"&&key=="ByteMask")return 1;
++if(cls=="FBoolProperty"&&key=="ByteOffset")return 1;
++if(cls=="FBoolProperty"&&key=="FieldMask")return 1;
++if(cls=="FEnumProperty"&&key=="Enum")return 8;
++if(cls=="FEnumProperty"&&key=="UnderlyingProp")return 8;
++if(cls=="FField"&&key=="ClassPrivate")return 8;
++if(cls=="FField"&&key=="NamePrivate")return std::nullopt;
++if(cls=="FField"&&key=="Next")return std::nullopt;
++if(cls=="FField"&&key=="Owner")return std::nullopt;
++if(cls=="FFieldClass"&&key=="CastFlags")return std::nullopt;
++if(cls=="FFieldClass"&&key=="FName")return 8;
++if(cls=="FFieldClass"&&key=="SuperClass")return 8;
++if(cls=="FProperty"&&key=="ArrayDim")return 4;
++if(cls=="FProperty"&&key=="ElementSize")return 4;
++if(cls=="FProperty"&&key=="Offset_Internal")return 4;
++if(cls=="FProperty"&&key=="PropertyFlags")return std::nullopt;
++if(cls=="FStructProperty"&&key=="Struct")return 8;
++if(cls=="FUObjectArray"&&key=="MaxObjectsNotConsideredByGC")return 4;
++if(cls=="FUObjectArray"&&key=="ObjFirstGCIndex")return 4;
++if(cls=="FUObjectArray"&&key=="ObjLastNonGCIndex")return 4;
++if(cls=="FUObjectArray"&&key=="ObjObjects")return 1;
++if(cls=="FUObjectArray"&&key=="OpenForDisregardForGC")return 4;
++if(cls=="FUObjectArray"&&key=="PrimarySerialNumber")return 4;
++if(cls=="FUObjectArray"&&key=="UObjectCreateListeners")return 16;
++if(cls=="FUObjectArray"&&key=="UObjectDeleteListeners")return 16;
++if(cls=="FUObjectArray"&&key=="bShouldRecycleObjectIndices")return 1;
++if(cls=="FUObjectItem"&&key=="Flags")return 4;
++if(cls=="FUObjectItem"&&key=="Object")return 8;
++if(cls=="TUObjectArray"&&key=="MaxChunks")return 4;
++if(cls=="TUObjectArray"&&key=="MaxElements")return 4;
++if(cls=="TUObjectArray"&&key=="NumChunks")return 4;
++if(cls=="TUObjectArray"&&key=="NumElements")return 4;
++if(cls=="TUObjectArray"&&key=="Objects")return 8;
++if(cls=="TUObjectArray"&&key=="PreAllocatedObjects")return 8;
++if(cls=="UClass"&&key=="ClassCastFlags")return std::nullopt;
++if(cls=="UClass"&&key=="ClassDefaultObject")return 8;
++if(cls=="UClass"&&key=="Interfaces")return 16;
++if(cls=="UField"&&key=="Next")return 8;
++if(cls=="UFunction"&&key=="Func")return std::nullopt;
++if(cls=="UFunction"&&key=="FunctionFlags")return std::nullopt;
++if(cls=="UFunction"&&key=="NumParms")return 1;
++if(cls=="UFunction"&&key=="ParmsSize")return 2;
++if(cls=="UFunction"&&key=="ReturnValueOffset")return 2;
++if(cls=="UObjectBase"&&key=="ClassPrivate")return 8;
++if(cls=="UObjectBase"&&key=="InternalIndex_Private")return 4;
++if(cls=="UObjectBase"&&key=="NamePrivate")return 8;
++if(cls=="UObjectBase"&&key=="ObjectFlags")return 4;
++if(cls=="UObjectBase"&&key=="OuterPrivate")return 8;
++if(cls=="UStruct"&&key=="ChildProperties")return 8;
++if(cls=="UStruct"&&key=="Children")return 8;
++if(cls=="UStruct"&&key=="MinAlignment")return 4;
++if(cls=="UStruct"&&key=="PropertiesSize")return 4;
++if(cls=="UStruct"&&key=="SuperStruct")return std::nullopt;
++if(cls=="FallbackControl"&&key=="Known")return 4;
++return std::nullopt;}
+ }
+ using namespace RC::Platform::NativeLayouts;
+ int main(int argc,char**argv){if(argc!=2)return 2;std::string mode=argv[1];
+ const std::string id="[NativeLayout]\nFormat=1\nTarget=prospero-x86_64-sysv\nPointerSize=8\nEngineMajor=5\nEngineMinor=6\nNonShipping=0\nStats=0\nEngineRevision=owned-host-control\nBuildId=owned-host-control\n";
+-std::string m=id;
+-std::string v=id;
+-bool expected=true;
+-if(mode=="func_good")m+="[UFunction]\nUEP_TotalSize=0xE0\nFunc=0xD8\n";
+-else if(mode=="func_boundary"){m+="[UFunction]\nUEP_TotalSize=0xE0\nFunc=0xD9\n";expected=false;}
+-else if(mode=="alignment_good")m+="[UStruct]\nUEP_TotalSize=0xB0\nMinAlignment=0xAE\n";
+-else if(mode=="alignment_boundary"){m+="[UStruct]\nUEP_TotalSize=0xB0\nMinAlignment=0xAF\n";expected=false;}
+-else if(mode=="class_cast_good")m+="[UClass]\nUEP_TotalSize=0x200\nClassCastFlags=0xD8\n";
+-else if(mode=="class_cast_boundary"){m+="[UClass]\nUEP_TotalSize=0x200\nClassCastFlags=0x1F9\n";expected=false;}
+-// FFieldClass total0x40 here is an owned geometry fixture, not a native sizeof claim.
+-else if(mode=="field_cast_good")m+="[FFieldClass]\nUEP_TotalSize=0x40\nCastFlags=0x10\n";
+-else if(mode=="field_cast_boundary"){m+="[FFieldClass]\nUEP_TotalSize=0x40\nCastFlags=0x39\n";expected=false;}
+-else if(mode=="unknown_key"){m+="[UStruct]\nUEP_TotalSize=0xB0\nNoAccessor=0x60\n";expected=false;}
+-else if(mode=="unknown_width"){m+="[UStruct]\nUEP_TotalSize=0xB0\nScript=0x60\n";expected=false;}
++std::string m=id,v=id,want;bool expected=true;std::map<std::string,uint32_t> wantWidths;
++if(mode=="func_good"){m+="[UFunction]\nUEP_TotalSize=0xe0\nFunc=0xd8\n";
++wantWidths.emplace("UFunction::Func",8);
++}
++else if(mode=="func_boundary"){m+="[UFunction]\nUEP_TotalSize=0xe0\nFunc=0xd9\n";
++expected=false;want="Native member is outside declared class size: UFunction";
++}
++else if(mode=="alignment_good"){m+="[UStruct]\nUEP_TotalSize=0xb0\nMinAlignment=0xae\n";
++wantWidths.emplace("UStruct::MinAlignment",2);
++}
++else if(mode=="alignment_boundary"){m+="[UStruct]\nUEP_TotalSize=0xb0\nMinAlignment=0xaf\n";
++expected=false;want="Native member is outside declared class size: UStruct";
++}
++else if(mode=="class_cast_good"){m+="[UClass]\nUEP_TotalSize=0x200\nClassCastFlags=0xd8\n";
++wantWidths.emplace("UClass::ClassCastFlags",8);
++}
++else if(mode=="class_cast_boundary"){m+="[UClass]\nUEP_TotalSize=0x200\nClassCastFlags=0x1f9\n";
++expected=false;want="Native member is outside declared class size: UClass";
++}
++else if(mode=="field_cast_good"){m+="[FFieldClass]\nUEP_TotalSize=0x40\nCastFlags=0x10\n";
++wantWidths.emplace("FFieldClass::CastFlags",8);
++}
++else if(mode=="field_cast_boundary"){m+="[FFieldClass]\nUEP_TotalSize=0x40\nCastFlags=0x39\n";
++expected=false;want="Native member is outside declared class size: FFieldClass";
++}
++else if(mode=="super_good"){m+="[UStruct]\nUEP_TotalSize=0xb0\nSuperStruct=0x40\n";
++wantWidths.emplace("UStruct::SuperStruct",8);
++}
++else if(mode=="super_boundary"){m+="[UStruct]\nUEP_TotalSize=0xb0\nSuperStruct=0xa9\n";
++expected=false;want="Native member is outside declared class size: UStruct";
++}
++else if(mode=="owner_good"){m+="[FField]\nUEP_TotalSize=0x30\nOwner=0x10\n";
++wantWidths.emplace("FField::Owner",16);
++}
++else if(mode=="owner_boundary"){m+="[FField]\nUEP_TotalSize=0x30\nOwner=0x21\n";
++expected=false;want="Native member is outside declared class size: FField";
++}
++else if(mode=="next_good"){m+="[FField]\nUEP_TotalSize=0x30\nNext=0x18\n";
++wantWidths.emplace("FField::Next",8);
++}
++else if(mode=="next_boundary"){m+="[FField]\nUEP_TotalSize=0x30\nNext=0x29\n";
++expected=false;want="Native member is outside declared class size: FField";
++}
++else if(mode=="name_good"){m+="[FField]\nUEP_TotalSize=0x30\nNamePrivate=0x20\n";
++wantWidths.emplace("FField::NamePrivate",8);
++}
++else if(mode=="name_boundary"){m+="[FField]\nUEP_TotalSize=0x30\nNamePrivate=0x29\n";
++expected=false;want="Native member is outside declared class size: FField";
++}
++else if(mode=="property_flags_good"){m+="[FProperty]\nUEP_TotalSize=0x70\nPropertyFlags=0x38\n";
++wantWidths.emplace("FProperty::PropertyFlags",8);
++}
++else if(mode=="property_flags_boundary"){m+="[FProperty]\nUEP_TotalSize=0x70\nPropertyFlags=0x69\n";
++expected=false;want="Native member is outside declared class size: FProperty";
++}
++else if(mode=="function_flags_good"){m+="[UFunction]\nUEP_TotalSize=0xe0\nFunctionFlags=0xb0\n";
++wantWidths.emplace("UFunction::FunctionFlags",4);
++}
++else if(mode=="function_flags_boundary"){m+="[UFunction]\nUEP_TotalSize=0xe0\nFunctionFlags=0xdd\n";
++expected=false;want="Native member is outside declared class size: UFunction";
++}
++else if(mode=="unknown_key"){m+="[UStruct]\nUEP_TotalSize=0xB0\nNoAccessor=0x60\n";expected=false;want="Unknown native member: UStruct::NoAccessor";}
++else if(mode=="unknown_width"){m+="[UStruct]\nUEP_TotalSize=0xB0\nScript=0x60\n";expected=false;want="Native accessor width unavailable: UStruct::Script";}
+ else if(mode=="virtual_metadata")v+="[FProperty]\nGetMinAlignment=0x170\n";
++else if(mode=="all_required"){m+="[FArrayProperty]\nUEP_TotalSize=0x80\nInner=0x78\n[FBoolProperty]\nUEP_TotalSize=0x78\nByteOffset=0x71\nByteMask=0x72\nFieldMask=0x73\n[FEnumProperty]\nUEP_TotalSize=0x80\nUnderlyingProp=0x70\nEnum=0x78\n[FField]\nUEP_TotalSize=0x30\nClassPrivate=0x8\nOwner=0x10\nNext=0x18\nNamePrivate=0x20\n[FFieldClass]\nUEP_TotalSize=0x40\nFName=0x0\nSuperClass=0x20\nCastFlags=0x10\n[FProperty]\nUEP_TotalSize=0x70\nArrayDim=0x2c\nElementSize=0x30\nPropertyFlags=0x38\nOffset_Internal=0x44\n[FStructProperty]\nUEP_TotalSize=0x78\nStruct=0x70\n[FUObjectArray]\nUEP_TotalSize=0xb8\nObjFirstGCIndex=0x0\nObjLastNonGCIndex=0x4\nMaxObjectsNotConsideredByGC=0x8\nOpenForDisregardForGC=0xc\nObjObjects=0x10\nUObjectCreateListeners=0x68\nUObjectDeleteListeners=0x78\nPrimarySerialNumber=0xb0\nbShouldRecycleObjectIndices=0xb4\n[FUObjectItem]\nUEP_TotalSize=0x18\nObject=0x0\nFlags=0x8\n[TUObjectArray]\nUEP_TotalSize=0x20\nObjects=0x0\nPreAllocatedObjects=0x8\nMaxElements=0x10\nNumElements=0x14\nMaxChunks=0x18\nNumChunks=0x1c\n[UClass]\nUEP_TotalSize=0x200\nClassDefaultObject=0x110\nInterfaces=0x1d8\nClassCastFlags=0xd8\n[UField]\nUEP_TotalSize=0x30\nNext=0x28\n[UFunction]\nUEP_TotalSize=0xe0\nNumParms=0xb4\nParmsSize=0xb6\nReturnValueOffset=0xb8\nFunctionFlags=0xb0\nFunc=0xd8\n[UObjectBase]\nUEP_TotalSize=0x28\nNamePrivate=0x18\nOuterPrivate=0x20\nClassPrivate=0x10\nInternalIndex_Private=0xc\nObjectFlags=0x8\n[UStruct]\nUEP_TotalSize=0xb0\nSuperStruct=0x40\nChildren=0x48\nChildProperties=0x50\nPropertiesSize=0x58\nMinAlignment=0x5c\n";
++wantWidths.emplace("FArrayProperty::Inner",8);
++wantWidths.emplace("FBoolProperty::ByteMask",1);
++wantWidths.emplace("FBoolProperty::ByteOffset",1);
++wantWidths.emplace("FBoolProperty::FieldMask",1);
++wantWidths.emplace("FEnumProperty::Enum",8);
++wantWidths.emplace("FEnumProperty::UnderlyingProp",8);
++wantWidths.emplace("FField::ClassPrivate",8);
++wantWidths.emplace("FField::NamePrivate",8);
++wantWidths.emplace("FField::Next",8);
++wantWidths.emplace("FField::Owner",16);
++wantWidths.emplace("FFieldClass::CastFlags",8);
++wantWidths.emplace("FFieldClass::FName",8);
++wantWidths.emplace("FFieldClass::SuperClass",8);
++wantWidths.emplace("FProperty::ArrayDim",4);
++wantWidths.emplace("FProperty::ElementSize",4);
++wantWidths.emplace("FProperty::Offset_Internal",4);
++wantWidths.emplace("FProperty::PropertyFlags",8);
++wantWidths.emplace("FStructProperty::Struct",8);
++wantWidths.emplace("FUObjectArray::MaxObjectsNotConsideredByGC",4);
++wantWidths.emplace("FUObjectArray::ObjFirstGCIndex",4);
++wantWidths.emplace("FUObjectArray::ObjLastNonGCIndex",4);
++wantWidths.emplace("FUObjectArray::ObjObjects",1);
++wantWidths.emplace("FUObjectArray::OpenForDisregardForGC",4);
++wantWidths.emplace("FUObjectArray::PrimarySerialNumber",4);
++wantWidths.emplace("FUObjectArray::UObjectCreateListeners",16);
++wantWidths.emplace("FUObjectArray::UObjectDeleteListeners",16);
++wantWidths.emplace("FUObjectArray::bShouldRecycleObjectIndices",1);
++wantWidths.emplace("FUObjectItem::Flags",4);
++wantWidths.emplace("FUObjectItem::Object",8);
++wantWidths.emplace("TUObjectArray::MaxChunks",4);
++wantWidths.emplace("TUObjectArray::MaxElements",4);
++wantWidths.emplace("TUObjectArray::NumChunks",4);
++wantWidths.emplace("TUObjectArray::NumElements",4);
++wantWidths.emplace("TUObjectArray::Objects",8);
++wantWidths.emplace("TUObjectArray::PreAllocatedObjects",8);
++wantWidths.emplace("UClass::ClassCastFlags",8);
++wantWidths.emplace("UClass::ClassDefaultObject",8);
++wantWidths.emplace("UClass::Interfaces",16);
++wantWidths.emplace("UField::Next",8);
++wantWidths.emplace("UFunction::Func",8);
++wantWidths.emplace("UFunction::FunctionFlags",4);
++wantWidths.emplace("UFunction::NumParms",1);
++wantWidths.emplace("UFunction::ParmsSize",2);
++wantWidths.emplace("UFunction::ReturnValueOffset",2);
++wantWidths.emplace("UObjectBase::ClassPrivate",8);
++wantWidths.emplace("UObjectBase::InternalIndex_Private",4);
++wantWidths.emplace("UObjectBase::NamePrivate",8);
++wantWidths.emplace("UObjectBase::ObjectFlags",4);
++wantWidths.emplace("UObjectBase::OuterPrivate",8);
++wantWidths.emplace("UStruct::ChildProperties",8);
++wantWidths.emplace("UStruct::Children",8);
++wantWidths.emplace("UStruct::MinAlignment",2);
++wantWidths.emplace("UStruct::PropertiesSize",4);
++wantWidths.emplace("UStruct::SuperStruct",8);
++}
+ else if(mode=="adapter_policy"){struct UnknownGetter{};
+ static_assert(!ActiveWidthDetail::FunctionWidth<UnknownGetter>());
+ static_assert(!ActiveWidthDetail::MinAlignmentWidth<UnknownGetter>());
+ static_assert(!ActiveWidthDetail::ClassCastFlagsWidth<UnknownGetter>());
+ static_assert(!ActiveWidthDetail::FieldCastFlagsWidth<UnknownGetter>());
+-if(GetBindingAccessorWidth("UFunction","Func")!=8||GetBindingAccessorWidth("UStruct","MinAlignment")!=2)return 1;
+-if(GetBindingAccessorWidth("UClass","ClassCastFlags")!=8||GetBindingAccessorWidth("FFieldClass","CastFlags")!=8)return 1;
++static_assert(!ActiveWidthDetail::SuperStructWidth<UnknownGetter>());
++static_assert(!ActiveWidthDetail::FieldOwnerWidth<UnknownGetter>());
++static_assert(!ActiveWidthDetail::FieldNextWidth<UnknownGetter>());
++static_assert(!ActiveWidthDetail::FieldNameWidth<UnknownGetter>());
++static_assert(!ActiveWidthDetail::PropertyFlagsWidth<UnknownGetter>());
++static_assert(!ActiveWidthDetail::FunctionFlagsWidth<UnknownGetter>());
+ if(GetBindingAccessorWidth("FallbackControl","Known")!=GetAccessorWidth("FallbackControl","Known"))return 1;
+ if(GetBindingAccessorWidth("Unknown","None"))return 1;
+-std::cout<<"PASS active signatures and unchanged fallback/unknown policy\n"; return 0;}
++std::cout<<"PASS missing public getters and unchanged fallback policy\n";return 0;}
+ else return 2;
+-bool staged=true;std::string detail;
+-try{StageNativeLayoutTexts(m,v);}catch(const std::exception&e){staged=false;detail=e.what();}
++bool staged=true;std::string detail;try{StageNativeLayoutTexts(m,v);}catch(const std::exception&e){staged=false;detail=e.what();}
+ if(staged!=expected){std::cerr<<"FAIL "<<mode<<" expected_stage="<<expected<<" observed_stage="<<staged<<" detail="<<detail<<"\n";return 1;}
+-if(!expected){std::string want;
+- if(mode=="func_boundary")want="Native member is outside declared class size: UFunction";
+- if(mode=="alignment_boundary")want="Native member is outside declared class size: UStruct";
+- if(mode=="class_cast_boundary")want="Native member is outside declared class size: UClass";
+- if(mode=="field_cast_boundary")want="Native member is outside declared class size: FFieldClass";
+- if(mode=="unknown_key")want="Unknown native member: UStruct::NoAccessor";
+- if(mode=="unknown_width")want="Native accessor width unavailable: UStruct::Script";
+- if(detail!=want){std::cerr<<"FAIL wrong refusal "<<detail<<" expected "<<want<<"\n";return 1;}
+-}
++if(!expected&&detail!=want){std::cerr<<"FAIL wrong refusal "<<detail<<" expected "<<want<<"\n";return 1;}
+ auto facts=GetStagedNativeLayoutFacts();if(bool(facts)!=staged)return 1;
+-if(staged&&mode=="virtual_metadata"){if(facts->vtables.size()!=1||facts->vtables[0].name!="FProperty::GetMinAlignment"||facts->vtables[0].offset!=0x170)return 1;if(facts->vtables[0].width!=sizeof(void*)){std::cerr<<"FAIL virtual_metadata expected_width="<<sizeof(void*)<<" observed_width="<<facts->vtables[0].width<<"\n";return 1;}}
+-else if(staged){bool found=false;for(auto&f:facts->members)if(f.name=="UFunction::Func"||f.name=="UStruct::MinAlignment"||f.name=="UClass::ClassCastFlags"||f.name=="FFieldClass::CastFlags"){unsigned want=mode=="alignment_good"?2:8;if(f.width!=want)return 1;found=true;}if(!found)return 1;}
+-if(!RC::Unreal::UFunction::MemberOffsets.empty()||!RC::Unreal::UStruct::MemberOffsets.empty())return 1;
+-if(!RC::Unreal::UClass::MemberOffsets.empty()||!RC::Unreal::FFieldClass::MemberOffsets.empty())return 1;
+-if(!RC::Unreal::UFunction::BitfieldInfos.empty()||!RC::Unreal::UStruct::BitfieldInfos.empty()||!RC::Unreal::UClass::BitfieldInfos.empty()||!RC::Unreal::FFieldClass::BitfieldInfos.empty())return 1;
++if(staged){for(auto&[name,width]:wantWidths){bool found=false;for(auto&f:facts->members)if(f.name==name){if(f.width!=width)return 1;found=true;}if(!found)return 1;}
++if(mode=="all_required"&&facts->members.size()!=69)return 1;
++if(mode=="virtual_metadata"){if(facts->vtables.size()!=1||facts->vtables[0].name!="FProperty::GetMinAlignment"||facts->vtables[0].offset!=0x170||facts->vtables[0].width!=sizeof(void*))return 1;}}
++if(!RC::Unreal::FArrayProperty::MemberOffsets.empty()||!RC::Unreal::FArrayProperty::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::FBoolProperty::MemberOffsets.empty()||!RC::Unreal::FBoolProperty::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::FEnumProperty::MemberOffsets.empty()||!RC::Unreal::FEnumProperty::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::FField::MemberOffsets.empty()||!RC::Unreal::FField::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::FFieldClass::MemberOffsets.empty()||!RC::Unreal::FFieldClass::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::FProperty::MemberOffsets.empty()||!RC::Unreal::FProperty::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::FStructProperty::MemberOffsets.empty()||!RC::Unreal::FStructProperty::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::FUObjectArray::MemberOffsets.empty()||!RC::Unreal::FUObjectArray::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::FUObjectItem::MemberOffsets.empty()||!RC::Unreal::FUObjectItem::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::TUObjectArray::MemberOffsets.empty()||!RC::Unreal::TUObjectArray::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::UClass::MemberOffsets.empty()||!RC::Unreal::UClass::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::UField::MemberOffsets.empty()||!RC::Unreal::UField::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::UFunction::MemberOffsets.empty()||!RC::Unreal::UFunction::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::UObjectBase::MemberOffsets.empty()||!RC::Unreal::UObjectBase::BitfieldInfos.empty())return 1;
++if(!RC::Unreal::UStruct::MemberOffsets.empty()||!RC::Unreal::UStruct::BitfieldInfos.empty())return 1;
+ if(!RC::Unreal::FProperty::VTableLayoutMap.empty())return 1;
+-std::cout<<"PASS "<<mode<<" stage="<<staged<<" engine_maps_empty=1 "<<detail<<"\n";
+-}
++std::cout<<"PASS "<<mode<<" stage="<<staged<<" checked_widths="<<wantWidths.size()<<" engine_maps_empty=1 "<<detail<<"\n";
++}

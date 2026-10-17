@@ -1,0 +1,220 @@
+--- a/src/LuaMod.cpp
++++ b/src/LuaMod.cpp
+@@ -4955,7 +4955,158 @@
+     // (atomic exchange); this is the r2 deferral LANDING, not a runtime re-arm of the
+     // initializer's own registrations (DIFF-2 header law untouched).
+     // =====================================================================================
++
++#ifdef __PROSPERO__
++    // =====================================================================================
++    // [FL-MAP] (agent-IA 2026-10-10, Claude round-8 item 4): the runtime-owned,
++    // game-agnostic map-load milestone logger. Replaces mod-side polling for the
++    // World (zzdiag's 6s LoopAsync [MAP] cycle) with ordered, contiguous
++    // '[FL-MAP] order=<n> map=<name> phase=pre|loaded' markers emitted by the
++    // runtime itself, from two complementary sources:
++    //
++    //   src=detour — [FL-MAP] lines inside lua_load_map_pre_callback /
++    //   lua_load_map_post_callback below. These are the framework's OWN
++    //   RegisterLoadMapPreCallback / RegisterLoadMapPostCallback registrations
++    //   (eager in W-works worlds, one-shot deferred arm in the R3 world) and fire
++    //   wherever the LoadMap detour actually arms; phase=pre carries URL.Map (the
++    //   map about to load), phase=loaded the constructed World's name.
++    //
++    //   src=marshal-watch — a bounded 1 Hz World-identity check on the proven
++    //   game-thread pump (funcptr_marshal_hook). Round-4 evidence
++    //   (round4-spawn-session-20261011.decoded.log) proves this is the ONLY
++    //   source that can deliver in the current console world: the deferred LoadMap
++    //   arm REFUSED ("[R3] LoadMap deferred arm refused (pre id 0, post id 0)" +
++    //   the "[UE4SS.LoadMap.LuaModImpl] Failed to add hook" pairs) and the
++    //   StaticConstructObject post registration — the engine seam behind Lua
++    //   NotifyOnNewObject — is R3-deferred, so neither prescribed mechanism
++    //   delivers there today. The watch resolves the current World via the
++    //   FFO2-proven FindFirstOf("World") walk (q='World' exact=2
++    //   first=0x18005194C0 arm=walk) and logs a NEW World instance phase=loaded.
++    //   Claude's NotifyOnNewObject(World) intent is served by this watch in the
++    //   R3 world and by the (already registered, W-works) StaticConstructObject
++    //   seam elsewhere; a fresh FUObjectCreateListener was deliberately NOT
++    //   registered (AddUObjectCreateListener is the unlocked direct-TArray-append
++    //   family with no Variant-C engine-op admission — out of risk scope).
++    //
++    // Ordering: one order number per map-load event; a pre line and its matching
++    // post line share the number. The detour post and the watch share the
++    // last-world pointer so a load logged by the detour is never double-counted
++    // by the watch. Pointer identity only (address reuse after GC is an accepted
++    // rare miss; same-address seamless-travel reuse logs once — see agent-IA
++    // limits). All sites run on the game thread (LoadMap detour / proven pump).
++    // Name rendering: URL.Map (FString) via LuaFNameBridge::fstring_to_narrow_string
++    // (the 'fstring-rev' proven family) for pre; World->GetName()
++    // (GetNamePrivate -> pool decoder) for loaded — the same routes GetFullName
++    // and [FFO2] q= prove on console. Wide-char log writer law: sanitized to one
++    // line, bounded at 64 chars.
++    // =====================================================================================
++    namespace FlMap
++    {
++        std::atomic<uint32_t> s_order{0};
++        std::atomic<uint32_t> s_pending{0};
++        Unreal::UObject* s_last_world{nullptr};
+ 
++        auto sanitize(StringType name) -> StringType
++        {
++            if (name.size() > 64) { name.resize(64); }
++            for (auto& c : name)
++            {
++                if (c == '\n' || c == '\r') { c = ' '; }
++                else if (c < 32 || c > 126) { c = '?'; }
++            }
++            return name;
++        }
++
++        auto world_name(const Unreal::UObject* world) -> StringType
++        {
++            if (!world) { return {}; }
++            try
++            {
++                return sanitize(world->GetName());
++            }
++            catch (...)
++            {
++                return {};
++            }
++        }
++
++        auto url_name(const Unreal::FURL& url) -> std::string
++        {
++            try
++            {
++                return LuaType::LuaFNameBridge::fstring_to_narrow_string(url.Map);
++            }
++            catch (...)
++            {
++                return {};
++            }
++        }
++
++        auto note_pre_detour(const Unreal::FURL& url) -> void
++        {
++            const uint32_t order = ++s_order;
++            s_pending.store(order, std::memory_order_relaxed);
++            const std::string map_narrow = url_name(url);
++            Output::send(STR("[FL-MAP] order={} map='{}' phase=pre src=detour\n"), order, ensure_str(map_narrow));
++        }
++
++        auto note_loaded_detour(Unreal::FWorldContext& world_context, const Unreal::FURL& url) -> void
++        {
++            Unreal::UObject* world = world_context.GetThisCurrentWorld();
++            s_last_world = world;
++            uint32_t order = s_pending.exchange(0, std::memory_order_relaxed);
++            if (order == 0)
++            {
++                // Post without a matching pre (arm landed between phases):
++                // allocate a fresh number rather than reusing a stale one.
++                order = ++s_order;
++            }
++            const std::string map_narrow = url_name(url);
++            Output::send(STR("[FL-MAP] order={} map='{}' phase=loaded src=detour url='{}'\n"),
++                         order, world_name(world), ensure_str(map_narrow));
++        }
++
++        // Bounded 1 Hz World-identity watch; called ONLY from funcptr_marshal_hook
++        // after the identity publication, the raw game-thread gate, dispatch-scope
++        // ownership and the deferred LoadMap arm — i.e. on the proven pump thread.
++        // The FindFirstOf("World") walk is the FFO2/console-proven verified path
++        // (FindFirstOfVerified -> FName walk, ~40-150K objects); at 1 Hz that is
++        // negligible against the carrier cadence, and it is the same walk the
++        // game-thread self-test ([ST] lua-ffo ... PASS) already ran on console.
++        auto marshal_watch() -> void
++        {
++            static std::atomic<int64_t> s_watch_ms{0};
++            const int64_t now_ms = r3_now_ms();
++            int64_t last_ms = s_watch_ms.load(std::memory_order_relaxed);
++            if (now_ms - last_ms < 1000)
++            {
++                return;
++            }
++            if (!s_watch_ms.compare_exchange_strong(last_ms, now_ms, std::memory_order_relaxed))
++            {
++                return;
++            }
++
++            Unreal::UObject* world = nullptr;
++            try
++            {
++                world = Unreal::UObjectGlobals::FindFirstOf(STR("World"));
++            }
++            catch (...)
++            {
++                return;
++            }
++            if (!world || world == s_last_world)
++            {
++                return;
++            }
++            s_last_world = world;
++            const uint32_t order = ++s_order;
++            Output::send(STR("[FL-MAP] order={} map='{}' phase=loaded src=marshal-watch\n"), order, world_name(world));
++        }
++    }
++#endif
++
+     // The LoadMap pre/post Lua-delivery bodies, verbatim from the eager block they serve
+     // (only the m_load_map_*_callbacks access gained its LuaMod:: qualification for file
+     // scope). Both the eager block (W-works world, pump_pending=false) and the one-shot
+@@ -4965,6 +5116,18 @@
+     static auto lua_load_map_pre_callback(Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) -> void
+     {
+         TRY([&] {
++#ifdef __PROSPERO__
++            // [FL-MAP] phase=pre milestone marker (see namespace FlMap above):
++            // logged for EVERY real LoadMap event the armed detour delivers,
++            // before any Lua callback runs, with the map about to load.
++            try
++            {
++                FlMap::note_pre_detour(URL);
++            }
++            catch (...)
++            {
++            }
++#endif
+             for (const auto& callback_data : LuaMod::m_load_map_pre_callbacks)
+             {
+                 for (const auto& [lua_ptr, registry_index] : callback_data.registry_indexes)
+@@ -5006,6 +5169,20 @@
+     static auto lua_load_map_post_callback(Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) -> void
+     {
+         TRY([&] {
++#ifdef __PROSPERO__
++            // [FL-MAP] phase=loaded milestone marker (see namespace FlMap above):
++            // logged for EVERY real LoadMap event the armed detour delivers, with
++            // the constructed World's name; shares the order number of its pre
++            // line and publishes the pointer so the marshal watch never
++            // double-counts this load.
++            try
++            {
++                FlMap::note_loaded_detour(WorldContext, URL);
++            }
++            catch (...)
++            {
++            }
++#endif
+             for (const auto& callback_data : LuaMod::m_load_map_post_callbacks)
+             {
+                 for (const auto& [lua_ptr, registry_index] : callback_data.registry_indexes)
+@@ -5156,6 +5333,18 @@
+         // deferred LoadMap arm exactly once. No-op unless the r3 gate queued it in
+         // on_program_start; if the arm is refused it refuses LOUDLY (fail-closed).
+         try_deferred_loadmap_arm();
++        // [FL-MAP] (agent-IA, Claude round-8 item 4): the R3-world map-load source.
++        // Runs AFTER the deferred arm attempt so an armed detour's pre/post pair
++        // owns this load's order number; the watch's shared last-world pointer
++        // (published by note_loaded_detour) then suppresses the duplicate. Bounded
++        // to 1 Hz internally; never throws into the pump.
++        try
++        {
++            FlMap::marshal_watch();
++        }
++        catch (...)
++        {
++        }
+ #endif
+         {
+             std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};

@@ -1,0 +1,42 @@
+#include "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-layout-widths-1/src/NativeLayoutWidths.cpp"
+#include "NativeLayoutActiveWidths.hpp"
+
+namespace RC::Platform::NativeLayouts {
+static_assert(!Find("UFunction","Func"));
+static_assert(Find("UStruct","MinAlignment")==4);
+static_assert(ActiveWidthDetail::FunctionWidth<Unreal::UFunction>()==8);
+static_assert(ActiveWidthDetail::MinAlignmentWidth<Unreal::UStruct>()==2);
+static_assert(!Find("UClass","ClassCastFlags"));
+static_assert(!Find("FFieldClass","CastFlags"));
+static_assert(ActiveWidthDetail::ClassCastFlagsWidth<Unreal::UClass>()==8);
+static_assert(ActiveWidthDetail::FieldCastFlagsWidth<Unreal::FFieldClass>()==8);
+static_assert(ActiveWidthDetail::SuperStructWidth<Unreal::UStruct>()==8);
+static_assert(ActiveWidthDetail::FieldOwnerWidth<Unreal::FField>()==16);
+static_assert(ActiveWidthDetail::FieldNextWidth<Unreal::FField>()==8);
+static_assert(ActiveWidthDetail::FieldNameWidth<Unreal::FField>()==8);
+static_assert(ActiveWidthDetail::PropertyFlagsWidth<Unreal::FProperty>()==8);
+static_assert(ActiveWidthDetail::FunctionFlagsWidth<Unreal::UFunction>()==4);
+struct UnknownGetter;
+static_assert(!ActiveWidthDetail::FunctionWidth<UnknownGetter>());
+static_assert(!ActiveWidthDetail::MinAlignmentWidth<UnknownGetter>());
+static_assert(!ActiveWidthDetail::ClassCastFlagsWidth<UnknownGetter>());
+static_assert(!ActiveWidthDetail::FieldCastFlagsWidth<UnknownGetter>());
+static_assert(!ActiveWidthDetail::SuperStructWidth<UnknownGetter>());
+static_assert(!ActiveWidthDetail::FieldOwnerWidth<UnknownGetter>());
+static_assert(!ActiveWidthDetail::FieldNextWidth<UnknownGetter>());
+static_assert(!ActiveWidthDetail::FieldNameWidth<UnknownGetter>());
+static_assert(!ActiveWidthDetail::PropertyFlagsWidth<UnknownGetter>());
+static_assert(!ActiveWidthDetail::FunctionFlagsWidth<UnknownGetter>());
+extern "C" [[gnu::used]] const uint32_t ActiveWidthControlFacts[]{
+Find("UFunction","Func").value_or(0),*Find("UStruct","MinAlignment"),
+*ActiveWidthDetail::FunctionWidth<Unreal::UFunction>(),
+*ActiveWidthDetail::MinAlignmentWidth<Unreal::UStruct>(),
+*ActiveWidthDetail::ClassCastFlagsWidth<Unreal::UClass>(),
+*ActiveWidthDetail::FieldCastFlagsWidth<Unreal::FFieldClass>(),
+*ActiveWidthDetail::SuperStructWidth<Unreal::UStruct>(),
+*ActiveWidthDetail::FieldOwnerWidth<Unreal::FField>(),
+*ActiveWidthDetail::FieldNextWidth<Unreal::FField>(),
+*ActiveWidthDetail::FieldNameWidth<Unreal::FField>(),
+*ActiveWidthDetail::PropertyFlagsWidth<Unreal::FProperty>(),
+*ActiveWidthDetail::FunctionFlagsWidth<Unreal::UFunction>()};
+}

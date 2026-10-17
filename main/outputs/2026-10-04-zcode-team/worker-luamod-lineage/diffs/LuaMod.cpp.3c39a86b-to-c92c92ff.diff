@@ -1,0 +1,62 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-luamod-lineage/provenance-originals/LuaMod.cpp.orig	2026-10-05 18:56:03
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp	2026-10-05 19:13:18
+@@ -933,7 +933,7 @@
+     {
+         if (m_native_source)
+         {
+-            const auto path = normalize_path_for_lua(m_mod_path);
++            const auto path = modbridge::normalize_path_for_lua(m_mod_path);
+             const auto& mods = m_native_source->lua_mods();
+             const auto found = std::find_if(mods.begin(), mods.end(), [&](const auto& mod) { return mod.path == path; });
+             if (found == mods.end())
+@@ -1197,7 +1197,7 @@
+             // upvalue is Lua-owned and remains valid across execution/yield.
+             const std::string* scripts = nullptr;
+             {
+-                const auto path = normalize_path_for_lua(m_mod_path);
++                const auto path = modbridge::normalize_path_for_lua(m_mod_path);
+                 for (const auto& mod : m_native_source->lua_mods())
+                     if (mod.path == path) { scripts = &mod.scripts_path; break; }
+             }
+@@ -1243,7 +1243,7 @@
+             int result = -1;
+             try
+             {
+-                result = native_lua_module(L, *native_mod->m_native_source, normalize_path_for_lua(native_mod->m_scripts_path));
++                result = native_lua_module(L, *native_mod->m_native_source, modbridge::normalize_path_for_lua(native_mod->m_scripts_path));
+             }
+             catch (const std::exception& error)
+             {
+@@ -1276,9 +1276,9 @@
+         const auto& mod_name = lua_mod->get_name();
+         const auto& scripts_path = lua_mod->get_scripts_path();
+         
+-        std::string mods_path_str = normalize_path_for_lua(mods_dir);
++        std::string mods_path_str = modbridge::normalize_path_for_lua(mods_dir);
+         std::string mod_name_str = to_utf8_string(mod_name);
+-        std::string scripts_path_str = normalize_path_for_lua(scripts_path);
++        std::string scripts_path_str = modbridge::normalize_path_for_lua(scripts_path);
+         
+         // Try different path combinations
+         std::vector<std::string> paths_to_try = {
+@@ -1408,9 +1408,9 @@
+             auto mod_name = get_name();
+ 
+             // Create normalized UTF-8 paths with forward slashes
+-            std::string mods_dir_utf8 = normalize_path_for_lua(mods_dir);
++            std::string mods_dir_utf8 = modbridge::normalize_path_for_lua(mods_dir);
+             std::string mod_name_utf8 = to_utf8_string(mod_name);
+-            std::string scripts_path_utf8 = normalize_path_for_lua(m_scripts_path);
++            std::string scripts_path_utf8 = modbridge::normalize_path_for_lua(m_scripts_path);
+ 
+             // Create path strings with forward slashes for Lua
+             std::string script_path = fmt::format(";{}/?.lua", scripts_path_utf8);
+@@ -6880,7 +6880,7 @@
+             std::string_view bytes;
+             if (m_native_source)
+             {
+-                native_buffer = m_native_source->read(normalize_path_for_lua(script_path));
++                native_buffer = m_native_source->read(modbridge::normalize_path_for_lua(script_path));
+                 if (!native_buffer) return false;
+                 bytes = native_buffer->bytes;
+             }

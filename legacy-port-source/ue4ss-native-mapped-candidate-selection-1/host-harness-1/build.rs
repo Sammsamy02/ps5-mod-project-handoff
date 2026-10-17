@@ -1,0 +1,1 @@
+fn main(){println!("cargo:rerun-if-changed=libselection_controls.a");println!("cargo:rustc-link-search=native={}",std::env::var("CARGO_MANIFEST_DIR").unwrap());println!("cargo:rustc-link-lib=static=selection_controls");println!("cargo:rustc-link-lib=c++");}

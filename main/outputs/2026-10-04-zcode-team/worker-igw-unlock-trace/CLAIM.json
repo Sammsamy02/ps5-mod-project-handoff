@@ -1,0 +1,42 @@
+{
+  "marker": "modbridge.igwunlocktrace.claim",
+  "schema": 1,
+  "worker": "worker-igw-unlock-trace",
+  "date": "2026-10-05",
+  "scope": "LOCAL ONLY source/evidence trace: why the armed exec-write probe (xwp, build igd1-6ebab07f2111) SKIPPED all 6 transition rows at launch-9; whether launch-10 can produce the IGW W_WORKS/W_FAILS_R_WORKS verdict without a probe change; minimal bounded launch-11 proposal. No console contact, no builds run, no files outside this output dir written.",
+  "probe_sources_located": {
+    "machinery": "outputs/2026-10-04-zcode-team/worker-writability-probe-build/src/exec_write_probe.c (+ .h) — ig_run_exec_write_probe transition-table runner",
+    "entry": "outputs/2026-10-04-zcode-team/worker-writability-probe-build/src/module_entry.c:127 — probe invoked UNCONDITIONALLY at module_start (no runtime gate)",
+    "table_injection": "outputs/2026-10-04-zcode-team/worker-writability-probe-build/TRANSITIONS.json (6 rows: IGW-1 T2/T3/T4/T5 at 0x7878000, D-1 pair at 0x82bc000) -> generated/xwp_transitions.{h,c} via build_exec_write_probe.py",
+    "builder": "outputs/2026-10-04-zcode-team/worker-writability-probe-build/build_exec_write_probe.py (line 136: confirmed defaults to 0 when absent)",
+    "launch9_build": "worker-writability-probe-build/build-receipt-armed.json: build_id igd1-6ebab07f2111, variant armed, table_rows 6, deliverable modbridge_exec_write_probe_armed.prx (fself sha 48949316…, 20013 B)",
+    "launch9_jsonl": "worker-launch10-evidence-upgrade/fixtures/l9_terminal/from-dir/modbridge-exec-write-probe.jsonl (== baselines/xwp-jsonl-baseline.txt): 6x (row confirmed=0 -> refusal outcome=2), summary rows_seen=6 rows_attempted=0 rows_refused=0 rows_skipped=6 attempts_used=0 budget=8"
+  },
+  "root_cause": {
+    "skip_condition": "exec_write_probe.c:166-168 — else if (t->confirmed == 0) { why = XWP_SKIP_NOT_CONFIRMED; gate_failed = 1; }",
+    "outcome_semantics": "exec_write_probe.h:72 — XWP_SKIP_NOT_CONFIRMED = 2 (row.confirmed == 0); counted into rows_skipped at exec_write_probe.c:190-193",
+    "why_all_6": "build_exec_write_probe.py:136 bakes '\"confirmed\": 1 if t.get(\"confirmed\") else 0'; the staged TRANSITIONS.json carries NO 'confirmed' key on ANY of its 6 rows, so all 6 rows compiled into const XwpTransition xwp_transitions[] (generated/xwp_transitions.c) with confirmed=0. Every row then hit the confirmed gate BEFORE the VMMAP coverage/prot gates (exec_write_probe.c:163-188, else-if chain + 'if (!gate_failed)' guard), hence outcome=2 on all 6 and rows_refused stayed 0.",
+    "gate_class": "DESIGN-TIME explicit-go flag (fail-closed by contract): exec_write_probe.h:12-19 requires (b) row.confirmed != 0 ('1 ONLY on the design's designated far page', header line 58; FILL-IN-FOR-DESIGN-WORKER.md line 26). It is NOT a runtime readiness signal, status file, composition state, or other-module-presence check. The only pre-table early-out is xwp_transitions_count == 0 (exec_write_probe.c:124), which did not apply (count=6).",
+    "entry_note_corroboration": "launch-9 seq1 entry record note: 'exec-write probe skeleton; transition table drives everything; no write before the design's conf[irmed row]'"
+  },
+  "alternatives_eliminated": [
+    "XWP_SKIP_UNARMED=1: armed=1 in entry+summary records; mprotect_route=sceKernelMprotect_import; also this build has no unarmed skip gate (deliberately removed, exec_write_probe.c:155-160 comment)",
+    "XWP_SKIP_BUDGET=3: attempts_used=0 < budget 8 (exec_write_probe.h:45); host test confirms outcome=3 only appears at attempts_used=8",
+    "XWP_SKIP_ROW_OVERFLOW=4: 6 rows < XWP_MAX_ROWS=32 (exec_write_probe.h:48)",
+    "XWP_REFUSE_NOT_COVERED=5 / XWP_REFUSE_PROT_MISMATCH=6: those count into rows_refused (exec_write_probe.c:195) and rows_refused=0; the mapscan block (exec_write_probe.c:177-188) is only reached when the earlier gates pass"
+  ],
+  "verdict_answers": {
+    "launch10_without_probe_change": "NO. The gate input is compile-time const table data (const XwpTransition xwp_transitions[], generated/xwp_transitions.c; confirmed baked at build_exec_write_probe.py:136). The probe reads NO status file, runtime-status state, or composition progress — module_entry.c:127 calls it unconditionally and its only runtime input (fresh VMMAP scan) sits AFTER the confirmed gate. Re-running the same igd1-6ebab07f2111 PRX deterministically reproduces the identical all-skipped file (host-tested logic, tests/run_host_checks.py).",
+    "probe_change_needed": "YES — minimal: add '\"confirmed\": 1' to the design-designated row(s) in TRANSITIONS.json (row 0, IGW-1 T2 X->RX 0x7878000 4->5, minimally; rows 4/5 D-1 optionally) and rerun build_exec_write_probe.py. Machinery files untouched (the designed injection path). TRANSITIONS.json bytes are part of the build-id seed (build_exec_write_probe.py:452-457) so the rebuild gets a distinct igd1-<hash12> id. See PROPOSAL.md.",
+    "ini_interaction": "The current 2-plugin ploader.ini (sha 1216aab6…eda0: supplier_composition=2, path_test=2; aligned_entry and ALL probes incl. xwp DISABLED — worker-return-docs-refresh/REPORT.md) does not load the probe at all, and the launch-10 staging flow FREEZES that ini (worker-launch10-staging-packet: l10.1/l10.5 ini byte-equal checks; the flow issues NO ini write; drift -> restore + refusal). So launch-10 as staged produces ZERO new xwp records — no verdict and not even a fresh skip set. The 9-entry canonical (fd9c7393, launch9-evidence/ploader-ini-9entry-restore.txt) that ran launch-9 with xwp first is preserved but superseded on console."
+  },
+  "gating_consequence": "The launch-11 walkguard ACTIVE fold stays blocked: worker-launch10-walkguard-prep shipped fold-0 DEFAULT-OFF ('#define RC_ASM_WALK_RX_GUARD 0'; armed object f5627427… pre-measured) and states the one-define flip needs the D2/IGW verdict (R1/R2 W_WORKS vs R3/R4 W_FAILS_R_WORKS), which is PARKED while the probe cannot attempt (worker-launch10-walkguard-prep/REPORT.md lines 13-16, 95-96, 112, 122).",
+  "claims": {
+    "trace_complete_with_file_line": true,
+    "console_evidence_read": "retained launch-9 jsonl fixture + baseline (both byte-identical); no console contact this session",
+    "native_executed": false,
+    "builds_run": false,
+    "verdict_produced": false,
+    "verdict_blocked_on": "rebuild with confirmed=1 design-designated rows + a staging ini that includes the xwp plugin line; both user-coordinated console decisions"
+  }
+}

@@ -1,0 +1,11 @@
+# Independent implementation review
+
+Verdict: no actionable source findings in the reviewed revision. REVIEW.json binds the exact implementation, tests, source receipt, source provenance, synthetic fixtures, replay and saved logs. All 24 source/file receipt entries matched their SHA256 and length. No unchanged tests were rerun.
+
+Compared the exact schema12 archive members against current shared sources. The type8 parse AST is unchanged; the planner differs only in its manifest SHA pin. The extracted admission gate retains the original bounded/stable byte loader, verified overlay bytes, full pinned TOC lookup, exact row/raw ID, whole length and whole-buffer BLAKE3. The documented tightening requires exact final raw type byte08/09 and integer receipt type. Type9 adds explicit actual TOC SHA/container/row equality. The type8 wrapper still parses and rechecks all sources after decoding.
+
+The adapter executes the hash-checked reader buffer, independently validates manifest and group, then rechecks the reader and both source sets. Group length equals manifest compressed_size. Payload/source/output caps and exclusive new output creation remain enforced. Receipt UCAS declarations are retained as provenance metadata and never opened. The saved synthetic replay has three views, exact owner binding and compatibility/stored shader hash flags false.
+
+Equal-size groups use the retained generic source's stored semantics and sorted offsets; prefix bytes remain unassigned. Unequal-size groups return zero views and CODEC_REQUIRED. SHA256 view fingerprints do not establish stored shader hashes, group-ID derivation, target format, code or compatibility. The supplied receipt is not an authenticated execution record; neither a slice receipt nor this review proves original full UCAS identity.
+
+Inspected preserved author RED/GREEN and affected logs: 14 new tests, 15 manifest tests, 14 planner tests and one synthetic CLI. These are preserved author results, not fresh reviewer test execution. Review performed source/hash/AST/replay-metadata checks only. No implementation changes, build/compiler, real payload, UCAS, console or runtime operation. Historical receipts are explicitly labelled as historical in the new documentation. Directory-race hardening remains outside the documented ordinary local-filesystem model.

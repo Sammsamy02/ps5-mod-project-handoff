@@ -1,0 +1,25 @@
+T1 basic: recursion, try_lock, FIFO
+  ok   l.my_depth() == 2 : depth=2
+  ok   !other_try : other thread cannot try_lock while held
+  ok   l.my_depth() == 0 : released
+  ok   fifo : served 0,1,2,3 in ticket order
+T2 starvation model (busy holder re-takes immediately; Mac scheduler, not PS5)
+  std::recursive_mutex   waiter acquisitions=2 worst_wait=2128314 us  holder_takes=73680
+  FairLock (ticket)      waiter acquisitions=1583 worst_wait=39 us  holder_takes=66470
+  ok   w_fair < 5000 : fair worst wait 39 us < 5 ms (std was 2128314 us)
+T3 stuck-key repro (game thread leaks a queue-lock level; keybind thread must still get through)
+  ok   !key_got.load() : OLD: keybind thread still blocked 300 ms after the leak (this is the B4 symptom)
+  ok   g_queue_lock.my_depth() == 1 : inside callback after the raise the queue lock is still leaked (depth=1)
+  ok   g_queue_lock.my_depth() == 0 : after the entry scope ends the leaked level was reclaimed (depth=0)
+  ok   get(&g_stats.leak_reclaimed) == 1 : leak_reclaimed counter = 1
+  ok   key_got.load() : NEW: keybind thread got mod lock and queue lock
+T4 ABBA: mod A on game thread fires B's hook while B's async code fires A's hook
+  ok   g_done.load() > 0 && x_done.load() == N : both threads finished (game ok-iterations=300, async=300) in 139 ms: no deadlock
+  nested_try_fail=300 hook_skips=0 defers=0
+  ok   stuck.load() > 0 : control (plain blocking ABBA) does deadlock, stuck threads=1: the test is sensitive
+T5 fast path cost per engine event (single thread, arm64 Mac, -O2)
+  old: 85.2 ns/event (6 recursive_mutex takes)   new: 1.38 ns/event (1 atomic load)
+  ok   new_ns < old_ns : fast path cheaper (sink=120000000)
+T6 fast path flag: producers enqueue under the queue lock and mark dirty; the consumer polls the flag lock-free
+  ok   !timed_out && consumed == (long long)P * PER : all 300000 items consumed, none lost (consumer queue-lock takes=92678, lock-free skips=968161)
+checked=14 failed=0

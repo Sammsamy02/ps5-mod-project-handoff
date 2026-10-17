@@ -1,0 +1,30 @@
+# Game-independent selection checkpoint
+
+The first test game is selected at test time. Nexus game/mod/file identifiers select provider records, while engine and format modules select by their own evidence. Product code contains no first-game restriction.
+
+Implemented and verified locally:
+
+- Direct Nexus lookup for any validated domain/mod ID through the current account client; selection is no longer restricted to recent-mod catalogs at the API level.
+- Trusted, bounded console-title snapshot interface with opaque selection references, explicit unavailable default, and separate sourced name/version/build identity. A title label or Nexus domain cannot supply a build hash or capability.
+- Target-bound analysis jobs, retry identity, durable receipts and explicit snapshot refresh. Stale references are rejected before transfer and analysis publication.
+- Actual desktop archive inventory/planning with bounded blocker reports. Exact measured build identity does not grant runtime acceptance. Structural Windows/CLR runtime requirements report Unsupported under the current implementation; filename hints remain Unverified.
+- Controller UI with separate target and Nexus selections, official mod URL/domain+ID lookup, stale-response protection and explicit compatibility/install blockers. Restored target references are checked against the current snapshot; stale jobs clear the selection without automatic resubmission.
+- Native format dispatch library with a sealed built-in registry and bounded probes. Its first adapter wraps classic-v11 PAK metadata and selected None/Zlib payload validation; it has no game/title/mod-ID input. Ambiguous probes, stale bindings and failed candidates cannot grant a positive format result.
+
+Evidence: 27 host checks, 16 companion checks (including actual C++ analysis), 8 title-inventory checks and 5 report checks passed. The 13 focused UI cases and actual-host/C++ browser integration passed. Format dispatch passed five host groups/163 assertions and PS5 compile/link only; root separately passed its integrated Make target. All provider/browser records are owned offline fixtures. No game, system, account or console data was touched.
+
+The native HTTP source embeds the same UI at `/app`, serving assets directly without the 8 KiB JSON limit. Its fresh desktop build and real browser fixture passed with only local app/bootstrap requests and no page errors. Root also passed the three focused static-route checks and matched the retained build's asset/artifact identities. Live services remain disabled in this preview.
+
+The explicit verified extracted-toolchain option now restores the ordinary native build without downloading the removed LLVM archive. Fifteen offline/builder checks and four relevant crypto regressions passed; root independently passed the seven focused offline checks. The fresh loopback app compiled/linked with 14 successful recorded commands and a current source/artifact identity. Its 2,023,072-byte ELF remains unexecuted, with the same frozen UI asset bytes, verified SDK/resource inputs and no host include origin. PS5 browser, controller and live-service behavior remain unproved.
+
+The format library is not yet wired to native transfers or game loading. Existing native PAK candidate integrity proof is separately committed, with 9,771 host checks and PS5 compile/link evidence; its success proves a scoped archive operation, not game compatibility.
+
+The reusable native `param.json` decoder is now implemented. It accepts generic title IDs, selects only the declared default locale and separates the captured metadata digest from measured game-build identity. Its five host groups/197 assertions, allocation-failure clearing/recovery and C ABI fixture passed; root also passed the integrated `make test-title` target. Fresh PS5 compile/link passed with used SDK/resource headers verified, without execution. The decoder performs no source reads or enumeration; the actual native provider remains unavailable.
+
+The companion now implements bounded inventory paging over one fully validated immutable capture. The UI stages every page, confirms the generation and then publishes the whole list; continuations never trigger new discovery. The legacy 8 KiB error view cannot erase the full trusted cache or break resolution of later titles. Version 2 preserves wide byte lengths as exact decimal strings. Eleven module checks, eight HTTP controls and 23 focused UI cases passed, together with a real Python-host/Chrome fixture covering 128 generic titles and a refresh racing final confirmation. Existing host, inventory and report checks also passed. The native preview explicitly keeps paging disabled until native handlers and source permissions are verified.
+
+The refreshed embedded UI also compiled and linked for PS5 with all 14 recorded build commands successful. Root matched its 25 source hashes and the 2,055,840-byte ELF; it remains unexecuted. A fresh desktop native-preview build used only the five local app/bootstrap paths, with no paging calls, external requests or page errors. Prior native UI artifacts remain frozen historical checkpoints.
+
+A separate read-only native source API now captures one candidate metadata file under fixed cache-root profiles. It checks every path component, file type, full bounded read, identity and candidate-ID binding, and uses one shared operation/read ledger with bounded cleanup. Six host groups/332 assertions and an actual C caller passed; root repeated the Make target. Its three-TU PS5 compile/link passed with 922 current verified header entries and no arbitrary-root fixture symbol. This is metadata-candidate observation; directory enumeration, installed/running discovery and actual process permissions remain unproved.
+
+Remaining: a validated native inventory provider, native Nexus signin/browsing/download integration, engine/build and asset acceptance, runtime tool ports and installation. The universal architecture remains the goal; support for every Nexus mod is not established.

@@ -1,0 +1,227 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-luamod-lineage/provenance-originals/SeedValidation.hpp.orig	2026-10-05 18:56:03
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-build/final-units/SeedValidation.hpp	2026-10-05 19:14:11
+@@ -171,28 +171,40 @@
+ 
+     // Pure publication filter over one kernel VMMAP walk snapshot (the
+     // bridge calls this over its FROZEN capture — the same-capture rule; host
+-    // fixtures drive the SAME function). v4 (FNAME-POOL-RE.md R2): a record
+-    // publishes ITSELF — its FULL [start,end) — when prot carries the READ
+-    // bit, it is at least one FName block capacity, and it fits the
+-    // top-N-by-size window. Image memory is NOT excluded anymore. Why:
+-    // the ALLOCATOR OBJECT is static image BSS, but Blocks[0] is an
+-    // ALLOCATED BLOCK whose storage class is not pinned (RE section 7.1);
+-    // the launch-9 REGION-CLASS observation placed Blocks[0]'s mapping in
+-    // LOAD7's BSS tail INSIDE the image extent, so v3's outside-extent
+-    // clipping (and the consumer-side outside-image refusal) could
+-    // false-refuse a legitimate pool on region-class evidence. Readable
+-    // image spans (LOAD1 R--, LOAD3/LOAD7 RW-) therefore publish alongside
+-    // non-image heap spans, and admission is ownership-covered by span
+-    // membership either way. The extent arguments are retained for
+-    // CALL-SITE STABILITY ONLY (the bridge TU passes the same literals; the
+-    // controller may drop them in a later signature fold). The caller
++    // fixtures drive the SAME function). v5 (supersedes the v4 include-image
++    // policy): a record publishes ITSELF — its FULL [start,end) — when prot
++    // carries the READ bit, it is at least one FName block capacity, it does
++    // NOT overlap the main-image extent, and it fits the top-N-by-size
++    // window. v4 kept image spans among the candidates because the launch-9
++    // REGION-CLASS observation suggested Blocks[0] might live in LOAD7's BSS
++    // tail INSIDE the image extent. Live candidate evidence disproves that
++    // placement: the first-ever captured Blocks[0] value (launch-11 full-fix
++    // run, pid 700; pool struct 0x9765EC0 read, candidate label until
++    // validation passes) is 0x22C0000000 — 139 GiB, far outside the image
++    // extent [0x400000, 0xc0602c8) and far above the whole listing envelope
++    // 0x1100400000 = 68 GiB (computed over ALL decoded records; the walk was
++    // complete: 10,070 entries, stop=0, capacity 32,768). Two consequences:
++    //   (a) IMAGE spans no longer belong among candidates: their readability
++    //       is already proven by the anchor geometry (7 anchors, 1 interval),
++    //       and as candidates they only crowd non-image spans out of the
++    //       saturated top-N window (live: 126 candidates, 64 published).
++    //   (b) The listing itself returned no record covering the candidate
++    //       Blocks[0] — the envelope (over ALL decoded records) proves the
++    //       omission. The working hypothesis is a direct-memory-class
++    //       mapping omitted by the listing; the allocation class is NOT
++    //       established, and no capacity constant can address it. The
++    //       evidence-strict handling lives in resolve_listing_gap below
++    //       (fresh per-address range verdicts are recorded as NEW evidence,
++    //       never folded into the frozen capture).
++    // The extent parameters are now USED (overlap test); the signature is
++    // unchanged, so call sites and fixtures compile unchanged. The caller
+     // passes the WHOLE captured record set (readable or not): envelope_end
+     // is computed over ALL of it, since non-readable records still prove
+     // enumeration coverage.
+     [[nodiscard]] inline auto publish_readable_spans(
+         const VmSpanRecord* records, size_t record_count,
+-        [[maybe_unused]] uint64_t image_base,
+-        [[maybe_unused]] uint64_t image_extent_bytes,
++        uint64_t image_base,
++        uint64_t image_extent_bytes,
+         AddressSpan* out, size_t out_capacity) -> PublicationResult
+     {
+         // Top-N by size, insertion-maintained; address-sorted on the way out.
+@@ -216,6 +228,14 @@
+             {
+                 continue; // cannot host a whole FName block
+             }
++            // v5: image-extent overlap excludes candidacy (see the policy
++            // comment above). The envelope above still counts every record:
++            // this filter only narrows the PUBLISHED set, never the
++            // enumeration-coverage proof.
++            if (image_extent_bytes != 0 && r.start < image_base + image_extent_bytes && r.end > image_base)
++            {
++                continue;
++            }
+             ++result.total;
+             if (kept_count < kMaxPublishedSpans)
+             {
+@@ -302,9 +322,23 @@
+     // coverage case is the production norm (coverage-proven fixture H).
+     struct PoolShapeCheck
+     {
++        enum class FailureClass : uint8_t
++        {
++            None = 0,
++            SpanTableUnavailable,
++            Structural,
++            CaptureTruncated, // blocks0 at/above the listing envelope: the
++                              // mapping may exist past the cut (omitted, not
++                              // proven unmapped) — live DM-class case
++            NotCovered,       // below the envelope and in no published span:
++                              // genuine unmapped/unreadable verdict
++        };
+         bool ok;
+         const char* failure;      // nullptr when ok
+         const char* bounds_source; // provenance of the bound that was applied
++        FailureClass failure_class; // machine-checkable class (v5): the
++                                    // initializer branches on this, never on
++                                    // string compare
+     };
+ 
+     // v4: the `base` parameter of v3 is REMOVED — it existed only for the
+@@ -321,19 +355,20 @@
+         if (published_spans == nullptr || published_span_count == 0)
+         {
+             return {false, "span table unavailable (bridge published no readable spans this invocation)",
+-                    "span-table-unavailable"};
++                    "span-table-unavailable", PoolShapeCheck::FailureClass::SpanTableUnavailable};
+         }
+         if ((none_id >> kPoolLayout.block_offset_bits) > current_block)
+         {
+-            return {false, "None entry block index exceeds CurrentBlock (engine invariant id>>16 <= CurrentBlock; pool not initialized or wrong pool/base)", "structural"};
++            return {false, "None entry block index exceeds CurrentBlock (engine invariant id>>16 <= CurrentBlock; pool not initialized or wrong pool/base)", "structural",
++                    PoolShapeCheck::FailureClass::Structural};
+         }
+         if (blocks0 == 0)
+         {
+-            return {false, "Blocks[0] is null", "structural"};
++            return {false, "Blocks[0] is null", "structural", PoolShapeCheck::FailureClass::Structural};
+         }
+         if ((blocks0 & 0x7ull) != 0)
+         {
+-            return {false, "Blocks[0] is not 8-aligned", "structural"};
++            return {false, "Blocks[0] is not 8-aligned", "structural", PoolShapeCheck::FailureClass::Structural};
+         }
+         for (size_t i = 0; i < published_span_count; ++i)
+         {
+@@ -345,12 +380,99 @@
+         if (blocks0 >= capture_envelope_end)
+         {
+             return {false, "snapshot truncated: cannot prove heap coverage at or past the captured envelope (omitted mapping, not proven unmapped)",
+-                    "capture-truncated"};
++                    "capture-truncated", PoolShapeCheck::FailureClass::CaptureTruncated};
+         }
+-        return {false, "Blocks[0] not covered by any published readable span (unmapped or unreadable at this address; capture complete below the envelope)",
+-                "published-readable-spans"};
++        // Below the envelope but in no published span: EITHER genuinely
++        // unmapped/unreadable OR dropped by a saturated publication window
++        // (live: 126 candidates for 64 slots). v5 no longer asserts
++        // 'unmapped' here — the initializer resolves this class with the
++        // kernel mapped-verdict probe before refusing (worker-coverage-ledger
++        // O-2). Blocks[0] keeps its candidate label either way until the
++        // content anchors pass.
++        return {false, "Blocks[0] not covered by any published readable span (below the envelope; unmapped OR dropped by the saturated publication window — resolved by the kernel mapped-verdict path)",
++                "published-readable-spans", PoolShapeCheck::FailureClass::NotCovered};
+     }
+ 
++    // v5 listing-gap resolution (hypothesis-driven, evidence-strict). Live
++    // facts (full-fix run 2026-10-05, candidate label until validation
++    // passes): Blocks[0] = 0x22C0000000 (139 GiB) while the COMPLETE listing
++    // envelope tops at 0x1100400000 (68 GiB) over ALL decoded records — the
++    // listing returned no record covering Blocks[0]. Because the envelope
++    // covers every decoded record, the 126-candidate/64-slot publication
++    // window CANNOT explain this above-envelope result; the working
++    // hypothesis is a direct-memory-class mapping omitted by the listing
++    // itself. That allocation class is NOT established — only the omission
++    // is observed.
++    //
++    // Evidence contract (user corrections 2026-10-05):
++    //   1. A mapped/residency verdict (mincore class) does NOT prove read
++    //      permission or owned-read coverage. This process contains
++    //      exec-only text, so mapped!=readable is a real case. Mapped-ness
++    //      over the FULL REQUIRED READ RANGE is necessary, never sufficient.
++    //   2. Readable-coverage authorization needs a supported source. Today
++    //      the pinned surface has exactly one: the listing's READ bit
++    //      (ListedSpan) — which by construction cannot cover a
++    //      listing-absent address. So a listing-gap admission is IMPOSSIBLE
++    //      today and the helper must refuse, recording the range verdict as
++    //      fresh per-address evidence (NOT part of the earlier frozen VMMAP
++    //      capture; any future registration/reads must carry that
++    //      provenance explicitly).
++    //   3. The on-target standalone payload (separate process, no game) is
++    //      the evidence route that may extend the source set: if the
++    //      actually-linked kernel proves the range verdict is protection-
++    //      aware (fails on exec-only), RangeVerdictImpliesReadable becomes
++    //      an evidence-backed source. A header constant and an available
++    //      trampoline are build evidence only, never a successful target
++    //      test.
++    enum class RangeMappedVerdict : int8_t
++    {
++        Unavailable = -1, // kernel refused the call class (any other errno)
++        NotMapped = 0,    // ENOMEM over the range: genuine unmapped proof
++        Mapped = 1,       // 0 over the range: mapped-ness only (not readable)
++    };
++    enum class ReadableCoverageSource : uint8_t
++    {
++        None = 0,          // no supported source for this address today
++        ListedSpan = 1,    // listing READ bit (cannot cover listing gaps)
++    };
++    struct ListingGapResolution
++    {
++        bool ok;
++        const char* bounds_source; // nullptr when refused
++        const char* note;          // admission explanation or refusal reason
++    };
++    [[nodiscard]] inline auto resolve_listing_gap(const PoolShapeCheck& shape,
++                                                  RangeMappedVerdict range_verdict,
++                                                  ReadableCoverageSource readable_source) -> ListingGapResolution
++    {
++        if (shape.ok)
++        {
++            return {true, shape.bounds_source, "shape already admitted by span membership; range verdict not consulted"};
++        }
++        if (shape.failure_class != PoolShapeCheck::FailureClass::CaptureTruncated &&
++            shape.failure_class != PoolShapeCheck::FailureClass::NotCovered)
++        {
++            return {false, nullptr, "range verdict does not rescue this failure class (structural checks gate everything)"};
++        }
++        if (range_verdict == RangeMappedVerdict::NotMapped)
++        {
++            return {false, nullptr, "kernel range verdict: NOT mapped over the required read range (genuine unmapped proof, stronger than the listing refusal)"};
++        }
++        if (range_verdict == RangeMappedVerdict::Unavailable)
++        {
++            return {false, nullptr, "kernel range verdict unavailable (call class refused); listing gap unresolved — refuse honestly"};
++        }
++        if (readable_source == ReadableCoverageSource::ListedSpan)
++        {
++            return {true, "listed-span-plus-range-verdict", "listing READ bit covers the range; range verdict corroborates"};
++        }
++        return {false, nullptr,
++                "kernel range verdict: MAPPED over the full required read range, but read permission is UNPROVEN for a listing-absent address "
++                "(mapped!=readable; exec-only mappings exist in this process) and no supported readable-coverage source exists for listing-absent "
++                "addresses in the pinned surface. Direct-memory omission remains a hypothesis. Refusing; the on-target range-verdict semantics "
++                "evidence (standalone payload, separate process) may extend the source set"};
++    }
++
+     // Bounds that must hold before any entry byte is touched — v4 engine
+     // semantics (FNAME-POOL-RE.md R1 + section 4 item 5; supersedes the v3
+     // strict `block_index < current_block`, which false-refused entries in

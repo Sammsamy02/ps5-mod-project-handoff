@@ -1,0 +1,96 @@
+{
+  "worker": "worker-gate5-loadmap",
+  "unit_id": "l11-loadmap-defer-r3",
+  "date": "2026-10-05",
+  "bounds": {
+    "local_only": true,
+    "console_contact": false,
+    "composition_run": false,
+    "packaging": false,
+    "canonical_or_shared_lineage_edits": false,
+    "game_claims": "none — no in-game oracle line is claimed, measured, or predicted as captured; every expected log line is a code-shaped expectation only",
+    "engine_or_provider_execution": false
+  },
+  "mission": "GATE-5 residual closure: in the R3 marshal world, defer/guard LuaMod's eager LoadMap arm WITHOUT retiring the RegisterLoadMapPreHook Lua surface; queued callbacks must deliver when a loadmap event actually fires through a supported path; any attempted-and-failed arm must refuse loudly (fail-closed), never silently.",
+  "inputs": {
+    "merged_base": {
+      "path": "outputs/2026-10-04-zcode-team/worker-l11-merge/staging/luamod-l11-merged/LuaMod.cpp",
+      "sha256": "37e8d7d19346b9b6541913e4c9516e0019a2eebc",
+      "lines": 8342,
+      "drift_note": "task snapshot sha c92c92ff and merge REPORT sha dc687602 (8327 lines) both superseded: the working merged file already carries worker-l11-loadmap-guard r2 (d2ad2818 lineage), which defers the eager block but declares the Lua LoadMap surface accepted-but-never-invoked — the residual this unit closes"
+    },
+    "composed_detour_layer_read": {
+      "hooks_cpp": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/Hooks/Hooks.cpp (RegisterLoadMapPreCallback :211, HookLoadMap :583, no other caller)",
+      "detour_instance_hpp": "same tree include/Unreal/Hooks/Internal/DetourInstance.hpp (AddCallback :282 arms-before-store; refusal Error :286; ERROR_ID; ctor throw :127-131 unreachable for LoadMap)",
+      "metadata_hpp": "same tree (LoadMap metadata = &UEngine::LoadMapInternal + &GlobalConfig.bHookLoadMap :211-218)",
+      "unreal_initializer_cpp": "same tree src/UnrealInitializer.cpp (:1243 LoadMap resolve walk gated on bHookLoadMap)",
+      "unreal_initializer_hpp": "same tree include/Unreal/UnrealInitializer.hpp:144 bHookLoadMap default false; NO SettingsManager/INI mapping exists anywhere in the composed port for this key",
+      "diff2_initializer_staging": "outputs/2026-10-04-zcode-team/worker-r3-diff2-rebase/work/patched/staging/UnrealInitializer.cpp (pump_pending :189/:1861, R3MarshalPumpPending :2190-2192)"
+    },
+    "main_lua": {
+      "path": "outputs/2026-10-04-zcode-team/worker-itemspawner-bundle/bundle/ue4ss/Mods/TownfallItemSpawner/Scripts/main.lua",
+      "sha256": "c87d54d0e5d88b78f19a7caff17915b4a1e4f699",
+      "usage": ":731-744 pcall(RegisterLoadMapPreHook, function() ... end) — pure Lua-state per-map reset"
+    },
+    "api_audit": "outputs/2026-10-04-zcode-team/worker-menu-spawn/results/01-API-AUDIT.md:36 (RegisterLoadMapPreHook -> LuaMod.cpp:2741, pcall-wrapped)",
+    "prior_r2": "outputs/2026-10-04-zcode-team/worker-l11-loadmap-guard/{REPORT,ANALYSIS,DIFF}.md + diffs/l11-loadmap-defer-r2.diff (d2ad2818db4b7338)"
+  },
+  "deliverables": {
+    "staged_unit": {
+      "path": "outputs/2026-10-04-zcode-team/worker-gate5-loadmap/staging/luamod-gate5-loadmap-r3/LuaMod.cpp",
+      "sha256": "1c26619eb30480254dc7370006d0ae9b053830f8",
+      "lines": 8434
+    },
+    "deliverable_diff": {
+      "path": "outputs/2026-10-04-zcode-team/worker-gate5-loadmap/diffs/l11-loadmap-defer-r3.diff",
+      "hunks": 3,
+      "roundtrip_reverse_to_base": "37e8d7d19346b9b6541913e4c9516e0019a2eebc (byte-identical)",
+      "roundtrip_reapply": "1c26619eb30480254dc7370006d0ae9b053830f8 (byte-identical)"
+    },
+    "host_test": {
+      "source": "outputs/2026-10-04-zcode-team/worker-gate5-loadmap/host-test/test_deferred_loadmap_predicate_r3.cpp",
+      "source_sha256": "65325ad2535bf09b60a52977350b9cb8b8eb6e71",
+      "binary_sha256": "752cd509710ea479398c45f1d436c565ef8cd4e4",
+      "build": "clang++ -std=c++20 -Wall -Wextra -fsanitize=address,undefined -g; 0 warnings, 0 errors",
+      "result": "PASS: 10 rows, 0 checks failed (exit 0, ASan/UBSan clean)",
+      "raw": "host-test/run-r3.stdout, host-test/run-r3.stderr (0 bytes)"
+    }
+  },
+  "diff_summary": [
+    "hunk 1 @4538 (+134): file-scope [R3][worker-gate5-loadmap r3] region before funcptr_marshal_hook — all-world delivery bodies lua_load_map_pre_callback/lua_load_map_post_callback (verbatim eager-block bodies, LuaMod::-qualified vector access) + __PROSPERO__-wrapped m_loadmap_deferred_arm_pending/attempted atomics and one-shot try_deferred_loadmap_arm() (pending check -> atomic-exchange single attempt -> registers BOTH LoadMap callbacks; success = loud armed line; failure = canonical composed-layer pair PLUS explicit Error naming the permanent undelivered state — no silent path)",
+    "hunk 2 @4588->4722 (+5): funcptr_marshal_hook calls try_deferred_loadmap_arm() inside the existing __PROSPERO__ block, AFTER identity publication + IsInGameThreadRaw + owns_dispatch gates = exactly the 'marshal world proven live' point",
+    "hunk 3 @7439->7578 (-47 net): on_program_start r2 gate branch now stores pending BEFORE the marshal consumer can arm (ordering law) and emits a corrected Warning (siblings keep the full r2 never-invoked law; LoadMap is queued + one-shot deferred); eager block's two inline LoadMap lambdas replaced by the same named handlers (W-works behavior unchanged)"
+  ],
+  "checks": [
+    {"check": "round-trip: staged -delta == merged base 37e8d7d1", "result": "PASS (byte-identical)"},
+    {"check": "round-trip: +delta reproduces staged 1c26619e", "result": "PASS (byte-identical)"},
+    {"check": "single definition of each new symbol (duplication introduced mid-authoring was removed)", "result": "PASS"},
+    {"check": "brace/#ifdef balance parity with base (one added #ifdef/#endif pair, PROSPERO-wrapped)", "result": "PASS"},
+    {"check": "host predicate decision table: 10 rows x state+log-sink assertions", "result": "PASS 10/0, ASan/UBSan clean"},
+    {"check": "no edits outside outputs/2026-10-04-zcode-team/worker-gate5-loadmap/", "result": "PASS"}
+  ],
+  "decision_table": [
+    {"row": 1, "r3_mode": "off", "arm": "eager ok", "hooks": "present", "expected": "eager pre+post armed, queued callback delivers on fire, deferred never fires", "verdict": "PASS"},
+    {"row": 2, "r3_mode": "off", "arm": "eager ok", "hooks": "absent", "expected": "eager arms unconditionally (upstream shape), nothing delivered, deferred never fires", "verdict": "PASS"},
+    {"row": 3, "r3_mode": "on", "arm": "deferred ok", "hooks": "present", "expected": "eager skipped + 1 Warning; one attempt at first proven drain; armed line; queued callbacks deliver; extra drains never re-attempt", "verdict": "PASS"},
+    {"row": 4, "r3_mode": "on", "arm": "deferred ok", "hooks": "absent at attempt, registered after", "expected": "attempt NOT gated on queue state (mod-load vs carrier-tick order trap); late registration delivers", "verdict": "PASS"},
+    {"row": 5, "r3_mode": "on", "arm": "deferred refused", "hooks": "present", "expected": "one attempt across 50 drains; canonical loud pair x2 + explicit fail-closed Error; callbacks stay queued, no delivery", "verdict": "PASS"},
+    {"row": 6, "r3_mode": "on", "arm": "deferred refused", "hooks": "absent", "expected": "same loud one-shot refusal; nothing delivered; detour never armed", "verdict": "PASS"},
+    {"row": 7, "r3_mode": "on", "arm": "partial (pre ok, post refused)", "hooks": "present", "expected": "pre armed and delivering; post-side canonical refusal + explicit Error; never a whole-block skip", "verdict": "PASS"},
+    {"row": 8, "r3_mode": "on", "arm": "never attempted (marshal world unproven)", "hooks": "present", "expected": "no attempt without a proven drain; boot Warning is the standing loud declaration (not silent)", "verdict": "PASS"},
+    {"row": 9, "r3_mode": "off", "arm": "eager ok + spurious drain", "hooks": "present", "expected": "pending never set; drain-side arm is a no-op; exactly 2 register calls", "verdict": "PASS"},
+    {"row": 10, "r3_mode": "on", "arm": "pre-gate drain hazard", "hooks": "present", "expected": "drain before the gate finds pending false and does nothing; post-gate drain attempts exactly once", "verdict": "PASS"}
+  ],
+  "honest_bounds": [
+    "Host test models the staged CONTROL FLOW and rc/log contracts; it is not the composed detour layer and proves nothing about PLH/owned-memory behavior (that layer's refusal behavior was measured by worker-l11-loadmap-guard's 5-phase host test and is reused here, not re-measured).",
+    "No compile gate was run on the staged LuaMod.cpp (no frozen-argv PS5 toolchain invocation in this worker's bounds); the diff is text-verified + round-trip + balance-checked only. The controller's gate must measure the object.",
+    "As composed, bHookLoadMap has NO INI mapping and defaults false (UnrealInitializer.hpp:144; verified no SettingsManager key), so in EVERY current composed world the deferred arm — like the eager arm before it — refuses at InstallHook's hooking-disabled check, loudly. The queued-callback delivery this unit restores becomes LIVE only if a separate, out-of-scope revision enables LoadMap hooking (config/initializer-side) or a future world arms the detour; this unit guarantees the surface + loud reporting, not the arm.",
+    "Delivery still requires a REAL UEngine::LoadMap event routed through an armed detour; no synthetic/simulated loadmap delivery was added or claimed.",
+    "The r2 comment's stale internal line reference ('declared in this TU at line 93') is preserved as-is (raw prior comment); the actual declaration in the current base is at :108."
+  ],
+  "admission": {
+    "proposal_only": true,
+    "compose_pin_suggestion": "controller may pin source shasum 1c26619eb30480254dc7370006d0ae9b053830f8 for the luamod unit IF adopting l11-loadmap-defer-r3 on top of the merged lineage; object sha unmeasured here and must not be assumed",
+    "explicitly_not_done": "no composition, no object build, no console dispatch, no packaging, no other worker's staging touched, no shared lineage file edited"
+  }
+}

@@ -1,0 +1,90 @@
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("__vecDelDtor")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("__vecDelDtor"), 0x0);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("__vecDelDtor__uint32")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("__vecDelDtor__uint32"), 0x0);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("Serialize__Ptr_C_wchar_t__ELogVerbosity_Type__Ref_C_FName__C_double")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("Serialize__Ptr_C_wchar_t__ELogVerbosity_Type__Ref_C_FName__C_double"), 0x8);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("Serialize__Ptr_C_wchar_t__ELogVerbosity_Type__Ref_C_FName")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("Serialize__Ptr_C_wchar_t__ELogVerbosity_Type__Ref_C_FName"), 0x10);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("SerializeRecord")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("SerializeRecord"), 0x18);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("SerializeRecord__Ref_C_UE_FLogRecord")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("SerializeRecord__Ref_C_UE_FLogRecord"), 0x18);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("Flush")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("Flush"), 0x20);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("TearDown")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("TearDown"), 0x28);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("Dump")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("Dump"), 0x30);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("Dump__Ref_FArchive")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("Dump__Ref_FArchive"), 0x30);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("IsMemoryOnly")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("IsMemoryOnly"), 0x38);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("IsMemoryOnly_C")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("IsMemoryOnly_C"), 0x38);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("CanBeUsedOnAnyThread")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("CanBeUsedOnAnyThread"), 0x40);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("CanBeUsedOnAnyThread_C")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("CanBeUsedOnAnyThread_C"), 0x40);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("CanBeUsedOnMultipleThreads")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("CanBeUsedOnMultipleThreads"), 0x48);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("CanBeUsedOnMultipleThreads_C")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("CanBeUsedOnMultipleThreads_C"), 0x48);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("CanBeUsedOnPanicThread")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("CanBeUsedOnPanicThread"), 0x50);
+}
+
+if (auto it = FOutputDevice::VTableLayoutMap.find(STR("CanBeUsedOnPanicThread_C")); it == FOutputDevice::VTableLayoutMap.end())
+{
+    FOutputDevice::VTableLayoutMap.emplace(STR("CanBeUsedOnPanicThread_C"), 0x50);
+}
+

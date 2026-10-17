@@ -1,0 +1,34 @@
+{
+  "worker": "worker-tick-address-validation",
+  "written_at_start": true,
+  "claims": [
+    {
+      "id": "TAV-1",
+      "claim": "The composed runtime locates UGameEngine::Tick at runtime NOT by the dormant serialized-ELF witness, but by UE4SS-derived in-process resolution: vtable walk of the live UGameEngine instance (OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL) cross-checked against a patternsleuth signature scan (UEngine::TickInternal). The serialized-ELF route (ps_ugameengine_tick_file_witness_v1) only selects between pre-computed candidates when a serialized ELF is actually present, which it is not in the r3 facts payload.",
+      "confidence": "medium",
+      "to_verify": "file:line for both paths and which one runs when OwnedSerializedElfSource has no bytes"
+    },
+    {
+      "id": "TAV-2",
+      "claim": "Validation before the detour write is weak: PLH::x64Detour is constructed at the resolved address with at most a non-null / in-exec-span sanity gate. If the resolved Tick address is wrong but plausible (still inside the exec LOAD), the detour is installed over arbitrary code and the failure is a game-side crash, not a refused detour.",
+      "confidence": "medium",
+      "to_verify": "DetourInstance.hpp 164-204 and any RegisterX pre-checks"
+    },
+    {
+      "id": "TAV-3",
+      "claim": "If vtable+scan both fail without the serialized ELF, failure is loud at runtime_start (exception -> runtime_start_failed / MRS_ERR_START status). It does NOT silently park at mods-started with zero ticks, because the tick hook registration happens inside the guarded startup bridge.",
+      "confidence": "low",
+      "to_verify": "runtime_start_bridge_r3.cpp exception mapping; which failures are caught vs swallowed"
+    },
+    {
+      "id": "TAV-4",
+      "claim": "The serialized-ELF witness consumer reads a bounded header + <=8192 witness records plus RELA slices, not the full 194MB image, so a TRIMMED serialized ELF (program headers + reloc section slices needed by the witness) could in principle be staged; but the exact consumed byte ranges must be measured from the patternsleuth witness call before claiming.",
+      "confidence": "low",
+      "to_verify": "patternsleuth_tick_file_witness.h consumed ranges; OwnedSerializedElfSource.cpp consumption"
+    }
+  ],
+  "non_claims": [
+    "No claim about composition-5 r3 having already launched or succeeded; that is in flight elsewhere.",
+    "No claim that the 0x33ac8c0 Townfall Tick address is used by the runtime as a constant; it is predicted output only."
+  ]
+}

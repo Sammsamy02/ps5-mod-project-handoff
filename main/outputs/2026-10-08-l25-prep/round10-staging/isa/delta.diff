@@ -1,0 +1,468 @@
+diff -ru base-tree/src/UObjectGlobals.cpp isa/tree/src/UObjectGlobals.cpp
+--- base-tree/src/UObjectGlobals.cpp	2026-10-12 15:06:59
++++ isa/tree/src/UObjectGlobals.cpp	2026-10-12 15:44:51
+@@ -224,6 +224,141 @@
+         return FoundObject;
+     }
+ 
++    // =====================================================================================
++    // [R9-NAME] Object-name lookups without the full GUObjectArray walk (generic; used only
++    // when FUObjectHashTables is unavailable, e.g. PS5). StaticFindObject / FindObject / Lua
++    // IsA("<path>") read every UObject (~150k) per MISS (~20-40 ms). The r9idx object index
++    // (below) also keeps, per slot, the comparison index of the object's OWN FName in hash
++    // buckets. A lookup syncs the index exactly (like FindFirstOf), takes every live object
++    // whose own name has the queried comparison index -- the walk's first test, FName::Equals
++    // compares only that -- in ascending slot order (= the walk's order) and runs the SAME
++    // predicate the walk runs on each; the first match wins, exactly like the walk.
++    // Index not usable -> the walk (fail closed, one [R9-NAME] line per reason).
++    // =====================================================================================
++    static auto r9_name_for_each(const uint32_t* Cmps, size_t NumCmps, const ObjectSearcherForEachPredicate& Pred) -> bool;
++    static uint64_t g_r9n_find_calls{0}, g_r9n_find_ns{0}, g_r9n_find_max_ns{0};
++    static uint64_t g_r9n_idx_lookups{0}, g_r9n_idx_cands{0}, g_r9n_walks{0}, g_r9n_misses{0}, g_r9n_renames{0};
++    static int64_t g_r9n_last_print_ns{0};
++    static auto R9NameNowNs() -> int64_t
++    {
++        return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
++    }
++    // Bounded one-time list of distinct names that StaticFindObject / FindObject / IsA(path)
++    // could not resolve (what the mods ask for); later misses are only counted.
++    static std::mutex g_r9n_miss_mutex{};
++    static uint64_t g_r9n_miss_keys[32]{};
++    static uint32_t g_r9n_miss_count{0};
++    static bool g_r9n_miss_full_logged{false};
++    static auto R9NameNoteMiss(UClass* Class, UObject* InOuter, const CharType* Name, bool bExactClass) -> void
++    {
++        try
++        {
++            uint64_t Key = 1469598103934665603ULL; // FNV-1a over the name characters
++            for (const CharType* p = Name; *p; ++p) { Key ^= static_cast<uint64_t>(*p); Key *= 1099511628211ULL; }
++            std::lock_guard Lock{g_r9n_miss_mutex};
++            for (uint32_t k = 0; k < g_r9n_miss_count; ++k)
++            {
++                if (g_r9n_miss_keys[k] == Key) { return; }
++            }
++            if (g_r9n_miss_count >= 32)
++            {
++                if (!g_r9n_miss_full_logged)
++                {
++                    g_r9n_miss_full_logged = true;
++                    Output::send(STR("[R9-NAME] miss list full (32 distinct names); later misses are only counted\n"));
++                }
++                return;
++            }
++            g_r9n_miss_keys[g_r9n_miss_count++] = Key;
++            // outer: 0 = none, 1 = ANY_PACKAGE, else the outer's address
++            const uintptr_t OuterBits = InOuter == ANY_PACKAGE ? uintptr_t{1} : reinterpret_cast<uintptr_t>(InOuter);
++            Output::send(STR("[R9-NAME] miss {}/32 '{}' class={:X} outer={:X} exact={}\n"),
++                         g_r9n_miss_count, StringViewType{Name}, reinterpret_cast<uintptr_t>(Class), OuterBits, bExactClass ? 1 : 0);
++        }
++        catch (...)
++        {
++        }
++    }
++    // Per FindObject call: cost, miss note, and a paced (>= 5 s) [R9-NAME] perf line.
++    struct R9NameFindScope
++    {
++        UClass* Class;
++        UObject* InOuter;
++        const CharType* Name;
++        bool bExactClass;
++        bool Missed{false};
++        int64_t t0{R9NameNowNs()};
++        ~R9NameFindScope()
++        {
++            try
++            {
++                const int64_t t1 = R9NameNowNs();
++                const uint64_t dt = t1 > t0 ? static_cast<uint64_t>(t1 - t0) : 0;
++                __atomic_fetch_add(&g_r9n_find_calls, uint64_t{1}, __ATOMIC_RELAXED);
++                __atomic_fetch_add(&g_r9n_find_ns, dt, __ATOMIC_RELAXED);
++                uint64_t Max = __atomic_load_n(&g_r9n_find_max_ns, __ATOMIC_RELAXED);
++                while (dt > Max && !__atomic_compare_exchange_n(&g_r9n_find_max_ns, &Max, dt, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
++                if (Missed && Name != nullptr)
++                {
++                    __atomic_fetch_add(&g_r9n_misses, uint64_t{1}, __ATOMIC_RELAXED);
++                    R9NameNoteMiss(Class, InOuter, Name, bExactClass);
++                }
++                int64_t Last = __atomic_load_n(&g_r9n_last_print_ns, __ATOMIC_RELAXED);
++                if (Last == 0)
++                {
++                    (void)__atomic_compare_exchange_n(&g_r9n_last_print_ns, &Last, t1, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED);
++                }
++                else if (t1 - Last >= 5000000000LL && __atomic_compare_exchange_n(&g_r9n_last_print_ns, &Last, t1, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED))
++                {
++                    const uint64_t Calls = __atomic_exchange_n(&g_r9n_find_calls, uint64_t{0}, __ATOMIC_RELAXED);
++                    const uint64_t Ns = __atomic_exchange_n(&g_r9n_find_ns, uint64_t{0}, __ATOMIC_RELAXED);
++                    const uint64_t MaxNs = __atomic_exchange_n(&g_r9n_find_max_ns, uint64_t{0}, __ATOMIC_RELAXED);
++                    const uint64_t Lookups = __atomic_exchange_n(&g_r9n_idx_lookups, uint64_t{0}, __ATOMIC_RELAXED);
++                    const uint64_t Cands = __atomic_exchange_n(&g_r9n_idx_cands, uint64_t{0}, __ATOMIC_RELAXED);
++                    const uint64_t Walks = __atomic_exchange_n(&g_r9n_walks, uint64_t{0}, __ATOMIC_RELAXED);
++                    const uint64_t Misses = __atomic_exchange_n(&g_r9n_misses, uint64_t{0}, __ATOMIC_RELAXED);
++                    const uint64_t Renames = __atomic_exchange_n(&g_r9n_renames, uint64_t{0}, __ATOMIC_RELAXED);
++                    Output::send(STR("[R9-NAME] perf win_ms={} find_calls={} find_us={} find_avg_us={} find_max_us={} idx_lookups={} idx_cands={} walks={} misses={} renames={}\n"),
++                                 static_cast<uint64_t>(t1 - Last) / 1000000u, Calls, Ns / 1000u, Calls ? Ns / Calls / 1000u : 0u, MaxNs / 1000u, Lookups, Cands, Walks, Misses, Renames);
++                }
++            }
++            catch (...)
++            {
++            }
++        }
++    };
++    // The plain GUObjectArray walk searcher (not a pool, not the hash tables): only that one is
++    // replaced by the name index. Reads the protected members through member pointers.
++    struct R9SearcherPeek : ObjectSearcher
++    {
++        static auto IsPlainWalk(const ObjectSearcher& Searcher) -> bool
++        {
++            ObjectSearcherPoolBase* ObjectSearcher::* const Pool = &R9SearcherPeek::PoolPtr;
++            bool ObjectSearcher::* const Hash = &R9SearcherPeek::bIsHashSearcher;
++            return Searcher.*Pool == nullptr && !(Searcher.*Hash);
++        }
++    };
++    // The walk's per-object test for a name-parts path (shared by the walk and the index).
++    static auto R9PathPartsMatch(UObject* Object, const std::vector<FName>& NameParts) -> bool
++    {
++        int32_t NumPathParts{};
++        auto PathObject = Object;
++        while (PathObject)
++        {
++            const auto PathName = PathObject->GetNamePrivate();
++            const auto It = std::ranges::find_if(NameParts, [&](const FName NamePart) {
++                return NamePart.Equals(PathName);
++            });
++            if (It == NameParts.end())
++            {
++                return false;
++            }
++            PathObject = PathObject->GetOuterPrivate();
++            ++NumPathParts;
++        }
++        return NumPathParts == NameParts.size();
++    }
++
+     auto StaticFindObject_InternalNoToStringFromNames(const std::vector<FName>& NameParts) -> UObject*
+     {
+         UObject* FoundObject{};
+@@ -237,37 +372,41 @@
+             }
+         }
+ 
++        // [R9-NAME] index first: the candidates are the live objects whose own name is one of the
++        // parts (the walk's first test), in slot order, each given the walk's own test.
++        {
++            uint32_t Cmps[32];
++            size_t NumCmps = 0;
++            bool bFits = true;
++            for (const auto& NamePart : NameParts)
++            {
++                const uint32_t Cmp = NamePart.GetComparisonIndex().ToUnstableInt();
++                bool bDup = false;
++                for (size_t d = 0; d < NumCmps; ++d) { if (Cmps[d] == Cmp) { bDup = true; break; } }
++                if (bDup) { continue; }
++                if (NumCmps == 32) { bFits = false; break; }
++                Cmps[NumCmps++] = Cmp;
++            }
++            if (bFits && r9_name_for_each(Cmps, NumCmps, [&](UObject* Object) {
++                    if (!R9PathPartsMatch(Object, NameParts)) { return LoopAction::Continue; }
++                    FoundObject = Object;
++                    return LoopAction::Break;
++                }))
++            {
++                return FoundObject;
++            }
++            __atomic_fetch_add(&g_r9n_walks, uint64_t{1}, __ATOMIC_RELAXED);
++        }
+ 
+         UObjectGlobals::ForEachUObject([&](UObject* Object, [[maybe_unused]]int32_t ChunkIndex, [[maybe_unused]]int32_t ObjectIndex) {
+             // In order to remain safe to use early in init before we've hooked FName::ToString up to KismetStringLibrary:Conv_NameToString, we have to
+             // compare FNames directly instead of using GetFullName.
+-            int32_t NumPathParts{};
+-            auto PathObject = Object;
+-            while (PathObject)
++            if (R9PathPartsMatch(Object, NameParts))
+             {
+-                const auto PathName = PathObject->GetNamePrivate();
+-                const auto It = std::ranges::find_if(NameParts, [&](const FName NamePart) {
+-                    return NamePart.Equals(PathName);
+-                });
+-                if (It == NameParts.end())
+-                {
+-                    return LoopAction::Continue;
+-                }
+-                else
+-                {
+-                    PathObject = PathObject->GetOuterPrivate();
+-                    ++NumPathParts;
+-                }
+-            }
+-            if (NumPathParts == NameParts.size())
+-            {
+                 FoundObject = Object;
+                 return LoopAction::Break;
+             }
+-            else
+-            {
+-                return LoopAction::Continue;
+-            }
++            return LoopAction::Continue;
+         });
+ 
+         return FoundObject;
+@@ -392,6 +531,7 @@
+ 
+     UObject* FindObject(UClass* Class, UObject* InOuter, const TCHAR* InName, bool bExactClass, ObjectSearcher* InSearcher)
+     {
++        R9NameFindScope r9_name_scope{Class, InOuter, ToCharTypePtr(InName), bExactClass}; // [R9-NAME] cost + miss note
+         bool bObjectIsCached{};
+         if (!Class && !InOuter && InName && !bExactClass)
+         {
+@@ -601,7 +741,7 @@
+         //          package) instead of always missing.
+         //   4. Long names keep the exact GetFullName verification on the
+         //      name-matched candidate only (unchanged behavior, now rare).
+-        Searcher.ForEach([&](UObject* Object) {
++        const auto FindPredicate = [&](UObject* Object) {
+             if (!Object->GetNamePrivate().Equals(ShortName))
+             {
+                 return LoopAction::Continue;
+@@ -664,13 +804,30 @@
+             }
+ 
+             return LoopAction::Continue;
+-        });
++        };
+ 
++        // [R9-NAME] the plain-walk searcher only: the same predicate on the live objects whose own
++        // name Equals ShortName (its first test), in walk order; index unusable -> the walk.
++        if (InSearcher || !R9SearcherPeek::IsPlainWalk(Searcher))
++        {
++            Searcher.ForEach(FindPredicate);
++        }
++        else
++        {
++            const uint32_t ShortCmp = ShortName.GetComparisonIndex().ToUnstableInt();
++            if (!r9_name_for_each(&ShortCmp, 1, FindPredicate))
++            {
++                __atomic_fetch_add(&g_r9n_walks, uint64_t{1}, __ATOMIC_RELAXED);
++                Searcher.ForEach(FindPredicate);
++            }
++        }
++
+         if (FoundObject && !bObjectIsCached)
+         {
+             CacheGlobalObject(FoundObject);
+         }
+ 
++        r9_name_scope.Missed = FoundObject == nullptr;
+         return FoundObject;
+     }
+ 
+@@ -1284,6 +1441,14 @@
+             bool NotifyWanted{false};
+             Vec<int32_t> NewIdx{};
+             Vec<UObject*> NewObj{}; // the object seen in that slot (a reused slot is re-checked by pointer)
++            // [R9-NAME] by-object-name table (per slot; NameHead per bucket, size = ObjAt.size())
++            Vec<int32_t> NameHead{};  // bucket -> first slot, -1 = empty
++            Vec<int32_t> NameNext{};
++            Vec<int32_t> NamePrev{};
++            Vec<uint32_t> NameCmp{};  // comparison index of the slot object's own FName at its last observe
++            Vec<uint8_t> NameIn{};    // 1 while the slot is linked into a bucket
++            size_t NameLinked{0};
++            size_t NameSweep{0};      // rename re-check cursor
+         };
+         static State* const g_state = new State{};
+         static bool g_logged{false};
+@@ -1410,6 +1575,57 @@
+             if (S.Classes.size() * 2 > S.HashKeys.size()) { Rehash(S, S.HashKeys.size() * 2); }
+             return S.ClassIndices.back();
+         }
++        // [R9-NAME] by-object-name table (see the [R9-NAME] note above FindObject's helpers):
++        // per slot the comparison index of the object's own FName at its last observe, chained
++        // per hash bucket (doubly linked: O(1) relink when a slot's name changes).
++        static auto NameBucket(const State& S, uint32_t Cmp) -> size_t
++        {
++            uint64_t h = static_cast<uint64_t>(Cmp) * 0x9E3779B97F4A7C15ULL;
++            h ^= h >> 29;
++            return static_cast<size_t>(h) & (S.NameHead.size() - 1);
++        }
++        static auto NameUnlink(State& S, int32_t Index) -> void
++        {
++            if (!S.NameIn[Index]) { return; }
++            const int32_t Prev = S.NamePrev[Index];
++            const int32_t Next = S.NameNext[Index];
++            if (Prev >= 0) { S.NameNext[Prev] = Next; }
++            else { S.NameHead[NameBucket(S, S.NameCmp[Index])] = Next; }
++            if (Next >= 0) { S.NamePrev[Next] = Prev; }
++            S.NameIn[Index] = 0;
++            --S.NameLinked;
++        }
++        static auto NameLink(State& S, int32_t Index, uint32_t Cmp) -> void
++        {
++            S.NameCmp[Index] = Cmp;
++            const size_t b = NameBucket(S, Cmp);
++            const int32_t Head = S.NameHead[b];
++            S.NamePrev[Index] = -1;
++            S.NameNext[Index] = Head;
++            if (Head >= 0) { S.NamePrev[Head] = Index; }
++            S.NameHead[b] = Index;
++            S.NameIn[Index] = 1;
++            ++S.NameLinked;
++        }
++        // true when the slot's name entry changed (new object name, or an in-place rename)
++        static auto NameNote(State& S, int32_t Index, UObject* Object) -> bool
++        {
++            const uint32_t Cmp = Object->GetNamePrivate().GetComparisonIndex().ToUnstableInt();
++            if (S.NameIn[Index] && S.NameCmp[Index] == Cmp) { return false; }
++            const bool bWasIn = S.NameIn[Index] != 0;
++            NameUnlink(S, Index);
++            NameLink(S, Index, Cmp);
++            return bWasIn;
++        }
++        static auto NameRehash(State& S) -> void
++        {
++            S.NameHead.assign(S.ObjAt.size(), -1); // power of two (Grow doubles from 65536)
++            S.NameLinked = 0;
++            for (size_t i = 0; i < S.NameIn.size(); ++i)
++            {
++                if (S.NameIn[i]) { NameLink(S, static_cast<int32_t>(i), S.NameCmp[i]); }
++            }
++        }
+         static auto Grow(State& S, int32_t Num) -> void
+         {
+             if (static_cast<int32_t>(S.ObjAt.size()) >= Num) { return; }
+@@ -1420,6 +1636,11 @@
+             S.SeenStamp.resize(NewSize, 0);
+             S.ListedUnder.resize(NewSize, nullptr);
+             S.InWatch.resize(NewSize, 0);
++            S.NameNext.resize(NewSize, -1);
++            S.NamePrev.resize(NewSize, -1);
++            S.NameCmp.resize(NewSize, 0);
++            S.NameIn.resize(NewSize, 0);
++            NameRehash(S);
+         }
+         // Record the slot's live object, or watch it when empty/unreachable.
+         static auto Observe(State& S, int32_t Index) -> void
+@@ -1429,10 +1650,12 @@
+             {
+                 S.ObjAt[Index] = nullptr;
+                 S.ClassAt[Index] = nullptr;
++                NameUnlink(S, Index); // [R9-NAME]
+                 if (!S.InWatch[Index]) { S.InWatch[Index] = 1; S.FreeWatch.push_back(Index); }
+                 return;
+             }
+             UClass* Class = Object->GetClassPrivate();
++            (void)NameNote(S, Index, Object); // [R9-NAME] same cache line as the class read; relinks only on a change
+             if (S.ObjAt[Index] == Object && S.ClassAt[Index] == Class) { return; }
+             if (S.Built && S.NotifyWanted && S.ObjAt[Index] != Object && S.NewIdx.size() < (1u << 20))
+             {
+@@ -1538,6 +1761,88 @@
+             __atomic_store_n(&g_r9_watch_fwd, static_cast<uint64_t>(S.FreeWatch.size()), __ATOMIC_RELAXED);
+             return true;
+         }
++        // [R9-NAME] an in-place Rename (same object, same slot, new name) sends no delete/create
++        // event: re-check the stored name of a bounded slice of slots per name lookup (cursor
++        // over the whole array, UObject reads prefetched), so a renamed object is found under its
++        // new name at most SyncedNum / 256 lookups later. Found objects are always re-tested live.
++        static auto NameSweepStep(State& S) -> void
++        {
++            const size_t N = static_cast<size_t>(S.SyncedNum);
++            if (N == 0) { return; }
++            constexpr size_t Budget = 256;
++            constexpr size_t Ahead = 16;
++            size_t i = S.NameSweep < N ? S.NameSweep : 0;
++            uint64_t Renamed = 0;
++            for (size_t k = 0; k < Budget && k < N; ++k)
++            {
++                if (UObject* P = S.ObjAt[(i + Ahead) % N]) { __builtin_prefetch(static_cast<const void*>(P)); }
++                UObject* O = S.ObjAt[i];
++                if (O != nullptr && LiveAt(static_cast<int32_t>(i)) == O && NameNote(S, static_cast<int32_t>(i), O)) { ++Renamed; }
++                if (++i >= N) { i = 0; }
++            }
++            S.NameSweep = i;
++            if (Renamed) { __atomic_fetch_add(&g_r9n_renames, Renamed, __ATOMIC_RELAXED); }
++        }
++        static bool g_name_logged{false};
++        static bool g_name_fallback_logged[3]{};
++        static auto NameFallbackNote(int Reason) -> void
++        {
++            if (Reason < 0 || Reason > 2 || g_name_fallback_logged[Reason]) { return; }
++            g_name_fallback_logged[Reason] = true;
++            try
++            {
++                if (Reason == 0) { Output::send(STR("[R9-NAME] name lookup uses the full walk: object index disabled\n")); }
++                else if (Reason == 1) { Output::send(STR("[R9-NAME] name lookup uses the full walk: delete listener not proven live yet\n")); }
++                else { Output::send(STR("[R9-NAME] name lookup uses the full walk: index sync failed\n")); }
++            }
++            catch (...)
++            {
++            }
++        }
++        // Live objects whose own FName has one of the comparison indices, ascending slot order
++        // (the walk's order). false = index unusable (the caller walks).
++        static auto NameCandidates(const uint32_t* Cmps, size_t NumCmps, Vec<UObject*>& Out) -> bool
++        {
++            State& S = *g_state;
++            std::lock_guard Lock{S.Mutex};
++            if (S.Disabled) { NameFallbackNote(0); return false; }
++            if (S.DeletesSeen == 0) { NameFallbackNote(1); return false; } // no proven delete listener -> walk
++            try
++            {
++                if (!Sync(S) || S.NameHead.empty()) { NameFallbackNote(2); return false; }
++                NameSweepStep(S);
++                Vec<int32_t> Idx{};
++                for (size_t c = 0; c < NumCmps; ++c)
++                {
++                    const uint32_t Cmp = Cmps[c];
++                    bool bDup = false;
++                    for (size_t d = 0; d < c; ++d) { if (Cmps[d] == Cmp) { bDup = true; break; } }
++                    if (bDup) { continue; }
++                    for (int32_t i = S.NameHead[NameBucket(S, Cmp)]; i >= 0; i = S.NameNext[i])
++                    {
++                        if (S.NameCmp[i] != Cmp) { continue; }
++                        UObject* O = S.ObjAt[i];
++                        if (O == nullptr || LiveAt(i) != O) { continue; }
++                        Idx.push_back(i);
++                    }
++                }
++                std::sort(Idx.begin(), Idx.end());
++                Out.reserve(Idx.size());
++                for (int32_t i : Idx) { Out.push_back(S.ObjAt[i]); }
++                if (!g_name_logged)
++                {
++                    g_name_logged = true;
++                    Output::send(STR("[R9-NAME] object-name index active: {} named slots, {} buckets, rename sweep 256 slots/lookup (StaticFindObject/FindObject/IsA no longer walk the whole array)\n"), S.NameLinked, S.NameHead.size());
++                }
++                return true;
++            }
++            catch (...)
++            {
++                S.Disabled = true;
++                try { Output::send<LogLevel::Error>(STR("[R9-NAME] object index disabled after an exception; name lookups use the full walk\n")); } catch (...) {}
++                return false;
++            }
++        }
+         // FirstOnly: walk semantics (lowest-index EXACT class match, else the LAST subclass match).
+         template <typename Accept>
+         static auto Query(FName ClassName, bool FirstOnly, Accept&& Out) -> bool
+@@ -1680,6 +1985,21 @@
+             }
+         }
+     } // namespace r9idx
++    // [R9-NAME] run the caller's walk predicate on the index candidates (outside the index lock:
++    // the FindObject predicate may call GetFullName -> engine code -> another lookup).
++    static auto r9_name_for_each(const uint32_t* Cmps, size_t NumCmps, const ObjectSearcherForEachPredicate& Pred) -> bool
++    {
++        r9idx::Vec<UObject*> Cands{};
++        if (!r9idx::NameCandidates(Cmps, NumCmps, Cands)) { return false; }
++        __atomic_fetch_add(&g_r9n_idx_lookups, uint64_t{1}, __ATOMIC_RELAXED);
++        __atomic_fetch_add(&g_r9n_idx_cands, static_cast<uint64_t>(Cands.size()), __ATOMIC_RELAXED);
++        for (UObject* O : Cands)
++        {
++            if (Pred(O) == LoopAction::Break) { break; }
++        }
++        return true;
++    }
++
+ 
+     // [R9-NOTIFY] game thread, once per pump: indices of objects that appeared since the last call.
+     // false = index unusable (no notifications this frame). Objects alive at the first build are

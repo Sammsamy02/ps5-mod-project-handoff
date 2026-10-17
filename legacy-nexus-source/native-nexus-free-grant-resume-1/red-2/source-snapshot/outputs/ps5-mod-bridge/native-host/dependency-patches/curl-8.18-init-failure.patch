@@ -1,0 +1,46 @@
+diff --git a/lib/vtls/mbedtls.c b/lib/vtls/mbedtls.c
+--- a/lib/vtls/mbedtls.c
++++ b/lib/vtls/mbedtls.c
+@@ -1419,6 +1419,8 @@
+   return CURLE_OK;
+ }
+ 
++static void mbedtls_cleanup(void);
++
+ /*
+  * return 0 error initializing SSL
+  * return 1 SSL initialized successfully
+@@ -1442,8 +1444,7 @@
+                               NULL, 0);
+ 
+   if(ret) {
+-    failf(NULL, " failed\n  ! mbedtls_ctr_drbg_seed returned -0x%x\n",
+-          (unsigned int)-ret);
++    mbedtls_cleanup();
+     return 0;
+   }
+ 
+diff --git a/lib/vtls/vtls.c b/lib/vtls/vtls.c
+--- a/lib/vtls/vtls.c
++++ b/lib/vtls/vtls.c
+@@ -457,14 +457,17 @@
+  */
+ int Curl_ssl_init(void)
+ {
++  int result = 1;
++
+   /* make sure this is only done once */
+   if(init_ssl)
+     return 1;
+-  init_ssl = TRUE; /* never again */
+ 
+   if(Curl_ssl->init)
+-    return Curl_ssl->init();
+-  return 1;
++    result = Curl_ssl->init();
++  if(result)
++    init_ssl = TRUE;
++  return result;
+ }
+ 
+ static bool ssl_prefs_check(struct Curl_easy *data)

@@ -1,0 +1,146 @@
+[
+  {
+    "surface": "RegisterKeyBind",
+    "phase": "startup; 6 registrations",
+    "status": "unknown",
+    "finding": "6 callsites694,698,703,708,713,722; native pad-to-key dispatch and callback lifetime unknown",
+    "evidence": "outputs/2026-10-08-r5-thread-source-integration/thread/LuaMod.cpp:1946",
+    "requirements": "input event registry; Lua callback owner; Key table",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "ExecuteInGameThread",
+    "phase": "each of 6 key callbacks",
+    "status": "unknown",
+    "finding": "saved default EngineTick; marshal usable redirects; address availability is not a running drain; no console closure delivered",
+    "evidence": "outputs/2026-10-08-r5-thread-source-integration/thread/LuaMod.cpp:5322",
+    "requirements": "UEngine::Tick; UObject::ProcessEvent; UFunction::Func; game-thread owner/queue",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "RegisterLoadMapPreHook",
+    "phase": "startup + future map change",
+    "status": "unknown",
+    "finding": "registration only stores Lua callback; pcall success cannot prove delivery; deferred arm may permanently refuse",
+    "evidence": "outputs/2026-10-08-r5-thread-source-integration/thread/LuaMod.cpp:2742; outputs/2026-10-08-r5-thread-source-integration/thread/LuaMod.cpp:4700",
+    "requirements": "UEngine::LoadMap; map hook install; callback/reset delivery",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "require(UEHelpers)",
+    "phase": "first controller lookup at first menu-open; later input lock/spawn",
+    "status": "unknown",
+    "finding": "module load creates two invalid-object caches; helper FindAllOf path then two reflected controller predicates, fallback FindFirstOf",
+    "evidence": "outputs/2026-10-08-menu-complete-package/console-test-20261008T140903Z-a0626b/UEHelpers.lua:35; outputs/2026-10-08-menu-complete-package/console-test-20261008T140903Z-a0626b/UEHelpers.lua:69",
+    "requirements": "CreateInvalidObject; FindAllOf; UObject lifetime; helper file resolution",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "FindFirstOf",
+    "phase": "database menu scan; controller fallback",
+    "status": "unknown",
+    "finding": "source GUObjectArray traversal and class/superclass matching; native lookup outcomes unmeasured",
+    "evidence": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/UObjectGlobals.cpp:434",
+    "requirements": "FUObjectArray; TUObjectArray; FUObjectItem; UObjectBase::ClassPrivate; NamePrivate; ObjectFlags; UStruct::SuperStruct",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "FindAllOf",
+    "phase": "UEHelpers controller lookup",
+    "status": "unknown",
+    "finding": "source scan/cache alternatives; startup native object reads do not prove this Lua API",
+    "evidence": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/UObjectGlobals.cpp:546",
+    "requirements": "same base objects plus result vector lifetime",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "StaticFindObject",
+    "phase": "menu classes/CDOs; spawn classes",
+    "status": "unknown",
+    "finding": "source slow/hash alternatives; hash-table-get is deliberately unbound; slow route remains selected possibility",
+    "evidence": "outputs/2026-10-08-r5-thread-source-integration/thread/LuaMod.cpp:1560; .superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/UObjectGlobals.cpp:246",
+    "requirements": "UObjectBase::NamePrivate; OuterPrivate; ClassPrivate; FName::ToString",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "StaticConstructObject",
+    "phase": "23 mandatory menu objects, root fallback adds 1",
+    "status": "unknown",
+    "finding": "slot4 bound; saved image supports struct-pointer ABI but selected initializer admitted identity/ABI unverified; no call executed",
+    "evidence": "outputs/2026-10-08-r5-thread-final-integration/thread/UnrealInitializer.cpp:1151; .superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/UObjectGlobals.cpp:122",
+    "requirements": "FStaticConstructObjectParameters.Above55; UObject* lifetime/GC; UClass",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "FName(string)",
+    "phase": "construction names; all reflected lookups",
+    "status": "unknown",
+    "finding": "native ByteProperty UTF16 probe console-proven; arbitrary FNAME_Add menu names and lifetime not proved",
+    "evidence": "outputs/2026-10-08-r5-thread-final-integration/thread/UnrealInitializer.cpp:1114; .superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaFName.cpp:45",
+    "requirements": "8-byte FName; native out/UTF16/mode; pool/indices",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "FName::ToString Kismet fallback",
+    "phase": "startup plus reflection property-name conversion",
+    "status": "unknown",
+    "finding": "Kismet function/CDO found in PID184; invocation blocked during allocator-backed parameter/string work; engine FString return ownership unresolved",
+    "evidence": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/NameTypes.cpp:68",
+    "requirements": "UFunction::ParmsSize; FProperty::Offset_Internal; GetReturnProperty; ProcessEvent; FString; FMalloc",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "FText(string)",
+    "phase": "menu title/header/rows and refresh",
+    "status": "unknown",
+    "finding": "selected source uses Conv_StringToText, not a direct ctor-address binding; pcalls suppress missing text; native size/value ownership still required",
+    "evidence": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/FText.cpp:147; .superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/UKismetTextLibrary.cpp:22",
+    "requirements": "FText size; TextProperty; CopyValuesInternal; DestroyValueInternal; FString; KismetText functions/CDO",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "IsValid",
+    "phase": "all guards",
+    "status": "unknown",
+    "finding": "Lua UObject implementation checks non-null pointer only, not GC/serial/liveness",
+    "evidence": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/include/LuaType/LuaUObject.hpp:185",
+    "requirements": "UObject wrapper non-null is insufficient liveness proof",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "Property access",
+    "phase": "menu WidgetTree/RootWidget/Font.Size/ShadowOffset; spawn properties",
+    "status": "unknown",
+    "finding": "generic property/index and struct wrappers exist; specific property offsets/types not captured from game",
+    "evidence": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/include/LuaType/LuaUObject.hpp:821; outputs/2026-10-08-menu-complete-build/candidate/LuaUObject.cpp:2341",
+    "requirements": "FProperty metadata; FStructProperty::Struct; bool masks; nested data lifetime",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "LoadAsset",
+    "phase": "spawn only after StaticFindObject miss",
+    "status": "unknown",
+    "finding": "IsInGameThread required; Registry helpers/asset data layouts needed; not part of menu-open",
+    "evidence": "outputs/2026-10-08-r5-thread-source-integration/thread/LuaMod.cpp:3649",
+    "requirements": "UAssetRegistryHelpers::GetAssetRegistry; UAssetRegistry::GetAssetByObjectPath; GetAsset; FAssetData; FScriptInterface",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "Top-level missing hook key",
+    "phase": "conditional runtime virtual lookup",
+    "status": "unbound-but-safely-failing",
+    "finding": "optional macro returns nullptr before vtable read if key absent; required macro throws. This only proves missing-key handling, not present-key pointer correctness.",
+    "evidence": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/include/Unreal/VersionedContainer/UnrealVirtualImpl/UnrealVirtualBaseVC.hpp:104",
+    "requirements": "lookup-map membership",
+    "console_proven_api_execution": false
+  },
+  {
+    "surface": "FOptionalProperty::RepNotifyFunc dependency",
+    "phase": "conditional optional access",
+    "status": "unbound-but-safely-failing",
+    "finding": "both active GetValueProperty implementations check missing map key and throw; line27 unchecked version is commented; derived native value offset unmeasured",
+    "evidence": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/include/Unreal/Property/FOptionalProperty.hpp:35; .superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/include/Unreal/Property/FOptionalProperty.hpp:210",
+    "requirements": "FProperty::RepNotifyFunc; sizeof(FName) vs StaticSize; optional flags/virtuals",
+    "console_proven_api_execution": false
+  }
+]

@@ -1,0 +1,120 @@
+# PROPOSAL PATCH (PARKED) - P2/01 build_variants.py: variant B dead by default.
+# DO NOT APPLY WITHOUT parked/P2-variant-b-removal/NOTES.md (owner FX,
+# 2026-10-10). Changes build topology: needs a FULL rebuild + packaging
+# verify when applied; apply as part of the whole P2 set (01 -> 02 -> 03).
+#
+# Authored against build_variants.py sha256
+# 5618dd51b24103ad49d70173fdcae36c0a7a125bc220c1f42aa30674f662adeb
+# (FF/FG/EZ state: NEW_UNITS + stamp + incremental; supersedes the 549b54dd
+# state EO's NB patch 02 was authored against - see NOTES for the rebase).
+#
+# Changes:
+#   - VARIANTS default = A only; variant B becomes env-opt-in (L26_BUILD_B=1,
+#     default off). The env-append mechanism stays for EO's NB control.
+#   - prepare_incremental retained-key loop derives from the ACTIVE set.
+#   - pair_receipt (G9/G10 + VARIANT-PAIR-RECEIPT.json) runs only on A+B.
+#   - G4-token-present enforces the B skip token only when B is active;
+#     with the P2 tree patch applied (token absent from every compiled
+#     source) an opt-in B fails LOUDLY there - never a silent B==A.
+--- a/outputs/2026-10-08-l26-runtime/build_variants.py
++++ b/outputs/2026-10-08-l26-runtime/build_variants.py
+@@ -84,6 +84,18 @@
+ Rules honored: no console/network contact; never edits
+ typescan-r4/candidate/src or include/ (owned by the code agents); the base
+ driver build_runtime.py is imported, never rewritten.
++
++[P2, agent FX 2026-10-10, PARKED patch set] variant B (l26-B, the
++MODBRIDGE_L25_SKIP_DELETE_LISTENER diagnostic twin) is DEAD BY DEFAULT:
++env opt-in L26_BUILD_B=1 only (default off). Its UNSAFE skip-listener
++diagnostic purpose ended when variant C's engine-call registration was
++proven on console; the P2 tree patch removes the skip arms themselves, so an
++opt-in B --execute fails LOUDLY at G4-token-present (token absent from every
++compiled source) and can never silently build a B identical to A. The A/B
++pair gates (G4-token-present, G9, G10) and the pair receipts run ONLY when B
++is opted in. The env-append mechanism itself stays so EO's NB control
++(parallel-candidate/02) and any future diagnostic sibling append the same
++way.
+ """
+ import argparse,concurrent.futures,copy,hashlib,importlib.util,json,os,subprocess,sys,tempfile,threading
+ from pathlib import Path
+@@ -147,14 +159,26 @@
+   'unsafe':False,
+   'status':'MAC_ONLY_L26_VARIANT_A_COMPLETE_LINK_ENGINE_LISTENER',
+   'twin_status':'MAC_ONLY_IDENTICAL_L26_VARIANT_A_RUNTIME_PAIR_ENGINE_LISTENER'},
+- {'key':'B','dir':PAIR_ROOT/'l26-B','artifact':'runtime-l26-B.o',
++)
++# [L26][P2] (agent FX, 2026-10-10; parked patch set under
++# outputs/2026-10-08-l25-prep/parked/P2-variant-b-removal/): variant B is
++# DEAD BY DEFAULT - dropped from the production tuple. Opt-in ONLY via
++# L26_BUILD_B=1. With the P2 tree patch (02-tree-dead-code.patch) applied
++# the skip-listener arms are gone from the tree, so an opt-in --execute
++# fails LOUDLY at G4-token-present (token not found in the tree) - it can
++# never silently build a B that equals A. To make B buildable again: revert
++# the P2 tree patch AND this hunk together. The env-append mechanism stays
++# so EO's NB control (parallel-candidate/02-build-variants-nb-env.patch)
++# appends NB_VARIANT exactly the same way.
++B_VARIANT={'key':'B','dir':PAIR_ROOT/'l26-B','artifact':'runtime-l26-B.o',
+   'token':TOKEN,
+   'define':'-D'+TOKEN,'registration':'skipped (diagnostic only)',
+   'label':'l26-B delete-listener registration SKIPPED via '+TOKEN,
+   'unsafe':True,
+   'status':'MAC_ONLY_L26_VARIANT_B_COMPLETE_LINK_SKIP_DELETE_LISTENER',
+-  'twin_status':'MAC_ONLY_IDENTICAL_L26_VARIANT_B_RUNTIME_PAIR_SKIP_DELETE_LISTENER'},
+-)
++  'twin_status':'MAC_ONLY_IDENTICAL_L26_VARIANT_B_RUNTIME_PAIR_SKIP_DELETE_LISTENER'}
++if os.environ.get('L26_BUILD_B')=='1':
++    VARIANTS=VARIANTS+(B_VARIANT,)
+ UNSAFE_NOTE=('UNSAFE FOR LONG-TERM USE: this variant compiles with '+TOKEN+
+  ' so the delete-listener registration is skipped and stale object pointers '
+  'are NOT cleared. Diagnostic A/B isolation only; never promote as the '
+@@ -393,7 +417,10 @@
+             except OSError:cache[k]=None
+         return cache[k]
+     retained={}
+-    for key in ('A','B'):
++    # [L26][P2] retained-variant keys derive from the ACTIVE variant set
++    # (B is env-gated dead by default; a dropped variant must not fail
++    # G-inc-base-build on a build that never happens).
++    for key in sorted({v['key'] for v in VARIANTS}):
+         d,source=resolve_base_build(explicit,key)
+         entry={'dir':(str(d) if d is not None else None),'source':source,'receipts':{},'marker':None,'pins':{}}
+         ok=bool(d)
+@@ -1048,6 +1075,16 @@
+     return finish_variant(variant,ctx,p1,p2,sel,record,execute,steps)
+ 
+ def pair_receipt(built,targets,record,execute,steps,root,sel=None):
++    # [L26][P2] the A/B pair receipt exists ONLY when both variants were
++    # built (variant B is env-gated dead by default). A default A-only run
++    # records the pair gates as planned-skip instead of failing on a missing
++    # sibling, and writes no pair receipt file.
++    if 'A' not in built or 'B' not in built:
++        record('G9-variants-differ',None,{'note':'pair receipt skipped: variant B not in the active build set (agent-FX P2 drop); G9/G10 enforced only on A+B runs'})
++        record('G10-object-deltas-confined-to-define-units',None,{'note':'pair receipt skipped: variant B not in the active build set (agent-FX P2 drop)'})
++        steps.append({'step':'write-variant-pair-receipt','skipped':True,
++                      'note':'variant B absent; VARIANT-PAIR-RECEIPT.json not written this run'})
++        return None
+     a,b=built['A'],built['B']
+     receipt={'status':'MAC_ONLY_L26_VARIANT_PAIR_A_VS_B_RECEIPT','token':TOKEN,'ctoken':CTOKEN,
+              'contract_call_site':'typescan-r4/candidate/src/UnrealInitializer.cpp wrapped by the listener agent in #if !defined('+TOKEN+')',
+@@ -1151,9 +1188,18 @@
+     targets_b=token_targets(sel,q['composed_path'] if q.get('composed_has_token') else None,TOKEN)
+     targets_c=token_targets(sel,None,CTOKEN)
+     targets_map={TOKEN:targets_b,CTOKEN:targets_c}
+-    record('G4-token-present',bool(targets_b['token_files']),{'token':TOKEN,'token_files':targets_b['token_files']})
+-    if execute and not targets_b['token_files']:
+-        raise RuntimeError('token '+TOKEN+' not found in the tree: the listener agent guard has not landed; refusing to build a variant B that would silently equal variant A')
++    # [L26][P2] the B skip-token presence gate runs ONLY when variant B is
++    # in the ACTIVE set (env opt-in). With the P2 tree patch applied the
++    # token is absent from every compiled source; an opt-in B must fail
++    # HERE, loudly, rather than silently equal variant A.
++    b_active=any(v['token']==TOKEN for v in VARIANTS)
++    record('G4-token-present',(bool(targets_b['token_files']) if b_active else None),
++           {'token':TOKEN,'token_files':targets_b['token_files'],
++            'note':('variant B active (L26_BUILD_B=1); token presence enforced at execute'
++                    if b_active else
++                    'variant B not in the active build set (agent-FX P2 drop); skip-token presence not enforced this run')})
++    if b_active and execute and not targets_b['token_files']:
++        raise RuntimeError('token '+TOKEN+' not found in the tree: the listener agent guard has not landed (or the P2 tree patch removed the skip arms); refusing to build a variant B that would silently equal variant A')
+     record('G4-ctoken-present',bool(targets_c['token_files']),{'token':CTOKEN,'token_files':targets_c['token_files']})
+     if execute and not targets_c['token_files']:
+         raise RuntimeError('token '+CTOKEN+' not found in the tree: the variant C engine-listener switch has not landed; variant A would silently build with the hand-rolled registration path')

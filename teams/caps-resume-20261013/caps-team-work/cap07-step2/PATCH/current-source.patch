@@ -1,0 +1,114 @@
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp
+@@ -83,6 +83,11 @@
+ #include "NativeFNameAdapter.hpp"
+ #include "NativeFNameChecks.hpp"
+ #include "CodeImageCache.hpp"
++#include "RuntimePakMount.hpp"
++#include "PakRequestProducer.hpp"
++#include "pak_mount_pins.inc"
++#include <Unreal/FString.hpp>
++#include "LuaFNameBridge.hpp"
+ #include "CopyinStartup.hpp"
+ #include "FNameAbiProfile.hpp"
+ #include "RuntimeBuildProfile.hpp"
+@@ -885,6 +890,7 @@
+ 
+         extern "C" int bridge_image_range(uint64_t,size_t,rc::imagecoverage::Hit*);
+         #include "NativePropertyReadBackend.inl"
++        #include "NativePakMountAdapter.inl"
+ 
+         static const char* l14_verdict(admission::Verdict v) {
+             switch(v) {
+@@ -3223,6 +3229,15 @@
+ #endif
+     }
+ 
++    auto RunNativePakMountOnce(const std::filesystem::path& mods_directory) noexcept -> void
++    {
++#ifdef __PROSPERO__
++        UnrealInitializer::SeedArming::RunNativePakMountOnceImpl(mods_directory);
++#else
++        (void)mods_directory;
++#endif
++    }
++
+     auto IsInGameThreadRaw() noexcept -> bool
+     {
+ #ifdef __PROSPERO__
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
+@@ -1,4 +1,5 @@
+ #if defined(__PROSPERO__)
++#include "NativePakMountEntry.hpp"
+ #include "L23GameThreadProbe.hpp"
+ #endif
+ #include <L22Diagnostics/Logging.hpp>
+@@ -7278,6 +7279,7 @@
+                     // [EARLY-4] first game-thread pump (the deferred LoadMap detour arm
+                     // that ran here is removed: no detours on PS5).
+                     early4::note_first_pump(true);
++                    RunNativePakMountOnce(UE4SSProgram::get_program().get_mods_directory());
+                     {
+                         std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+                         LuaMod::m_is_processing_actions = true;
+--- a/outputs/2026-10-08-l26-runtime/profile/units/CodeSignatureProfile.hpp
++++ b/outputs/2026-10-08-l26-runtime/profile/units/CodeSignatureProfile.hpp
+@@ -1,5 +1,6 @@
+ #pragma once
+ #include "CodeImageCache.hpp"
++#include "PakMountCodeProfile.hpp"
+ #include "ThreadNameProfile.hpp"
+ #include "FNameAbiProfile.hpp"
+ #include "SeedTable.h"
+@@ -26,6 +27,13 @@
+ // L26/L27 profile headers (same sha-pinned image 3b6cfad4...; both headers
+ // byte-verified against the pinned eboot at file offsets label+0x4000).
+ inline constexpr codecache::Pin kPins[]={
++ rc::pakmountprofile::kPins[0],
++ rc::pakmountprofile::kPins[1],
++ rc::pakmountprofile::kPins[2],
++ rc::pakmountprofile::kPins[3],
++ rc::pakmountprofile::kPins[4],
++ rc::pakmountprofile::kPins[5],
++
+  {1,"fname_ctor_wchar",seeds::kFNameCtorWchar.label,fnameprofile::kPrefix,sizeof(fnameprofile::kPrefix)},
+  {2,"static_construct_object_internal",seeds::kStaticConstructObject.label,kScoPrefix,sizeof(kScoPrefix)},
+  NativeNameThread::kNamePin,
+@@ -35,6 +43,6 @@
+ };
+ inline constexpr codecache::Profile kProfile{
+  "/data/homebrew/Silent Hill Townfall PPSA33286/decrypted/eboot.bin",
+- seeds::kImageSha256.data(),194241424ull,0xbc602c8ull,seeds::kBaseObserved,kPins,6
++ seeds::kImageSha256.data(),194241424ull,0xbc602c8ull,seeds::kBaseObserved,kPins,12
+ };
+ }
+--- a/outputs/2026-10-08-l26-runtime/profile/units/CodeImageCache.hpp
++++ b/outputs/2026-10-08-l26-runtime/profile/units/CodeImageCache.hpp
+@@ -18,7 +18,7 @@
+ // 11:36 L27/Phase-6 refusals. Keep BOTH compiled copies of this header
+ // byte-identical (lineage overlay + l19-local-profile-r4/units): Metadata
+ // layout must agree in every TU that calls named_entry on the bridge's cache.
+-constexpr size_t kMaxPins=8,kMaxLoads=16,kMaxPhdrs=32,kChunk=16384;
++constexpr size_t kMaxPins=16,kMaxLoads=16,kMaxPhdrs=32,kChunk=16384;
+ constexpr uint64_t kBudgetMs=60000;
+ struct Pin { uint32_t id;const char* name;uint64_t linked;const uint8_t* bytes;size_t size; };
+ struct Profile { const char* path;const char* sha256;uint64_t size,extent,base;const Pin* pins;size_t count; };
+--- a/outputs/2026-10-08-l26-runtime/profile/CHANGES.json
++++ b/outputs/2026-10-08-l26-runtime/profile/CHANGES.json
+@@ -30,13 +30,13 @@
+     {
+       "original": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l19-local-profile-r4/units/CodeImageCache.hpp",
+       "candidate": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/profile/units/CodeImageCache.hpp",
+       "original_sha256": "b9006941471915881f9b9ba62d3e17edca7ce270f77c7c15805b44b92308fc9b",
+-      "candidate_sha256": "22803051e5406e1c2494d461d6adec9e880a860fea3f4f73a71c98b933eade9f"
++      "candidate_sha256": "3fa64af86ea25543d1197b683b8ddc86a910e3b83500679395aa12bdcc8b00c1"
+     },
+     {
+       "original": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-r5-thread-final-integration/thread/CodeSignatureProfile.hpp",
+       "candidate": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/profile/units/CodeSignatureProfile.hpp",
+       "original_sha256": "5737e2632040747d174d0245252ef2d8a89163430a0df2c0d0068eb1f5a8b850",
+-      "candidate_sha256": "a4cd6c04eb2f9af0a033ca447ca4807b953c5b405b6ae0919bb5675475861016"
++      "candidate_sha256": "6d073dc60d4fa53419324b94ed3f51d0679ef888d710da6d73ce3e12b70314c6"
+     },
+     {

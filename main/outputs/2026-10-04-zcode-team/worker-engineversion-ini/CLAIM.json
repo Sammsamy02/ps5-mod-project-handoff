@@ -1,0 +1,38 @@
+{
+  "worker": "worker-engineversion-ini",
+  "date": "2026-10-04",
+  "status": "PROPOSALS-ONLY",
+  "scope_note": "Settings-ini side of the slot-6 (engine_version) zero-scan resolution only. No console contact, no nested subagents, no editor/engine writes. Complements worker-seed-table-derivation (initializer unit + seed table; not touched). Base bytes: worker-loadlist-final/final-package (sha-verified equal to the staged 779 B / 9f3fa127... pin). All staging/restage steps are proposals for the controller; nothing under /data/modbridge was modified from this Mac (path not mounted here).",
+  "question": "Can required slot 6 (engine_version) be resolved with zero scans via [EngineVersionOverride] in the staged ue4ss/UE4SS-settings.ini, and what exact byte/loadlist delta does that imply?",
+  "verdict": {
+    "settings_route_confirmed": true,
+    "keys_accepted": "EXACTLY MajorVersion and MinorVersion (int64, section [EngineVersionOverride]); optional DebugBuild/Stats strings also parsed but deliberately NOT set; Patch/Changelist/VersionString keys DO NOT EXIST in the retained parser",
+    "consumer_chain": "SettingsManager.cpp:172-173 (REGISTER_INT64_SETTING, defaults -1) -> UE4SSProgram.cpp:869-884 (both != -1 and uint32-range required, else startup throw; sets Unreal::Version::Major/Minor and installs no-op version_finder ScanOverride) -> staged UnrealInitializer.cpp:590 config.engine_version=false -> :718-722 scan assignment skipped (ini values stand) -> :856 InitializeVersionedContainer -> Prospero PublishStagedNativeLayoutMaps(Major, Minor, NonShipping, DebugBuild) -> :876 ArmLayoutGate consumes the same values",
+    "values_set": "MajorVersion=5, MinorVersion=6",
+    "value_provenance": [
+      "validated profile townfall-ps5-ue56.profile.json: identity.engine_major=5, engine_minor=6; EngineVersion fact 'validated-static', origin E-survey-stdout line 'engine_version status=0 major=5 minor=6'",
+      "worker-layout-identity/IDENTITY-RESOLUTION.md section 3: engine_revision '5.6.1-0+++UE5' statically verified in-image (Patch=1 store site 0x1F37E4); BuildId 04bb4330a7d71dcefe1cc2c4d19769d5 - revision/patch are NOT settings keys; they remain staged in MemberVariableLayout.ini identity and are untouched by this change",
+      "consistency requirement satisfied: override (5,6) equals the staged layout-pair identity '5.6' pinned in MemberVariableLayout.ini, so PublishStagedNativeLayoutMaps identity agreement holds"
+    ],
+    "honest_notes": [
+      "Task brief said 'profile pins engine 5.6.1' - the profile file itself records engine_patch/engine_revision as null/unknown (its unresolved_list); 5.6.1 comes from the LATER worker-layout-identity image evidence. Either way the ini override only carries Major=5/Minor=6, identical under both sources.",
+      "The loadlist row pins SIZE ONLY (t1 format, mf_parse_u64 on field 4); mfa enforcement is exact byte-count (read_exact, MFA_E_SIZE 'file is shorter/longer than the load list says'). Sha equality is our provenance discipline, not an mfa check.",
+      "Value-neutral today: the detector also yields (5,6), so the override changes no downstream value; its effect is admission-level (slot 6 removed from required mask) and determinism (no scan dependency)."
+    ]
+  },
+  "delta": {
+    "settings_old": { "bytes": 779, "sha256": "9f3fa1277218331432294fcdac88097d5268a2db6007b72b4266f45a17730f7f" },
+    "settings_new": { "bytes": 834, "sha256": "9570ead39ce8b9a2a2d96eddbcf04d43dd0225be0bbfd5b2cd417d618b8c6e0c" },
+    "append_only": true,
+    "appended_bytes": 55,
+    "appended_text": "\\n[EngineVersionOverride]\\nMajorVersion=5\\nMinorVersion=6\\n",
+    "loadlist_old": { "bytes": 446, "sha256": "49ab7a3a40ee15d3090a542a6e7150307b4d001a08aa3386de66c04b6981e3bf", "settings_row": "file\\tconfig\\tue4ss/UE4SS-settings.ini\\t779" },
+    "loadlist_new": { "bytes": 446, "sha256": "3afd10cebca1a89c653d70fff453bdec121f2bc6c230c4768f0833b3d0032ff5" },
+    "loadlist_new_row": "file\\tconfig\\tue4ss/UE4SS-settings.ini\\t834",
+    "loadlist_size_unchanged": true,
+    "loadlist_size_unchanged_reason": "779->834 is a 3-digit->3-digit change; loadlist stays 446 B, only 3 digits + row sha differ",
+    "preloaded_total_new": 35952,
+    "preloaded_total_new_breakdown": "35945 payload + 7 NUL terminators"
+  },
+  "config_review_constraints": "All worker-config-final-review GO constraints re-verified on the new bytes (see VERIFICATION.md): console/GUI/crashdump keys still 0, RenderMode still ExternalThread, hot-reload keys still absent, DefaultExecuteInGameThreadMethod still EngineTick, no [Overrides], full-line comments only, no NUL/CR, ASCII/LF only, no comments-only section."
+}

@@ -1,0 +1,1980 @@
+--- a/loader/src/guest_teb_lifecycle.cpp
++++ b/loader/src/guest_teb_lifecycle.cpp
+@@ -1,4 +1,5 @@
+ #include "guest_teb_lifecycle.h"
++#include "win32_last_error_state.h"
+ 
+ #include "win64_bridge.h"
+ 
+@@ -41,6 +42,9 @@
+     const uint64_t tls_pointer = reinterpret_cast<uint64_t>(array_.slots.data());
+     std::memcpy(prefix_.data() + TEB_SELF_OFFSET, &self_pointer, sizeof(self_pointer));
+     std::memcpy(prefix_.data() + TEB_TLS_ARRAY_OFFSET, &tls_pointer, sizeof(tls_pointer));
++    const uint32_t last_error = win32_get_last_error();
++    std::memcpy(prefix_.data() + WIN32_TEB_LAST_ERROR_OFFSET,
++                &last_error, sizeof(last_error));
+     return array_;
+ }
+ 
+@@ -76,6 +80,7 @@
+     catch (const std::bad_alloc&) { return GuestNotifyStatus::TlsPreparationFailed; }
+     if (!segment_.enter(teb.address())) return GuestNotifyStatus::BackendRefused;
+     LeaveOnExit guard(segment_);
++    ScopedGuestLastErrorBinding error_binding(teb.address());
+     for (uint64_t callback : callbacks_)
+         (void)cap13_win64_call3(reinterpret_cast<void*>(callback), image_base_, reason, 0);
+     if (entry_)
+@@ -93,18 +98,25 @@
+     if (attached_) return GuestNotifyStatus::WrongState;
+     const GuestNotifyStatus status = notify(teb, DLL_PROCESS_ATTACH);
+     if (status == GuestNotifyStatus::Ok) attached_ = true;
++    else thread_notifications_disabled_ = false;
+     return status;
+ }
+ 
+ GuestNotifyStatus GuestModuleLifecycle::thread_attach(GuestTebView& teb)
+ {
+     if (!attached_) return GuestNotifyStatus::WrongState;
++    if (!teb.belongs_to(bank_) || !teb.on_owner_thread())
++        return GuestNotifyStatus::WrongThreadOrBank;
++    if (thread_notifications_disabled_) return GuestNotifyStatus::Ok;
+     return notify(teb, DLL_THREAD_ATTACH);
+ }
+ 
+ GuestNotifyStatus GuestModuleLifecycle::thread_detach(GuestTebView& teb)
+ {
+     if (!attached_) return GuestNotifyStatus::WrongState;
++    if (!teb.belongs_to(bank_) || !teb.on_owner_thread())
++        return GuestNotifyStatus::WrongThreadOrBank;
++    if (thread_notifications_disabled_) return GuestNotifyStatus::Ok;
+     return notify(teb, DLL_THREAD_DETACH);
+ }
+ 
+@@ -112,8 +124,18 @@
+ {
+     if (!attached_) return GuestNotifyStatus::WrongState;
+     const GuestNotifyStatus status = notify(teb, DLL_PROCESS_DETACH);
+-    if (status == GuestNotifyStatus::Ok) attached_ = false;
++    if (status == GuestNotifyStatus::Ok)
++    {
++        attached_ = false;
++        thread_notifications_disabled_ = false;
++    }
+     return status;
+ }
+ 
++bool GuestModuleLifecycle::disable_thread_notifications() noexcept
++{
++    thread_notifications_disabled_ = true;
++    return true;
++}
++
+ } // namespace cap13
+--- a/loader/src/guest_teb_lifecycle.h
++++ b/loader/src/guest_teb_lifecycle.h
+@@ -77,6 +77,7 @@
+     GuestNotifyStatus thread_attach(GuestTebView& teb);
+     GuestNotifyStatus thread_detach(GuestTebView& teb);
+     GuestNotifyStatus process_detach(GuestTebView& teb);
++    bool disable_thread_notifications() noexcept;
+ 
+   private:
+     GuestNotifyStatus notify(GuestTebView& teb, uint64_t reason);
+@@ -86,6 +87,7 @@
+     uint64_t entry_;
+     std::vector<uint64_t> callbacks_;
+     std::atomic<bool> attached_{false};
++    std::atomic<bool> thread_notifications_disabled_{false};
+ };
+ 
+ } // namespace cap13
+--- /dev/null
++++ b/loader/src/win32_last_error_state.h
+@@ -0,0 +1,79 @@
++// Shared per-host-thread Win32 error slot and the current guest x64 TEB view.
++// The x64 TEB prefix used by this loader stores LastErrorValue at 0x68.
++#ifndef CAP13_WIN32_LAST_ERROR_STATE_H
++#define CAP13_WIN32_LAST_ERROR_STATE_H
++
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++
++namespace cap13 {
++
++constexpr size_t WIN32_TEB_LAST_ERROR_OFFSET = 0x68;
++
++struct Win32LastErrorState
++{
++    uint32_t code = 0;
++    uint8_t* active_teb = nullptr;
++};
++
++inline Win32LastErrorState& win32_last_error_state() noexcept
++{
++    static thread_local Win32LastErrorState state{};
++    return state;
++}
++
++inline uint32_t win32_get_last_error() noexcept
++{
++    auto& state = win32_last_error_state();
++    if (state.active_teb)
++        std::memcpy(&state.code, state.active_teb + WIN32_TEB_LAST_ERROR_OFFSET,
++                    sizeof(state.code));
++    return state.code;
++}
++
++inline void win32_set_last_error(uint32_t code) noexcept
++{
++    auto& state = win32_last_error_state();
++    state.code = code;
++    if (state.active_teb)
++        std::memcpy(state.active_teb + WIN32_TEB_LAST_ERROR_OFFSET, &code,
++                    sizeof(code));
++}
++
++// Bind after the segment backend has accepted entry. Destroy before the
++// backend leaves; direct guest writes are then copied to the host-thread
++// slot and nested bindings restore their prior TEB view.
++class ScopedGuestLastErrorBinding
++{
++  public:
++    explicit ScopedGuestLastErrorBinding(void* guest_teb) noexcept
++    {
++        auto& state = win32_last_error_state();
++        const uint32_t current = win32_get_last_error();
++        previous_ = state.active_teb;
++        state.active_teb = static_cast<uint8_t*>(guest_teb);
++        if (state.active_teb)
++            std::memcpy(state.active_teb + WIN32_TEB_LAST_ERROR_OFFSET,
++                        &current, sizeof(current));
++    }
++
++    ~ScopedGuestLastErrorBinding() noexcept
++    {
++        auto& state = win32_last_error_state();
++        const uint32_t current = win32_get_last_error();
++        state.active_teb = previous_;
++        if (previous_)
++            std::memcpy(previous_ + WIN32_TEB_LAST_ERROR_OFFSET,
++                        &current, sizeof(current));
++    }
++
++    ScopedGuestLastErrorBinding(const ScopedGuestLastErrorBinding&) = delete;
++    ScopedGuestLastErrorBinding& operator=(const ScopedGuestLastErrorBinding&) = delete;
++
++  private:
++    uint8_t* previous_ = nullptr;
++};
++
++} // namespace cap13
++#endif // CAP13_WIN32_LAST_ERROR_STATE_H
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -1,27 +1,31 @@
+ // win_api_shim.cpp -- kernel32/ucrt subset implementations (T1-T3) and the
+ // fail-closed EH stubs (T4). See win_api_shim.h for the tier policy.
+ //
+-// Notes baked into the implementations:
+-//  * Dynamic TLS (TlsAlloc family) is EMULATED with a slot table -- this is
+-//    NOT the refused static PE TLS directory (design 3e).
+-//  * GetLastError/SetLastError ride a thread-local error slot, NOT the TEB
+-//    (no gs addressing anywhere in OUR code).
+-//  * Encode/DecodePointer use one process cookie; self-consistent pairs.
+-//  * File APIs apply the GA path-shim rules and confine writes to the mod
+-//    root (design 5b T2; agent-GA-path-shim.md rules).
+-//  * EH/SEH entry points FAIL CLOSED with a precise diagnostic (design 4c).
++// Candidate bodies exist for dynamic TLS, files, threads, and EH/SEH, but
++// their full Win32 behavior or guest-callable ABI is not established. They
++// remain unresolved imports. Static PE TLS is a separate loader refusal.
++// Imported GetLastError/SetLastError share a per-thread slot with the guest
++// TEB lifecycle; pointer encoding is not implemented here.
+ //
+ // Raw built-in handlers are private metadata. No PE import receives one
+ // until a per-signature guest-callable wrapper is explicitly published.
+ // CAP13 proposal-only; design-grade; bodies are intentionally small.
+ 
+ #include "win_api_shim.h"
+-
++#include "win32_last_error_state.h"
++#include "win64_bridge.h"
++
++#include <atomic>
++#include <cerrno>
+ #include <chrono>
++#include <condition_variable>
+ #include <cstdio>
+ #include <cstring>
+ #include <ctime>
++#include <memory>
+ #include <mutex>
++#include <new>
++#include <shared_mutex>
+ #include <thread>
+ #include <vector>
+ 
+@@ -40,6 +44,8 @@
+ 
+ // ---- fixed Win32 constants used by the shims (public documentation values)
+ constexpr uint32_t WAIT_FAILED = 0xFFFFFFFFu;
++constexpr uint32_t ERROR_TIMEOUT = 1460;
++constexpr uint32_t ERROR_INVALID_PARAMETER = 87;
+ constexpr uint32_t TLS_OUT_OF_INDEXES = 0xFFFFFFFFu;
+ constexpr uint32_t GENERIC_WRITE = 0x40000000u;
+ 
+@@ -57,20 +63,33 @@
+ 
+ struct WinApiShim::Impl
+ {
++    struct RawExport
++    {
++        void* body = nullptr;
++        uint8_t integer_arity = UINT8_MAX;
++        bool reviewed_for_publication = false;
++    };
+     Hooks hooks;
+     std::string mod_root = "/data/modbridge/roots/";
+     std::mutex mu;
+     // dll-name(lowercased) -> { symbol/ordinal -> address }
+-    std::unordered_map<std::string, std::unordered_map<std::string, void*>> raw_exports;
++    std::unordered_map<std::string, std::unordered_map<std::string, RawExport>> raw_exports;
+     std::unordered_map<std::string, std::unordered_map<std::string, void*>> exports;
++    ExecutableMemoryBackend executable_backend{};
+     struct ModuleEntry
+     {
+         WinModule handle;
+         bool (*lookup)(WinModule, const char*, void**);
+     };
+     std::unordered_map<std::string, ModuleEntry> modules;
++    struct ThreadNotificationPolicy
++    {
++        bool has_static_tls = false;
++        bool (*disable)(void* user) = nullptr;
++        void* user = nullptr;
++    };
++    std::unordered_map<WinModule, ThreadNotificationPolicy> notification_policies;
+     uint64_t pointer_cookie = 0xA5A5'5A5A'0000'0042ull; // fixed for design; M1 randomizes at DllMain time
+-    void* last_error_slot_value = nullptr; // M1: per-thread (emulated TEB-free TLS slot)
+ 
+     // ---- T1 emulation state ----
+     std::vector<bool> tls_slot_used;
+@@ -99,6 +118,61 @@
+     }
+ };
+ 
++namespace {
++
++struct HostSrwLock
++{
++    std::shared_mutex rw;
++    std::mutex owners_mu;
++    std::thread::id exclusive_owner{};
++    std::unordered_map<std::thread::id, uint32_t> shared_owners;
++};
++
++struct HostCondition
++{
++    std::mutex mu;
++    std::condition_variable cv;
++    uint64_t generation = 0;
++};
++
++struct HostSyncRegistry
++{
++    std::mutex mu;
++    std::unordered_map<void*, std::shared_ptr<HostSrwLock>> locks;
++    std::unordered_map<void*, std::shared_ptr<HostCondition>> conditions;
++};
++
++HostSyncRegistry& host_sync_registry()
++{
++    static HostSyncRegistry registry;
++    return registry;
++}
++
++std::shared_ptr<HostSrwLock> host_srw_lock(void* address, bool create)
++{
++    auto& registry = host_sync_registry();
++    std::lock_guard guard(registry.mu);
++    auto found = registry.locks.find(address);
++    if (found != registry.locks.end()) return found->second;
++    if (!create) return {};
++    auto state = std::make_shared<HostSrwLock>();
++    registry.locks.emplace(address, state);
++    return state;
++}
++
++std::shared_ptr<HostCondition> host_condition(void* address)
++{
++    auto& registry = host_sync_registry();
++    std::lock_guard guard(registry.mu);
++    auto found = registry.conditions.find(address);
++    if (found != registry.conditions.end()) return found->second;
++    auto state = std::make_shared<HostCondition>();
++    registry.conditions.emplace(address, state);
++    return state;
++}
++
++} // namespace
++
+ WinApiShim::WinApiShim() : m(new Impl()) {}
+ 
+ void WinApiShim::set_hooks(const Hooks& hooks) { m->hooks = hooks; }
+@@ -111,6 +185,22 @@
+     const std::string key = ascii_module_key(name);
+     std::lock_guard g(m->mu);
+     m->modules[key] = Impl::ModuleEntry{handle, lookup};
++}
++
++bool WinApiShim::register_thread_notification_policy(
++    WinModule module_handle, bool has_static_tls,
++    bool (*disable)(void* user), void* user)
++{
++    if (!module_handle || (!has_static_tls && !disable)) return false;
++    std::lock_guard guard(m->mu);
++    if (m->notification_policies.count(module_handle)) return false;
++    try
++    {
++        m->notification_policies.emplace(module_handle,
++            Impl::ThreadNotificationPolicy{has_static_tls, disable, user});
++    }
++    catch (const std::bad_alloc&) { return false; }
++    return true;
+ }
+ 
+ // ===================== T1 implementations =====================
+@@ -139,12 +229,275 @@
+ #endif
+ }
+ 
+-static uint32_t impl_Sleep(WinApiShim::Impl*, uint32_t ms)
++static uint32_t impl_Sleep(WinApiShim::Impl* m, uint32_t ms)
+ {
+ #if CAP13_POSIX
+-    ::usleep(useconds_t(ms) * 1000);
++    if (ms == 0)
++    {
++        std::this_thread::yield();
++        return 0;
++    }
++    struct timespec remaining{};
++    remaining.tv_sec = static_cast<time_t>(ms / 1000);
++    remaining.tv_nsec = static_cast<long>(ms % 1000) * 1000000L;
++    while (::nanosleep(&remaining, &remaining) != 0)
++    {
++        if (errno == EINTR) continue;
++        m->fail_closed("Sleep host clock failed");
++        break;
++    }
++#else
++    (void)m;
++    (void)ms;
+ #endif
+     return 0;
++}
++
++static uint32_t impl_GetCurrentProcessId(WinApiShim::Impl* m)
++{
++#if CAP13_POSIX
++    (void)m;
++    return static_cast<uint32_t>(::getpid());
++#else
++    m->fail_closed("GetCurrentProcessId host identity unavailable");
++    return 0;
++#endif
++}
++
++static uint32_t impl_GetCurrentThreadId(WinApiShim::Impl* m)
++{
++    // A host thread keeps one Windows-visible ID across all shim instances.
++    // Assignment is process-wide and never wraps a DWORD ID into reuse.
++    static std::atomic<uint64_t> next_id{1};
++    static thread_local uint64_t id = next_id.fetch_add(1, std::memory_order_relaxed);
++    if (id > UINT32_MAX)
++    {
++        m->fail_closed("GetCurrentThreadId ID space exhausted");
++        return 0;
++    }
++    return static_cast<uint32_t>(id);
++}
++
++static uint32_t impl_GetLastError(WinApiShim::Impl*)
++{
++    return win32_get_last_error();
++}
++
++static void impl_SetLastError(WinApiShim::Impl*, uint32_t error)
++{
++    win32_set_last_error(error);
++}
++
++static void impl_GetSystemTimeAsFileTime(WinApiShim::Impl* m, void* output)
++{
++    if (!output)
++    {
++        m->fail_closed("GetSystemTimeAsFileTime null output");
++        return;
++    }
++#if CAP13_POSIX
++    struct timespec utc{};
++    if (::clock_gettime(CLOCK_REALTIME, &utc) != 0)
++    {
++        m->fail_closed("GetSystemTimeAsFileTime host clock failed");
++        return;
++    }
++    // FILETIME is two little-endian DWORDs, counting 100 ns ticks since
++    // 1601-01-01 UTC. The POSIX clock counts from 1970-01-01 UTC.
++    constexpr uint64_t epoch_delta = 116444736000000000ull;
++    const uint64_t ticks = epoch_delta +
++        static_cast<uint64_t>(utc.tv_sec) * 10000000ull +
++        static_cast<uint64_t>(utc.tv_nsec) / 100ull;
++    const uint32_t words[2] = {static_cast<uint32_t>(ticks),
++                               static_cast<uint32_t>(ticks >> 32)};
++    std::memcpy(output, words, sizeof(words));
++#else
++    m->fail_closed("GetSystemTimeAsFileTime host clock unavailable");
++#endif
++}
++
++static void impl_AcquireSRWLockExclusive(WinApiShim::Impl* m, void* address)
++{
++    if (!address) { m->fail_closed("AcquireSRWLockExclusive null lock"); return; }
++    try
++    {
++        auto state = host_srw_lock(address, true);
++        state->rw.lock();
++        std::lock_guard guard(state->owners_mu);
++        state->exclusive_owner = std::this_thread::get_id();
++    }
++    catch (...) { m->fail_closed("AcquireSRWLockExclusive host failure"); }
++}
++
++static void impl_ReleaseSRWLockExclusive(WinApiShim::Impl* m, void* address)
++{
++    if (!address) { m->fail_closed("ReleaseSRWLockExclusive null lock"); return; }
++    try
++    {
++        auto state = host_srw_lock(address, false);
++        if (!state) { m->fail_closed("ReleaseSRWLockExclusive unknown lock"); return; }
++        bool owned = false;
++        {
++            std::lock_guard guard(state->owners_mu);
++            owned = state->exclusive_owner == std::this_thread::get_id();
++            if (owned) state->exclusive_owner = {};
++        }
++        if (!owned) { m->fail_closed("ReleaseSRWLockExclusive wrong owner"); return; }
++        state->rw.unlock();
++    }
++    catch (...) { m->fail_closed("ReleaseSRWLockExclusive host failure"); }
++}
++
++static void impl_AcquireSRWLockShared(WinApiShim::Impl* m, void* address)
++{
++    if (!address) { m->fail_closed("AcquireSRWLockShared null lock"); return; }
++    try
++    {
++        auto state = host_srw_lock(address, true);
++        state->rw.lock_shared();
++        try
++        {
++            std::lock_guard guard(state->owners_mu);
++            ++state->shared_owners[std::this_thread::get_id()];
++        }
++        catch (...) { state->rw.unlock_shared(); throw; }
++    }
++    catch (...) { m->fail_closed("AcquireSRWLockShared host failure"); }
++}
++
++static void impl_ReleaseSRWLockShared(WinApiShim::Impl* m, void* address)
++{
++    if (!address) { m->fail_closed("ReleaseSRWLockShared null lock"); return; }
++    try
++    {
++        auto state = host_srw_lock(address, false);
++        if (!state) { m->fail_closed("ReleaseSRWLockShared unknown lock"); return; }
++        bool owned = false;
++        {
++            std::lock_guard guard(state->owners_mu);
++            auto found = state->shared_owners.find(std::this_thread::get_id());
++            owned = found != state->shared_owners.end() && found->second != 0;
++            if (owned) --found->second;
++        }
++        if (!owned) { m->fail_closed("ReleaseSRWLockShared wrong owner"); return; }
++        state->rw.unlock_shared();
++    }
++    catch (...) { m->fail_closed("ReleaseSRWLockShared host failure"); }
++}
++
++static uint32_t impl_SleepConditionVariableSRW(
++    WinApiShim::Impl* m, void* condition, void* lock, uint32_t milliseconds,
++    uint32_t flags)
++{
++    if (!condition || !lock || (flags & ~1u))
++    {
++        m->fail_closed("SleepConditionVariableSRW invalid arguments");
++        return 0;
++    }
++    try
++    {
++        auto srw = host_srw_lock(lock, false);
++        if (!srw) { m->fail_closed("SleepConditionVariableSRW unknown lock"); return 0; }
++        auto cv = host_condition(condition);
++        const bool shared = (flags & 1u) != 0;
++        const auto thread = std::this_thread::get_id();
++        std::unique_lock cv_guard(cv->mu);
++        bool owned = false;
++        {
++            std::lock_guard owner_guard(srw->owners_mu);
++            if (shared)
++            {
++                auto found = srw->shared_owners.find(thread);
++                owned = found != srw->shared_owners.end() && found->second != 0;
++                if (owned) --found->second;
++            }
++            else
++            {
++                owned = srw->exclusive_owner == thread;
++                if (owned) srw->exclusive_owner = {};
++            }
++        }
++        if (!owned)
++        {
++            cv_guard.unlock();
++            m->fail_closed(shared ? "SleepConditionVariableSRW shared lock not held"
++                                  : "SleepConditionVariableSRW exclusive lock not held");
++            return 0;
++        }
++        const uint64_t observed = cv->generation;
++        if (shared) srw->rw.unlock_shared();
++        else srw->rw.unlock();
++        const auto signaled = [&] { return cv->generation != observed; };
++        bool woken = true;
++        if (milliseconds == 0xffffffffu)
++            cv->cv.wait(cv_guard, signaled);
++        else
++            woken = cv->cv.wait_for(cv_guard,
++                std::chrono::milliseconds(milliseconds), signaled);
++        cv_guard.unlock();
++        if (shared) srw->rw.lock_shared();
++        else srw->rw.lock();
++        {
++            std::lock_guard owner_guard(srw->owners_mu);
++            if (shared) ++srw->shared_owners[thread];
++            else srw->exclusive_owner = thread;
++        }
++        if (!woken) { win32_set_last_error(ERROR_TIMEOUT); return 0; }
++        return 1;
++    }
++    catch (...) { m->fail_closed("SleepConditionVariableSRW host failure"); return 0; }
++}
++
++static void impl_WakeAllConditionVariable(WinApiShim::Impl* m, void* condition)
++{
++    if (!condition) { m->fail_closed("WakeAllConditionVariable null condition"); return; }
++    try
++    {
++        auto cv = host_condition(condition);
++        {
++            std::lock_guard guard(cv->mu);
++            ++cv->generation;
++        }
++        cv->cv.notify_all();
++    }
++    catch (...) { m->fail_closed("WakeAllConditionVariable host failure"); }
++}
++
++static void impl_InitializeSListHead(WinApiShim::Impl* m, void* header)
++{
++    // The x64 Windows SDK declares SLIST_HEADER as 16 bytes, aligned to 16.
++    if (!header || (reinterpret_cast<uintptr_t>(header) & 15u))
++    {
++        m->fail_closed("InitializeSListHead null or misaligned header");
++        return;
++    }
++    std::memset(header, 0, 16);
++}
++
++static uint32_t impl_DisableThreadLibraryCalls(WinApiShim::Impl* m,
++                                                WinModule module_handle)
++{
++    WinApiShim::Impl::ThreadNotificationPolicy policy{};
++    bool found = false;
++    {
++        std::lock_guard guard(m->mu);
++        auto row = m->notification_policies.find(module_handle);
++        if (row != m->notification_policies.end())
++        {
++            policy = row->second;
++            found = true;
++        }
++    }
++    if (!found || policy.has_static_tls || !policy.disable)
++    {
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return 0;
++    }
++    bool disabled = false;
++    try { disabled = policy.disable(policy.user); }
++    catch (...) { m->fail_closed("DisableThreadLibraryCalls adapter failure"); }
++    if (!disabled) { win32_set_last_error(ERROR_INVALID_PARAMETER); return 0; }
++    return 1;
+ }
+ 
+ static uint32_t impl_WaitForSingleObject_events(WinApiShim::Impl*, void* handle, uint32_t ms)
+@@ -246,10 +599,20 @@
+ #endif
+ }
+ 
+-static uint32_t impl_GetTickCount(WinApiShim::Impl*)
+-{
+-    using namespace std::chrono;
+-    return uint32_t(duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
++static uint32_t impl_GetTickCount(WinApiShim::Impl* m)
++{
++#if CAP13_POSIX
++    struct timespec now{};
++    if (::clock_gettime(CLOCK_MONOTONIC, &now) != 0)
++    {
++        m->fail_closed("GetTickCount host clock failed");
++        return 0;
++    }
++    return uint32_t(uint64_t(now.tv_sec) * 1000 + uint64_t(now.tv_nsec) / 1000000);
++#else
++    (void)m;
++    return 0;
++#endif
+ }
+ 
+ // ---- T4: fail-closed EH/SEH (design 4c). These raw bodies are cataloged,
+@@ -330,46 +693,95 @@
+         const char* dll;
+         const char* sym;
+         void* fn;
++        uint8_t integer_arity;
++        bool reviewed_for_publication;
+     };
+     const Row rows[] = {
+-        // T1 MAP rows (implemented bodies above):
+-        {"kernel32.dll", "VirtualAlloc", (void*)&impl_VirtualAlloc},
+-        {"kernel32.dll", "Sleep", (void*)&impl_Sleep},
+-        {"kernel32.dll", "WaitForSingleObject", (void*)&impl_WaitForSingleObject_events},
+-        {"kernel32.dll", "TlsAlloc", (void*)&impl_TlsAlloc},
+-        {"kernel32.dll", "TlsGetValue", (void*)&impl_TlsGetValue},
+-        {"kernel32.dll", "TlsSetValue", (void*)&impl_TlsSetValue},
+-        {"kernel32.dll", "CreateThread", (void*)&impl_CreateThread},
+-        {"kernel32.dll", "QueryPerformanceCounter", (void*)&impl_QueryPerformanceCounter},
+-        {"kernel32.dll", "GetTickCount", (void*)&impl_GetTickCount},
+-        {"kernel32.dll", "CreateFileW", (void*)&impl_CreateFileW},
++        // These identity/time rows have host-checked basic behavior.
++        // The other raw bodies are catalogued but remain unresolved imports.
++        {"kernel32.dll", "VirtualAlloc", (void*)&impl_VirtualAlloc, 4, false},
++        {"kernel32.dll", "Sleep", (void*)&impl_Sleep, 1, true},
++        {"kernel32.dll", "GetCurrentProcessId", (void*)&impl_GetCurrentProcessId, 0, true},
++        {"kernel32.dll", "GetCurrentThreadId", (void*)&impl_GetCurrentThreadId, 0, true},
++        {"kernel32.dll", "GetLastError", (void*)&impl_GetLastError, 0, true},
++        {"kernel32.dll", "SetLastError", (void*)&impl_SetLastError, 1, true},
++        {"kernel32.dll", "AcquireSRWLockExclusive", (void*)&impl_AcquireSRWLockExclusive, 1, true},
++        {"kernel32.dll", "ReleaseSRWLockExclusive", (void*)&impl_ReleaseSRWLockExclusive, 1, true},
++        {"kernel32.dll", "AcquireSRWLockShared", (void*)&impl_AcquireSRWLockShared, 1, true},
++        {"kernel32.dll", "ReleaseSRWLockShared", (void*)&impl_ReleaseSRWLockShared, 1, true},
++        {"kernel32.dll", "SleepConditionVariableSRW", (void*)&impl_SleepConditionVariableSRW, 4, true},
++        {"kernel32.dll", "WakeAllConditionVariable", (void*)&impl_WakeAllConditionVariable, 1, true},
++        {"kernel32.dll", "InitializeSListHead", (void*)&impl_InitializeSListHead, 1, true},
++        {"kernel32.dll", "DisableThreadLibraryCalls", (void*)&impl_DisableThreadLibraryCalls, 1, true},
++        {"kernel32.dll", "GetSystemTimeAsFileTime", (void*)&impl_GetSystemTimeAsFileTime, 1, true},
++        {"kernel32.dll", "WaitForSingleObject", (void*)&impl_WaitForSingleObject_events, 2, false},
++        {"kernel32.dll", "TlsAlloc", (void*)&impl_TlsAlloc, 0, false},
++        {"kernel32.dll", "TlsGetValue", (void*)&impl_TlsGetValue, 1, false},
++        {"kernel32.dll", "TlsSetValue", (void*)&impl_TlsSetValue, 2, false},
++        {"kernel32.dll", "CreateThread", (void*)&impl_CreateThread, 6, false},
++        {"kernel32.dll", "QueryPerformanceCounter", (void*)&impl_QueryPerformanceCounter, 1, false},
++        {"kernel32.dll", "GetTickCount", (void*)&impl_GetTickCount, 0, true},
++        {"kernel32.dll", "CreateFileW", (void*)&impl_CreateFileW, 7, false},
+         // T4 fail-closed (the important policy rows):
+-        {"vcruntime140.dll", "__CxxFrameHandler4", (void*)&impl_fail_closed_cxx_frame},
+-        {"kernel32.dll", "RaiseException", (void*)&impl_fail_closed_raise},
+-        {"vcruntime140.dll", "CxxThrowException", (void*)&impl_fail_closed_throw},
+-        {"kernel32.dll", "RtlUnwind", (void*)&impl_fail_closed_raise},
+-        {"ntdll.dll", "RtlUnwindEx", (void*)&impl_fail_closed_raise},
+-        {"vcruntime140.dll", "__C_specific_handler", (void*)&impl_fail_closed_specific_handler},
++        {"vcruntime140.dll", "__CxxFrameHandler4", (void*)&impl_fail_closed_cxx_frame, UINT8_MAX, false},
++        {"kernel32.dll", "RaiseException", (void*)&impl_fail_closed_raise, UINT8_MAX, false},
++        {"vcruntime140.dll", "CxxThrowException", (void*)&impl_fail_closed_throw, UINT8_MAX, false},
++        {"kernel32.dll", "RtlUnwind", (void*)&impl_fail_closed_raise, UINT8_MAX, false},
++        {"ntdll.dll", "RtlUnwindEx", (void*)&impl_fail_closed_raise, UINT8_MAX, false},
++        {"vcruntime140.dll", "__C_specific_handler", (void*)&impl_fail_closed_specific_handler, UINT8_MAX, false},
+     };
+     std::lock_guard g(m->mu);
+     for (const auto& r : rows)
+     {
+         std::string key = r.sym;
+-        m->raw_exports[r.dll][key] = r.fn;
+-    }
+-}
+-
+-bool WinApiShim::publish_builtin_wrapper(const char* dll_name, const char* symbol,
+-                                          void* win64_entry)
+-{
+-    if (!dll_name || !*dll_name || !symbol || !*symbol || !win64_entry)
++        m->raw_exports[r.dll][key] = Impl::RawExport{
++            r.fn, r.integer_arity, r.reviewed_for_publication};
++    }
++}
++
++BuiltinInstallStatus WinApiShim::install_builtin_integer_wrapper(
++    const char* dll_name, const char* symbol, void* writable_slot,
++    size_t slot_bytes, SealExecutable seal, void* seal_user)
++{
++    if (!dll_name || !*dll_name || !symbol || !*symbol || !writable_slot ||
++        slot_bytes < sizeof(ContextBridgeTramp) || !seal)
++        return BuiltinInstallStatus::InvalidInput;
++    const std::string dll = ascii_module_key(dll_name);
++    Impl::RawExport raw;
++    {
++        std::lock_guard g(m->mu);
++        auto raw_dll = m->raw_exports.find(dll);
++        if (raw_dll == m->raw_exports.end()) return BuiltinInstallStatus::Unsupported;
++        auto row = raw_dll->second.find(symbol);
++        if (row == raw_dll->second.end() || !row->second.reviewed_for_publication)
++            return BuiltinInstallStatus::Unsupported;
++        auto existing = m->exports.find(dll);
++        if (existing != m->exports.end() && existing->second.count(symbol))
++            return BuiltinInstallStatus::AlreadyPublished;
++        raw = row->second;
++    }
++    const void* thunk = bridge_select_context_thunk(raw.integer_arity);
++    if (!thunk) return BuiltinInstallStatus::Unsupported;
++    bridge_stamp_context_tramp(writable_slot, m, raw.body, thunk);
++    if (!seal(writable_slot, slot_bytes, seal_user))
++        return BuiltinInstallStatus::SealFailed;
++    {
++        std::lock_guard g(m->mu);
++        auto existing = m->exports.find(dll);
++        if (existing != m->exports.end() && existing->second.count(symbol))
++            return BuiltinInstallStatus::AlreadyPublished;
++        try { m->exports[dll][symbol] = writable_slot; }
++        catch (const std::bad_alloc&) { return BuiltinInstallStatus::OutOfMemory; }
++    }
++    return BuiltinInstallStatus::Ok;
++}
++
++bool WinApiShim::set_executable_backend(const ExecutableMemoryBackend& backend)
++{
++    if (!backend.allocate_writable || !backend.seal_executable || !backend.release)
+         return false;
+-    const std::string dll = ascii_module_key(dll_name);
+     std::lock_guard g(m->mu);
+-    auto raw_dll = m->raw_exports.find(dll);
+-    if (raw_dll == m->raw_exports.end() ||
+-        raw_dll->second.find(symbol) == raw_dll->second.end()) return false;
+-    m->exports[dll][symbol] = win64_entry;
++    m->executable_backend = backend;
+     return true;
+ }
+ 
+@@ -398,27 +810,81 @@
+         if (selected.lookup(selected.handle, symbol, &out) && out) return out;
+     }
+ 
+-    // 2) built-in rows
+-    std::lock_guard g(m->mu);
+-    auto ex = m->exports.find(dll);
+-    if (ex != m->exports.end())
+-    {
++    // 2) already-published built-ins, or a reviewed row eligible for lazy
++    // installation. Never call platform callbacks while holding the mutex.
++    ExecutableMemoryBackend backend{};
++    bool eligible = false;
++    {
++        std::lock_guard g(m->mu);
++        auto ex = m->exports.find(dll);
++        if (ex != m->exports.end())
++        {
++            if (symbol)
++            {
++                auto sym = ex->second.find(symbol);
++                if (sym != ex->second.end()) return sym->second;
++            }
++            else if (ordinal)
++            {
++                char ord[24];
++                std::snprintf(ord, sizeof(ord), "#%llu", (unsigned long long)ordinal);
++                auto sym = ex->second.find(ord);
++                if (sym != ex->second.end()) return sym->second;
++            }
++        }
+         if (symbol)
++        {
++            auto catalog = m->raw_exports.find(dll);
++            if (catalog != m->raw_exports.end())
++            {
++                auto row = catalog->second.find(symbol);
++                eligible = row != catalog->second.end() &&
++                           row->second.reviewed_for_publication;
++            }
++            backend = m->executable_backend;
++        }
++    }
++
++    if (!eligible || !backend.allocate_writable || !backend.seal_executable ||
++        !backend.release) return nullptr;
++
++    // A sealing callback may inspect this same import. It must observe a
++    // missing import rather than recursively allocate another trampoline.
++    static thread_local bool in_lazy_install = false;
++    if (in_lazy_install) return nullptr;
++    in_lazy_install = true;
++    struct ResetLazyFlag
++    {
++        bool& flag;
++        ~ResetLazyFlag() { flag = false; }
++    } reset{in_lazy_install};
++
++    void* memory = nullptr;
++    size_t bytes = 0;
++    if (!backend.allocate_writable(sizeof(ContextBridgeTramp), &memory,
++                                   &bytes, backend.user) ||
++        !memory || bytes < sizeof(ContextBridgeTramp))
++    {
++        if (memory && bytes) backend.release(memory, bytes, backend.user);
++        return nullptr;
++    }
++    const BuiltinInstallStatus status = install_builtin_integer_wrapper(
++        dll_name, symbol, memory, bytes, backend.seal_executable, backend.user);
++    if (status == BuiltinInstallStatus::Ok) return memory;
++    backend.release(memory, bytes, backend.user);
++    if (status == BuiltinInstallStatus::AlreadyPublished)
++    {
++        std::lock_guard g(m->mu);
++        auto ex = m->exports.find(dll);
++        if (ex != m->exports.end())
+         {
+             auto sym = ex->second.find(symbol);
+             if (sym != ex->second.end()) return sym->second;
+         }
+-        else if (ordinal)
+-        {
+-            char ord[24];
+-            std::snprintf(ord, sizeof(ord), "#%llu", (unsigned long long)ordinal);
+-            auto sym = ex->second.find(ord);
+-            if (sym != ex->second.end()) return sym->second;
+-        }
+-    }
+-
+-    // 3) unknown: nullptr -> the loader refuses with the complete missing
+-    // list (fail closed; precise diagnostics per cap13 acceptance).
++    }
++
++    // 3) Unknown, unsupported, or failed install: the loader reports the
++    // complete missing list and refuses the image.
+     return nullptr;
+ }
+ 
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -1,6 +1,6 @@
+ // win_api_shim.h -- Windows API import shim for the cap13 PE loader.
+ //
+-// Tiered policy (DESIGN/native-dll-loader.md section 5):
++// Intended tiered policy (DESIGN/native-dll-loader.md section 5):
+ //   T1 MAP  memory / sync / time / thread / text / TLS-API emulation
+ //   T2 MAP  files + the GA path-shim rules (drive letters, backslashes,
+ //           Binaries/Win64 virtual-cwd, write confinement to the mod root)
+@@ -10,12 +10,14 @@
+ //   T5 REFUSE (load time, in the loader/census, not here) game-code
+ //           rewriting APIs and user32/gdi32 surfaces
+ //
+-// The shim bodies model selected Win32 signatures. Raw bodies remain private
+-// until a per-signature guest-callable wrapper is supplied and checked.
++// Most tiers remain candidate bodies or design. Raw bodies stay private;
++// only explicitly reviewed integer rows can be published after sealing a
++// context-bound Win64 wrapper. The loader still refuses real static TLS/GS.
+ // CAP13 proposal-only; design-grade.
+ #ifndef CAP13_WIN_API_SHIM_H
+ #define CAP13_WIN_API_SHIM_H
+ 
++#include <cstddef>
+ #include <cstdint>
+ #include <string>
+ #include <unordered_map>
+@@ -26,6 +28,16 @@
+ 
+ // A mod-visible module handle ("HMODULE"): opaque index into the registry.
+ using WinModule = void*;
++
++enum class BuiltinInstallStatus
++{
++    Ok,
++    InvalidInput,
++    Unsupported,
++    SealFailed,
++    AlreadyPublished,
++    OutOfMemory
++};
+ 
+ class WinApiShim : public ImportResolver
+ {
+@@ -57,19 +69,46 @@
+     void register_module(const char* name, WinModule handle,
+                          bool (*lookup)(WinModule, const char* symbol, void** out));
+ 
++    // The adapter registers each validated mapped DLL by its HMODULE/image
++    // base before DllMain. A non-TLS module needs a callback that actually
++    // suppresses its thread notifications; active static TLS always refuses
++    // DisableThreadLibraryCalls. A duplicate handle is rejected.
++    bool register_thread_notification_policy(WinModule module_handle,
++        bool has_static_tls, bool (*disable)(void* user), void* user);
++
+     // Catalog raw SysV handlers. They are NOT guest-callable and remain
+     // unresolved imports until a per-signature Win64 wrapper is published.
+     void register_builtin_exports();
+ 
+-    // Call only after generating and validating a guest-callable wrapper
+-    // that also supplies the handler's hidden Impl* context. Unknown rows,
+-    // null pointers, and malformed names refuse. Publication does not by
+-    // itself prove the wrapper's behavior; the caller owns that gate.
+-    bool publish_builtin_wrapper(const char* dll_name, const char* symbol,
+-                                 void* win64_entry);
++    // Stamp and publish one reviewed integer/pointer signature. The caller
++    // owns writable_slot through process exit. seal must transition the
++    // entire slot region to readable executable memory, including needed
++    // target cache maintenance, and return false without publication on
++    // failure. Neither this method nor the Mac host test proves PS5 sealing.
++    using SealExecutable = bool (*)(void* memory, size_t bytes, void* user);
++    BuiltinInstallStatus install_builtin_integer_wrapper(
++        const char* dll_name, const char* symbol, void* writable_slot,
++        size_t slot_bytes, SealExecutable seal, void* seal_user);
++
++    // Optional platform backend for lazy installation during PE import
++    // resolution. allocate_writable returns a region and its full size;
++    // seal_executable must make it RX and perform target cache maintenance.
++    // release is called on failed/duplicate installation. Published regions
++    // remain owned by the platform until process exit. Callbacks must not
++    // throw. No backend means reviewed imports remain unresolved.
++    struct ExecutableMemoryBackend
++    {
++        bool (*allocate_writable)(size_t minimum_bytes, void** memory,
++                                  size_t* region_bytes, void* user) = nullptr;
++        SealExecutable seal_executable = nullptr;
++        void (*release)(void* memory, size_t region_bytes, void* user) = nullptr;
++        void* user = nullptr;
++    };
++    bool set_executable_backend(const ExecutableMemoryBackend& backend);
+ 
+     // ImportResolver: exact match on (dll, symbol) or (dll, ordinal).
+-    // Unknown => nullptr (the loader refuses with the full missing list).
++    // Reviewed built-ins install on demand if a backend is configured.
++    // Unknown/unsupported => nullptr (loader reports the missing list).
+     void* resolve(const char* dll_name, const char* symbol, uint64_t ordinal) override;
+ 
+   private:
+--- a/loader/tests/import_registry_test.cpp
++++ b/loader/tests/import_registry_test.cpp
+@@ -14,10 +14,19 @@
+     if (!condition) ++failures;
+ }
+ 
++static bool helper_lookup(cap13::WinModule handle, const char* name, void** out)
++{
++    if (handle != reinterpret_cast<void*>(0x4321) ||
++        name[0] != 'H' || name[1] != '\0') return false;
++    *out = reinterpret_cast<void*>(0x8765);
++    return true;
++}
++
+ static bool lookup(cap13::WinModule handle, const char* name, void** out)
+ {
+     if (handle != reinterpret_cast<void*>(0x1234)) return false;
+-    reentered = active->resolve("KERNEL32.DLL", "Sleep", 0) != nullptr;
++    reentered = active->resolve("HELPER.DLL", "H", 0) ==
++                reinterpret_cast<void*>(0x8765);
+     if (name[0] == 'F' && name[1] == 'n' && name[2] == '\0')
+     {
+         *out = reinterpret_cast<void*>(0x5678);
+@@ -33,16 +42,11 @@
+     shim.register_builtin_exports();
+     check(shim.resolve("KERNEL32.DLL", "Sleep", 0) == nullptr,
+           "raw SysV built-in body is not exposed as a guest import");
+-    check(!shim.publish_builtin_wrapper("kernel32.dll", "Imaginary", reinterpret_cast<void*>(0x99)) &&
+-          !shim.publish_builtin_wrapper("kernel32.dll", "Sleep", nullptr),
+-          "unknown rows and null wrappers cannot be published");
+-    check(shim.publish_builtin_wrapper("KERNEL32.DLL", "Sleep", reinterpret_cast<void*>(0x9999)) &&
+-          shim.resolve("kernel32.dll", "Sleep", 0) == reinterpret_cast<void*>(0x9999),
+-          "a known row resolves only through its published Win64 wrapper");
++    shim.register_module("Helper.DLL", reinterpret_cast<void*>(0x4321), helper_lookup);
+     shim.register_module("UE4SS.DLL", reinterpret_cast<void*>(0x1234), lookup);
+     check(shim.resolve("ue4ss.dll", "Fn", 0) == reinterpret_cast<void*>(0x5678),
+           "registered module names use ASCII case-insensitive lookup");
+-    check(reentered, "module lookup may resolve a built-in import recursively");
++    check(reentered, "module lookup may resolve another registered module recursively");
+     check(shim.resolve("ue4ss.dll", "Missing", 0) == nullptr,
+           "missing registered export remains unresolved");
+     shim.register_module(nullptr, reinterpret_cast<void*>(0x1234), lookup);
+--- /dev/null
++++ b/loader/tests/lazy_import_resolution_test.cpp
+@@ -0,0 +1,227 @@
++#include "win_api_shim.h"
++#include "win64_bridge.h"
++
++#include <atomic>
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <thread>
++#include <sys/mman.h>
++#include <unistd.h>
++
++static int failures = 0;
++static void check(bool ok, const char* label)
++{
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", label);
++    if (!ok) ++failures;
++}
++
++struct MemoryState
++{
++    cap13::WinApiShim* shim = nullptr;
++    const char* active_symbol = nullptr;
++    int allocated = 0;
++    int sealed = 0;
++    int released = 0;
++    bool reject_seal = false;
++    bool hidden_during_seal = true;
++};
++
++static bool allocate_writable(size_t minimum, void** address, size_t* bytes, void* user)
++{
++    auto& state = *static_cast<MemoryState*>(user);
++    ++state.allocated;
++    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
++    if (minimum > page) return false;
++    void* mapping = mmap(nullptr, page, PROT_READ | PROT_WRITE,
++                         MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (mapping == MAP_FAILED) return false;
++    *address = mapping;
++    *bytes = page;
++    return true;
++}
++
++static bool seal_executable(void* address, size_t bytes, void* user)
++{
++    auto& state = *static_cast<MemoryState*>(user);
++    ++state.sealed;
++    if (state.shim->resolve("KERNEL32.DLL", state.active_symbol, 0))
++        state.hidden_during_seal = false;
++    if (state.reject_seal) return false;
++    return mprotect(address, bytes, PROT_READ | PROT_EXEC) == 0;
++}
++
++static void release_mapping(void* address, size_t bytes, void* user)
++{
++    auto& state = *static_cast<MemoryState*>(user);
++    ++state.released;
++    munmap(address, bytes);
++}
++
++static uint64_t registered_sleep() { return 0; }
++static bool registered_lookup(cap13::WinModule, const char* symbol, void** result)
++{
++    if (symbol && __builtin_strcmp(symbol, "Sleep") == 0)
++    {
++        *result = reinterpret_cast<void*>(&registered_sleep);
++        return true;
++    }
++    return false;
++}
++
++struct RaceState
++{
++    std::atomic<int> allocated{0};
++    std::atomic<int> sealing{0};
++    std::atomic<int> released{0};
++};
++static bool race_allocate(size_t minimum, void** address, size_t* bytes, void* user)
++{
++    auto& state = *static_cast<RaceState*>(user);
++    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
++    if (minimum > page) return false;
++    void* mapping = mmap(nullptr, page, PROT_READ | PROT_WRITE,
++                         MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (mapping == MAP_FAILED) return false;
++    state.allocated.fetch_add(1);
++    *address = mapping;
++    *bytes = page;
++    return true;
++}
++static bool race_seal(void* address, size_t bytes, void* user)
++{
++    auto& state = *static_cast<RaceState*>(user);
++    state.sealing.fetch_add(1);
++    const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(2);
++    while (state.sealing.load() < 2)
++    {
++        if (std::chrono::steady_clock::now() > limit) return false;
++        std::this_thread::yield();
++    }
++    return mprotect(address, bytes, PROT_READ | PROT_EXEC) == 0;
++}
++static void race_release(void* address, size_t bytes, void* user)
++{
++    auto& state = *static_cast<RaceState*>(user);
++    state.released.fetch_add(1);
++    munmap(address, bytes);
++}
++
++int main()
++{
++    cap13::WinApiShim shim;
++    shim.register_builtin_exports();
++    check(shim.resolve("kernel32.dll", "Sleep", 0) == nullptr,
++          "without a platform backend reviewed imports remain unresolved");
++    MemoryState state{};
++    state.shim = &shim;
++    cap13::WinApiShim::ExecutableMemoryBackend backend{};
++    backend.allocate_writable = allocate_writable;
++    backend.seal_executable = seal_executable;
++    backend.release = release_mapping;
++    backend.user = &state;
++    check(shim.set_executable_backend(backend),
++          "complete executable-memory backend is accepted");
++    check(shim.resolve("kernel32.dll", "VirtualAlloc", 0) == nullptr &&
++          shim.resolve("kernel32.dll", "Imaginary", 0) == nullptr &&
++          state.allocated == 0,
++          "unreviewed and unknown imports do not allocate executable memory");
++
++    state.active_symbol = "GetCurrentThreadId";
++    void* thread_entry = shim.resolve("KERNEL32.DLL", state.active_symbol, 0);
++    check(thread_entry && state.allocated == 1 && state.sealed == 1 &&
++          state.released == 0 && state.hidden_during_seal,
++          "first resolution seals a trampoline while its import is hidden");
++    if (thread_entry)
++    {
++        const uint32_t first = static_cast<uint32_t>(cap13_win64_call0(thread_entry));
++        check(first != 0 && first == cap13_win64_call0(thread_entry),
++              "lazy Win64 import calls its typed SysV handler");
++    }
++    check(shim.resolve("kernel32.dll", "GetCurrentThreadId", 0) == thread_entry &&
++          state.allocated == 1,
++          "repeated import resolution returns one retained trampoline");
++
++    state.active_symbol = "GetCurrentProcessId";
++    state.reject_seal = true;
++    check(shim.resolve("kernel32.dll", state.active_symbol, 0) == nullptr &&
++          state.allocated == 2 && state.sealed == 2 && state.released == 1,
++          "failed executable sealing leaves import unresolved and releases memory");
++    state.reject_seal = false;
++    void* process_entry = shim.resolve("kernel32.dll", state.active_symbol, 0);
++    check(process_entry && state.allocated == 3 && state.sealed == 3 &&
++          state.released == 1 && state.hidden_during_seal &&
++          static_cast<uint32_t>(cap13_win64_call0(process_entry)) ==
++          static_cast<uint32_t>(getpid()),
++          "a later successful resolve installs the previously refused import");
++
++    state.active_symbol = "GetLastError";
++    void* get_error = shim.resolve("kernel32.dll", state.active_symbol, 0);
++    state.active_symbol = "SetLastError";
++    void* set_error = shim.resolve("kernel32.dll", state.active_symbol, 0);
++    check(get_error && set_error && state.hidden_during_seal,
++          "GetLastError and SetLastError install with sealed typed wrappers");
++    if (get_error && set_error)
++    {
++        check(cap13_win64_call0(get_error) == 0,
++              "new host thread starts with zero Win32 last error");
++        (void)cap13_win64_call1(set_error, 0xCAFE1234u);
++        check(cap13_win64_call0(get_error) == 0xCAFE1234u,
++              "SetLastError updates the calling thread's DWORD");
++        uint32_t worker_initial = UINT32_MAX;
++        uint32_t worker_written = 0;
++        std::thread worker([&] {
++            worker_initial = static_cast<uint32_t>(cap13_win64_call0(get_error));
++            (void)cap13_win64_call1(set_error, 0x19u);
++            worker_written = static_cast<uint32_t>(cap13_win64_call0(get_error));
++        });
++        worker.join();
++        check(worker_initial == 0 && worker_written == 0x19u &&
++              cap13_win64_call0(get_error) == 0xCAFE1234u,
++              "worker last error is independent of the main thread");
++        state.active_symbol = "Sleep";
++        void* sleep_entry = shim.resolve("kernel32.dll", state.active_symbol, 0);
++        if (sleep_entry) (void)cap13_win64_call1(sleep_entry, 0);
++        check(sleep_entry && cap13_win64_call0(get_error) == 0xCAFE1234u,
++              "Sleep does not erase the prior last-error code");
++    }
++    else check(false, "last-error wrappers are available for Win64 calls");
++
++    cap13::WinApiShim registered;
++    registered.register_builtin_exports();
++    MemoryState registered_state{};
++    registered_state.shim = &registered;
++    backend.user = &registered_state;
++    check(registered.set_executable_backend(backend), "second backend is accepted");
++    registered.register_module("KERNEL32.DLL", nullptr, registered_lookup);
++    check(registered.resolve("kernel32.dll", "Sleep", 0) ==
++          reinterpret_cast<void*>(&registered_sleep) &&
++          registered_state.allocated == 0,
++          "registered module export retains priority over lazy built-ins");
++    registered_state.active_symbol = "GetLastError";
++    void* second_get_error = registered.resolve("kernel32.dll", "GetLastError", 0);
++    check(second_get_error && cap13_win64_call0(second_get_error) == 0xCAFE1234u,
++          "last-error slot is shared across shim instances on one thread");
++
++    cap13::WinApiShim racing;
++    racing.register_builtin_exports();
++    RaceState race{};
++    backend.allocate_writable = race_allocate;
++    backend.seal_executable = race_seal;
++    backend.release = race_release;
++    backend.user = &race;
++    check(racing.set_executable_backend(backend), "race backend is accepted");
++    void* first_entry = nullptr;
++    void* second_entry = nullptr;
++    std::thread first([&] { first_entry = racing.resolve("kernel32.dll", "Sleep", 0); });
++    std::thread second([&] { second_entry = racing.resolve("KERNEL32.DLL", "Sleep", 0); });
++    first.join();
++    second.join();
++    check(first_entry && first_entry == second_entry &&
++          racing.resolve("kernel32.dll", "Sleep", 0) == first_entry &&
++          race.allocated.load() == 2 && race.sealing.load() == 2 &&
++          race.released.load() == 1,
++          "concurrent install keeps one published trampoline and releases the loser");
++    std::printf("TOTAL: %d failed\n", failures);
++    return failures ? 1 : 0;
++}
+--- a/loader/tests/run_import_registry.py
++++ b/loader/tests/run_import_registry.py
+@@ -10,6 +10,7 @@
+     '-Wextra', '-Werror', '-pthread', '-I' + str(root / 'src'),
+     '-I' + str(root / 'include'),
+     str(root / 'tests/import_registry_test.cpp'),
+-    str(root / 'src/win_api_shim.cpp'), '-o', str(out),
++    str(root / 'src/win_api_shim.cpp'),
++    str(root / 'src/win64_bridge.S'), '-o', str(out),
+ ], check=True, timeout=30)
+ subprocess.run(['arch', '-x86_64', str(out)], check=True, timeout=5)
+--- /dev/null
++++ b/loader/tests/run_lazy_import_resolution.py
+@@ -0,0 +1,16 @@
++#!/usr/bin/env python3
++"""Build and run lazy reviewed import resolution host checks."""
++import subprocess
++from pathlib import Path
++
++root = Path(__file__).resolve().parents[1]
++out = root / 'tests/lazy-import-resolution-host'
++subprocess.run([
++    'clang++', '-arch', 'x86_64', '-std=c++17', '-O1', '-g', '-Wall',
++    '-Wextra', '-Werror', '-pthread', '-I' + str(root / 'src'),
++    '-I' + str(root / 'include'),
++    str(root / 'tests/lazy_import_resolution_test.cpp'),
++    str(root / 'src/win_api_shim.cpp'),
++    str(root / 'src/win64_bridge.S'), '-o', str(out),
++], check=True, timeout=30)
++subprocess.run(['arch', '-x86_64', str(out)], check=True, timeout=20)
+--- /dev/null
++++ b/loader/tests/run_thread_notification_policy.py
+@@ -0,0 +1,18 @@
++#!/usr/bin/env python3
++"""Build and run module-aware thread-notification host checks."""
++import subprocess
++from pathlib import Path
++
++root = Path(__file__).resolve().parents[1]
++out = root / 'tests/thread-notification-policy-host'
++subprocess.run([
++    'clang++', '-arch', 'x86_64', '-std=c++17', '-O1', '-g', '-Wall',
++    '-Wextra', '-Werror', '-pthread', '-I' + str(root / 'src'),
++    '-I' + str(root / 'include'),
++    str(root / 'tests/thread_notification_policy_test.cpp'),
++    str(root / 'src/win_api_shim.cpp'),
++    str(root / 'src/static_tls_bank.cpp'),
++    str(root / 'src/guest_teb_lifecycle.cpp'),
++    str(root / 'src/win64_bridge.S'), '-o', str(out),
++], check=True, timeout=30)
++subprocess.run(['arch', '-x86_64', str(out)], check=True, timeout=20)
+--- /dev/null
++++ b/loader/tests/run_typed_import_install.py
+@@ -0,0 +1,16 @@
++#!/usr/bin/env python3
++"""Build and run typed, sealed import installation host checks."""
++import subprocess
++from pathlib import Path
++
++root = Path(__file__).resolve().parents[1]
++out = root / 'tests/typed-import-install-host'
++subprocess.run([
++    'clang++', '-arch', 'x86_64', '-std=c++17', '-O1', '-g', '-Wall',
++    '-Wextra', '-Werror', '-pthread', '-I' + str(root / 'src'),
++    '-I' + str(root / 'include'),
++    str(root / 'tests/typed_import_install_test.cpp'),
++    str(root / 'src/win_api_shim.cpp'),
++    str(root / 'src/win64_bridge.S'), '-o', str(out),
++], check=True, timeout=30)
++subprocess.run(['arch', '-x86_64', str(out)], check=True, timeout=20)
+--- /dev/null
++++ b/loader/tests/run_win32_sync_import.py
+@@ -0,0 +1,16 @@
++#!/usr/bin/env python3
++"""Build and run Win32 SRW/condition import host checks."""
++import subprocess
++from pathlib import Path
++
++root = Path(__file__).resolve().parents[1]
++out = root / 'tests/win32-sync-import-host'
++subprocess.run([
++    'clang++', '-arch', 'x86_64', '-std=c++17', '-O1', '-g', '-Wall',
++    '-Wextra', '-Werror', '-pthread', '-I' + str(root / 'src'),
++    '-I' + str(root / 'include'),
++    str(root / 'tests/win32_sync_import_test.cpp'),
++    str(root / 'src/win_api_shim.cpp'),
++    str(root / 'src/win64_bridge.S'), '-o', str(out),
++], check=True, timeout=30)
++subprocess.run(['arch', '-x86_64', str(out)], check=True, timeout=20)
+--- a/loader/tests/teb_lifecycle_test.cpp
++++ b/loader/tests/teb_lifecycle_test.cpp
+@@ -1,4 +1,5 @@
+ #include "guest_teb_lifecycle.h"
++#include "win32_last_error_state.h"
+ 
+ #include <atomic>
+ #include <cstdint>
+@@ -15,6 +16,7 @@
+ static std::atomic<bool> teb_ok{true};
+ static std::atomic<bool> entry_should_fail{false};
+ static int failures = 0;
++static uint32_t observed_guest_error = 0;
+ 
+ static void check(bool value, const char* name)
+ {
+@@ -55,6 +57,21 @@
+ {
+     note("entry", module, reason, reserved);
+     return entry_should_fail ? 0 : 1;
++}
++
++extern "C" __attribute__((ms_abi)) void guest_writes_teb_error(
++    uint64_t, uint64_t, uint64_t)
++{
++    const uint32_t value = 0x55aa33ccu;
++    std::memcpy(static_cast<uint8_t*>(published_teb) + 0x68, &value, sizeof(value));
++}
++
++extern "C" __attribute__((ms_abi)) uint64_t guest_reads_and_sets_error(
++    uint64_t, uint64_t, uint64_t)
++{
++    observed_guest_error = cap13::win32_get_last_error();
++    cap13::win32_set_last_error(0x66bb44ddu);
++    return 1;
+ }
+ 
+ class RecordingSwitch : public cap13::GuestSegmentSwitch
+@@ -169,6 +186,26 @@
+           events.size() == before_no_backend,
+           "production placeholder refuses guest calls without a segment backend");
+ 
++    cap13::win32_set_last_error(0x1234abcd);
++    (void)main_teb.refresh();
++    uint32_t teb_error = 0;
++    std::memcpy(&teb_error, static_cast<uint8_t*>(main_teb.address()) + 0x68,
++                sizeof(teb_error));
++    check(teb_error == 0x1234abcdu,
++          "TEB refresh publishes the calling thread's last-error value");
++    cap13::GuestModuleLifecycle error_lifecycle(
++        bank, sw, 0x12345000,
++        reinterpret_cast<uint64_t>(&guest_reads_and_sets_error),
++        {reinterpret_cast<uint64_t>(&guest_writes_teb_error)});
++    check(error_lifecycle.process_attach(main_teb) == GuestNotifyStatus::Ok &&
++          observed_guest_error == 0x55aa33ccu &&
++          cap13::win32_get_last_error() == 0x66bb44ddu,
++          "direct guest TEB write reaches GetLastError and imported write survives exit");
++    std::memcpy(&teb_error, static_cast<uint8_t*>(main_teb.address()) + 0x68,
++                sizeof(teb_error));
++    check(teb_error == 0x66bb44ddu && !published_teb,
++          "TEB field and host-thread slot agree after segment restoration");
++
+     std::printf("TOTAL: %d failed\n", failures);
+     return failures ? 1 : 0;
+ }
+--- /dev/null
++++ b/loader/tests/thread_notification_policy_test.cpp
+@@ -0,0 +1,174 @@
++#include "guest_teb_lifecycle.h"
++#include "win_api_shim.h"
++#include "win64_bridge.h"
++
++#include <cstdint>
++#include <cstdio>
++#include <sys/mman.h>
++#include <unistd.h>
++#include <utility>
++#include <vector>
++
++static int failures = 0;
++static void check(bool ok, const char* label)
++{
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", label);
++    if (!ok) ++failures;
++}
++static bool allocate_writable(size_t minimum, void** address, size_t* bytes, void*)
++{
++    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
++    if (minimum > page) return false;
++    void* mapping = mmap(nullptr, page, PROT_READ | PROT_WRITE,
++                         MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (mapping == MAP_FAILED) return false;
++    *address = mapping;
++    *bytes = page;
++    return true;
++}
++static bool seal_executable(void* address, size_t bytes, void*)
++{
++    return mprotect(address, bytes, PROT_READ | PROT_EXEC) == 0;
++}
++static void release_mapping(void* address, size_t bytes, void*)
++{
++    munmap(address, bytes);
++}
++static int rejected_callback_calls = 0;
++static bool reject_disable(void*) { ++rejected_callback_calls; return false; }
++static bool disable_lifecycle(void* user)
++{
++    return static_cast<cap13::GuestModuleLifecycle*>(user)->disable_thread_notifications();
++}
++
++static void* disable_entry = nullptr;
++static uint64_t eligible_result = UINT64_MAX;
++static uint64_t tls_result = UINT64_MAX;
++static int retry_attaches = 0;
++static std::vector<std::pair<uint64_t, uint64_t>> events;
++extern "C" __attribute__((ms_abi)) uint64_t module_entry(
++    uint64_t module, uint64_t reason, uint64_t reserved)
++{
++    if (reserved != 0) return 0;
++    events.emplace_back(module, reason);
++    if (reason == 1)
++    {
++        if (module != 0x5000 || retry_attaches == 0)
++        {
++            const uint64_t result = cap13_win64_call1(disable_entry, module);
++            if (module == 0x2000) eligible_result = result;
++            if (module == 0x3000) tls_result = result;
++        }
++        if (module == 0x5000 && ++retry_attaches == 1) return 0;
++    }
++    return 1;
++}
++
++class RecordingSegment final : public cap13::GuestSegmentSwitch
++{
++  public:
++    int enters = 0;
++    int leaves = 0;
++    bool enter(void*) override { ++enters; return true; }
++    void leave() noexcept override { ++leaves; }
++};
++
++int main()
++{
++    cap13::WinApiShim shim;
++    shim.register_builtin_exports();
++    cap13::WinApiShim::ExecutableMemoryBackend backend{};
++    backend.allocate_writable = allocate_writable;
++    backend.seal_executable = seal_executable;
++    backend.release = release_mapping;
++    check(shim.set_executable_backend(backend), "executable backend accepted");
++    disable_entry = shim.resolve("kernel32.dll", "DisableThreadLibraryCalls", 0);
++    void* get_error = shim.resolve("kernel32.dll", "GetLastError", 0);
++    void* set_error = shim.resolve("kernel32.dll", "SetLastError", 0);
++    check(disable_entry && get_error && set_error,
++          "thread-notification and last-error imports resolve");
++    if (!disable_entry || !get_error || !set_error) return 1;
++
++    check(cap13_win64_call1(disable_entry, 0) == 0 &&
++          cap13_win64_call0(get_error) == 87,
++          "null module handle returns FALSE with an error");
++    check(cap13_win64_call1(disable_entry, 0x9999) == 0 &&
++          cap13_win64_call0(get_error) == 87,
++          "unregistered module handle cannot suppress notifications");
++    check(shim.register_thread_notification_policy(
++              reinterpret_cast<void*>(0x4000), false, reject_disable, nullptr) &&
++          cap13_win64_call1(disable_entry, 0x4000) == 0 &&
++          rejected_callback_calls == 1 && cap13_win64_call0(get_error) == 87,
++          "adapter refusal propagates as FALSE without marking success");
++
++    cap13::StaticTlsBank bank;
++    cap13::GuestTebView teb(bank);
++    RecordingSegment segment;
++    cap13::GuestModuleLifecycle eligible(bank, segment, 0x2000,
++                                          reinterpret_cast<uint64_t>(&module_entry), {});
++    check(shim.register_thread_notification_policy(
++              reinterpret_cast<void*>(0x2000), false, disable_lifecycle, &eligible),
++          "non-TLS module policy registered before DllMain");
++    (void)cap13_win64_call1(set_error, 0x1234);
++    check(eligible.process_attach(teb) == cap13::GuestNotifyStatus::Ok &&
++          eligible_result == 1 && cap13_win64_call0(get_error) == 0x1234,
++          "non-TLS DllMain disables thread notifications and preserves prior error");
++    check(eligible.thread_attach(teb) == cap13::GuestNotifyStatus::Ok &&
++          eligible.thread_detach(teb) == cap13::GuestNotifyStatus::Ok &&
++          events == std::vector<std::pair<uint64_t, uint64_t>>({{0x2000, 1}}),
++          "eligible module skips both thread notifications");
++    cap13::StaticTlsBank other_bank;
++    cap13::GuestTebView wrong_teb(other_bank);
++    check(eligible.thread_attach(wrong_teb) ==
++          cap13::GuestNotifyStatus::WrongThreadOrBank,
++          "suppressed notifications still reject a foreign TEB");
++    check(eligible.process_detach(teb) == cap13::GuestNotifyStatus::Ok &&
++          events == std::vector<std::pair<uint64_t, uint64_t>>(
++              {{0x2000, 1}, {0x2000, 0}}) && segment.enters == 2 && segment.leaves == 2,
++          "process notifications still run after thread calls are disabled");
++
++    cap13::StaticTlsBank tls_bank;
++    tls_bank.register_module({0x44}, 1);
++    cap13::GuestTebView tls_teb(tls_bank);
++    RecordingSegment tls_segment;
++    cap13::GuestModuleLifecycle with_tls(tls_bank, tls_segment, 0x3000,
++                                          reinterpret_cast<uint64_t>(&module_entry), {});
++    check(shim.register_thread_notification_policy(
++              reinterpret_cast<void*>(0x3000), true, disable_lifecycle, &with_tls),
++          "static-TLS module policy registered before DllMain");
++    check(with_tls.process_attach(tls_teb) == cap13::GuestNotifyStatus::Ok &&
++          tls_result == 0 && cap13_win64_call0(get_error) == 87,
++          "static-TLS DllMain receives documented FALSE result");
++    check(with_tls.thread_attach(tls_teb) == cap13::GuestNotifyStatus::Ok &&
++          with_tls.thread_detach(tls_teb) == cap13::GuestNotifyStatus::Ok &&
++          with_tls.process_detach(tls_teb) == cap13::GuestNotifyStatus::Ok &&
++          events == std::vector<std::pair<uint64_t, uint64_t>>(
++              {{0x2000, 1}, {0x2000, 0},
++               {0x3000, 1}, {0x3000, 2}, {0x3000, 3}, {0x3000, 0}}),
++          "static-TLS module retains thread notifications");
++
++    events.clear();
++    cap13::StaticTlsBank retry_bank;
++    cap13::GuestTebView retry_teb(retry_bank);
++    RecordingSegment retry_segment;
++    cap13::GuestModuleLifecycle retry(retry_bank, retry_segment, 0x5000,
++                                       reinterpret_cast<uint64_t>(&module_entry), {});
++    check(shim.register_thread_notification_policy(
++              reinterpret_cast<void*>(0x5000), false, disable_lifecycle, &retry) &&
++          !shim.register_thread_notification_policy(
++              reinterpret_cast<void*>(0x5000), false, disable_lifecycle, &retry),
++          "module policy rejects duplicate handles");
++    check(retry.process_attach(retry_teb) ==
++          cap13::GuestNotifyStatus::EntryReturnedFalse &&
++          retry.thread_attach(retry_teb) == cap13::GuestNotifyStatus::WrongState &&
++          retry.process_attach(retry_teb) == cap13::GuestNotifyStatus::Ok &&
++          retry.thread_attach(retry_teb) == cap13::GuestNotifyStatus::Ok &&
++          retry.thread_detach(retry_teb) == cap13::GuestNotifyStatus::Ok &&
++          retry.process_detach(retry_teb) == cap13::GuestNotifyStatus::Ok &&
++          events == std::vector<std::pair<uint64_t, uint64_t>>(
++              {{0x5000, 1}, {0x5000, 1}, {0x5000, 2}, {0x5000, 3}, {0x5000, 0}}),
++          "failed process attach clears prior notification suppression");
++
++    std::printf("TOTAL: %d failed\n", failures);
++    return failures ? 1 : 0;
++}
+--- /dev/null
++++ b/loader/tests/typed_import_install_test.cpp
+@@ -0,0 +1,195 @@
++#include "win_api_shim.h"
++#include "win64_bridge.h"
++
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <thread>
++#include <sys/mman.h>
++#include <unistd.h>
++
++static int failures = 0;
++static int seal_calls = 0;
++static bool stamp_seen = false;
++static bool visible_during_seal = false;
++static cap13::WinApiShim* active_shim = nullptr;
++static const char* sealing_symbol = nullptr;
++
++static void check(bool condition, const char* label)
++{
++    std::printf("%s %s\n", condition ? "PASS" : "FAIL", label);
++    if (!condition) ++failures;
++}
++
++static bool reject_seal(void*, size_t, void*)
++{
++    ++seal_calls;
++    return false;
++}
++
++static bool seal_rx(void* memory, size_t bytes, void*)
++{
++    ++seal_calls;
++    visible_during_seal |= active_shim->resolve("kernel32.dll", sealing_symbol, 0) != nullptr;
++    const auto* code = static_cast<const uint8_t*>(memory);
++    stamp_seen = code[0] == 0x49 && code[1] == 0xBA &&
++                 code[10] == 0x49 && code[11] == 0xBB &&
++                 code[20] == 0x48 && code[21] == 0xB8 &&
++                 code[30] == 0xFF && code[31] == 0xE0;
++    return stamp_seen && mprotect(memory, bytes, PROT_READ | PROT_EXEC) == 0;
++}
++
++int main()
++{
++    using cap13::BuiltinInstallStatus;
++    const long page_bytes = sysconf(_SC_PAGESIZE);
++    if (page_bytes < 4096) return 2;
++    auto map_page = [=]() -> void* {
++        void* p = mmap(nullptr, static_cast<size_t>(page_bytes),
++                       PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
++        return p == MAP_FAILED ? nullptr : p;
++    };
++    void* sleep_page = map_page();
++    void* tick_page = map_page();
++    void* spare_page = map_page();
++    void* process_page = map_page();
++    void* thread_page = map_page();
++    void* filetime_page = map_page();
++    if (!sleep_page || !tick_page || !spare_page || !process_page ||
++        !thread_page || !filetime_page) return 2;
++
++    cap13::WinApiShim shim;
++    active_shim = &shim;
++    cap13::WinApiShim empty_shim;
++    check(empty_shim.install_builtin_integer_wrapper("kernel32.dll", "Sleep", spare_page,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Unsupported,
++          "unregistered catalog cannot publish an import");
++    shim.register_builtin_exports();
++    check(shim.resolve("kernel32.dll", "Sleep", 0) == nullptr &&
++          shim.resolve("kernel32.dll", "GetTickCount", 0) == nullptr &&
++          shim.resolve("kernel32.dll", "GetCurrentProcessId", 0) == nullptr &&
++          shim.resolve("kernel32.dll", "GetCurrentThreadId", 0) == nullptr &&
++          shim.resolve("kernel32.dll", "GetSystemTimeAsFileTime", 0) == nullptr,
++          "catalog names remain unresolved before executable sealing");
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", "Imaginary", spare_page,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Unsupported,
++          "unknown row is refused before stamping or sealing");
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", "VirtualAlloc", spare_page,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Unsupported,
++          "unreviewed Windows API stays unresolved");
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", "Sleep", nullptr,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::InvalidInput &&
++          shim.install_builtin_integer_wrapper("kernel32.dll", "Sleep", sleep_page,
++          31, seal_rx, nullptr) == BuiltinInstallStatus::InvalidInput &&
++          shim.install_builtin_integer_wrapper("kernel32.dll", "Sleep", sleep_page,
++          static_cast<size_t>(page_bytes), nullptr, nullptr) ==
++          BuiltinInstallStatus::InvalidInput,
++          "null, undersized, and unsealable memory are rejected");
++    check(seal_calls == 0 && shim.resolve("kernel32.dll", "VirtualAlloc", 0) == nullptr,
++          "invalid requests did not seal memory or publish APIs");
++
++    check(shim.install_builtin_integer_wrapper("KERNEL32.DLL", "Sleep", sleep_page,
++          static_cast<size_t>(page_bytes), reject_seal, nullptr) ==
++          BuiltinInstallStatus::SealFailed &&
++          shim.resolve("kernel32.dll", "Sleep", 0) == nullptr,
++          "failed executable-memory transition publishes no import");
++    sealing_symbol = "Sleep";
++    check(shim.install_builtin_integer_wrapper("KERNEL32.DLL", "Sleep", sleep_page,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Ok && stamp_seen && !visible_during_seal &&
++          shim.resolve("kernel32.dll", "Sleep", 0) == sleep_page,
++          "Sleep remains hidden during sealing, then publishes its trampoline");
++    sealing_symbol = "GetTickCount";
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", "GetTickCount", tick_page,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Ok && !visible_during_seal &&
++          shim.resolve("KERNEL32.DLL", "GetTickCount", 0) == tick_page,
++          "second typed time API publishes independently");
++
++    auto* sleep_entry = shim.resolve("kernel32.dll", "Sleep", 0);
++    auto* tick_entry = shim.resolve("kernel32.dll", "GetTickCount", 0);
++    const auto start = std::chrono::steady_clock::now();
++    const uint32_t before = static_cast<uint32_t>(cap13_win64_call0(tick_entry));
++    (void)cap13_win64_call1(sleep_entry, 5);
++    const uint32_t after = static_cast<uint32_t>(cap13_win64_call0(tick_entry));
++    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
++        std::chrono::steady_clock::now() - start).count();
++    check(elapsed >= 3 && elapsed < 10000 && uint32_t(after - before) < 10000,
++          "published Win64 Sleep and GetTickCount cross into SysV handlers");
++    const int before_duplicate = seal_calls;
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", "Sleep", spare_page,
++          static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::AlreadyPublished && seal_calls == before_duplicate &&
++          shim.resolve("kernel32.dll", "Sleep", 0) == sleep_page,
++          "duplicate installation cannot replace a live IAT target");
++
++    sealing_symbol = "GetCurrentProcessId";
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", sealing_symbol,
++          process_page, static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Ok && !visible_during_seal,
++          "process identity wrapper seals before publication");
++    sealing_symbol = "GetCurrentThreadId";
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", sealing_symbol,
++          thread_page, static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Ok && !visible_during_seal,
++          "thread identity wrapper seals before publication");
++    sealing_symbol = "GetSystemTimeAsFileTime";
++    check(shim.install_builtin_integer_wrapper("kernel32.dll", sealing_symbol,
++          filetime_page, static_cast<size_t>(page_bytes), seal_rx, nullptr) ==
++          BuiltinInstallStatus::Ok && !visible_during_seal,
++          "UTC file-time wrapper seals before publication");
++
++    const bool identity_ready =
++        shim.resolve("kernel32.dll", "GetCurrentProcessId", 0) == process_page &&
++        shim.resolve("kernel32.dll", "GetCurrentThreadId", 0) == thread_page &&
++        shim.resolve("kernel32.dll", "GetSystemTimeAsFileTime", 0) == filetime_page;
++    if (identity_ready)
++    {
++    check(static_cast<uint32_t>(cap13_win64_call0(process_page)) ==
++          static_cast<uint32_t>(getpid()),
++          "Win64 GetCurrentProcessId returns the host process identity");
++    const uint32_t main_tid = static_cast<uint32_t>(cap13_win64_call0(thread_page));
++    uint32_t worker_tid = 0;
++    std::thread worker([&] {
++        worker_tid = static_cast<uint32_t>(cap13_win64_call0(thread_page));
++        if (worker_tid != static_cast<uint32_t>(cap13_win64_call0(thread_page)))
++            worker_tid = 0;
++    });
++    worker.join();
++    check(main_tid != 0 && worker_tid != 0 && main_tid != worker_tid &&
++          main_tid == static_cast<uint32_t>(cap13_win64_call0(thread_page)),
++          "Win64 thread IDs stay stable and distinguish live threads");
++
++    struct FileTime { uint32_t low; uint32_t high; };
++    FileTime ft{0, 0};
++    const auto unix_before = std::chrono::system_clock::now();
++    (void)cap13_win64_call1(filetime_page, reinterpret_cast<uint64_t>(&ft));
++    const auto unix_after = std::chrono::system_clock::now();
++    const uint64_t windows_ticks = (uint64_t(ft.high) << 32) | ft.low;
++    const uint64_t epoch_delta = 116444736000000000ull;
++    const auto before_ticks = epoch_delta + uint64_t(std::chrono::duration_cast<
++        std::chrono::nanoseconds>(unix_before.time_since_epoch()).count() / 100);
++    const auto after_ticks = epoch_delta + uint64_t(std::chrono::duration_cast<
++        std::chrono::nanoseconds>(unix_after.time_since_epoch()).count() / 100);
++    check(windows_ticks >= before_ticks && windows_ticks <= after_ticks,
++          "Win64 file-time output has the documented UTC epoch and layout");
++    int stopped = 0;
++    cap13::WinApiShim::Hooks hooks{};
++    hooks.stop_mod = +[](void* user, const char*) { ++*static_cast<int*>(user); };
++    hooks.stop_user = &stopped;
++    shim.set_hooks(hooks);
++    (void)cap13_win64_call1(filetime_page, 0);
++    check(stopped == 1, "null FILETIME output stops the mod through its hook");
++    }
++    else check(false, "all three identity/time wrappers are callable");
++
++    munmap(spare_page, static_cast<size_t>(page_bytes));
++    // Published trampolines stay mapped until process exit, as required by
++    // the retained-module lifetime rule.
++    std::printf("TOTAL: %d failed\n", failures);
++    return failures ? 1 : 0;
++}
+--- /dev/null
++++ b/loader/tests/win32_sync_import_test.cpp
+@@ -0,0 +1,205 @@
++#include "win_api_shim.h"
++#include "win64_bridge.h"
++
++#include <atomic>
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <thread>
++#include <sys/mman.h>
++#include <unistd.h>
++
++static int failures = 0;
++static void check(bool ok, const char* label)
++{
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", label);
++    if (!ok) ++failures;
++}
++
++static bool allocate_writable(size_t minimum, void** address, size_t* bytes, void*)
++{
++    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
++    if (minimum > page) return false;
++    void* mapping = mmap(nullptr, page, PROT_READ | PROT_WRITE,
++                         MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (mapping == MAP_FAILED) return false;
++    *address = mapping;
++    *bytes = page;
++    return true;
++}
++static bool seal_executable(void* address, size_t bytes, void*)
++{
++    return mprotect(address, bytes, PROT_READ | PROT_EXEC) == 0;
++}
++static void release_mapping(void* address, size_t bytes, void*)
++{
++    munmap(address, bytes);
++}
++static bool wait_until(std::atomic<int>& value, int goal)
++{
++    const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(2);
++    while (value.load() < goal)
++    {
++        if (std::chrono::steady_clock::now() > limit) return false;
++        std::this_thread::yield();
++    }
++    return true;
++}
++
++struct StopContext
++{
++    std::atomic<int> calls{0};
++    void* wake_entry = nullptr;
++    uint64_t condition = 0;
++    bool reenter = false;
++};
++
++int main()
++{
++    cap13::WinApiShim shim;
++    shim.register_builtin_exports();
++    cap13::WinApiShim::ExecutableMemoryBackend backend{};
++    backend.allocate_writable = allocate_writable;
++    backend.seal_executable = seal_executable;
++    backend.release = release_mapping;
++    check(shim.set_executable_backend(backend), "executable-memory backend accepted");
++    StopContext stop{};
++    std::atomic<int>& stopped = stop.calls;
++    cap13::WinApiShim::Hooks hooks{};
++    hooks.stop_mod = +[](void* user, const char*) {
++        auto& state = *static_cast<StopContext*>(user);
++        state.calls.fetch_add(1);
++        if (state.reenter)
++            (void)cap13_win64_call1(state.wake_entry, state.condition);
++    };
++    hooks.stop_user = &stop;
++    shim.set_hooks(hooks);
++
++    void* acquire = shim.resolve("kernel32.dll", "AcquireSRWLockExclusive", 0);
++    void* release = shim.resolve("kernel32.dll", "ReleaseSRWLockExclusive", 0);
++    void* acquire_shared = shim.resolve("kernel32.dll", "AcquireSRWLockShared", 0);
++    void* release_shared = shim.resolve("kernel32.dll", "ReleaseSRWLockShared", 0);
++    void* sleep_cv = shim.resolve("kernel32.dll", "SleepConditionVariableSRW", 0);
++    void* wake_all = shim.resolve("kernel32.dll", "WakeAllConditionVariable", 0);
++    void* get_error = shim.resolve("kernel32.dll", "GetLastError", 0);
++    void* initialize_slist = shim.resolve("kernel32.dll", "InitializeSListHead", 0);
++    check(acquire && release && acquire_shared && release_shared &&
++          sleep_cv && wake_all && get_error && initialize_slist,
++          "six synchronization rows, GetLastError, and S-list init resolve");
++    if (!acquire || !release || !acquire_shared || !release_shared ||
++        !sleep_cv || !wake_all || !get_error || !initialize_slist) return 1;
++
++    alignas(8) uint64_t lock_word = 0;
++    alignas(8) uint64_t cv_word = 0;
++    const uint64_t lock = reinterpret_cast<uint64_t>(&lock_word);
++    const uint64_t cv = reinterpret_cast<uint64_t>(&cv_word);
++    stop.wake_entry = wake_all;
++    stop.condition = cv;
++    (void)cap13_win64_call1(acquire, lock);
++    std::atomic<int> entered{0};
++    std::thread blocked([&] {
++        (void)cap13_win64_call1(acquire, lock);
++        entered = 1;
++        (void)cap13_win64_call1(release, lock);
++    });
++    std::this_thread::sleep_for(std::chrono::milliseconds(15));
++    const bool stayed_blocked = entered.load() == 0;
++    (void)cap13_win64_call1(release, lock);
++    blocked.join();
++    check(stayed_blocked && entered == 1 && stopped == 0,
++          "exclusive SRW lock blocks another thread until release");
++
++    std::atomic<int> waiting{0};
++    std::atomic<int> woke{0};
++    auto waiter = [&] {
++        (void)cap13_win64_call1(acquire, lock);
++        waiting.fetch_add(1);
++        if (cap13_win64_call4(sleep_cv, cv, lock, 0xffffffffu, 0) != 0)
++            woke.fetch_add(1);
++        (void)cap13_win64_call1(release, lock);
++    };
++    std::thread one(waiter);
++    std::thread two(waiter);
++    const bool both_entered = wait_until(waiting, 2);
++    if (both_entered)
++    {
++        (void)cap13_win64_call1(acquire, lock);
++        (void)cap13_win64_call1(release, lock);
++        (void)cap13_win64_call1(wake_all, cv);
++    }
++    one.join();
++    two.join();
++    check(both_entered && woke == 2 && stopped == 0,
++          "wake-all releases and reacquires SRW lock for two waiters");
++
++    (void)cap13_win64_call1(acquire, lock);
++    const bool timed_out = cap13_win64_call4(sleep_cv, cv, lock, 0, 0) == 0;
++    const uint32_t timeout_error = static_cast<uint32_t>(cap13_win64_call0(get_error));
++    (void)cap13_win64_call1(release, lock);
++    check(timed_out && timeout_error == 1460 && stopped == 0,
++          "zero timeout returns FALSE and ERROR_TIMEOUT with lock reacquired");
++
++    (void)cap13_win64_call1(acquire_shared, lock);
++    std::atomic<int> shared_entered{0};
++    std::thread reader([&] {
++        (void)cap13_win64_call1(acquire_shared, lock);
++        shared_entered = 1;
++        (void)cap13_win64_call1(release_shared, lock);
++    });
++    const bool concurrent_readers = wait_until(shared_entered, 1);
++    (void)cap13_win64_call1(release_shared, lock);
++    reader.join();
++    check(concurrent_readers && stopped == 0,
++          "shared SRW acquisition allows a second reader concurrently");
++
++    (void)cap13_win64_call1(acquire_shared, lock);
++    const bool shared_timeout = cap13_win64_call4(sleep_cv, cv, lock, 0, 1) == 0;
++    (void)cap13_win64_call1(release_shared, lock);
++    check(shared_timeout && stopped == 0 &&
++          static_cast<uint32_t>(cap13_win64_call0(get_error)) == 1460,
++          "shared condition timeout reacquires the shared lock");
++
++    const int before_unowned = stopped;
++    stop.reenter = true;
++    const bool unowned_refused = cap13_win64_call4(sleep_cv, cv, lock, 0, 0) == 0;
++    stop.reenter = false;
++    check(unowned_refused && stopped == before_unowned + 1,
++          "invalid ownership stop hook can reenter condition wake");
++
++    const int before_bad = stopped;
++    (void)cap13_win64_call1(acquire, 0);
++    (void)cap13_win64_call1(acquire, lock);
++    const bool invalid_flags = cap13_win64_call4(sleep_cv, cv, lock, 0, 2) == 0;
++    (void)cap13_win64_call1(release, lock);
++    check(invalid_flags && stopped == before_bad + 2,
++          "null lock and unsupported condition flags stop this mod");
++
++    alignas(16) uint8_t slist_bytes[48];
++    std::memset(slist_bytes, 0xa5, sizeof(slist_bytes));
++    uint8_t* const slist_head = slist_bytes + 16;
++    (void)cap13_win64_call1(initialize_slist,
++                            reinterpret_cast<uint64_t>(slist_head));
++    bool bounded_zero = true;
++    for (size_t i = 0; i < sizeof(slist_bytes); ++i)
++        bounded_zero &= slist_bytes[i] == ((i >= 16 && i < 32) ? 0 : 0xa5);
++    check(bounded_zero, "S-list init zeroes exactly one aligned 16-byte x64 header");
++    std::memset(slist_head, 0x5a, 16);
++    (void)cap13_win64_call1(initialize_slist,
++                            reinterpret_cast<uint64_t>(slist_head));
++    bool cleared_again = true;
++    for (size_t i = 0; i < 16; ++i) cleared_again &= slist_head[i] == 0;
++    check(cleared_again, "S-list head can be reinitialized");
++    uint8_t before_reject[sizeof(slist_bytes)];
++    std::memcpy(before_reject, slist_bytes, sizeof(slist_bytes));
++    const int before_misaligned = stopped;
++    (void)cap13_win64_call1(initialize_slist,
++                            reinterpret_cast<uint64_t>(slist_head + 1));
++    (void)cap13_win64_call1(initialize_slist, 0);
++    check(stopped == before_misaligned + 2 &&
++          std::memcmp(before_reject, slist_bytes, sizeof(slist_bytes)) == 0,
++          "null and misaligned S-list heads are refused before writing");
++
++    std::printf("TOTAL: %d failed\n", failures);
++    return failures ? 1 : 0;
++}

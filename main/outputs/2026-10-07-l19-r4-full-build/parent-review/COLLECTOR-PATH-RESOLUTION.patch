@@ -1,0 +1,22 @@
+--- preserved-collector-v2
++++ collector-v3-root-relative-resolution
+@@ -7,7 +7,7 @@
+ OWN = Path(__file__).resolve().parent.parent
+ ROOT = OWN.parents[1]
+ sys.path.insert(0, str(OWN / 'execution'))
+-from admission import pin, read, sha, require
++from admission import pin, read, sha, require, resolved
+ 
+ 
+ def file_pin(path):
+@@ -52,8 +52,8 @@
+         for path, digest in read(run / 'input-hashes.json').items():
+             pin({'path': path, 'sha256': digest}, 'actual composition input')
+         for name, unit in receipt['selected_runtime_units'].items():
+-            pin({'path': unit['source'], 'sha256': unit['source_sha256']}, 'actual selected source/' + name)
+-            pin({'path': unit['object'], 'sha256': unit['object_sha256']}, 'actual selected object/' + name)
++            pin({'path': str(resolved(unit['source'])), 'sha256': unit['source_sha256']}, 'actual selected source/' + name)
++            pin({'path': str(resolved(unit['object'])), 'sha256': unit['object_sha256']}, 'actual selected object/' + name)
+         current = identities(candidate / 'supplier-contract.json')
+         added, removed = sorted(current.keys() - baseline.keys()), sorted(baseline.keys() - current.keys())
+         changed = {n: [baseline[n], current[n]] for n in current.keys() & baseline.keys() if baseline[n] != current[n]}

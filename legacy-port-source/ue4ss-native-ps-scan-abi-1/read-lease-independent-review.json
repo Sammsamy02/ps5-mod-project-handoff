@@ -1,0 +1,33 @@
+{
+  "scope": "Focused source review of synchronous owned service ReadLease and OwnedMappedImageCaller; no console/game access",
+  "recommendation": "Accept for explicit already-owned synchronous mapped-image leaf use under documented caller contract",
+  "actionable_findings": [],
+  "reasoning": [
+    "ReadLease acquires the authoritative service mutex before checking registry extents/permissions and retains it through all Rust borrowed reads. Checked service write/protect/free/revoke share that mutex.",
+    "Each requested range is checked, sorted and nonoverlapping; coverage traverses only actual registered entries and clips uniform protection spans to the caller-supplied end. No gap or unknown region becomes a slice.",
+    "Registration owners remain retained under lock; removal and unmap wait. Borrowed ScopedRegion still requires its original synchronous storage/external-change prohibition.",
+    "ReadLease Impl field destruction releases the mutex before span storage. Constructor failure destroys lock before member storage and permits later calls; same-thread destruction is enforced before unlock.",
+    "OwnedMappedImageCaller declares context and ranges before lease and geometry wrapper. The copied snapshot owner survives geometry wrapper destruction/constructor unwind and outlives lease unlock, preventing reentrant final owner destruction under service lock.",
+    "Permission conversion uses genuine registry flags, not user hints. Geometry checks exact snapshot readable-range coverage, including splits; code/data/slot helpers inspect only frozen descriptor spans and checked bounds.",
+    "Existing host ASan/UBSan controls demonstrate real blocked protect/free/write, rejected unknown/unreadable/gap/overlap extents and uniform page splits; caller controls and native SDK compilation receipts have exit0."
+  ],
+  "integration_conditions": [
+    "Use on the constructing thread synchronously; borrowed C view must not escape caller lifetime.",
+    "No owned-memory service operation, callback that invokes that service, or potentially reentrant logging occurs before caller destruction; the lock is nonrecursive.",
+    "Caller must prevent direct writes and external permission/unmap changes outside this service. The lease cannot synchronize those.",
+    "Admission is range/permission/role checking only; no engine identity, semantic resolver correctness or runtime ABI guarantee."
+  ],
+  "reviewed_files": {
+    "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-read-lease-1/src/OwnedMemory.cpp": "d824528d762f8156bee76456b66fdf895554daa3d521941e02be815568c3edbf",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-read-lease-1/include/polyhook2/OwnedMemory.hpp": "6a8fe108af18d70df9c6f3cf6e2403034d0debbd4c229047dafbbb4247c968aa",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-read-lease-1/include/OwnedMappedImageCaller.hpp": "8324518ac4088330627be09be6eee86df269144e26328349af82716ffe2a5b84",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-read-lease-1/tests/owned_controls.cpp": "fe7c83f8e607000144e9e0a5413820597788bebecba97fd2518aef6b0be52288",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-read-lease-1/tests/caller_controls.cpp": "3b7127243d05660522ffc19dda6200daf50bf9c9e757e4383ab24d795cd0c0fc",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-read-lease-1/build-1/commands.json": "5a792217c7d7c3a4855b0f1abe67f18085e8d771164fbf2d65193aa7db1f2f4c",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-read-lease-1/caller-2/commands.json": "ea8d5c1f5d4f6eb043a61b5500ac5ff54340996d2c363ef56ade66183836823d",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-read-lease-1/build-1/host-run.stdout": "7ff5bb4daab467cd40dd392c6cfe76156477a8ba710225dfb85f01103cc42e21",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-read-lease-1/build-1/host-run.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-ps-scan-abi-1/include/PsMappedImageCaller.hpp": "b4612648d0b0452bd53bbdeee092199b519cf0b4dbe68ef42a0ca19c1c3974e8",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-ps-scan-abi-1/include/PsScanAbi.h": "7647b3ff5cda515bf440e70dcf0870bea310868bc643a160e0ef0ef9183790ee"
+  }
+}

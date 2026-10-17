@@ -1,0 +1,47 @@
+{
+  "worker": "worker-e2e-runconfig-b",
+  "date": "2026-10-04",
+  "task": "Find the exact RUN-CONFIG B definition (worker-e2e-console-dry, worker-e2e-staging-final, worker-d1-chain-relink, worker-e2e-payload-build, E2E-CMD-SCHEMA), then execute every host-executable step of it against the PROMOTED tree (post-splice if worker-e2e-composer-splice delivered, else promoted receipt + vendored state, noting which form), with per-step receipts; mark console-bound remainder [PENDING user console session] with exact commands.",
+  "runconfig_b_definition": {
+    "is": "STAGED-E2E-COMMANDS.md (worker-e2e-staging-final) MODE B sequence: config-file entry E2E — 13 sha-verified cmd JSON files STORed to /data/modbridge/intake/e2e-cmd.json one at a time, bare payload dispatch, consumed-rename proof, stage 0-6 expected-line checks, Step C evidence + receipt JSON, 35-line ledger.",
+    "design_sources": [
+      "worker-e2e-console-dry/CONSOLE-E2E-EXECUTION.md",
+      "worker-e2e-console-dry/E2E-CMD-SCHEMA.md (schema, sec 8 re-pin preconditions)",
+      "worker-e2e-staging-final/STAGED-E2E-COMMANDS.md (the literal sequence)"
+    ],
+    "hard_gate": "MODE B only lawful against the re-pinned config-entry payload revision (CONFIG_ENTRY_SHA/BYTES from the re-pin receipt); can NEVER pass against D1-fixed e3489297... (681528 B). Identity gate in STAGED sec 3.",
+    "preconditions": [
+      "config-entry revision exists (core sha 43ea66c1..., tuples g1-cmd-entry-{parse,allowlist,consume}, chain 51->54)",
+      "receipt promoted in worker-d1-chain-relink/composition/receipts/patches.json (63c28979d21a9a56...)",
+      "imports re-proven 116, missing=[]",
+      "suites re-run green (bridge 75 / F-R2 87 / fault 186) + config-entry host cases",
+      "new build receipt (worker-e2e-payload-build build-r2)",
+      "STAGING re-pin with new sha + size law (CONFIG_ENTRY_SHA/CONFIG_ENTRY_BYTES)",
+      "13 staged cmd files byte-exact under worker-e2e-staging-final/cmd/ (SHASUMS.txt)"
+    ],
+    "pass_produces": "Step C evidence: MODBRIDGE_INST_E2E-e2e-status.jsonl + records.txt copies, on-console bridge artifact sha, cmdfiles.log, receipt JSON with per-stage verdicts vs sec 4 verbatim blocks, 35-line ledger, SIMULATED label on stages 4-5, stage-6 CORRECTION reference."
+  },
+  "execution_form": "PROMOTED-RECEIPT + VENDORED-PRE-SPLICE (worker-e2e-composer-splice has NOT delivered as of this run start; composition/vendored/modinst_core.c still pristine 45c04d08...; splice is explicitly a separate controller step per promotion-apply REPORT sec 5.3/sec 7).",
+  "scope": {
+    "in_scope_host_side": [
+      "sec 2 pre-flight: 13-cmd-file sha verification (shasum -c SHASUMS.txt)",
+      "staged cmd bytes vs E2E-CMD-SCHEMA sec 4 exact-JSON grammar validation",
+      "promoted receipt re-verification (sha, 54 tuples, tail ids, endpoint 43ea66c1...)",
+      "vendored-state check (pre-splice form confirmed, not assumed)",
+      "G1 block replay over the promoted tree (read-only scratch replay, independent re-run)",
+      "payload identity-gate host form: config-entry ELF sha/bytes vs re-pin values",
+      "precondition ledger: suites receipts, imports receipt, staging re-pin presence",
+      "console remainder enumerated with exact batch-runner commands"
+    ],
+    "out_of_scope": [
+      "any console contact (HTTP ps5-host-not-configured.invalid:8084, FTP ps5-host-not-configured.invalid:2121) — NO console contact constraint",
+      "target/payload execution on console or any [TARGET] claim",
+      "nested subagents",
+      "staging re-pin authoring (controller owns the manifest update per schema sec 8.4)",
+      "composer splice (separate controller step; not dispatched to me)"
+    ]
+  },
+  "honesty": "Host-side verification only. No step is claimed PASS without its own output captured in RUNCONFIG-B-RESULTS.md. Console dispatch/consumption/evidence steps are [PENDING user console session]; no console behavior is claimed. If the STAGING re-pin for the config-entry revision is absent, RUN-CONFIG B is NOT dispatch-ready and that is reported as a finding, not papered over.",
+  "result": "ALL HOST-EXECUTABLE STEPS PASS. Steps: 1 cmd-files 13/13 OK; 2 promoted receipt verified (63c28979..., 54 tuples, endpoint 43ea66c1...) with vendored core pre-splice (45c04d08...) — execution form PROMOTED-RECEIPT + VENDORED-PRE-SPLICE (worker-e2e-composer-splice NOT delivered); 3 schema grammar 13/13 incl sec-4 byte-equality; 4 identity gate MODE=B resolvable (build-r1 a21771f8.../681888 == re-pin; r2 twin differs in exactly the 16 build-id bytes); 5 independent G1 replay PASS; 6 schema-sec-8 preconditions all MET (suites 75/87/186 + config-entry suite PASS, census 116 missing=[], build receipt, re-pin values delivered); 7 OPEN item: STAGED-E2E-COMMANDS.md sec-1 placeholders not literally substituted (values delivered in PAYLOAD-DELIVERY sec 2; substituted paste-block exists in worker-e2e-console-stage-prep CONSOLE-STAGE-PLAN sec 2 — controller doc edit, not mine); 8 port erratum adjudicated upstream: 8084 pinned, 9223 never used; 9 console dispatch/consumption/Step C remain [PENDING user console session], exact commands = CONSOLE-STAGE-PLAN sec 2-5 driven by worker-console-batch-runner/console_batch.py (fake-drive rehearsal 15/15 PASS, ledger 35/35 — rehearsal only, NOT console evidence). RUN-CONFIG B is host-ready and dispatch-ready; the console E2E stage remains pending the user.",
+  "logs": ["logs/01-cmdfiles-shasum-check.log", "logs/02-promoted-receipt-verify.log", "logs/03-schema-grammar-validation.log", "logs/04-payload-identity-gate.log", "logs/05-g1-replay-independent.log", "logs/06-precondition-ledger.log", "logs/07-suites-and-batchrunner.log", "logs/08-port-delta.log"]
+}

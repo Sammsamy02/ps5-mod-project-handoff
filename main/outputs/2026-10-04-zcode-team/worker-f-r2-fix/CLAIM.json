@@ -1,0 +1,32 @@
+{
+  "role": "worker-f-r2-fix",
+  "date": "2026-10-04",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "task": "Fix F-R2 (worker-e2e-rehearsal REPORT.md §3) in a vendored copy of the worker-zip-to-mfb composition: (a) install refusal path must emit a matched e2e_status begin+end pair carrying the failure code instead of exiting cmd_install with a dangling begin line; (b) install success path must emit a terminal status event like download/prepare-archive; no other behavior change; tests for both plus the --no-auto-bundle refusal exactness; re-run the affected suites green.",
+  "bounds": {
+    "write_scope": "outputs/2026-10-04-zcode-team/worker-f-r2-fix/ ONLY",
+    "read_only_inputs": [
+      "outputs/2026-10-04-zcode-team/worker-zip-to-mfb/",
+      "outputs/2026-10-04-zcode-team/worker-e2e-final/",
+      "outputs/2026-10-04-zcode-team/worker-e2e-rehearsal/"
+    ],
+    "no_nested_subagents": true,
+    "no_network": true,
+    "no_console": true,
+    "call_budget": 25,
+    "ephemeral": "suites may write their own $TMPDIR trees only"
+  },
+  "method": {
+    "vendor": "copy worker-zip-to-mfb composition inputs (compose_bridge.py, owned/, test harness) into this dir, sha-logged against source",
+    "patch_chain": "extend the recorded splice/patch chain with F-R2 tuples applied AFTER the zb chain (apply order = list order), each tuple sha-logged",
+    "discipline": "exact-anchor splices only (count==1), provenance receipts regenerated in this dir",
+    "tests": "vendored bridge suite extended with F-R2 checks (refusal begin+end pairing w/ failure code, terminal install status event, --no-auto-bundle refusal still exact), full suite re-run green"
+  },
+  "acceptance": [
+    "e2e-status.jsonl from a refused install has no unmatched begin line",
+    "refusal end event carries the failure/exit code",
+    "successful install emits a terminal status event",
+    "--no-auto-bundle refusal output remains exactly as before",
+    "all affected suites pass with 0 failures"
+  ]
+}

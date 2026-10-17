@@ -1,0 +1,23 @@
+--- a/MonoOwner.cpp
++++ b/MonoOwner.cpp
+@@ -24,6 +24,9 @@
+ extern "C" std::int32_t modbridge_cap10_abi_version() noexcept;
+ extern "C" std::int32_t modbridge_cap10_runtime_probe(std::int32_t, std::int32_t*) noexcept;
+ extern "C" void diagnostic_event(const char*, unsigned int);
++#if defined(__PROSPERO__) || defined(MODBRIDGE_CAP10_STATIC_CORLIB)
++extern "C" void* mono_aot_module_mscorlib_info;
++#endif
+ namespace RC::Cap10Host
+ {
+     namespace
+@@ -122,6 +125,10 @@
+             mono_set_dirs(MODBRIDGE_CAP10_CORLIB_DIR, MODBRIDGE_CAP10_CONFIG_DIR);
+             mono_config_parse(nullptr); // Load the relocated runtime's global dllmap.
+             mono_jit_set_aot_mode(MONO_AOT_MODE_INTERP);
++#if defined(__PROSPERO__) || defined(MODBRIDGE_CAP10_STATIC_CORLIB)
++            // The generated symbol holds the file-info pointer; do not pass its address.
++            mono_aot_register_module(static_cast<void**>(mono_aot_module_mscorlib_info));
++#endif
+             owner.domain = mono_jit_init_version("ModBridge.Cap10", "v4.0.30319");
+             if (!owner.domain) { out.stage = Stage::InitFailed; return out; }
+             out.initialized = true;

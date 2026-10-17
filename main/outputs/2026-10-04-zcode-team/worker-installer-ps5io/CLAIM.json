@@ -1,0 +1,37 @@
+{
+  "worker": "worker-installer-ps5io",
+  "date": "2026-10-04",
+  "output_dir": "outputs/2026-10-04-zcode-team/worker-installer-ps5io/",
+  "claim": "Connect worker-7's tested installer transaction slice to real PS5 I/O callbacks, the native archive intake interface, and a runtime acknowledgment contract. Console-side adapter compiled (compile + nm receipts) against the pinned PS5 payload SDK; host-buildable path tested for everything POSIX-mappable. No console execution claimed.",
+  "scope": {
+    "delivered": [
+      "src/ps5_io.[ch]: mfb_io/mfx_io/mfa_io callback adapters over pinned sceKernel* APIs (open/read/write/close/lseek/mkdir/stat/rename/unlink/fsync/clock_gettime), explicit O_/mode semantics, bounded buffers, negative-errno convention; identical logic builds on host POSIX for tests",
+      "src/ps5_prepare_bridge.[ch]: installer prepare stage -> native archive intake (mb_archive_scan_v1/mb_archive_materialize_v1) call path over a dispatch vtable; host stub tests prove wiring; real libarchive closure link stays controller-composed",
+      "test/: host tests for fd semantics, errno fidelity, bounded IO, real mfa_activate through the adapter callbacks",
+      "RUNTIME-ACK.md: minimal runtime acknowledgment contract tied to mfa_status_* and bootstrap RuntimeState; UE4SS-side emissions listed as controller integration point",
+      "CONSOLE-E2E-PLAN.md: no-developer-intervention console acceptance steps",
+      "receipts/: console compile log, undefined-symbol nm, per-symbol provider check against pinned target libs, host test log"
+    ],
+    "explicitly_not_claimed": [
+      "No execution on any PS5 console or jailbroken environment",
+      "No network download implementation (controller/owner interface unchanged)",
+      "No FOMOD XML evaluation or .mfb production from arbitrary archives on console (host-side per worker-7)",
+      "No UE4SS runtime code modified; runtime-side status emission is a listed integration point, not implemented here",
+      "Driver-level directory enumeration (rmtree/opendir/readdir) of modinst.c not bound to sceKernel getdents; documented as open port item"
+    ]
+  },
+  "inputs_used": [
+    "outputs/2026-10-04-zcode-team/worker-7-installer/ (vendored modforge_* + REPORT PS5-port note)",
+    "outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk (pinned target libs + wrappers)",
+    "outputs/ps5-mod-bridge/native-host/archive/intake.[ch], dependency_build.py, verify.py (read-only reference)",
+    "outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/ (runtime_owner RuntimeState, README)",
+    ".superpowers/native-dependency-spike/sharpprospero-legacy-ctors-1 (pinned kernel signatures; read-only)",
+    "outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64 (pinned LLVM 21.1.8 tools)"
+  ],
+  "toolchain": {
+    "compiler_console": "sdk bin/prospero-clang (resolved through pinned LLVM 21.1.8 via LLVM_CONFIG)",
+    "nm": "SDK bin/llvm-nm over pinned LLVM 21.1.8",
+    "host": "clang (macOS) with -DPS5IO_HOST=1"
+  },
+  "target_resolution_proven": false
+}

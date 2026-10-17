@@ -1,0 +1,48 @@
+{
+  "part": "copyin-probe",
+  "item": "Claude l25 item 7 - resident copyin probe liveness logging",
+  "author": "agent-Q (2026-10-08)",
+  "status": "PENDING_INTEGRATION - overlay files + wiring instructions; NOT wired into build_runtime.py (see WIRING.md for the reason and the exact wiring)",
+  "scope": "Observation only. Adds one-time post-admission probe-state logging (diagnostic events + UE4SS.log line) and throttled events if a kernel-write probe dispatch is ever attempted after admission retirement. No probe behavior, gating or import set changes.",
+  "base_files": {
+    "unrealinitializer": {
+      "base_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l25-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp",
+      "base_sha256": "c4364dd734019969be12491ffd8a76bed24f5e3a862ba331179f3e53c650cd4e",
+      "candidate_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l25-runtime/copyin-probe/candidate/src/UnrealInitializer.cpp",
+      "candidate_sha256": "125a04718b52ef3b2314ca5c7bcae846ae5fc7c0c4d55fcb1ee38a2bd5c3765f",
+      "patch": "patches/unrealinitializer-copyin-probe-liveness.patch",
+      "patch_sha256": "0f2ecdab87010a83cfe522d11b784d1e81871313f52df6bbbdddcc6ac9cdf496",
+      "ownership": "base owned by the typescan-r4 agent; the patch must be adopted by that owner or the coordinator (pure additions)"
+    },
+    "runtime_start_bridge": {
+      "base_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l24-package/lineage/lifecycle/runtime_start_bridge.cpp",
+      "base_sha256": "89e4b64344fe0acd5cb5cf30156420f3f73c994f7ccdc949ab66b50a1a6f0eac",
+      "candidate_path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l25-runtime/copyin-probe/candidate/lifecycle/runtime_start_bridge.cpp",
+      "candidate_sha256": "f510c01484e3edcc21960fb0bb5c23562e548522b30cc629e43baf3dd1911712",
+      "patch": "patches/runtime_start_bridge-copyin-probe-liveness.patch",
+      "patch_sha256": "6771e33e022dd5511d47f53db6111ab4e150647eb3f64f429d31406bc8bb8297",
+      "ownership": "packaging-side lineage file (NOT consumed by build_runtime.py); wire at the l25 packaging step"
+    }
+  },
+  "new_diagnostic_tags": [
+    "copyin_probe_state (bridge; one-time at bank retirement: bit0 gate_armed, bit1 bank_retired, bit2 parent_fd_still_open(abnormal), bit3 sink_still_open(abnormal))",
+    "copyin_probe_gate_armed, copyin_probe_bank_retired, copyin_probe_parent_fd_open, copyin_probe_sinks_open, copyin_probe_nonce_used, copyin_probe_attempts_total (bridge; one-time)",
+    "copyin_probe_gate_released, copyin_probe_attempts_late_total (bridge; one-time at shutdown leave)",
+    "copyin_probe_fire_init_phase (bridge; first init-phase dispatch census)",
+    "copyin_probe_fire_post_admission + copyin_probe_fire_addr_lo/hi + copyin_probe_fire_len + copyin_probe_fire_parent_fd (bridge; throttled 10 s after retirement)",
+    "copyin_probe_liveness_state (=3: bank retired + gate still armed), copyin_probe_liveness_oracle_calls (UnrealInitializer; one-time, mirrors into UE4SS.log)",
+    "copyin_probe_fire_post_admission (UnrealInitializer admission-ops side; throttled 10 s; identical tag intentionally: both sides observe the same dispatch class)"
+  ],
+  "new_link_symbols": [],
+  "import_delta": "none - diagnostic_event is already an undefined symbol of the composed runtime object (outputs/2026-10-08-l24-build-r2/pass1/undefined.stdout line 38); build_runtime.py's raw-import-delta assertion is untouched",
+  "builds_run": false,
+  "console_contact": false,
+  "reanchor_note": {
+    "date": "2026-10-08",
+    "by": "agent-R (build execute failure fix, coordinator instruction)",
+    "change": "unrealinitializer patch struct-definition hunk re-anchored from the post-L13AdmissionOps region (generic admission context that drifted and landed AFTER the probe-lambda call on base cac95e48: use-of-undeclared CopyinProbeLiveness at composed :982) to the stable early landmark right after the extern-C bridge declaration block / #include \"NativePropertyReadBackend.inl\", BEFORE struct L13AdmissionOps. Content of all three hunks byte-identical; only anchor and line numbers changed.",
+    "old_patch_sha256": "2681497dcbbf4689350ffcbb4e11ee2d7939390ca0d124310e799d7fac02991d",
+    "new_patch_sha256": "0f2ecdab87010a83cfe522d11b784d1e81871313f52df6bbbdddcc6ac9cdf496",
+    "order_gate": "build_variants.py G2q-order-def-before-use now enforces struct-before-use on every composition"
+  }
+}

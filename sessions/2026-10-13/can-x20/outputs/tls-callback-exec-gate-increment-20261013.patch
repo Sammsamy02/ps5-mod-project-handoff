@@ -1,0 +1,172 @@
+--- a/loader/src/pe_tls_registration.cpp
++++ b/loader/src/pe_tls_registration.cpp
+@@ -25,7 +25,9 @@
+ 
+ PeTlsRegistration register_mapped_static_tls(StaticTlsBank& bank,
+                                              uint8_t* image, size_t image_size,
+-                                             const PeTlsDirectory64& tls)
++                                             const PeTlsDirectory64& tls,
++                                             TlsExecutableTarget executable_target,
++                                             void* executable_user)
+ {
+     PeTlsRegistration result;
+     size_t template_off = 0;
+@@ -71,6 +73,22 @@
+                 result.reason = "TLS callback target lies outside mapped image";
+                 return result;
+             }
++            bool executable = false;
++            try
++            {
++                executable = executable_target &&
++                    executable_target(callback, executable_user);
++            }
++            catch (...)
++            {
++                result.reason = "TLS callback executable validation failed";
++                return result;
++            }
++            if (!executable)
++            {
++                result.reason = "TLS callback target is not file-backed executable code";
++                return result;
++            }
+             try { callbacks.push_back(callback); }
+             catch (const std::bad_alloc&)
+             {
+--- a/loader/src/pe_tls_registration.h
++++ b/loader/src/pe_tls_registration.h
+@@ -23,9 +23,14 @@
+ 
+ // The caller must hold the loader's module-registration lock, pass a mapped
+ // image after base relocations, and keep it writable until this returns.
++// executable_target must identify file-backed executable mapped code; every
++// non-null callback is checked before a TLS slot or index write is published.
++using TlsExecutableTarget = bool (*)(uint64_t callback, void* user);
+ PeTlsRegistration register_mapped_static_tls(StaticTlsBank& bank,
+                                              uint8_t* image, size_t image_size,
+-                                             const PeTlsDirectory64& tls);
++                                             const PeTlsDirectory64& tls,
++                                             TlsExecutableTarget executable_target,
++                                             void* executable_user);
+ 
+ } // namespace cap13
+ #endif
+--- a/loader/tests/pe_tls_registration_test.cpp
++++ b/loader/tests/pe_tls_registration_test.cpp
+@@ -26,12 +26,21 @@
+             base + 0x300, 2, 0};
+ }
+ 
++static bool synthetic_executable_callback(uint64_t target, void* user)
++{
++    const auto& image = *static_cast<std::vector<uint8_t>*>(user);
++    const uint64_t base = reinterpret_cast<uint64_t>(image.data());
++    return target >= base + 0x400 && target < base + 0x500;
++}
++
+ int main()
+ {
+     std::vector<uint8_t> image(0x1000, 0);
+     auto dir = make_directory(image);
+     cap13::StaticTlsBank bank;
+-    auto result = cap13::register_mapped_static_tls(bank, image.data(), image.size(), dir);
++    auto result = cap13::register_mapped_static_tls(
++        bank, image.data(), image.size(), dir,
++        synthetic_executable_callback, &image);
+     uint32_t written = 0xFFFFFFFF;
+     std::memcpy(&written, image.data() + 0x200, sizeof(written));
+     check(result.ok && result.index == 0 && written == 0,
+@@ -58,7 +67,9 @@
+     auto bad_dir = make_directory(bad_image);
+     cap13::StaticTlsBank bad_bank;
+     bad_dir.AddressOfIndex = reinterpret_cast<uint64_t>(bad_image.data()) + bad_image.size() - 3;
+-    auto bad = cap13::register_mapped_static_tls(bad_bank, bad_image.data(), bad_image.size(), bad_dir);
++    auto bad = cap13::register_mapped_static_tls(
++        bad_bank, bad_image.data(), bad_image.size(), bad_dir,
++        synthetic_executable_callback, &bad_image);
+     uint32_t untouched = 0;
+     std::memcpy(&untouched, bad_image.data() + 0x200, sizeof(untouched));
+     check(!bad.ok && untouched == 0xDEADBEEF && bad_bank.attach_current_thread().slots.empty(),
+@@ -67,14 +78,18 @@
+     bad_dir = make_directory(bad_image);
+     const uint64_t outside = reinterpret_cast<uint64_t>(bad_image.data()) + bad_image.size();
+     std::memcpy(bad_image.data() + 0x300, &outside, sizeof(outside));
+-    bad = cap13::register_mapped_static_tls(bad_bank, bad_image.data(), bad_image.size(), bad_dir);
++    bad = cap13::register_mapped_static_tls(
++        bad_bank, bad_image.data(), bad_image.size(), bad_dir,
++        synthetic_executable_callback, &bad_image);
+     check(!bad.ok && bad_bank.attach_current_thread().slots.empty(),
+           "callback target outside mapped image refuses before registration");
+ 
+     bad_dir = make_directory(bad_image);
+     const uint64_t first_valid = reinterpret_cast<uint64_t>(bad_image.data()) + 0x400;
+     std::memcpy(bad_image.data() + 0x308, &outside, sizeof(outside));
+-    bad = cap13::register_mapped_static_tls(bad_bank, bad_image.data(), bad_image.size(), bad_dir);
++    bad = cap13::register_mapped_static_tls(
++        bad_bank, bad_image.data(), bad_image.size(), bad_dir,
++        synthetic_executable_callback, &bad_image);
+     check(!bad.ok && bad.callbacks.empty() && bad.index == UINT32_MAX &&
+           bad_bank.attach_current_thread().slots.empty(),
+           "partial callback scan leaves no callable work or assigned index");
+@@ -82,15 +97,32 @@
+     bad_dir = make_directory(bad_image);
+     std::memcpy(bad_image.data() + bad_image.size() - 8, &first_valid, sizeof(first_valid));
+     bad_dir.AddressOfCallBacks = reinterpret_cast<uint64_t>(bad_image.data()) + bad_image.size() - 8;
+-    bad = cap13::register_mapped_static_tls(bad_bank, bad_image.data(), bad_image.size(), bad_dir);
++    bad = cap13::register_mapped_static_tls(
++        bad_bank, bad_image.data(), bad_image.size(), bad_dir,
++        synthetic_executable_callback, &bad_image);
+     check(!bad.ok && bad_bank.attach_current_thread().slots.empty(),
+           "unterminated callback table refuses at mapped image boundary");
+ 
+     bad_dir = make_directory(bad_image);
+     bad_dir.EndAddressOfRawData = reinterpret_cast<uint64_t>(bad_image.data()) + bad_image.size() + 1;
+-    bad = cap13::register_mapped_static_tls(bad_bank, bad_image.data(), bad_image.size(), bad_dir);
++    bad = cap13::register_mapped_static_tls(
++        bad_bank, bad_image.data(), bad_image.size(), bad_dir,
++        synthetic_executable_callback, &bad_image);
+     check(!bad.ok && bad_bank.attach_current_thread().slots.empty(),
+           "template outside mapped image refuses before registration");
++
++    bad_dir = make_directory(bad_image);
++    const uint64_t nonexecuting = reinterpret_cast<uint64_t>(bad_image.data()) + 0x900;
++    std::memcpy(bad_image.data() + 0x300, &nonexecuting, sizeof(nonexecuting));
++    bad = cap13::register_mapped_static_tls(
++        bad_bank, bad_image.data(), bad_image.size(), bad_dir,
++        synthetic_executable_callback, &bad_image);
++    uint32_t index_marker = 0;
++    std::memcpy(&index_marker, bad_image.data() + 0x200, sizeof(index_marker));
++    check(!bad.ok && bad.callbacks.empty() && bad.index == UINT32_MAX &&
++          bad_bank.attach_current_thread().slots.empty() &&
++          index_marker == 0xDEADBEEF,
++          "in-image non-executable callback refuses before TLS registration");
+ 
+     std::printf("TOTAL: %d failed\n", failures);
+     return failures ? 1 : 0;
+--- a/loader/tests/real_tls_prepare.cpp
++++ b/loader/tests/real_tls_prepare.cpp
+@@ -163,6 +163,11 @@
+     return false;
+ }
+ 
++static bool executable_callback_adapter(uint64_t callback, void* user)
++{
++    return executable_callback(*static_cast<PreparedImage*>(user), callback);
++}
++
+ int main(int argc, char** argv)
+ {
+     if (argc != 3) return 2;
+@@ -170,8 +175,9 @@
+     PreparedImage mapped;
+     if (!map_for_tls(argv[1], mapped)) return 1;
+     StaticTlsBank bank;
+-    auto registration = register_mapped_static_tls(bank, mapped.bytes.data(),
+-                                                    mapped.bytes.size(), mapped.tls);
++    auto registration = register_mapped_static_tls(
++        bank, mapped.bytes.data(), mapped.bytes.size(), mapped.tls,
++        executable_callback_adapter, &mapped);
+     if (!registration.ok) return fail_exit(registration.reason);
+     uint32_t written_index = UINT32_MAX;
+     const size_t index_off = mapped.tls.AddressOfIndex -

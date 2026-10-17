@@ -1,0 +1,320 @@
+--- a/src/CodePatch.cpp
++++ b/src/CodePatch.cpp
+@@ -151,6 +151,7 @@
+     case PatchResult::kVerifyOpenFailed:    return "VERIFY_OPEN_FAILED";
+     case PatchResult::kReadbackMismatch:    return "READBACK_MISMATCH";
+     case PatchResult::kAlreadyApplied:      return "ALREADY_APPLIED";
++    case PatchResult::kOriginalMismatch:    return "ORIGINAL_MISMATCH";
+     case PatchResult::kRestoreWriteFailed:  return "RESTORE_WRITE_FAILED";
+     case PatchResult::kRestoreMprotectFailed: return "RESTORE_MPROTECT_FAILED";
+     case PatchResult::kRestoreVerifyFailed: return "RESTORE_VERIFY_FAILED";
+@@ -462,15 +463,17 @@
+ /* patch_code_ex                                                       */
+ /* ================================================================== */
+ 
+-PatchResult patch_code_ex(void* target, const void* replacement,
+-                          size_t length, PatchBackup* backup_out,
+-                          unsigned flags)
++static PatchResult patch_code_impl(void* target, const void* replacement,
++                                   const void* expected_original,
++                                   bool require_expected, size_t length,
++                                   PatchBackup* backup_out, unsigned flags)
+ {
+     emitf("[CAP3][PATCH] === BEGIN target=%p len=%zu flags=0x%x ===",
+           target, length, flags);
+ 
+     /* STEP 0: arguments. */
+-    if(!target || !replacement || length == 0 ||
++    if(!target || !replacement || (require_expected && !expected_original) ||
++       length == 0 ||
+        (length <= kMaxPatchBytes && !span_address_valid(target, length)))
+         return PatchResult::kBadArgs;
+     if(length > kMaxPatchBytes)
+@@ -490,6 +493,10 @@
+     if(pre != PatchResult::kOk)
+         return pre;
+     log_hex_bytes("original", target, length);
++
++    uint8_t expected_copy[kMaxPatchBytes];
++    if(require_expected)
++        memcpy(expected_copy, expected_original, length);
+ 
+     PatchBackup local_backup;
+     memset(&local_backup, 0, sizeof(local_backup));
+@@ -505,6 +512,14 @@
+     memcpy(local_backup.replacement_bytes, replacement, length);
+     local_backup.valid = 1;
+ 
++    if(require_expected &&
++       memcmp(local_backup.original_bytes, expected_copy, length) != 0)
++    {
++        emitf("[CAP3][PATCH] STEP=COMPARE original != planned snapshot "
++              "before OPEN -> ORIGINAL_MISMATCH (nothing written)");
++        return PatchResult::kOriginalMismatch;
++    }
++
+     /* STEP 2b (P1): LIVENESS — kekcall CHECK must report alive before the
+      * page is opened (verdict precondition P1: a failed probe aborts, it
+      * is never retried blindly). */
+@@ -516,7 +531,7 @@
+     }
+ 
+     /* Compare-before-write: refuse an idempotent-looking double patch. */
+-    if(memcmp(target, replacement, length) == 0)
++    if(memcmp(target, local_backup.replacement_bytes, length) == 0)
+     {
+         emitf("[CAP3][PATCH] STEP=COMPARE target already == replacement -> "
+               "ALREADY_APPLIED (nothing written)");
+@@ -543,8 +558,18 @@
+         return rr == PatchResult::kOk ? PatchResult::kVerifyOpenFailed : rr;
+     }
+ 
++    if(require_expected && memcmp(target, expected_copy, length) != 0)
++    {
++        emitf("[CAP3][PATCH] STEP=COMPARE original changed after OPEN -> "
++              "ORIGINAL_MISMATCH (no replacement written)");
++        PatchResult rr = revert_only(target, local_backup.original_bytes,
++                                     length, &span, "original-mismatch", false);
++        return rr == PatchResult::kOk ? PatchResult::kOriginalMismatch : rr;
++    }
++
+     /* STEP 5: WRITE + readback. Any mismatch -> REVERT-ONLY. */
+-    if(write_and_verify(target, replacement, length, "patch") !=
++    if(write_and_verify(target, local_backup.replacement_bytes, length,
++                        "patch") !=
+        PatchResult::kOk)
+     {
+         emitf("[CAP3][PATCH] WRITE failed -> REVERT-ONLY");
+@@ -567,6 +592,23 @@
+     emitf("[CAP3][PATCH] === PASS target=%p len=%zu orig_prot=0x%x ===",
+           target, length, (unsigned)span.orig_prot[0]);
+     return PatchResult::kOk;
++}
++
++PatchResult patch_code_ex(void* target, const void* replacement,
++                          size_t length, PatchBackup* backup_out,
++                          unsigned flags)
++{
++    return patch_code_impl(target, replacement, 0, false, length,
++                           backup_out, flags);
++}
++
++PatchResult patch_code_if_original_ex(void* target, const void* replacement,
++                                      const void* expected_original,
++                                      size_t length, PatchBackup* backup_out,
++                                      unsigned flags)
++{
++    return patch_code_impl(target, replacement, expected_original, true,
++                           length, backup_out, flags);
+ }
+ 
+ /* ================================================================== */
+--- a/src/CodePatch.hpp
++++ b/src/CodePatch.hpp
+@@ -77,6 +77,7 @@
+     kVerifyOpenFailed,       /* VERIFY-OPEN: re-query not writable (st4) */
+     kReadbackMismatch,       /* WRITE readback byte mismatch (step 5)    */
+     kAlreadyApplied,         /* target already contains replacement      */
++    kOriginalMismatch,       /* target != caller's planned original      */
+ 
+     /* Restoration failures (patch was applied or page open; state is
+      * recorded in the log and must be treated as DIRTY by the caller). */
+@@ -171,6 +172,16 @@
+ PatchResult patch_code_ex(void* target, const void* replacement,
+                           size_t length, PatchBackup* backup_out,
+                           unsigned flags);
++
++/* Checked variant for an instruction plan based on a prior byte snapshot.
++ * Refuses if target bytes differ from expected_original before OPEN or
++ * immediately before WRITE. The expected bytes are copied before either
++ * comparison, so an alias of target cannot track later changes. The caller
++ * must still guarantee thread quiescence throughout install/removal. */
++PatchResult patch_code_if_original_ex(void* target, const void* replacement,
++                                      const void* expected_original,
++                                      size_t length, PatchBackup* backup_out,
++                                      unsigned flags);
+ 
+ /* Task-required entry point: defaults to kFlagRequireLiveness and records
+  * the backup in the module slot consumed by unpatch_code(). */
+--- a/src/DetourPlan.cpp
++++ b/src/DetourPlan.cpp
+@@ -130,6 +130,7 @@
+     DetourPlan draft{};
+     draft.stolen_length = stolen;
+     draft.trampoline_length = trampoline_length;
++    std::memcpy(draft.original_bytes.data(), original, stolen);
+     std::memcpy(draft.trampoline.data(), original, stolen);
+     draft.target_patch.fill(0x90);
+     absolute_jump(draft.target_patch.data(), handler_address);
+--- a/src/DetourPlan.hpp
++++ b/src/DetourPlan.hpp
+@@ -28,6 +28,7 @@
+ 
+ struct DetourPlan {
+     size_t stolen_length = 0;
++    std::array<uint8_t, kMaxPatchBytes> original_bytes{};
+     std::array<uint8_t, kMaxPatchBytes> target_patch{};
+     size_t trampoline_length = 0;
+     std::array<uint8_t, kMaxTrampolineBytes> trampoline{};
+@@ -37,9 +38,10 @@
+ // a caller-owned trampoline address, and a handler address. No allocation,
+ // memory permission change, or code write occurs here. Short external
+ // branches may use absolute-jump islands after the jump-back, within the
+-// bounded trampoline array. The resulting bytes still require quiescence,
+-// executable-memory preparation, and the existing
+-// compare-before-write patch/restore protocol before use.
++// bounded trampoline array. original_bytes can be passed to
++// patch_code_if_original_ex to refuse a stale target snapshot. The
++// resulting bytes still require quiescence, executable-memory preparation,
++// and the existing patch/restore protocol before use.
+ DetourPlanResult plan_detour(const uint8_t* original, size_t available,
+                              uint64_t target_address,
+                              uint64_t trampoline_address,
+--- a/tests/detour_plan_test.cpp
++++ b/tests/detour_plan_test.cpp
+@@ -50,6 +50,9 @@
+                        trampoline, handler, &plan) == DetourPlanResult::Ok &&
+            plan.stolen_length == 14 && plan.trampoline_length == 28,
+            "whole-instruction prologue covers 14-byte jump");
++    expect(std::memcmp(plan.original_bytes.data(), ordinary.data(),
++                       plan.stolen_length) == 0,
++           "planner retains exact original bytes for checked installation");
+     expect(std::memcmp(plan.trampoline.data(), ordinary.data(), 14) == 0 &&
+            plan.target_patch[0] == 0xff && plan.target_patch[1] == 0x25 &&
+            unsigned64(plan.target_patch.data() + 6) == handler &&
+--- a/tests/host_test_protocol.cpp
++++ b/tests/host_test_protocol.cpp
+@@ -131,6 +131,8 @@
+ static long g_mprotect_allow   = -1;              /* -1 = never fail; else
+                                                      fail after N calls  */
+ static long g_mprotect_calls   = 0;
++static uint8_t* g_open_mutate_target = 0;        /* inject external edit */
++static uint8_t g_open_mutate_byte = 0;
+ 
+ extern "C" int cap3_host_mprotect(void* addr, size_t len, int prot);
+ 
+@@ -150,6 +152,12 @@
+         /* g_frozen deliberately does NOT track mprotect: it models a
+          * STALE query view (pre-OPEN protection) for the VERIFY-OPEN
+          * failure test. */
++    }
++    if(prot == (PROT_READ | PROT_WRITE | PROT_EXEC) &&
++       g_open_mutate_target)
++    {
++        *g_open_mutate_target = g_open_mutate_byte;
++        g_open_mutate_target = 0;
+     }
+     return 0;
+ }
+@@ -298,6 +306,7 @@
+     g_vq_not_writable  = 0;
+     g_vq_fail_next     = 0;
+     g_mprotect_allow   = -1;
++    g_open_mutate_target = 0;
+ }
+ 
+ static bool page_prot_is(const void* addr, int prot)
+@@ -479,6 +488,95 @@
+               "UNPATCH] === BEGIN", "STEP=OPEN", "STEP=WRITE+READBACK",
+               "STEP=RESTORE-PROT", "PASS restoration proven"}),
+           "unpatch log order: BEGIN < OPEN < WRITE < RESTORE-PROT < PASS");
++}
++
++static void test_expected_original_guard(void)
++{
++    log_clear();
++    PatchBackup b;
++    memset(&b, 0, sizeof(b));
++    uint8_t expected[kPatchLen];
++    memcpy(expected, g_span + 4, kPatchLen);
++    uint8_t stale[kPatchLen];
++    memcpy(stale, expected, kPatchLen);
++    stale[0] ^= 1;
++    const long before = g_mprotect_calls;
++    PatchResult r = cap03::patch_code_if_original_ex(
++        g_span + 4, kReplacement, stale, kPatchLen, &b,
++        cap03::kFlagSkipLiveness);
++    CHECK(r == PatchResult::kOriginalMismatch,
++          "stale planned bytes refuse before opening text");
++    CHECK(g_mprotect_calls == before &&
++          memcmp(g_span + 4, expected, kPatchLen) == 0 && !b.valid,
++          "stale refusal leaves permissions, bytes and backup untouched");
++
++    log_clear();
++    g_open_mutate_target = g_span + 4;
++    g_open_mutate_byte = 0x5a;
++    r = cap03::patch_code_if_original_ex(
++        g_span + 4, kReplacement, g_span + 4, kPatchLen, &b,
++        cap03::kFlagSkipLiveness);
++    CHECK(r == PatchResult::kOriginalMismatch,
++          "target edit during OPEN refuses even with aliased expected pointer");
++    CHECK(g_span[4] == 0x5a &&
++          memcmp(g_span + 4, kReplacement, kPatchLen) != 0 && !b.valid,
++          "post-OPEN mismatch never writes the replacement or publishes backup");
++    CHECK(page_prot_is(g_span, kOrigProt) &&
++          log_contains("STEP=RESTORE-PROT"),
++          "post-OPEN mismatch restores original protection");
++    g_span[4] = expected[0];
++    fixture_reset_injections();
++
++    g_open_mutate_target = g_span + 4;
++    g_open_mutate_byte = 0x5a;
++    g_mprotect_allow = g_mprotect_calls + 1; /* OPEN succeeds, restore fails */
++    r = cap03::patch_code_if_original_ex(
++        g_span + 4, kReplacement, expected, kPatchLen, &b,
++        cap03::kFlagSkipLiveness);
++    CHECK(r == PatchResult::kRestoreMprotectFailed,
++          "failed protection restore after stale OPEN reports dirty state");
++    CHECK(g_span[4] == 0x5a && !b.valid &&
++          page_prot_is(g_span, PROT_READ | PROT_WRITE | PROT_EXEC),
++          "dirty refusal does not overwrite another writer's bytes");
++    g_span[4] = expected[0];
++    g_pages[(uintptr_t)g_span] = kOrigProt;
++    fixture_reset_injections();
++
++    log_clear();
++    r = cap03::patch_code_if_original_ex(
++        g_span + 4, kReplacement, expected, kPatchLen, &b,
++        cap03::kFlagSkipLiveness);
++    CHECK(r == PatchResult::kOk && b.valid &&
++          memcmp(b.original_bytes, expected, kPatchLen) == 0,
++          "matching snapshot patches and records exact original bytes");
++    PatchResult ur = cap03::unpatch_code_ex(&b, 0);
++    CHECK(ur == PatchResult::kOk &&
++          memcmp(g_span + 4, expected, kPatchLen) == 0 &&
++          page_prot_is(g_span, kOrigProt),
++          "checked patch restores original bytes and protection");
++
++    uint8_t mutable_replacement[kPatchLen];
++    memcpy(mutable_replacement, kReplacement, kPatchLen);
++    g_open_mutate_target = mutable_replacement;
++    g_open_mutate_byte = 0x5a;
++    r = cap03::patch_code_if_original_ex(
++        g_span + 4, mutable_replacement, expected, kPatchLen, &b,
++        cap03::kFlagSkipLiveness);
++    CHECK(r == PatchResult::kOk &&
++          memcmp(b.replacement_bytes, kReplacement, kPatchLen) == 0 &&
++          memcmp(g_span + 4, kReplacement, kPatchLen) == 0,
++          "checked patch writes the captured replacement even if caller buffer changes");
++    if(r == PatchResult::kOk)
++    {
++        memcpy(g_span + 4, b.replacement_bytes, kPatchLen);
++        CHECK(cap03::unpatch_code_ex(&b, 0) == PatchResult::kOk,
++              "captured replacement can be restored after caller buffer changes");
++    }
++    fixture_reset_injections();
++    CHECK(cap03::patch_code_if_original_ex(
++              g_span + 4, kReplacement, 0, kPatchLen, &b,
++              cap03::kFlagSkipLiveness) == PatchResult::kBadArgs,
++          "checked patch requires an expected-original snapshot");
+ }
+ 
+ static void test_cross_page_span(void)
+@@ -854,6 +952,7 @@
+     test_execute_only_refused_before_read();
+     test_mixed_protection();
+     test_happy_patch_unpatch();
++    test_expected_original_guard();
+     test_cross_page_span();
+     test_already_applied();
+     test_open_mprotect_failure();

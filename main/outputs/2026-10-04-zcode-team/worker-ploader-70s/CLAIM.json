@@ -1,0 +1,70 @@
+{
+  "worker": "worker-ploader-70s",
+  "date": "2026-10-05",
+  "scope": "read-only decomposition of the 70.7-71.8s inter-plugin gap (composition module_start refusal -> path_test PATH_TEST stamp); proposal-only patch; no console changes, no builds",
+  "mission_question": "enumerate every wait between finishing one plugin's pt_call and starting the next; identify what composes to ~70s; does a FAILED module_start trigger a different cleanup path; which path was the ~32s worst case modeled for; bounded fix",
+  "inputs": {
+    "pinned_ploader_source": {
+      "path": ".superpowers/native-dependency-spike/ploader-cleanup-candidate-1/original/main.c",
+      "sha256": "2b521cd7751636d10291bf14435bebe9590213c2208d9a2dc7f9f49cab09330b",
+      "verified_this_session": true,
+      "lines": 851
+    },
+    "timing_evidence": "outputs/2026-10-04-zcode-controller/launch10-evidence/run{1,3,4}-sdiag.jsonl t_ms + run{1,2,3,4}-ue4ss.log [t=]/PATH_TEST stamps (per-writer monotonic clock correlation validated 3/3 exact by worker-real-timing; reused, not re-derived)",
+    "latency_model": "outputs/2026-10-04-zcode-team/worker-injection-latency/LATENCY-ANALYSIS.md + PATCHES/01..04",
+    "ini_law": "2-plugin config 1216aab6... (supplier_composition=2 FIRST, path_test=2 SECOND/LAST, all else 0) per LAUNCH-DAY-10.md pre-state; entry and facts disabled"
+  },
+  "gap_measurements": {
+    "method": "UE4SS refusal stamp [t=<ms> pid=<pid>] minus nothing; PATH_TEST monotonic-ns/1e6 minus refusal ms; same validated monotonic clock, per-boot same-pid writers",
+    "boots": [
+      {"run": 1, "pid": 317, "refusal_ms": 60004266, "path_test_ms": 60076100.108, "gap_s": 71.834},
+      {"run": 2, "pid": 341, "refusal_ms": 60249877, "path_test_ms": 60320585.374, "gap_s": 70.708},
+      {"run": 3, "pid": 355, "refusal_ms": 60900581, "path_test_ms": 60971455.045, "gap_s": 70.874},
+      {"run": 4, "pid": 370, "refusal_ms": 62842697, "path_test_ms": 62913653.733, "gap_s": 70.957}
+    ],
+    "mean_s": 71.09,
+    "spread_s": 1.12,
+    "run4_corroboration": "pid 370 sdiag: module_start_entered t=62841898 (+0), runtime_start_failed t=62842696 (+798ms), module_start_return t=62842700 (+802ms) -> C_comp(run4)=802ms, same shape as runs 1-3 (0.72-0.81s); runtime-status session stamp 62842688 = +790ms; UE4SS r4 line 62842697 is the same refusal +/-1ms rounding"
+  },
+  "source_facts": [
+    {"id": "F01", "fact": "Plugins run serially in ini order inside the per-plugin loop (main.c:776-820). Each pid is processed exactly once per invocation (known-list, main.c:755-764): there is NO retry of a failed plugin within an invocation."},
+    {"id": "F02", "fact": "The injection wait point is pt_call (main.c:260-290): PT_CONTINUE at 277, waitpid_timeout(pid,&status,30000) at 280. The shellcode ends in INT3 after 'call r15' (main.c:93-96), so the SIGTRAP fires when sceKernelLoadStartModule - and therefore module_start - has RETURNED."},
+    {"id": "F03", "fact": "A FAILED module_start (rc<=0) does NOT take a different ploader path: the SIGTRAP still arrives, pt_call takes its SUCCESS branch (getregs/setregs/return rax, main.c:285-289); the failure is only the SIGN of the returned handle (ok = rc > 0, main.c:810). The pt_call FAILURE branch (main.c:280-283) would require a lost SIGTRAP or non-SIGTRAP stop - neither exists in the evidence (module_start_return stamped in 4/4 boots)."},
+    {"id": "F04", "fact": "Post-pt_call cleanup is BYTE-IDENTICAL for OK and FAIL: kernel_mprotect de-exec (main.c:448), pt_munmap (452), notify OK/FAIL - only the string differs (812 vs 814), restore_creds (816), pt_detach (817), all_ok=0 (819, no break - the loop CONTINUES to the next plugin; only death-while-waiting breaks, main.c:787). There is NO cleanup timeout and NO cleanup retry anywhere in the file."},
+    {"id": "F05", "fact": "wait_for_needs is charged PER PLUGIN (main.c:784, inside the per-plugin loop): path_test re-pays the full readiness wait ~0.8s after composition already passed it."},
+    {"id": "F06", "fact": "wait_stable (main.c:518-559): tick=50ms; max_ticks = max_ms/tick = 500 for mode 2 (25000/50). There is NO clock check inside the loop: max_ms bounds the TICK COUNT, not wall time. The loop's only sleep is usleep(50ms) per tick (554)."},
+    {"id": "F07", "fact": "Per-tick compute: count_modules (main.c:531 -> 492-499) = 128 kernel_dynlib_mapbase_addr calls, called a FIRST time at 531; deps_ready (538 -> 509-514) = 3x(dynlib_handle+mapbase) + pt_resolve <=2 + count_modules' 128 again = ~136. Total ~264 kernel calls per tick, none short-circuited for a healthy game process (all deps present)."},
+    {"id": "F08", "fact": "wait_stable exits: (a) fast path - 20 consecutive stable-count ticks (stable_req=20, main.c:521) + usleep(600ms) settle + re-verify (540-545); (b) exhaust path - 500 ticks then 'try anyway if still alive' returns 1 (557-558). Both paths return 1; neither records which path ran."},
+    {"id": "F09", "fact": "pt_attach (main.c:176-190): <=3 attempts x (kill(0) + PT_ATTACH + waitpid_timeout(2000) + usleep(300ms)) = <=6.9s worst; typically 1 attempt ~0.3s."},
+    {"id": "F10", "fact": "pt_syscall (main.c:214-250, used by pt_mmap/pt_munmap at 252-258): PT_STEP loop capped at 10000 iterations, each paying waitpid_timeout(pid,NULL,1000) (WNOHANG poll every 10ms) + PT_GETREGS; breaks when rsp unwinds past entry (2-4 steps for a syscall stub)."},
+    {"id": "F11", "fact": "Remaining inter-plugin calls are ms-class: notify = 1 sceKernelSendNotificationRequest (main.c:128-140); restore_creds = 10 kernel_copyin + 2 kernel sets (321-346); jb_pid = 9 copyin + 2 sets (349-376); save_creds = 10 copyout + 2 gets (294-319); pt_detach = 1 ptrace with 2 ucred authid switches (145-157, 192-194)."}
+  ],
+  "worst_case_arithmetic": {
+    "note": "sleep-only worst case (the model that produced 'the ~32s worst case'):",
+    "components_s": {"readiness_ticks_max": 25.0, "attach_worst": 6.9, "cleanup_epilogue_worst": 0.5, "inject_to_stamp_worst": 0.5, "total": 32.9},
+    "answer_to_mission": "The ~32s worst case is the SLEEP-ONLY bound of the ONE path both plugins take regardless of failure or success (F03/F04: there is no distinct failure-path flow). The latency worker's '~2-3s' was the same path's fast case (fast readiness 1.6s sleep-only + typical attach). Neither figure modeled F06/F07: the tick loop's kernel-call compute is unbounded by max_ms, and the readiness burn happens TWICE per invocation (F05).",
+    "wall_clock_model": "gap = cleanup(0.05-0.5) + readiness(20x(0.05+264K)+0.6 fast | 500x(0.05+264K) full-burn) + attach(0.3-6.9) + creds(~0) + inject-to-stamp(0.2-0.5), where K = per-kernel-call seconds",
+    "h1_fit": "full-burn with K~0.30-0.33ms: 500x(0.05+264*0.0003)=64.6s + 0.3 + 0.3-6.9 + 0.3 = 65.5-72.2s -> matches all four boots (70.7-71.8s) with ONE stable parameter; run1's +0.9s is attach/jitter-class"
+  },
+  "hypotheses": [
+    {"id": "H1", "text": "path_test's readiness re-payment (F05) runs its FULL 500-tick burn (module count never holds 20 stable ticks mid-boot) and the tick compute (~264 kernel calls x 500 ticks = 132,000 calls at K~0.3ms) stretches the '25s' budget to ~64s wall (F06/F07)", "verdict": "MATCH - primary", "why": "deterministic across 4 boots (fixed tick cap, stable K); only hypothesis whose fitted parameter lands in a plausible range; explains why composition's own pre-module_start readiness is invisible-but-large"},
+    {"id": "H2", "text": "pt_syscall step-loop pathology (F10) walking thousands of instructions", "verdict": "REJECT (residual, cheap to disprove)", "why": "no mechanism for ~3500 clean steps through a 2-3 instruction munmap stub; would also inflate composition's own inject_prx dt. DISCRIMINATOR for next run: composition FAIL toast dt ~1-2s (H1) vs ~70s (H2); patch 03 steplog records it durably"},
+    {"id": "H3", "text": "pt_call's 30s waitpid timeout fired on composition (lost SIGTRAP), then readiness", "verdict": "REJECT", "why": "module_start_return stamped +802ms in 4/4 boots (SIGTRAP demonstrably generated); predicted totals 40.6s (fast readiness) or >=88s (full burn with same K) - neither is 70.9s"},
+    {"id": "H4", "text": "second ploader invocation, or 3+ ini entries between composition and path_test (missing files each paying readiness)", "verdict": "REJECT", "why": "ini law is the 2-plugin 1216aab6 config (verified in LAUNCH-DAY-10 pre-state, staging never writes the ini); ploader is one-shot per launch"},
+    {"id": "H5", "text": "mission's primary hypothesis: a failed-plugin cleanup timeout", "verdict": "REFUTED AT SOURCE", "why": "F03/F04: the failure path is the success path plus one toast string; no cleanup timeout, no retry, no extra wait exists on rc<=0"}
+  ],
+  "fix_estimate": {
+    "02_hoist_readiness_existing": "removes the per-plugin re-payment (the dominant term): gap 70.9s -> 0.8-7.9s (cleanup 0.3-0.5 + attach 0.3-6.9 + inject-to-stamp 0.2-0.5); saves ~63-70s of MEASURED gap per invocation",
+    "05_wallclock_deadline_new": "bounds ANY readiness wait to max_ms WALL: full-burn capped at ~25.3s instead of ~64s; total mod-side serial <= ~34s worst with 02, vs implied ~137s today; zero behavior change in the fast path (500 ticks already take >=25s of sleep alone)",
+    "05_alone": "gap <= ~32.7s (saves ~38s when settling; 0 when stable); does NOT fix the double payment"
+  },
+  "ini_order_mitigation_verdict": "REJECTED: moving path_test first would make PATH_TEST stamp BEFORE composition's refusal - it masks the measured gap, saves ZERO real seconds (both readiness burns are still paid; total serial unchanged), breaks the documented terminator guard (LAUNCH-DAY-10: 'PATH_TEST stamps prove full ini traversal (path_test is the TERMINATOR)'), and loses comparability with runs 1-4.",
+  "honesty": [
+    "The 70.7-71.8s gap is MEASURED (4/4 boots, per-writer same-clock stamps). Its INTERNAL split (readiness vs attach vs cleanup) is INFERENCE from pinned source: no ploader-side stamps exist in any log; patch 03 (steplog) is the instrument that will confirm or refute H1's split.",
+    "K (~0.3ms per kernel_dynlib call) is a FITTED parameter, not an independent measurement; no datum for it exists in the evidence. The whole H1 attribution stands or falls with it - flagged as such.",
+    "Composition's OWN readiness burn (before module_start_entered, outside the measured gap) is inferred by symmetry with H1 and is unmeasured; this EXTENDS the implied injection age beyond TIMING T07's '~2-28s' bound, which had silently assumed sleep-only readiness.",
+    "The mission's run4 stamps were re-derived from raw evidence, not trusted: refusal [t=62842697ms pid=370] and PATH_TEST 62913653732826ns reproduce exactly (gap 70.957s).",
+    "Patch 05 is verified to apply (patch -p1, zero offsets/rejects) both standalone and after the 01-04 series; full compilation requires PS5 SDK headers, unavailable on this host - same verification standard as the latency worker's series.",
+    "No console writes, no builds, no engine files touched; deliverables and /tmp scratch only."
+  ]
+}

@@ -1,0 +1,143 @@
+{
+  "schema": "mb-windows-heap-process-checkpoint-v1",
+  "date": "2026-10-04",
+  "status": "LOCAL_HEAP_PROCESS_SLICE_VERIFIED",
+  "overall_dll_runtime_goal_complete": false,
+  "summary": "Explicit native heap ownership, per-thread Windows errno storage, and pinned Microsoft x64 import bridges are implemented and verified using a self-built DLL on the local x86_64 host.",
+  "receipts": {
+    "heap": {
+      "copy": "HEAP-RECEIPT.json",
+      "source": ".superpowers/native-dependency-spike/windows-heap-owner-1/e7450f5bf63a4a7f903f62530fbda4a8/receipt.json",
+      "sha256": "507ce5d7bcd26fe28efe0504b44db128ec5d4b669e4a94ff25d3757c17bf76e4",
+      "status": "HEAP_OWNER_HOST_AND_PS5_OBJECT_PASSED"
+    },
+    "threads": {
+      "copy": "THREADS-RECEIPT.json",
+      "source": ".superpowers/native-dependency-spike/windows-thread-errno-1/2b498da2a1aa43b1bfb8dc59a8d1d0c2/receipt.json",
+      "sha256": "33d1df17497f3dcd549783f158e5c599c03e32bbadc9592b1e45925b9912a9bd",
+      "status": "NATIVE_THREAD_ERRNO_HOST_AND_PS5_OBJECT_PASSED"
+    },
+    "execution": {
+      "copy": "EXECUTION-RECEIPT.json",
+      "source": ".superpowers/native-dependency-spike/heap-pe-runtime-1/c4f61649bb0a40d1b26665add4c9a99b/receipt.json",
+      "sha256": "a797308d9b1e192ef12cdda2d78410c5cc0cc8f2183aaa28382ae1320a349a81",
+      "status": "OWNED_HEAP_PE_HOST_AND_PS5_BRIDGE_OBJECT_PASSED"
+    }
+  },
+  "verified": {
+    "heap": {
+      "receipt": "HEAP-RECEIPT.json",
+      "host_groups": 6,
+      "asan_ubsan_passed": true,
+      "result": "6 heap-owner groups passed: pinned lifetime, alignment/accounting, calloc/overflow, realloc semantics, failure preservation, errno identity",
+      "ps5_build_method": "direct PS5 C frontend",
+      "ps5_object_bytes": 4216,
+      "ps5_object_sha256": "9ab548bf4c331f6eccc19e33fc5ae7490008f262a1f36b9fbc5ce5622fef3bba",
+      "ps5_undefined_imports": []
+    },
+    "threads": {
+      "receipt": "THREADS-RECEIPT.json",
+      "actual_native_threads": 3,
+      "asan_ubsan_passed": true,
+      "result": "3 actual native threads: isolated stable Windows errno, explicit detach, exit destructor, busy close passed",
+      "ps5_build_method": "direct PS5 C frontend",
+      "ps5_object_bytes": 6368,
+      "ps5_object_sha256": "85589327ee77a5e96916ba200a1b3f8eb2fadca2c18f7682273c72c9298adc8a",
+      "ps5_undefined_imports": [
+        "abort",
+        "calloc",
+        "free",
+        "malloc",
+        "pthread_getspecific",
+        "pthread_key_create",
+        "pthread_key_delete",
+        "pthread_mutex_destroy",
+        "pthread_mutex_init",
+        "pthread_mutex_lock",
+        "pthread_mutex_unlock",
+        "pthread_setspecific"
+      ]
+    },
+    "execution": {
+      "receipt": "EXECUTION-RECEIPT.json",
+      "platform_scope": "Local x86_64 host only; self-built no-entry PE DLL",
+      "result": {
+        "owned_pe_executed": true,
+        "heap_errno_imports_called": 5,
+        "composed_crt_imports_called": 1,
+        "realloc_failure_preserved": true,
+        "thread_errno_isolated": true,
+        "session_lifetime_passed": true,
+        "unloaded": true,
+        "console_contact": false
+      },
+      "bridge_checks": "heap bridge session/binder/lifetime checks passed",
+      "fixture_sha256": "c0cc619ecbe07f3e4b54625daed8fe9a9d45fea7ac231f220da0121af1298333",
+      "ps5_build_route": "FreeBSD9 C frontend -> unedited win64cc IR -> PS5 LLVM backend",
+      "ps5_object_bytes": 7416,
+      "ps5_object_sha256": "14831532136574fb440d14e203b4d358407d9e6a5ba4267133c90bb92052efbc",
+      "ps5_undefined_imports": [
+        "mb_win_crt_bind",
+        "mb_win_heap_acquire",
+        "mb_win_heap_calloc",
+        "mb_win_heap_errno",
+        "mb_win_heap_free",
+        "mb_win_heap_malloc",
+        "mb_win_heap_realloc",
+        "mb_win_heap_release"
+      ]
+    },
+    "source_hashes_match_all_three_receipts": true,
+    "thread_import_declarations": {
+      "evidence": "THREAD-IMPORT-EVIDENCE.json",
+      "sha256": "f594f00f695fb1e44acb00296e370d0c4444534b2e9297ba0d4f3f12b68c7024",
+      "exact_stub_names": 12,
+      "existing_provider_map_entries": 11,
+      "additional_declared_mapping": {
+        "pthread_key_delete": "libkernel_web.so"
+      },
+      "in_game_module_library_version_resolution_verified": false
+    }
+  },
+  "supported_new_import_pairs": {
+    "api-ms-win-crt-heap-l1-1-0.dll": [
+      "malloc",
+      "calloc",
+      "realloc",
+      "free"
+    ],
+    "api-ms-win-crt-runtime-l1-1-0.dll": [
+      "_errno"
+    ]
+  },
+  "ownership_contract": "Caller prepares each thread before DLL calls. Bridge sessions pin an active heap owner, serialize heap access, and survive consumer cleanup failures. Live allocations and pins prevent owner teardown; borrowed errno pointers remain bound to registered-thread/session lifetimes.",
+  "limits": {
+    "ps5_object_compile_only": true,
+    "ps5_execution": false,
+    "console_contact": false,
+    "game_success": false,
+    "new_playable_ue4ss_build": false,
+    "downloaded_dll_execution": false,
+    "full_windows_crt_or_tls_emulation": false,
+    "automatic_loader_thread_notifications": false,
+    "native_executable_memory_integration_complete": false
+  },
+  "next_windows_work": [
+    "Implement real dynamic-module services with explicit module lifetime ownership.",
+    "Implement remaining Windows thread-state services beyond per-thread errno, including required TLS semantics.",
+    "Integrate the loader and service objects with native executable-memory ownership and concrete target-library resolution."
+  ],
+  "remaining_unreal_requirements": [
+    "Actual game provider",
+    "Verified game layouts",
+    "Actual Tick integration"
+  ],
+  "report_creation_actions": {
+    "tests_rerun": false,
+    "receipts_copied_byte_for_byte": true,
+    "thread_import_evidence_preserved": true,
+    "canonical_transport_checkpoint_edited": false,
+    "source_manifest_edited": false,
+    "published": false
+  }
+}

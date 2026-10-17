@@ -1,0 +1,185 @@
+--- a/src/CodePatch.cpp
++++ b/src/CodePatch.cpp
+@@ -177,9 +177,12 @@
+     out->prot = prot;
+     char dec[8];
+     prot_decode(prot, dec);
+-    emitf("[CAP3][QUERY] qmp addr=%p rc=%d errno=%d prot=0x%x(%s) span=%p..%p",
+-          addr, rc, errno, (unsigned)prot, dec, start, end);
+-    if(rc != 0)
++    const uintptr_t queried = (uintptr_t)addr;
++    const bool bracketed = start && end &&
++        (uintptr_t)start <= queried && queried < (uintptr_t)end;
++    emitf("[CAP3][QUERY] qmp addr=%p rc=%d errno=%d prot=0x%x(%s) span=%p..%p bracketed=%d",
++          addr, rc, errno, (unsigned)prot, dec, start, end, (int)bracketed);
++    if(rc != 0 || !bracketed)
+         return PatchResult::kQueryFailed;
+     return PatchResult::kOk;
+ }
+@@ -199,7 +202,9 @@
+     prot_decode(info.prot, dec);
+     /* Layout sanity: a wrong PS5 struct layout must SHOW here, not pass
+      * garbage onward (U3 detection). */
+-    int bracketed = (info.start <= addr) && (addr < info.end);
++    int bracketed = info.start && info.end &&
++        ((uintptr_t)info.start <= (uintptr_t)addr) &&
++        ((uintptr_t)addr < (uintptr_t)info.end);
+     emitf("[CAP3][QUERY] vq addr=%p rc=%d errno=%d prot=0x%x(%s) span=%p..%p "
+           "name='%.32s' bracketed=%d",
+           addr, rc, errno, (unsigned)info.prot, dec,
+@@ -257,6 +262,12 @@
+     span->page_count = (int)(span->len / PAGE_SIZE);
+     for(int i = 0; i < kMaxPatchPages; ++i)
+         span->orig_prot[i] = -1;
++}
++
++static bool span_address_valid(const void* target, size_t length)
++{
++    return target && length > 0 && length <= kMaxPatchBytes &&
++        (uintptr_t)target <= UINTPTR_MAX - (length - 1);
+ }
+ 
+ /* ================================================================== */
+@@ -431,7 +442,8 @@
+           target, length, flags);
+ 
+     /* STEP 0: arguments. */
+-    if(!target || !replacement || length == 0)
++    if(!target || !replacement || length == 0 ||
++       (length <= kMaxPatchBytes && !span_address_valid(target, length)))
+         return PatchResult::kBadArgs;
+     if(length > kMaxPatchBytes)
+         return PatchResult::kTooLarge;
+@@ -536,6 +548,15 @@
+ PatchResult unpatch_code_ex(PatchBackup* backup, unsigned flags)
+ {
+     if(!backup || backup->magic != kBackupMagic || !backup->valid)
++        return PatchResult::kBackupInvalid;
++    if(!span_address_valid(backup->target, backup->length) ||
++       backup->page_count == 0 || backup->page_count > kMaxPatchPages)
++        return PatchResult::kBackupInvalid;
++    Span expected;
++    span_of(backup->target, backup->length, &expected);
++    if(backup->page_base != expected.base ||
++       backup->span_len != expected.len ||
++       backup->page_count != (uint32_t)expected.page_count)
+         return PatchResult::kBackupInvalid;
+     if((flags & kFlagRequireLiveness) && (flags & kFlagSkipLiveness))
+         return PatchResult::kBadFlags;
+--- a/tests/host_test_protocol.cpp
++++ b/tests/host_test_protocol.cpp
+@@ -121,6 +121,7 @@
+ static std::map<uintptr_t, int> g_frozen;         /* stale qmp snapshot  */
+ static bool g_qmp_use_frozen   = false;
+ static int  g_qmp_fail_next    = 0;               /* one-shot rc!=0      */
++static int  g_qmp_wrong_span_next = 0;            /* success, wrong span */
+ static int  g_qmp_lie_rwx_left = 0;               /* report R|X n times  */
+ static long g_qmp_lie_at_call  = 0;               /* 1-based qmp call to
+                                                      lie on (0 = off)    */
+@@ -207,8 +208,17 @@
+         v = PROT_READ | PROT_WRITE | PROT_EXEC;
+     }
+     uintptr_t base = (uintptr_t)addr & ~(uintptr_t)PAGE_MASK;
+-    if(start) *start = (void*)base;
+-    if(end)   *end   = (void*)(base + PAGE_SIZE);
++    if(g_qmp_wrong_span_next > 0)
++    {
++        --g_qmp_wrong_span_next;
++        if(start) *start = (void*)(base + PAGE_SIZE);
++        if(end)   *end   = (void*)(base + 2 * PAGE_SIZE);
++    }
++    else
++    {
++        if(start) *start = (void*)base;
++        if(end)   *end   = (void*)(base + PAGE_SIZE);
++    }
+     if(prot)  *prot  = v;
+     return 0;
+ }
+@@ -281,6 +291,7 @@
+ {
+     g_qmp_use_frozen   = false;
+     g_qmp_fail_next    = 0;
++    g_qmp_wrong_span_next = 0;
+     g_qmp_lie_rwx_left = 0;
+     g_qmp_lie_at_call  = 0;
+     g_qmp_calls        = 0;
+@@ -340,6 +351,44 @@
+           "bytes untouched after query failure");
+     CHECK(page_prot_is(g_span, kOrigProt), "prot untouched after query failure");
+     fixture_reset_injections();
++}
++
++static void test_query_span_validation(void)
++{
++    log_clear();
++    PatchBackup b;
++    memset(&b, 0, sizeof(b));
++    g_qmp_wrong_span_next = 1;
++    PatchResult r = cap03::patch_code_ex(g_span, kReplacement, kPatchLen,
++                                         &b, cap03::kFlagSkipLiveness);
++    CHECK(r == PatchResult::kQueryFailed,
++          "successful query with unrelated span -> kQueryFailed");
++    CHECK(!log_contains("STEP=OPEN") &&
++          memcmp(g_span, kOriginal, sizeof(kOriginal)) == 0 &&
++          page_prot_is(g_span, kOrigProt),
++          "unrelated query span cannot open or modify text");
++    if(r == PatchResult::kOk)
++        (void)cap03::unpatch_code_ex(&b, cap03::kFlagSkipLiveness);
++    fixture_reset_injections();
++}
++
++static void test_address_overflow(void)
++{
++    /* Isolate the pre-fix invalid dereference in a child process. */
++    pid_t child = fork();
++    if(child == 0)
++    {
++        PatchBackup b;
++        memset(&b, 0, sizeof(b));
++        void* wrap = (void*)(UINTPTR_MAX - 2);
++        PatchResult r = cap03::patch_code_ex(wrap, kReplacement, kPatchLen,
++                                             &b, cap03::kFlagSkipLiveness);
++        _exit(r == PatchResult::kBadArgs ? 0 : 1);
++    }
++    int status = 0;
++    const bool waited = child > 0 && waitpid(child, &status, 0) == child;
++    CHECK(waited && WIFEXITED(status) && WEXITSTATUS(status) == 0,
++          "wrapping patch address refuses before reading target");
+ }
+ 
+ static void test_mixed_protection(void)
+@@ -692,6 +741,24 @@
+     b.magic = cap03::kBackupMagic;
+     CHECK(cap03::unpatch_code_ex(&b, 0) == PatchResult::kBackupInvalid,
+           "valid magic but valid==0 -> kBackupInvalid");
++    b.valid = 1;
++    b.target = g_span;
++    b.length = kPatchLen;
++    b.page_base = g_span;
++    b.page_count = 0;
++    CHECK(cap03::unpatch_code_ex(&b, 0) == PatchResult::kBackupInvalid,
++          "forged zero-page backup refuses before target read");
++    b.page_count = cap03::kMaxPatchPages + 1;
++    CHECK(cap03::unpatch_code_ex(&b, 0) == PatchResult::kBackupInvalid,
++          "oversized backup page count refuses before array read");
++    b.page_count = 1;
++    b.span_len = 0;
++    CHECK(cap03::unpatch_code_ex(&b, 0) == PatchResult::kBackupInvalid,
++          "inconsistent backup span length refuses");
++    b.span_len = PAGE_SIZE;
++    b.page_base = g_span + PAGE_SIZE;
++    CHECK(cap03::unpatch_code_ex(&b, 0) == PatchResult::kBackupInvalid,
++          "inconsistent backup page base refuses");
+ }
+ 
+ static void test_module_slot_entries(void)
+@@ -746,6 +813,8 @@
+ 
+     test_arg_validation();
+     test_query_failure();
++    test_query_span_validation();
++    test_address_overflow();
+     test_mixed_protection();
+     test_happy_patch_unpatch();
+     test_cross_page_span();

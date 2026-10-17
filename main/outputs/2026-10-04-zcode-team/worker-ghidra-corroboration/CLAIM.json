@@ -1,0 +1,115 @@
+{
+  "_meta": {
+    "worker": "worker-ghidra-corroboration",
+    "date": "2026-10-05",
+    "restart_of": "2026-10-05 prior attempt (Ghidra import+analysis and decomp partials were complete; verdicts and reports missing)",
+    "target": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+    "sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+    "toolchain": "Ghidra 12.1.4 headless, project /tmp/wrfp_ghidra_proj/fnamepool (program decrypted-eboot.bin, import+auto-analysis COMPLETE, db 330MB)",
+    "postscript": "FnamepoolDecomp.java (creates CORROB_* functions at pinned vaddrs, dumps asm+C+memory blocks into decomp/)",
+    "ghidra_mapping": "imageBase=0x0, mappingDelta=0x0 (signature-verified): Ghidra addresses == RE worker's FILE VADDR space; no +0x4000 shift in any Ghidra output",
+    "independent_verification": "byte_checks.receipt.txt: every RE-quoted byte sequence, string constant and call-target displacement re-read from the raw file with struct-parsed phdrs (no capstone/lief reuse); tools_phdr_check.py + phdr_check.receipt.txt + phdr_load0_check.json for the LOAD0 trap audit",
+    "address_convention": "all addresses FILE VADDR (runtime = file + 0x400000)"
+  },
+  "mission_claims": [
+    {
+      "id": "MC1",
+      "claim": "FName ctor 0x23d590 -> FindOrStore 0x23d600 -> core 0x242470",
+      "verdict": "CONFIRMED",
+      "evidence": [
+        "decomp/fname_ctor.c/.asm: ctor OR-reduces wchar units (or ecx,edi loop), cmp ecx,0x7f; seta; shl rdi,0x20 = wide flag bit32, bextr rsi,rsi,0x2001 = wchar length, call 0x23d600 (displacement verified), mov [rbx],rax = *out = id|number<<32",
+        "decomp/find_or_store.c: len==0 -> 0; non-wide SSE/AVX narrowing into ~0x400-byte stack buffer hard-capped at 0x400; trailing _NNN parse (digit scan, '_' 0x5f, leading-'0' 0x30 rejected, <=10 digits, num<0x7fffffff, number=num+1, len-=digits); calls pool_core(str, len|wide<<32); returns id|number<<32",
+        "decomp/pool_core.c + find_or_store.asm: (len & 0xfffffc00)==0 gate; lazy init: cmp byte[0x9365ea0],0 -> lea rax,[0x9365ec0] -> call 0x23a5d0 -> mov byte[0x9365ea0],1; FNAME_Add(1) -> store_name 0x23c0b0; else hash 0x239b00/0x23a2c0 then lea rdi,[rax + 0x9365ec0 + 0x10040] (decomp: (hash&0xffffffff)*0x40 + 0x9375f00) -> call 0x23c340",
+        "byte_checks.receipt.txt: all quoted bytes exact; call targets recomputed: 0x23d5eb->0x23d600, 0x2424d7->0x23a5d0, 0x2424fe->0x23c0b0, 0x242550->0x23c340, lea 0x2424c7->0x9365ec0"
+      ]
+    },
+    {
+      "id": "MC2",
+      "claim": "FNamePool::Init 0x23a5d0: memset pool+8 size 0x10008; Malloc(0x20000,2) -> pool+0x10; buckets +0x10040; None/ByteProperty interning +0x14040/+0x14044",
+      "verdict": "CONFIRMED",
+      "evidence": [
+        "decomp/pool_init.c/.asm: memset(param_1+8, 0, 0x10008) via memset PLT (file 0x7471e40; RE label 0x7871e40 is runtime form) -> CurrentBlock@+8=0, CBO@+0xC=0, Blocks[0..8191]@+0x10=null",
+        "asm 0x23a609/0x23a60e/0x23a613: mov edi,0x20000; mov esi,2; call 0xb7a20 (file vaddr; RE label 0x4b7a20 is runtime form; displacement recomputed 0x23a618-0x182bf8=0xb7a20); asm 0x23a625: mov [rbx+0x10],rax = Blocks[0]",
+        "asm 0x23a618: lea r14,[rbx+0x10040]; R15D=0x4000; loop stride 0x40 x256: mutex init 0x74728e0 (file; RE 0x78728e0 runtime), VMOVUPS zero [b+8..+0x28], dword 0 at [b+0x28] = 256 hash buckets at +0x10040",
+        "aux loop 0x1004c..0x1404c step 0x40: tag 0xff at bucket+0xc, Malloc(0x400,4) at bucket+0x10 (memset 0x400), pool ptr at bucket+0x18",
+        "asm 0x23a656/0x23a65d: memset(pool+0x14040, 0, 0xafc); asm 0x23a6fd: lea rsi,[0x7b96c17] -> raw bytes 'None'; 0x23a713 call store_name 0x23c0b0; 0x23a727 mov [rbx+0x14040],eax = NoneId",
+        "interning slots read from decomp + raw strings (LOAD1, corrected offsets): +0x14040 None(4)@0x7b96c17, +0x14044 ByteProperty(12)@0x7abcd83, +0x14048 IntProperty(11)@0x7bfb4f8, +0x1404c BoolProperty(12)@0x7b12fe2, +0x14050 FloatProperty(13)@0x7c184db, +0x14054 ObjectProperty(14)@0x7a572f6",
+        "mission text 'None/BaneProperty' read as typo for ByteProperty; actual interned name is ByteProperty -> +0x14044 CONFIRMED"
+      ],
+      "corrections": [
+        "RE md line 'FloatProperty -> +0x1404C' is off by one slot: +0x1404C = BoolProperty, FloatProperty = +0x14050. Validator-relevant offsets (+0x14040/+0x14044) unaffected"
+      ]
+    },
+    {
+      "id": "MC3",
+      "claim": "CurrentBlock getter 0x23d570: id>>16 <= CurrentBlock",
+      "verdict": "CONFIRMED",
+      "evidence": [
+        "decomp/current_block_getter.asm byte-for-byte: 8b054e891209 mov eax,[0x9365ec8] (CurrentBlock = pool+8; rip-target verified); c1ef10 shr edi,0x10; ffc0 inc eax; 39f8 cmp eax,edi; 0f97c0 seta al; ret",
+        "seta after cmp gives al = (CurrentBlock+1) > (id>>16) unsigned == id>>16 <= CurrentBlock; decomp renders param_1>>0x10 < _DAT_09365ec8 + 1U",
+        "context: decomp/reserve.c shows CurrentBlock is the 0-based open-block index (fit path stores only [pool+0xC]; new-block path incs [pool+8] and zeroes CBO; Malloc(0x20000,2) when Blocks[CurrentBlock]==0) -> 'CurrentBlock==0 is valid' CONFIRMED"
+      ]
+    }
+  ],
+  "supporting_verdicts": [
+    {"claim": "Reserve 0x246090: needed=((len<<wide)+3)&~1; fit check vs 0x20000-CBO; sliver 'and word[rax+rbx],0x3f'; CurrentBlock++; CBO=0; Blocks[cb] null -> Malloc(0x20000,2) stored [pool+cb*8+0x10]; CBO+=needed; returns block | (oldCBO>>1)<<32", "verdict": "CONFIRMED", "evidence": "decomp/reserve.c + byte_checks.receipt.txt (0x2460a8..0x246154 all exact; alloc call target 0xb7a20 recomputed)"},
+    {"claim": "FMemory::Malloc 0xb7a20: GMalloc slot 0x9350950, lazy creator 0xbeba0 under once-flag 0x932c048, call [vtable+0x30] slot 6", "verdict": "CONFIRMED", "evidence": "decomp/fmemory_malloc.c + bytes at 0xb7a2a/0xb7a36/0xb7a4c/0xb7a52; lea target recomputed -> 0x9350950"},
+    {"claim": "Malloc impl 0xb48e0 binned fast path: cmp rsi,0x20001; cmp edx,0x11; pthread_getspecific; size-class table 0x9327000 (shr 4); slow path 0x4b1460", "verdict": "CONFIRMED_at_entry_points", "evidence": "byte_checks.receipt.txt: 0xb48ea/0xb48f4 exact; call targets recomputed 0x7472530 (RE 0x7872530 runtime) and 0xb1460; lea r8 -> 0x9327000. Deep binned internals out of corroboration scope, not contradicted"},
+    {"claim": "Pool base 0x9365ec0 / flag 0x9365ea0 / CurrentBlock 0x9365ec8 / pool in LOAD7 memsz-only BSS (no file bytes)", "verdict": "CONFIRMED", "evidence": "multiple lea rip-targets computed to exactly 0x9365ec0; init called with literal 0x9365ec0; phdr parse shows 0x9365ec0 beyond LOAD7 filesz (BSS)"},
+    {"claim": "FName entry layout: Blocks[id>>16] @ pool+0x10 stride 8; entry byte offset (id&0xffff)*2; u16 header len=hdr>>6, wide=hdr&1", "verdict": "CONFIRMED", "evidence": "decomp/fname_tostring.c (0x23f640): lazy-init site, Blocks access, hdr>>6/hdr&1, '_%d' suffix; decomp/store_name.c builds id = probe-hash<<29 | block<<16 | offset_units"},
+    {"claim": "store_name 0x23c0b0 / bucket_find_insert 0x23c340 probe logic (linear probe masked by bucket+0xc tag 0xff, memcmp variants 0x8cdb0/0x8ce20, rehash 0x243850)", "verdict": "CONFIRMED", "evidence": "decomp/store_name.c, decomp/bucket_find_insert.c; consistent with bucket struct written by init"}
+  ],
+  "refuted_or_corrected": [
+    {
+      "claim": "RE FNAME-POOL-RE.md: '\"IntProperty\" -> +0x14048, \"FloatProperty\" -> +0x1404C' (also CLAIM.json pool_identity_and_layout slot list)",
+      "verdict": "REFUTED_minor",
+      "correction": "+0x14048=IntProperty correct; +0x1404C=BoolProperty (12 chars @0x7b12fe2); FloatProperty is +0x14050. None/ByteProperty offsets used by the validator are correct as claimed"
+    },
+    {
+      "claim": "RE FNAME-POOL-RE.md sec 2.1 quote block addresses 0x243261/0x243277/0x24327e/0x243281/0x243286/0x24328a/0x243297 attributed to 'getter @ 0x243240'",
+      "verdict": "REFUTED_as_labels_CONFIRMED_at_true_addresses",
+      "correction": "bytes at those labels do not match; identical byte sequences live at 0x23f661/0x23f677/0x23f67e/0x23f681/0x23f686/0x23f68a/0x23f697 inside fn 0x23f640 (shift = +0x3C00). All rip-targets from corrected sites compute to exactly 0x9365ec0. 0x243240 contains unrelated code (8b6f18 488b5dc0...). Semantics of the getter evidence are real and Ghidra-decompiled at 0x23f640"
+    },
+    {
+      "claim": "RE CLAIM.json sample: 'site TRUE 0x23d0a2 bytes 488d3d17ce1209 = lea rdi,[rip+0x912ce17] -> 0x9365ec0'",
+      "verdict": "REFUTED_as_label_CONFIRMED_at_true_address",
+      "correction": "bytes actually at 0x2390a2 (label carries the documented +0x4000 early-tool artifact); 0x23d0a2 holds 743c4c8b... The lea is genuine and its target is exactly 0x9365ec0, so the pool-base conclusion stands"
+    },
+    {
+      "claim": "RE doc labels PLT/allocator targets in runtime form inside a file-vaddr document ('call 0x4b7a20', 'memset PLT 0x7871e40', 'pthread_getspecific 0x7872530', 'mutex_init 0x78728e0')",
+      "verdict": "LABEL_INCONSISTENCY_ONLY",
+      "correction": "file vaddrs are 0xb7a20 / 0x7471e40 / 0x7472530 / 0x74728e0; all e8 displacements recomputed and consistent with runtime = file + 0x400000"
+    }
+  ],
+  "load0_trap_audit": {
+    "method": "tools_phdr_check.py (struct-only phdr parse, independent of lief) -> phdr_check.receipt.txt; machine-readable phdr_load0_check.json",
+    "result": "14 phdrs, 5 PT_LOADs at phdr indices 0,1,3,7,8; indices 0,1,3,7 have file_off = vaddr + 0x4000; index 8 has file_off = vaddr - 0x324000; RE header claim CONFIRMED exactly",
+    "loads_with_plus_0x4000": [0, 1, 3, 7],
+    "load8_delta": "-0x324000",
+    "pinned_address_classification": "phdr_load0_check.json pinned_address_classification covers all 34 pinned addresses; every pinned address lies in a +0x4000 load (none in LOAD8); BSS (no file bytes): pool 0x9365ec0, init flag 0x9365ea0, gmalloc slot 0x9350950, allocator obj 0x93089b8, allocator global 0x930add8, size-class table 0x9327000, tls index 0x92dc288 is FILE-backed",
+    "ghidra_exposure": "none: postScript signature matched at mappingDelta 0x0; memory_blocks.txt segments match vaddr boundaries (LOAD8 starts 0x9633420); all Ghidra outputs share the RE vaddr space",
+    "affected_re_outputs": [
+      "FNAME-POOL-RE.md sec 2.1 quote-block labels (+0x3C00 too high; true fn 0x23f640)",
+      "CLAIM.json pool-base sample label 0x23d0a2 (+0x4000 artifact; true site 0x2390a2)"
+    ],
+    "tool_receipt_notes": [
+      "tools_phdr_check.py PINNED dict lists fmemory_malloc as runtime 0x4b7a20 while the JSON output used file 0xb7a20 (JSON is right)",
+      "tools_phdr_check.py getter byte-check compares fn start vs +4 mov bytes: receipt 'MISMATCH' line actually shows correct prologue 554889e5 8b05 (cosmetic)",
+      "tool prints LOAD0..LOAD4 as list positions (phdr idx 0,1,3,7,8) while RE doc uses phdr indices LOAD0/1/3/7/8; same facts"
+    ]
+  },
+  "unresolved": [
+    "launch-9 runtime Blocks[0] placement inside module-BSS page range vs static GMalloc/binned chain: static side now Ghidra-corroborated; runtime contradiction still needs a fresh runtime sample of qword at runtime 0x9765ed0",
+    "PS5 page source under binned slow path 0x4b1460 not traced to syscalls (out of scope)",
+    "thread-forwarder wrapper installation depends on runtime vtable+0xC0 return (statically undecidable)",
+    "deep binned-allocator internals (76x0x78 tables, vtable walk beyond slot 6) corroborated only at entry points; not contradicted"
+  ],
+  "deliverables": {
+    "postscript": "FnamepoolDecomp.java",
+    "decomp_outputs": "decomp/ (10 functions asm+c, SUMMARY.txt, memory_blocks.txt)",
+    "byte_verification": "byte_checks.receipt.txt",
+    "phdr_audit": ["tools_phdr_check.py", "phdr_check.receipt.txt", "phdr_load0_check.json"],
+    "report": "CORROBORATION.md",
+    "summary": "REPORT.md"
+  }
+}

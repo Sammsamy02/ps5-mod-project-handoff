@@ -1,0 +1,72 @@
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
+@@ -3330,17 +3330,44 @@
+ 
+             std::filesystem::path game_executable_directory = UE4SSProgram::get_program().get_game_executable_directory();
+             auto game_content_dir = game_executable_directory.parent_path().parent_path() / "Content";
++            auto game_name = game_executable_directory.parent_path().parent_path().filename();
++            auto game_root_directory = game_executable_directory.parent_path().parent_path().parent_path();
++            // [IGD][IU-GROUP-B] Claude r13 item 5 / self-test call 134.
++            // PS5 (__PROSPERO__): the game image layout is flat — the
++            // configured game directory is the app mount (verified console
++            // log 2026-10-11: "configured game directory: /app0", executable
++            // /app0/eboot.bin), so the classic
++            // <RootGamePath>/<Game>/Binaries/<Platform> derivation collapses
++            // to "/Content" and always missed (observed 'ret=nil' PASS with
++            // the unknown-structure warning). Fallback, gated at runtime by
++            // the same exists() evidence standard upstream uses: when the
++            // game directory itself contains Content/, iterate from the game
++            // directory and alias it under the "Game" key (rawset
++            // self-reference, see below) so mods written against the
++            // upstream result shape keep working. Classic-layout behavior is
++            // unchanged.
++            bool igd_flat_ps5_layout{};
+             if (!std::filesystem::exists(game_content_dir))
+             {
+-                Output::send<LogLevel::Warning>(STR("IterateGameDirectories: Could not locate the root directory because the directory structure is unknown "
+-                                                    "(not <RootGamePath>/Game/Binaries/Win64)\n"));
+-                lua.set_nil();
+-                return 1;
++#ifdef __PROSPERO__
++                std::error_code igd_ec{};
++                std::filesystem::path igd_flat_content = game_executable_directory / "Content";
++                if (game_executable_directory != game_executable_directory.root_path() && std::filesystem::exists(igd_flat_content, igd_ec) && !igd_ec)
++                {
++                    igd_flat_ps5_layout = true;
++                    game_name = game_executable_directory.filename();
++                    game_root_directory = game_executable_directory;
++                }
++#endif
++                if (!igd_flat_ps5_layout)
++                {
++                    Output::send<LogLevel::Warning>(STR("IterateGameDirectories: Could not locate the root directory because the directory structure is unknown "
++                                                        "(not <RootGamePath>/Game/Binaries/Win64, and no <GameDir>/Content on this platform)\n"));
++                    lua.set_nil();
++                    return 1;
++                }
+             }
+ 
+-            auto game_name = game_executable_directory.parent_path().parent_path().filename();
+-            auto game_root_directory = game_executable_directory.parent_path().parent_path().parent_path();
+-
+             // A C function only gets LUA_MINSTACK (20) free slots and each level below holds two of them until
+             // fuse_pair() runs, so a deep tree pushes past the end of the stack. api_incr_top's check is compiled
+             // out in release, so it corrupts the heap instead of erroring.
+@@ -3651,6 +3678,17 @@
+                 Output::send<LogLevel::Error>(STR("Exception in IterateGameDirectories: {}\n"), to_wstring(e.what()));
+                 lua.set_nil();
+                 return 1;
++            }
++
++            if (igd_flat_ps5_layout)
++            {
++                // Raw self-reference: root_table["Game"] = root_table (on the
++                // flat PS5 layout the iterated root IS the game directory).
++                // lua_rawset bypasses the per-entry __index metatable.
++                lua_State* igd_lua_state = lua.get_lua_state();
++                lua_pushvalue(igd_lua_state, -1);
++                lua_pushliteral(igd_lua_state, "Game");
++                lua_rawset(igd_lua_state, -3);
+             }
+ 
+             return 1;

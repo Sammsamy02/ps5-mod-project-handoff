@@ -1,0 +1,133 @@
+{
+  "review": "worker-composition-review",
+  "date": "2026-10-04",
+  "targets": {
+    "extended_script": ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/build_runtime.py (sha256 54c9b64604a0dd88d147c369773f656313c37c8e566d8e5e9d5321dd855d0b0e)",
+    "composition_run": ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/ue4ss-native-supplier-composition-1/run-1",
+    "sce_tu": ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/src/live_module_os_ops_sce.cpp",
+    "original_reference_run": ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/native-1 (produced by pre-extension script pinned sha256 aaf8f7d2cfc7a6e814e3...)"
+  },
+  "verdict": "ALL_CLEAR",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "info",
+      "claim": "Extras cannot run without the explicit baseline-extension opt-in",
+      "evidence": "build_runtime.py:66 `if a.extra_unit and not a.extend_undefined_baseline: raise ValueError('Extra units require --extend-undefined-baseline')`"
+    },
+    {
+      "id": "F2",
+      "severity": "info",
+      "claim": "With no extras passed, no original invariant is weakened",
+      "evidence": "Extras loop (lines 67-82) skipped => extras=[] and extra_pinned=[]; inputs.extend([]) is a no-op (line 87); undefined-delta refusal at lines 93-102 requires BOTH a.extra_unit truthy AND not removed AND not changed_bindings to extend, so with no extras any added/removed/changed delta raises 'Unexpected native import change' exactly as the original did. All pre-existing checks (BASE sha pin L23, host/rust receipt hash pins L25-30, originals input-hashes L33-34, prior-composite refusal L35, exactly-one-old-rust L36-37, unit source/object pins L39-43, fresh-dep must-be-in-pins L60-62, affected-inventory set equality L42) execute before any extra handling and are unaffected by extra args. Reference: native-1 receipt (original script) tolerated zero delta (added/removed/changed = []/[]/{}, 197 symbols) proving the original refusal behavior the no-extras path preserves."
+    },
+    {
+      "id": "F3",
+      "severity": "info",
+      "claim": "--extend-undefined-baseline alone (no extras) weakens nothing",
+      "evidence": "Line 94 condition `a.extra_unit and a.extend_undefined_baseline and ...` is false without extras, falling to the unconditional raise at line 102."
+    },
+    {
+      "id": "F4",
+      "severity": "info",
+      "claim": "Provider gate actually nm-verifies added symbols against pinned SDK libraries",
+      "evidence": "Lines 95-101 run llvm-nm -D --defined-only over every outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/target/lib/*.so; missing providers raise. run-1 command log: 34 sdknm-* commands all exit 0 with saved stdout; sdknm-libkernel.so.stdout contains sceKernelGetModuleInfo (T). Independently re-verified with pinned LLVM-21.1.8 llvm-nm: libkernel.so defines sceKernelGetModuleInfo as global text at 0x1218c."
+    },
+    {
+      "id": "F5",
+      "severity": "info",
+      "claim": "linker_provided allow-list is minimal ({'_DYNAMIC'} only) and justified",
+      "evidence": "build_runtime.py:97. Verified no SDK target/lib/*.so exports _DYNAMIC (nm -D --defined-only across all libs => none), so without the exemption the gate would have rejected it; _DYNAMIC is the standard ELF dynamic-section symbol defined by the final PRX/ELF link (the TU references it via `extern \"C\" Elf64_Dyn _DYNAMIC[]`, live_module_os_ops_sce.cpp:60). Nothing else needed the exemption."
+    },
+    {
+      "id": "F6",
+      "severity": "info",
+      "claim": "First-seen pinning records extra-unit dep hashes in the receipt and refuses unpinned project-tree deps",
+      "evidence": "Lines 74-80: resolved dep under ROOT but under S (spike) or ROOT/.superpowers and not already pinned => hard ValueError; other ROOT-local deps => pins[rp]=sha + extra_pinned list; receipt['extra_pinned_dependencies'] persisted (line 110). Bucketed all deps of the three lmf .d files: 0 files outside ROOT, 0 unpinned spike/.superpowers files, 0 files in other ROOT dirs; lmf-sce-ops contributed exactly the 66 first-seen pins, lmf-live-module-facts and lmf-loader-adapter deps were all pre-pinned."
+    },
+    {
+      "id": "F7",
+      "severity": "info",
+      "claim": "Extra defines cannot leak into baseline compiles",
+      "evidence": "Line 71 inserts -D flags only inside the extras loop; verified in run-1 receipt argv: -DLMF_DISABLE_DL_RETENTION present only in the 3 lmf extra compiles, absent from all 7 baseline fresh compiles (e.g. unreal-unrealinitializer, native-ownedserializedelfsource)."
+    },
+    {
+      "id": "F8",
+      "severity": "info",
+      "claim": "Undefined delta added set is exactly [_DYNAMIC, sceKernelGetModuleInfo]; no removals or binding changes",
+      "evidence": "run-1 undefined-delta.json: added=['_DYNAMIC','sceKernelGetModuleInfo'], removed=[], changed_bindings={}, current_count=199. Independently recomputed with pinned llvm-nm on the composed object: my undefined set equals receipt current exactly (199 symbols); set difference vs native-1's 197-symbol baseline is exactly {_DYNAMIC, sceKernelGetModuleInfo}."
+    },
+    {
+      "id": "F9",
+      "severity": "info",
+      "claim": "Providers correct",
+      "evidence": "Receipt providers: _DYNAMIC -> <linker-provided>; sceKernelGetModuleInfo -> [libkernel.so, libkernel_stub_weak.so, libkernel_sys.so, libkernel_web.so]. Independently enumerated SDK libs exporting the symbol: exactly those four. libkernel.so entry: `sceKernelGetModuleInfo T 1218c 0`."
+    },
+    {
+      "id": "F10",
+      "severity": "info",
+      "claim": "Runtime object hash and size in receipt match the file",
+      "evidence": "receipt runtime_sha256 fb2f4dd16a20997455b39e6857fd2bdf45842c691bd0124a448948ae5bcb775c == recomputed sha256; runtime_bytes 117624920 == actual stat size (117 MB)."
+    },
+    {
+      "id": "F11",
+      "severity": "info",
+      "claim": "10 freshly compiled units and 353 retained match expectation",
+      "evidence": "freshly_compiled_units = 6 affected (unreal-unrealinitializer, native-ownedmappedscansource, native-psscanbinding, native-ownedmappedcandidateselection, native-loadercontext, native-programfactory) + native-ownedserializedelfsource + 3 lmf extras (lmf-live-module-facts, lmf-sce-ops, lmf-loader-adapter); retained_runtime_units=353; total 363 consistent with native-1's 360 (353+7) plus 3 extras; extras appended at end of link input order (runtime_object_order tail)."
+    },
+    {
+      "id": "F12",
+      "severity": "info",
+      "claim": "extra_pinned 66 entries are all SDK/toolchain; no project file snuck in unpinned",
+      "evidence": "All 66 paths under outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/target/include/{bsm,machine,sys,vm,x86} (FreeBSD-derived SDK kernel headers pulled by the SCE TU); none under .superpowers, spike dirs, work/, or other project trees."
+    },
+    {
+      "id": "F13",
+      "severity": "info",
+      "claim": "Vendored SCE TU: with LMF_DISABLE_DL_RETENTION absent, functionally identical to worker-1 original",
+      "evidence": "diff outputs/2026-10-04-zcode-team/worker-1-live-supplier/src/live_module_os_ops_sce.cpp vs tick-file-owner-1 copy shows ONLY: (a) #ifdef/#else/#endif wrapping #include <dlfcn.h> plus explanatory comment (lines 40-49), (b) #ifdef/#else/#endif wrapping the two dl-retention functions with degraded bodies (lines 118-138). Both #else branches are byte-identical to the original code; ops-table binding unchanged in both modes."
+    },
+    {
+      "id": "F14",
+      "severity": "info",
+      "claim": "Degraded paths return documented values",
+      "evidence": "lmf_sce_loader_retain_noload returns nullptr (matches the real path's dlopen failure convention; inline comment 'degraded: no dl handle bridge in this composition'); lmf_sce_loader_release returns -1 (matches the real path's null-handle failure code; inline comment 'degraded: nothing was retained via dl'). Both documented in the header comment block citing livefacts-probe E6 observation."
+    },
+    {
+      "id": "F15",
+      "severity": "info",
+      "claim": "No __dl* or dlfcn symbols in the composed object's undefined set",
+      "evidence": "Pinned llvm-nm --extern-only --undefined-only over the 117,624,920-byte object: grep -Ec '^( _?_dl|dlfcn|dlopen|dlsym|dlclose)' = 0 matches. Broad case-insensitive sweep finds only sceKernelDlsym, a PS5 SDK module API already present in the pre-extension baseline (native-1) and exported by libkernel.so (verified) - not a libdl/dlfcn import."
+    },
+    {
+      "id": "F16",
+      "severity": "info",
+      "claim": "Safety/scope claims unchanged",
+      "evidence": "run-1 receipt: linked_prx=False, target_executed=False, console_contact=False; extra_receipt (worker-s1-adapter run-1) sha256 fc4c085448b6301685127bb4ca74a5c44721e14a8f906454c8e57f9de5771665 matches the referenced file."
+    },
+    {
+      "id": "O1",
+      "severity": "minor_observation",
+      "claim": "Provider-gate oracle .so files are not hash-pinned",
+      "evidence": "sdk_lib_dir (line 95) is a fixed path; the 33 SDK .so files are nm-verified as oracles but their sha256s are not recorded in the receipt, unlike compiled inputs. Does not affect this run's validity; a future pin of the oracle library set would make the provider evidence tamper-evident too."
+    },
+    {
+      "id": "O2",
+      "severity": "minor_observation",
+      "claim": "Extra-unit dependencies outside ROOT escape pinning entirely",
+      "evidence": "Lines 74-80 only pin/check deps whose resolved path starts with ROOT; system/toolchain headers outside the worktree would be neither pinned nor refused (baseline units, by contrast, require every dep to be in the sealed pin set, line 61). In run-1 all 1003 dep files across the three lmf units were ROOT-local, so nothing actually escaped; noting the asymmetry for the record."
+    },
+    {
+      "id": "O3",
+      "severity": "minor_observation",
+      "claim": "--extra-receipt is optional rather than mandatory when extras are passed",
+      "evidence": "Line 21/111: recorded if provided, never required. run-1 did provide one and its hash verifies; a stricter gate could require an attestation receipt whenever extra_unit is non-empty."
+    },
+    {
+      "id": "O4",
+      "severity": "minor_observation",
+      "claim": "No committed pre-extension original exists for a byte-level diff",
+      "evidence": "build_runtime.py is git-staged (never committed; worktree == index for the extended version). Original behavior was instead established via native-1 receipt (pinned pre-extension script sha aaf8f7d2..., zero tolerated delta, 7 fresh units, 360 units) plus structural code-path analysis of the no-extras path."
+    }
+  ]
+}

@@ -1,0 +1,109 @@
+{
+  "worker": "worker-bss-budget",
+  "date": "2026-10-05",
+  "claim": "The launch-12 capacity bump 16,384 -> 32,768 (+38,010,880 B g_bridge_vmmap + 3x 786,432 B 24-B-record arrays) adds +20,553,728 B (+19.60 MiB) BSS to a shipped PRX whose measured .bss is 21,558,752 B (20.56 MiB); the resulting 42,112,480 B (40.16 MiB) BSS in a 40,188,672 B (16 KiB-aligned) writable segment of a 74,978,914 B (71.51 MiB) total PT_LOAD memsz image is AFFORDABLE: 815x under the only documented machine cap (MAXDSIZ 32 GiB, pinned sdk-v0.43 machine/vmparam.h) and only 1.378x the total-image memsz and 2.05x the BSS already proven by >=6 real console boots of the same runtime class.",
+  "verdict": "AFFORDABLE",
+  "verdict_honest_unknown": "No PS5 dynlib/PRX-loader-specific per-module BSS or segment-memsz cap is documented anywhere in the pinned SDK (sdk-v0.43); kernel-internal behavior (loader segment allocation policy, sysctl KERN_PROC_VMMAP temp-buffer sizing for a 36.25 MiB request) is unverifiable from the pin. Empirical bounds are therefore the operative constraint: 51.90 MiB total PT_LOAD memsz / 20.56 MiB BSS loaded, started (module_start_return=0) and fully walked (22,761-record vmmap sysctl into the 19,005,440 B buffer) on every observed boot.",
+  "shipped_prx": {
+    "path": "outputs/2026-10-04-zcode-controller/launch10-build/prx-candidate-l10-2/bare-sdk/modbridge_supplier_composition.prx",
+    "sha256": "ff1055b26db6fed8ee438781baac00f71e08b06cc06cdf46ff9e10d811b13cbb",
+    "file_bytes": 30834648,
+    "elf": "ELF64 LSB, e_machine 62 (x86-64), e_type 65048 (0xFE08, prospero PRX), 5 PT_LOADs, 27 sections",
+    "bss_section": {"size_bytes": 21558752, "hex": "0x148F5E0", "KiB": 21053.5, "MiB": 20.56},
+    "pt_load": [
+      {"idx": 0, "flags": "R-E", "filesz": 18788391, "memsz": 18788391},
+      {"idx": 1, "flags": "R", "filesz": 11266436, "memsz": 11266436},
+      {"idx": 2, "flags": "RW", "filesz": 218784, "memsz": 218784},
+      {"idx": 4, "flags": "RW (data + bss)", "filesz": 23456, "memsz": 21582208},
+      {"idx": 9, "flags": "R (dynamic-link info)", "filesz": 501104, "memsz": 501104}
+    ],
+    "pt_load_filesz_sum_bytes": 32855914,
+    "pt_load_memsz_sum_bytes": 54425186,
+    "bss_carrier": "PT_LOAD[4]: filesz 0x5BA0 (23,456 B) + bss 0x148F5E0 (21,558,752 B) = memsz 0x1495180 (21,582,208 B)"
+  },
+  "composed_object_bss": {
+    "path": "outputs/2026-10-04-zcode-controller/launch10-build/prx-candidate-l10-2/build/combined-supplier.o",
+    "nobits_total_bytes": 21553867,
+    "note": "All other linked objects contribute 92 B NOBITS; PRX .bss exceeds object sum by 4,793 B of link alignment. runtime_start_bridge.o (19,796,470 B NOBITS) is the same translation unit's standalone compile, not linked into l10-2.",
+    "capacity_arrays_bytes": {
+      "g_bridge_vmmap (bridge, 16384 x 1160 kinfo_vmentry)": 19005440,
+      "g_spanpub_records (bridge, 16384 x 24 VmSpanRecord)": 393216,
+      "window_anchor_verify::mappings (bridge, 16384 x 24 OsVmMapping)": 393216,
+      "lmf RetainedLiveModuleFactsSupplier::capture::mappings (1024 x 24 OsVmMapping)": 24576
+    },
+    "capacity_arrays_sum_bytes": 19816448,
+    "other_bss_bytes": 1742304,
+    "lmf_hunk_status": "kMaxVmMappings is still 1024 in the shipped l10-2 artifact (24 KiB array); the EDITION.json edit-4 staged header override (1024->16384) did NOT reach this composition, exactly the risk CAPTURE-CAPACITY.md section 5.1 flags for verification in launch-12."
+  },
+  "launch12_delta": {
+    "records_16384_to_32768": true,
+    "g_bridge_vmmap": {"today": 19005440, "after": 38010880, "delta": 19005440},
+    "g_spanpub_records": {"today": 393216, "after": 786432, "delta": 393216},
+    "window_anchor_mappings": {"today": 393216, "after": 786432, "delta": 393216, "note": "4th scaling array; omitted from CAPTURE-CAPACITY.md section 5.3 list but scales with kBridgeVmmapEntries and must be budgeted"},
+    "lmf_capture_mappings": {"today": 24576, "after": 786432, "delta": 761856, "note": "1024 -> 32768 = the section-5.1 fold (16384) plus the section-5.2 bump (32768) combined"},
+    "spanpub_top16_table": {"today": 384, "after": 384, "delta": 0, "note": "kMaxPublishedSpans=16 x 24 B; bounded window, orthogonal to snapshot capacity (fixture C3)"},
+    "total_delta_bytes": 20553728,
+    "total_delta_MiB": 19.602
+  },
+  "after_bump": {
+    "bss_bytes": 42112480,
+    "bss_MiB": 40.162,
+    "writable_segment_memsz_bytes": 42139648,
+    "writable_segment_memsz_aligned_16K": true,
+    "pt_load_memsz_sum_bytes": 74978914,
+    "pt_load_memsz_sum_MiB": 71.505,
+    "multiple_of_console_proven_memsz": 1.378,
+    "multiple_of_console_proven_bss": 2.049
+  },
+  "limits": {
+    "documented_pinned_sdk": {
+      "path": "outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/target/include/machine/vmparam.h:55-70",
+      "MAXTSIZ": 34359738368,
+      "DFLDSIZ": 34359738368,
+      "MAXDSIZ": 34359738368,
+      "DFLSSIZ": 8388608,
+      "MAXSSIZ": 536870912,
+      "reading": "FreeBSD-derived per-process data-size cap 32 GiB; the post-bump writable segment (40.2 MiB) sits 815x under it. Headers carry no prospero dynlib/PRX-specific per-module cap."
+    },
+    "not_documented": [
+      "Any PS5 dynlib loader (sceKernelLoadStartModule) per-module BSS, per-segment memsz, or total-module-memory cap: absent from pinned SDK headers (libkernel.h has only uint32_t SceKernelModuleSegmentInfo.size reporting fields), ldscript (no MEMORY/LENGTH caps), and docs.",
+      "Kernel-side temp-buffer policy for sysctl KERN_PROC_VMMAP with a 38,010,880 B len request (works at 19,005,440 B request with ~19 MiB of real map data, 6/6 boots)."
+    ],
+    "empirical": {
+      "frozen_prx_baseline": {
+        "file": ".superpowers/native-dependency-spike/native-full-runtime-aligned-entry-1/build-1/modbridge_runtime_aligned_entry.prx",
+        "sha256": "3b998f098de7e1adba29c129c51586554590b3eadc257749e15223983c4ab654",
+        "fself_bytes": 30151623,
+        "pt_load_memsz_sum_bytes": 32197730,
+        "bss_bytes": 71960,
+        "proves": "total-image loading (~30.7 MiB memsz) is not the binding constraint; its BSS is only 70.3 KiB so it proves NOTHING about BSS headroom"
+      },
+      "current_class_console_boots": {
+        "evidence": "worker-verdict-first-real runs 1/2/3 (pids 317/341/355) + launch10-prep run5 baselines (session 370, three boots)",
+        "count": 6,
+        "module_start_return": 0,
+        "ctor_pairs": "235/235",
+        "bridge_walk": "bridge_vmentry_entries=22761/22761/10028/10028/9993/9993, bridge_vm_walk_stop=0 on all six; the 19,005,440 B g_bridge_vmmap buffer fully exercised by sysctl + per-record walk every boot",
+        "spanpub": "bridge_spanpub_cap=1 saturated on every observed >16384 boot",
+        "refusals_seen": "PS5Pad.ini ASCII / loadlist size / pad phase=6 (config-class, code=3/-8) - never a memory-class failure",
+        "proves": "54,425,186 B total PT_LOAD memsz with 21,558,752 B BSS (>=19.5 MiB of it physically resident during the walk) loads and starts on the target"
+      }
+    }
+  },
+  "verdict_rationale": {
+    "documented_limit_margin": "40,188,672 B writable segment vs MAXDSIZ 34,359,738,368 B = 815x margin",
+    "empirical_margin": "1.378x the total-image memsz and 2.05x the BSS of a runtime class that booted >=6 times with zero memory-class failures; the dominant BSS consumer (g_bridge_vmmap) is already proven resident at 18.12 MiB",
+    "residency_cost": "worst-case all-BSS-resident adds ~40.2 MiB (~0.3% of a ~12.5 GiB title-class budget); the walk already touches the full raw buffer on every boot",
+    "binding_constraint": "none identified at the operating point; the honest unknown is an undocumented kernel-internal cap, for which the 6-boot record gives no positive signal of existence"
+  },
+  "alternative_lever_bounded_proposal": {
+    "status": "not required by this verdict; proposal-only",
+    "sketch": "Keep kBridgeVmmapEntries=16384. The walk already parses EVERY record (bridge_vmentry_entries=22761) - only the SNAPSHOT copy is bounded. Feed bridge_spanpub_publish from the walk stream instead of the 16,384-record prefix so interest-spans above the prefix cut (tail/heap-top) register into the existing bounded top-16 table, and define the published envelope over the FULL walk. Zero added BSS; changes are confined to the publish input + envelope semantics.",
+    "contract_warning": "This changes the caller-contract pin (D1: envelope = max end over the CAPTURED prefix; 'omitted <=> at/above envelope', fixture T5's 'honest unmapped below the cut'). A full-walk envelope removes the truncation class entirely for span queries, so the validator's capture-truncated refusal and fixture H5/E4/T* expectations must be re-derived; it is a NEW bounded revision, not a loosening of the validator.",
+    "requires": "new distinct IDs, host fixture re-derivation first, no resubmission of any refused launch"
+  },
+  "artifacts": {
+    "budget": "BSS-BUDGET.md",
+    "report": "REPORT.md"
+  }
+}

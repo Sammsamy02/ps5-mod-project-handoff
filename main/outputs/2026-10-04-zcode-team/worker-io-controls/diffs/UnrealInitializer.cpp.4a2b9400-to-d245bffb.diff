@@ -1,0 +1,246 @@
+--- 2026-10-04-zcode-controller/launch10-build/final-units/UnrealInitializer.cpp	2026-10-05 09:55:06
++++ 2026-10-04-zcode-team/worker-io-controls/staging/UnrealInitializer.cpp	2026-10-05 23:21:49
+@@ -641,6 +641,16 @@
+         // of a false 'unmapped'. Bridge capture capacity is 16,384 records
+         // (static bss; launch-9 observed vm_total 10,019 -> complete).
+         extern "C" int bridge_capture_envelope(uint64_t* envelope_end);
++        // ---- launch10-io (worker-io-controls): the write-copyin probe and
++        // ---- its R-4 sink-capture accessor, defined by the bridge TU on the
++        // ---- RECONCILED transport — Sony-native sceKernelOpen/Write/Close
++        // ---- (PROVEN in-game, session 1047: 0x20000 real pool bytes, sink
++        // ---- sha 6f849a31...) with the write fd CLOSED before the fopen
++        // ---- read-back (the sandbox FS never publishes unflushed writes to
++        // ---- a second handle — 1047's only failure). Returns the
++        // ---- rc_seed::CopyinProbeClass int codes.
++        extern "C" int bridge_kernel_write_copyin_probe(uint64_t addr, uint64_t len);
++        extern "C" int bridge_write_copyin_capture(uint64_t addr, const uint8_t** out_bytes, uint32_t* out_len);
+ 
+         // Set only after the ctor was seed-bound AND behaviorally verified.
+         // While true, the detour-based VerifyFNameConstructor pass must not arm
+@@ -864,9 +874,12 @@
+                          reinterpret_cast<void*>(gmalloc_runtime), reinterpret_cast<void*>(malloc_ptr));
+ 
+             // ---- Phase 3: FName pool validation chain (FNAME-VERDICT section 5, steps 1-3) ----
+-            // Retries are only for "pool not initialized YET" shapes (shape
+-            // failure or interned ids still 0); once the shape holds, a string
+-            // mismatch is terminal refutation, never retried.
++            // Retries are only for "pool not initialized YET" shapes
++            // (structural failure or the ByteProperty id still 0) — never
++            // for a rescuable coverage-class miss: that consumes the ONE
++            // copyin probe attempt immediately (guard below) and terminates
++            // in admit or refuse. Once the shape holds, a string mismatch is
++            // terminal refutation, never retried.
+             require_present(SeedTableNS::kFNameCtorWchar);
+             const uint64_t pool_runtime = base + SeedTableNS::kFNamePoolLabel;
+             // Read-path guard: every pool-chain read_u64 roots here — the pool
+@@ -931,6 +944,48 @@
+                 if (bridge_capture_envelope(&env) && env > capture_envelope) { capture_envelope = env; }
+             }
+             PoolWords words{};
++            // ---- launch10-io (worker-io-controls): audit fixes ------------------
++            // (1) NONE-ID GATE RETIRED (was a false refusal): the old break
++            //     gate `words.none_id != 0` spun the whole wait budget on a
++            //     HEALTHY pool and refused it as "never initialized". UE5
++            //     FName pool semantics make NoneId == 0 the LEGITIMATE value:
++            //     FNamePool::Init stores "None" FIRST, at entry 0 of
++            //     Blocks[0], so id("None") = block 0 / offset 0 = 0 (static
++            //     evidence: FNAME-POOL-RE.md R3 and SeedValidation.hpp's
++            //     check_none_anchor; live evidence: session 1047 transferred
++            //     the real pool head — None/ByteProperty/IntProperty/... at
++            //     entry 0+). check_pool_shape already structurally accepts
++            //     NoneId 0 (0>>16 == 0 <= CurrentBlock, always true). The
++            //     readiness signal is now ByteProperty's id alone: it is
++            //     never the first entry, so id != 0 exactly when the pool
++            //     has initialized.
++            // (2) COPYIN RESCUE GUARD: only the rescuable coverage classes
++            //     (CaptureTruncated / NotCovered) may consume the ONE probe
++            //     attempt. Structural failures (null / misaligned Blocks[0])
++            //     NEVER spend it — the pool may simply not be initialized
++            //     yet, so they keep waiting under the budget. A coverage-class
++            //     miss with a live pool (ids ready) is the DM-class case:
++            //     probe once via bridge_kernel_write_copyin_probe over the
++            //     FULL required read range (one whole FName block, the
++            //     session-1047 transfer shape), resolve with
++            //     rc_seed::resolve_listing_gap, and on Readable admit — the
++            //     read already happened into the bridge sink.
++            // (3) CAPTURE BINDING: the rescue is bound to
++            //     (addr, full range, generation). An address change (or a
++            //     fresh retry generation) invalidates any previously cached
++            //     binding, so stale sink metadata can never be consumed as
++            //     the current pool state; the SAME binding gates every
++            //     downstream sink-capture read (rescue_capture_bytes below).
++            struct CopyinRescue
++            {
++                bool attempted{false};
++                bool admitted{false};
++                uint64_t addr{0};
++                uint64_t range{0};
++                uint32_t generation{0};
++            };
++            CopyinRescue rescue{};
++            constexpr uint64_t kRescueRange = rc_seed::kFNameBlockCapacityBytes; // 0x20000
+             const auto pool_wait_start = std::chrono::steady_clock::now();
+             for (;;)
+             {
+@@ -943,19 +998,91 @@
+                 // non-image). The already-read words feed the invariant; no
+                 // extra reads.
+                 const auto shape = rc_seed::check_pool_shape(words.current_block, words.none_id, words.blocks0, published, published_count, capture_envelope);
+-                if (shape.ok && words.none_id != 0 && words.byte_property_id != 0)
++                const bool ids_ready = words.byte_property_id != 0;
++                if (shape.ok && ids_ready)
+                 {
+-                    break;
++                    break; // span-membership admission (unchanged v4 path)
++                }
++                const bool rescuable =
++                    !shape.ok &&
++                    (shape.failure_class == rc_seed::PoolShapeCheck::FailureClass::CaptureTruncated ||
++                     shape.failure_class == rc_seed::PoolShapeCheck::FailureClass::NotCovered);
++                if (rescuable && ids_ready)
++                {
++                    // Binding hygiene: an address/range change invalidates
++                    // the previous binding (generation++); the cached capture
++                    // metadata never survives an address change.
++                    if (rescue.attempted && (rescue.addr != words.blocks0 || rescue.range != kRescueRange))
++                    {
++                        rescue = CopyinRescue{false, false, rescue.addr, rescue.range, rescue.generation + 1u};
++                    }
++                    if (!rescue.attempted)
++                    {
++                        rescue.attempted = true;
++                        rescue.addr = words.blocks0;
++                        rescue.range = kRescueRange;
++                        const auto probe_class = static_cast<rc_seed::CopyinProbeClass>(
++                            bridge_kernel_write_copyin_probe(rescue.addr, rescue.range));
++                        const auto gap = rc_seed::resolve_listing_gap(shape, probe_class);
++                        if (!gap.ok)
++                        {
++                            // Refused / Unavailable: the honest terminal
++                            // state (a Refused verdict is never an unmapped
++                            // proof; Unavailable means the oracle itself
++                            // failed). Never replayed this boot.
++                            seed_refused(fmt::format("FName pool at 0x{:X}: Blocks[0] 0x{:X}: {}", pool_runtime, words.blocks0, gap.note));
++                        }
++                        rescue.admitted = true; // the read HAPPENED into the sink (R-4)
++                    }
++                    if (rescue.admitted)
++                    {
++                        break; // admitted via kernel write-copyin over the listing gap
++                    }
++                    // Attempt spent without admission cannot reach here:
++                    // !gap.ok refused above. (Defensive: a re-entered retry
++                    // with the SAME binding never re-probes unchanged
++                    // evidence; the budget check below still terminates.)
+                 }
++                // Structural failures fall through WITHOUT spending the
++                // probe: keep waiting — the pool may not be initialized yet.
+                 if (std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - pool_wait_start).count() > validation_budget.count())
+                 {
+-                    seed_refused(shape.ok ? fmt::format("FName pool at 0x{:X}: interned ids still zero after the wait budget (pool never initialized)", pool_runtime)
++                    seed_refused(shape.ok ? fmt::format("FName pool at 0x{:X}: ByteProperty id still zero after the wait budget (pool never initialized)", pool_runtime)
+                                           : fmt::format("FName pool at 0x{:X}: {} (observed CurrentBlock {}, Blocks[0] 0x{:X}; published readable spans {})",
+                                                        pool_runtime, shape.failure, words.current_block, words.blocks0, published_count));
+                 }
+                 WaitForStartupRetry(std::chrono::milliseconds(50));
+             }
+ 
++            // R-4 sink-fed read, bound to the rescue binding (addr, full
++            // range, generation): the bridge capture is keyed by the probed
++            // address and the needed slice must sit inside the captured
++            // first page. A miss refuses loudly — NEVER a direct block read
++            // fallback on this path.
++            const auto rescue_capture_bytes = [&rescue](uint64_t runtime_addr, size_t needed) -> std::vector<uint8_t> {
++                if (!rescue.admitted)
++                {
++                    seed_refused("sink capture read without a copyin-admitted rescue binding");
++                }
++                if (runtime_addr < rescue.addr || needed > rescue.range ||
++                    runtime_addr - rescue.addr > rescue.range - needed)
++                {
++                    seed_refused(fmt::format("sink capture read 0x{:X}+0x{:X} outside the probed binding (addr 0x{:X}, range 0x{:X}, generation {})",
++                                             runtime_addr, needed, rescue.addr, rescue.range, rescue.generation));
++                }
++                const uint8_t* cap = nullptr;
++                uint32_t cap_len = 0;
++                if (!bridge_write_copyin_capture(rescue.addr, &cap, &cap_len) || cap == nullptr ||
++                    static_cast<uint64_t>(cap_len) < needed ||
++                    (runtime_addr - rescue.addr) + needed > static_cast<uint64_t>(cap_len))
++                {
++                    seed_refused(fmt::format("bridge sink capture at 0x{:X} cannot cover 0x{:X}+0x{:X} (captured {} bytes; generation {})",
++                                             rescue.addr, runtime_addr, needed, cap_len, rescue.generation));
++                }
++                const uint64_t off = runtime_addr - rescue.addr;
++                return std::vector<uint8_t>(cap + off, cap + off + needed);
++            };
++
+             // ---- v4 entry-0 content anchor (FNAME-POOL-RE.md R3) ----
+             // With image residency no longer a refusal, wrong-base/wrong-pool
+             // protection is CONTENT: entry 0 of Blocks[0] is ANSI 'None'
+@@ -964,8 +1091,14 @@
+             // address is ownership-covered by the published-span membership
+             // check that just passed. Terminal on mismatch (content identity,
+             // same class as the entry matches below — never retried).
++            // R-4 (launch10-io): on a copyin-admitted boot the anchor bytes
++            // come from the SINK CAPTURE bound to the rescue — never a
++            // direct block read.
+             {
+-                const auto anchor_bytes = read_bytes_at(words.blocks0, 2 + rc_seed::kNoneString.size());
++                const auto anchor_bytes =
++                    rescue.admitted
++                        ? rescue_capture_bytes(words.blocks0, 2 + rc_seed::kNoneString.size())
++                        : read_bytes_at(words.blocks0, 2 + rc_seed::kNoneString.size());
+                 if (const auto anchor = rc_seed::check_none_anchor(anchor_bytes.data(), anchor_bytes.size()); !anchor.ok)
+                 {
+                     seed_refused(fmt::format("FName pool at 0x{:X}: Blocks[0] 0x{:X}: {}", pool_runtime, words.blocks0, anchor.failure));
+@@ -977,7 +1110,26 @@
+                 {
+                     seed_refused(fmt::format("FName pool entry id 0x{:X}: {}", id, bounds.failure));
+                 }
+-                const auto bytes = pool_entry_bytes(pool_runtime, id, 2 + expected.size());
++                std::vector<uint8_t> bytes;
++                if (rescue.admitted)
++                {
++                    // R-4: resolve the entry ADDRESS through the pool struct
++                    // (direct read, image BSS inside the data-readable class)
++                    // but take the ENTRY BYTES from the sink capture bound to
++                    // the rescue binding — never a direct block read.
++                    const auto location = rc_seed::entry_location(id);
++                    const auto* pool_ptr = reinterpret_cast<const volatile uint8_t*>(pool_runtime);
++                    const uint64_t block_ptr = read_u64(pool_ptr, rc_seed::kPoolLayout.blocks_offset + location.block_index * 8);
++                    if (block_ptr == 0)
++                    {
++                        seed_refused(fmt::format("pool entry id 0x{:X}: Blocks[{}] is null", id, location.block_index));
++                    }
++                    bytes = rescue_capture_bytes(block_ptr + location.byte_offset, 2 + expected.size());
++                }
++                else
++                {
++                    bytes = pool_entry_bytes(pool_runtime, id, 2 + expected.size());
++                }
+                 if (const auto match = rc_seed::entry_matches_ascii(bytes.data(), bytes.size(), expected); !match.ok)
+                 {
+                     seed_refused(fmt::format("FName pool entry id 0x{:X} (expected '{}'): {}", id, expected, match.failure));
+@@ -989,8 +1141,20 @@
+             validate_entry(words.byte_property_id,
+                            rc_seed::check_entry_bounds(words.byte_property_id, words.current_block, words.current_byte_offset, 2 + rc_seed::kBytePropertyString.size()),
+                            rc_seed::kBytePropertyString);
+-            Output::send(STR("[Seeds] FName pool validated at {} (CurrentBlock {}, Blocks[0] 0x{:X} inside a published readable span (image or non-image) of {}; 'None' anchor ok; 'None' id 0x{:X}, 'ByteProperty' id 0x{:X})\n"),
+-                         reinterpret_cast<void*>(pool_runtime), words.current_block, words.blocks0, published_count, words.none_id, words.byte_property_id);
++            if (rescue.admitted)
++            {
++                // Honest provenance: Blocks[0] was NOT inside a published
++                // span this boot — admission came from the kernel
++                // write-copyin over the listing gap, and the anchor + entry
++                // bytes were consumed from the sink capture (R-4).
++                Output::send(STR("[Seeds] FName pool validated at {} (CurrentBlock {}, Blocks[0] 0x{:X} admitted via kernel write-copyin over the listing gap; binding addr 0x{:X}, range 0x{:X}, generation {}; 'None' anchor + entries ok from the SINK CAPTURE; 'None' id 0x{:X}, 'ByteProperty' id 0x{:X})\n"),
++                             reinterpret_cast<void*>(pool_runtime), words.current_block, words.blocks0, rescue.addr, rescue.range, rescue.generation, words.none_id, words.byte_property_id);
++            }
++            else
++            {
++                Output::send(STR("[Seeds] FName pool validated at {} (CurrentBlock {}, Blocks[0] 0x{:X} inside a published readable span (image or non-image) of {}; 'None' anchor ok; 'None' id 0x{:X}, 'ByteProperty' id 0x{:X})\n"),
++                             reinterpret_cast<void*>(pool_runtime), words.current_block, words.blocks0, published_count, words.none_id, words.byte_property_id);
++            }
+ 
+             // ---- Phase 4: bind the ctor + behavioral ByteProperty probe (FNAME-VERDICT section 5) ----
+             // FNAME_Find EXPLICITLY: the default is FNAME_Add, which would

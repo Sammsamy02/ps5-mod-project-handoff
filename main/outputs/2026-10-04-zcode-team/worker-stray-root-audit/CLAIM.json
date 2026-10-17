@@ -1,0 +1,66 @@
+{
+  "worker": "worker-stray-root-audit",
+  "date": "2026-10-05",
+  "task": "Audit the stray outputs/2026-10-04-zcode-team/.superpowers tree: full inventory, owner attribution, _find_root shadow mechanics, blast radius, ranked disposition; verify walkguard WGP E4 stays valid under the recommended option.",
+  "mode": "LOCAL-ONLY read/analyze; ZERO mutations performed (no delete, no rename, no edit). Controller owns disposition.",
+  "stray_tree": {
+    "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/.superpowers",
+    "created_mtime": "2026-10-05 05:42:47 (all 6 paths, single mkdir -p event)",
+    "total_bytes": 14535,
+    "files": 2,
+    "classification": "Botched staging copy of one FAILED owned-dll-sdk-candidate spike attempt (owned_profile.h + FAILED receipt.json, build_id b33f79f5a88b40e6bdfd1aff15816f99); NOT a cache, NOT a second ledger.",
+    "in_canonical_ledger_tree": false,
+    "in_transport_ledger": false,
+    "unique_build_id": true
+  },
+  "owner_attribution": {
+    "most_likely_owner": "worker-seh64-trampoline-fix",
+    "confidence": "HIGH (mechanical, not circumstantial)",
+    "evidence": [
+      "receipt.json source_files keys are str(path.relative_to(ROOT)) and all begin with 'worker-seh64-trampoline-fix/vendor/...' -- which mathematically forces ROOT == outputs/2026-10-04-zcode-team",
+      "build.py's ROOT=HERE.parents[2] (line 14); for team/worker-seh64-trampoline-fix/vendor/windows-candidate/build.py that is exactly the team dir",
+      "receipt lists build.py itself as a source: key 'worker-seh64-trampoline-fix/vendor/windows-candidate/build.py' sha256 c45a2c6878fb... == byte-identical to the file still in that worker's vendor tree TODAY",
+      "3 more spot-checked source hashes match that worker's vendor tree exactly (owned_runtime.c c505cf9b..., sdk_driver.c 201e8ca5..., build.py c45a2c68...)",
+      "stray mtime 05:42:47 falls inside that worker's E-run activity bracket (out-e1b 05:41:36, out-e2 05:46:12)",
+      "receipt receipt-shape matches build.py's writer exactly (lines 42/58/118/354-355): owned_profile.h + receipt.json under ROOT/.superpowers/native-dependency-spike/owned-dll-sdk-candidate-1/<uuid>/",
+      "ledger entry zcode_worker_seh64_trampoline_fix exists but does NOT mention this attempt; the stray receipt is unrecorded anywhere else"
+    ],
+    "self_reported_by_owner": false
+  },
+  "shadow_mechanics": {
+    "frozen_script": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-prx-link-gaps/package_prx.py",
+    "frozen_sha256": "e6fbe6c5011b498e0c26ee88bdc6c84aacab204b6ccad5696a78353afef5c313 (verified unchanged today)",
+    "mechanism": "_find_root() lines 74-83 walks up max 6 ancestor levels from BASE (script dir, line 71) and returns the FIRST dir containing a '.superpowers' subdir (line 79). With the stray team-dir .superpowers present, the walk stops one level early at outputs/2026-10-04-zcode-team; ROOT/SPIKE/PIN (lines 85-86, PIN ledger entries) then all point at nonexistent team/.superpowers/... paths.",
+    "failure_mode": "fail-closed: 12 lineage gaps (composition_receipt_base_matches_pinned, frozen_prx_exists, import_contract_exists, tool_dotnet, tool_finalize_sdk, tool_make_fself, tool_ld.lld, tool_llvm-readelf, tool_llvm-nm, tool_llvm-config, tool_prospero_clang, tool_lua_include); no PRX linked"
+  },
+  "blast_radius": {
+    "scripts_with_marker_walk": ["worker-prx-link-gaps/package_prx.py (the ONLY _find_root marker-walk; frozen, sha-pinned by 7+ drivers)"],
+    "drivers_loading_frozen_script": [
+      "worker-comp6-drybuild/build_runtime_composition6_dry1.py (last ran 2026-10-04 21:35, PRE-incident, valid)",
+      "worker-comp6-driver/build_runtime_composition6.py (2026-10-04 23:55, PRE, valid)",
+      "worker-d1-determinism-diagnosis/build_runtime_composition6_d1fix.py (2026-10-04 23:58, PRE, valid)",
+      "worker-launch11-vtable-prebuild/build_runtime_composition6_l11pre.py (2026-10-05 02:35, PRE, valid)",
+      "worker-launch11-dry-compose (2026-10-05 03:56, PRE, valid)",
+      "worker-launch10-prebuild/build_runtime_composition6_l10pre.py (pre-incident run; UNPATCHED driver would fail on any re-run)",
+      "worker-launch10-walkguard-prep/build_runtime_composition6_walkguard.py (hit it live; fixed in-driver via WGP E4)",
+      "worker-launch10-r3-armed/build_runtime_composition6_l10r3.py (hit it live; fixed in-driver via L10R3 E3)",
+      "worker-composition-3/package_composition3.py, worker-composition-4-fix/package_composition4.py, worker-composition-5-rebuild/build_runtime_composition5.py, worker-composition-5-minimal/build_comp5_minimal.py (older lineage, PRE)"
+    ],
+    "wrong_root_victims": [
+      "worker-launch10-walkguard-prep run-a 2026-10-05T07:00:29: 12 gaps, fail-closed, artifacts preserved as prx-candidate-composition6-l10wg-a.rootgap-firstattempt + logs/run-a.console.log",
+      "worker-launch10-r3-armed run-a (post-05:42): same 12 gaps, fail-closed, preserved in logs/run-a.console.log"
+    ],
+    "wrong_root_receipts_that_approved_anything": [],
+    "unaffected_patterns": "worker-prx-packaging/package_prx.py and all verify_*.py / build.py copies under outputs/ps5-mod-bridge use fixed-depth ROOT=HERE.parents[2] from depth-correct locations (unaffected by the stray); the vendored worker build.py copies' parents[2] anchoring is the bug class that CREATED the stray (see worker-crt-integrate 2026-10-04 17:08 prior instance of the same misroot, pre-stray)"
+  },
+  "recommended_disposition": {
+    "rank": ["A: relocate/rename (RECOMMENDED)", "B: harden _find_root (blocked by attestation pins; only as a NEW versioned file)", "C: delete (controller-owned; not recommended while provenance is unresolved)"],
+    "option_a_command": "mv '/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/.superpowers' '/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/.superpowers.QUARANTINED-stray-20261005T0542-b33f79f5-worker-seh64-trampoline-fix'",
+    "why_a_is_safest": "Zero bytes change, frozen packaging file stays byte-identical (sha e6fbe6c5 pins in 7+ drivers keep holding), every past receipt remains reproducible, WGP E4 becomes a verified no-op (its `if m.ROOT != ROOT` guard), L10R3 E3 keeps working, and all unpatched drivers (launch10-prebuild etc.) work again unmodified."
+  },
+  "honesty": {
+    "verified": "tree inventory, hashes, mtimes, frozen-script sha, _find_root line-level mechanics, 12-gap lists, both post-incident wrong-root victims and their fail-closed status, E4/E3 code paths, ledger absence of the stray build id",
+    "inferred": "exact build.py invocation/argv at 05:42 (receipt records commands:[] because the first lld-link exec failed before any command was appended; the bogus bin/gcc-ld lld-link path in the error was passed by the driver/edition that ran)",
+    "not_done": "no deletions, renames, edits, or ledger writes of any kind"
+  }
+}

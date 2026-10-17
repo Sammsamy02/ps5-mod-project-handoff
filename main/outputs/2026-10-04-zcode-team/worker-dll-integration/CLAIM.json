@@ -1,0 +1,66 @@
+{
+  "worker": "worker-dll-integration",
+  "date": "2026-10-05",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "write_scope": [
+    "outputs/2026-10-04-zcode-team/worker-dll-integration/"
+  ],
+  "task": "After the dll8/ALLFAM8 console PASS (ledger zcode_return_phase1_dll8, consolidated into zcode_return_session_log), determine and execute the next step of the approved DLL-compatibility line: read the dll8 results and the line's own plans (worker-dll-8fam-combined, worker-dll-7fam-stage-prep, worker-dll-track-closure, worker-8fam-console-prep), choose between (a) the dll7 fallback test, (b) runtime integration of the owned-DLL candidate into a composed candidate, (c) closure; execute the chosen step host-side (proposal-only for any console part); state goal-relevance (menu path vs independent) and park/continue accordingly.",
+  "budget_calls_max": 60,
+  "decision": {
+    "chosen": "c_closure",
+    "why": "TRACK-COMPLETE.md criterion 4 branches on the dll8 verdict: PASS = track done. The ledger records EIGHT_FAMILY_CONSOLE_RUN_PASSED with a full match to the frozen 8fam oracle (12 family keys enabled incl. static_tls + seh64 first console proof, consumer_imports 90, results [86,93], worker 4/4, memory.last 163840).",
+    "rejected_a_dll7_fallback": "The 7-family run is a CONDITIONAL attribution aid, armed only if dll8 tripped a SEH64-specific surface (DLL-TRACK-STATE §6, TRACK-COMPLETE criterion 4 carve-out branch). dll8 PASSED, so the condition lapsed. Dispatching ALLFAM7_DLL_TEST.elf now would answer no open question, append records 41-44 with no decision value, and spend a console window - no busywork, no duplicate dispatch.",
+    "rejected_b_runtime_integration": "No plan on the line calls for loading the owned-DLL candidate inside the composed (composition-5/6 PRX) candidate. DLL-TRACK-STATE §7 documents independence in both directions: no EVIDENCE-SPEC rung references any DLL artifact; different mechanism/artifacts/console state (payload-only game-closed vs ploader PRX running-game); separate build lineages; order-not-dependency; motivation-link-not-acceptance-link (the current acceptance path loads Lua mods, not owned PE DLLs). The launch-10/11 and PC-acquisition lines have no dependency on the owned-DLL line. Integration would be new successor work with a named precondition, not a next step."
+  },
+  "executed_host_side": {
+    "description": "Closure verification + record only. No console contact, no upload/dispatch, no target execution, no writes outside this worker dir.",
+    "rehash_results": [
+      {
+        "artifact": "outputs/2026-10-04-zcode-team/worker-dll-8fam-combined/out-sdk-composition/c3aba79f968a492b849e5ece2f009e8e/owned-dll-candidate.elf",
+        "sha256": "792811911e773c9b07a47ba3b22bc5d290f9f3ab86056ddfc985cf25e6d804fb",
+        "bytes": 336552,
+        "verdict": "EXACT vs the worker-dll-8fam-combined receipt, DLL-TRACK-STATE §2, the controller session-artifacts-manifest allfam8-elf entry, and the dll8 ledger upload identity (79281191 EXACT) - the on-disk artifact is byte-identical to the console-PASSED upload"
+      },
+      {
+        "artifact": "outputs/2026-10-04-zcode-team/worker-static-tls-7fam/out-sdk-composition/e72f5318233845369a68556cd61e59ca/owned-dll-candidate.elf",
+        "sha256": "83ee2ae95268a9b7f7bc4d931a29b77d5c3c2b15afdbb4e4288ac5490a847cae",
+        "bytes": 334656,
+        "verdict": "EXACT vs frozen receipts; the 7-family fallback candidate remains compiled-never-dispatched and stays that way"
+      },
+      {
+        "artifact": "outputs/2026-10-04-zcode-team/worker-combined-dll-allfam/out-sdk-composition/133c5e9e59f24c2fb57e7e3422c665a1/owned-dll-candidate.elf",
+        "sha256": "96296c1c92850623781c0ecf8126f2307c21a1380cc95bb99d277a8d7a07e81c",
+        "bytes": 300456,
+        "verdict": "EXACT vs frozen receipts; the 6-family ALLFAM_DLL_TEST console PASS baseline"
+      }
+    ],
+    "ledger_facts_verified": [
+      "zcode_return_phase1_dll8 (2026-10-05T11:38:27Z): EIGHT_FAMILY_CONSOLE_RUN_PASSED; upload identity 79281191 EXACT; upload NOT repeated; dispatch exactly once (controller, after the batch tool correctly halted at its own gate - the tool's manage:check lacked ?filename=, fixed in place at both dll8 and e2e sites)",
+      "zcode_return_session_log (2026-10-05T11:55:21Z, consolidation record; originals preserved with superseded_by markers): phase dll8_allfam8 verdict PASS_12_FAMILY_KEYS; final record 12 family keys ALL enabled (incl. static_tls + seh64 first console proof), worker 4/4, consumer_imports 90, results [86,93], memory.last 163840 - LEDGER MATCH vs the 8fam EXPECTED-DELTA table"
+    ]
+  },
+  "results_86_93_meaning": "Not per-family verdicts. report.results = [values[2], values[3]] from owned_runtime.c:618: the two calls of the owned helper's HelperCompute export through GetProcAddress name and ordinal-7 - HelperCompute(11)=11*7+9=86 and HelperCompute(12)=12*7+9=93 (malloc/free + TlsAlloc/Set/Get/Free exercised per call; loader_consumer.c:35 CHECKs both). Constant across the 6/7/8-family console runs because the combined family exercises return 1 or a unique negative family code while keeping the 86/93 base pair (entry_consumer.c).",
+  "per_family_verdicts": {
+    "init_once": "console-proven individually (1a6b37b7) and re-proven inside the 6/7/8-family combined runs",
+    "mutex": "console-proven individually (6f5bf85a) and re-proven inside combined runs",
+    "fileio": "console-proven individually (664f83a5) and re-proven inside combined runs",
+    "crt_startup": "console-proven individually (53808597) and re-proven inside combined runs",
+    "module_enum": "console-proven INSIDE combined runs only (6-family 133c5e9e, re-proven dll8) - never an individual payload",
+    "vm": "console-proven INSIDE combined runs only (6-family 133c5e9e, re-proven dll8) - never an individual payload",
+    "static_tls": "FIRST console proof via dll8 (dir-9 post-link patch route, -120..-127 surface passed - no failure code in the ledger record)",
+    "seh64": "FIRST console proof via dll8 (dir-3 EXCEPTION admission, -130..-137 fixture census passed - no failure code in the ledger record)"
+  },
+  "honest_limits": [
+    "The dll8 console PASS is quoted from the ledger entries; this worker holds no raw console records. The plan-named post-PASS archive (allfam8-console-receipt.json + result copy under C/console/) does NOT exist on the host - only a fake-drive selftest copy exists in worker-console-batch-runner/runs/fake-drive/dll8/. That bookkeeping item remains OUTSTANDING and controller-owned; this worker cannot fabricate it.",
+    "No Windows-loader parity, no ntdll/VCRUNTIME parity, no arbitrary-DLL claim; component evidence only for the exercised fixtures.",
+    "SEH64 PS5-trampoline register contracts are host-verified only; the dll8 PASS does NOT discharge the named pre-execution review, and no reliance on SEH64 beyond the exercised fixture census is authorized by this closure.",
+    "results [86,93] were not re-derived on target by this worker; the meaning is established from the vendor source and the frozen ledgers."
+  ],
+  "non_goals": [
+    "No console contact, no upload, no dispatch, no replay of any prior dispatch, no nested subagents, no network",
+    "No writes outside worker-dll-integration/; no modification of any vendor tree, plan, ledger, or batch tool",
+    "No claim that the owned-DLL line advances any UE4SS acceptance rung or the menu/spawn path"
+  ],
+  "goal_relevance_verdict": "INDEPENDENT of the menu path. The line is COMPLETE and PARKED as successor substrate; successor queue is documented in NEXT-STEP.md (trampoline review precondition, host-only caveats, MSVCP140 assessed-only, outstanding controller bookkeeping)."
+}

@@ -1,0 +1,36 @@
+{
+  "worker": "worker-record-sink-addon",
+  "team": "2026-10-04-zcode-team",
+  "date": "2026-10-04",
+  "mission": "Minimal late-load PRX add-on that drives the query-harness record path from OUTSIDE the composition: own-module igd-lineage probe (record_sink.c IgSink lineage) + the NativeQueryHarness tick/record emitters, so /data/modbridge-ingame-facts.jsonl can carry the rung-1/2 QueryResultRecord evidence (ticks_accepted advancing, game_thread_id_key) once composition-5 r6 reaches engine-ready.",
+  "route_decision": {
+    "outside_composition_possible": true,
+    "why": "The composed PRX stages native-query-harness (worker-composition-5-rebuild/build_runtime_composition5.py:157) but NOTHING in it calls OnEngineTickDispatch or FormatRecordJsonLine (tree-wide grep: only host tests call OnEngineTickDispatch; WIRING.md:120-124 leaves the driver to the controller). The igf lineage (worker-anchor-validation -> ingame-probe v2/v3 -> igf4 -> igf6) proves a separate late-load PRX in the same process reads live engine memory (GUA header at runtime 0x97ba110, layout A validated live: NumElements=71959, first_gc=35477/last_non_gc=35476) and writes /data/modbridge-ingame-facts.jsonl through its own sceKernelOpen/Write/Close trio. The harness's EngineBindings seam is injectable by design (NativeQueryHarness.hpp:155-165), so the add-on supplies its own four probes instead of the RC::Unreal default bindings it cannot link.",
+    "limits": [
+      "The add-on dispatches the harness from its OWN worker thread (pthread_create, observer lineage). It can NOT execute on the engine's OS game thread without a code detour (mprotect/raw syscalls are forbidden by the frozen recipe and were the igf5 crash correlate). game_thread_id_key is therefore the add-on driver-thread identity fold, NOT a UE4SS-published UGameEngine::Tick game-thread identity. Rung-1/2 verdicts from this add-on evidence the RECORD PATH (seqlock record -> FormatRecordJsonLine -> IgSink JSONL, counters advancing, real engine count observations) — the in-game-thread claim stays with the composition's WIRING.md persistent-callback route."
+    ]
+  },
+  "deliverables_planned": [
+    "DESIGN.md",
+    "src/ (vendored byte-identical + labeled-change + new files, per-file provenance)",
+    "build_qdrv_probe.py (frozen igf6 recipe adaptation; determinism double-build)",
+    "check_qdrv_artifact.py (adapted from worker-startup-checkpoint/diag/check_diag_artifact.py)",
+    "tests/ host tests incl. rung_check.py --from-dir PASS fixtures generated from the real vendored harness + record_sink",
+    "STAGE-PLAN-QDRV1.md (ploader.ini entry =2 alongside composition; expected record shapes)",
+    "determinism/run1,run2 + receipts/",
+    "REPORT.md (last)"
+  ],
+  "claims": [
+    "LOCAL ONLY: a modbridge_qh_driver PRX is built twice with byte-equal outputs (determinism) from a frozen-recipe adaptation using the vendored dotnet SDK Packager.dll in place, ps5-payload-sdk cross tools, finalize_sdk 0x11000000 stamp, pinned make_fself.",
+    "Import surface: exactly 11 verbatim rows of the frozen 191-row contract (__error, sceKernelOpen, sceKernelWrite, sceKernelClose, sysctl, getpid, clock_gettime, nanosleep, pthread_create, pthread_detach, pthread_self). ZERO new/derived identities; the 4 rows beyond the igf 7 are flagged additions, each copied byte-identical from the same frozen contract (pthread_create is the observer-lineage precedent).",
+    "The vendored record path is REAL: NativeQueryHarness.cpp record/seqlock/formatter logic byte-identical except individually labeled freestanding edits (throw->wiring-refusal counter, yield->bounded spin, memcpy->ig_memcpy); record_sink.c byte-identical; the qh record line is the pinned FormatRecordJsonLine output written as a standalone JSONL line.",
+    "Host tests: the driver state machine + the real vendored harness + real record_sink produce JSONL fixtures on which worker-rung-evidence-reader/rung_check.py --from-dir verdicts are RUNG1 PASS and RUNG2 PASS."
+  ],
+  "non_claims": [
+    "No console contact, no native execution, no in-game results claimed.",
+    "No rung-1/2 PASS claimed for any console file; STAGE-PLAN only predicts the shapes/timing.",
+    "No claim that the add-on runs on the engine game thread; no claim about composition-5 r6 behavior.",
+    "The GUA element-count admission is a header-window read (layout-A offset pinned by worker-5/anchor-validation live validation and worker-batch2-live-prep provenance); the full corrected-predicate chunk-extent chase (cfgL) is NOT performed in-PRX — raw header fields are recorded every poll for offline predicate replay."
+  ],
+  "bounds": "No nested subagents; no network/console; writes only under outputs/2026-10-04-zcode-team/worker-record-sink-addon/; existing files elsewhere read-only; CLAIM.json first, REPORT.md last."
+}

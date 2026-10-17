@@ -1,0 +1,31 @@
+{
+  "scope": "bounded HTTP resume-route framing and dispatch controls",
+  "historical_actual_app_red": {
+    "receipt": ".superpowers/native-dependency-spike/native-nexus-free-grant-resume-1/red-2/receipt.json",
+    "expected_red_observed": true,
+    "all_passed": false,
+    "actual_http_status": 400,
+    "intended_http_status": 202,
+    "scenario": "retained same-owner needs_nexus_authorization job; valid complete-frame resume POST; no provider/link/archive and no ID/state change"
+  },
+  "focused_red_green": {
+    "red_command": "python3 -m unittest -v test_host.HostTests.test_resume_body_is_framed_before_unconfigured_dispatch",
+    "red_result": "FAIL at expected status assertion: exact valid resume POST returned 400 instead of 503/jobs_unavailable because the path was not recognized as a bounded JSON POST",
+    "green_command": "python3 -m unittest -v test_host.HostTests.test_resume_body_is_framed_before_unconfigured_dispatch",
+    "green_result": "PASS; exact POST and fragmented body dispatch to jobs_unavailable in the unconfigured build; trailing bytes, wrong content type, oversized body, and malformed path forms are rejected; GET is 405",
+    "initial_fragment_attempt": "Before route implementation, the test helper observed BrokenPipeError while sending a body split after headers because the unknown path was rejected early. This was a test transport race, not a product diagnosis; the stable RED was narrowed to complete-frame 400-vs-503. The same fragmented request passes after the route is recognized."
+  },
+  "verification": {
+    "command": "python3 -m unittest -v test_host",
+    "result": "PASS, 22 tests",
+    "enabled_http_syntax_command": "cc -std=c11 -Wall -Wextra -Werror -fsyntax-only -DMB_HOST_DOWNLOAD=1 -DMB_HOST_JOBS=1 -I. -I../include -isystem ../third_party -isystem ../third_party/picosha2 http.c",
+    "enabled_http_syntax_result": "PASS",
+    "diff_check": "PASS"
+  },
+  "reviewed_file_hashes": {
+    "outputs/ps5-mod-bridge/native-host/http.c": "eac9232eac19da931aadb316ddc5d7c47160e454d3ffa3c471f307e1bc9e53d1",
+    "outputs/ps5-mod-bridge/native-host/tests/test_host.py": "02a6b3982140da3243e1288884cd0ac97b0ade2508a24c2f399ec5a0839fe85e",
+    "outputs/ps5-mod-bridge/native-host/jobs.h at syntax check": "31fdb3071584f8657896a1c367d3d7347876c9d8757f0805fa2be61e2441e6e0"
+  },
+  "limits": "The host test fixture exercises the disabled-jobs 503 path. Enabled route wiring was syntax-checked against the additive jobs header; actual owned-TLS resume behavior and the final product build remain with the coordinator fixture/build. No credentials, production account, console, or game files were used."
+}

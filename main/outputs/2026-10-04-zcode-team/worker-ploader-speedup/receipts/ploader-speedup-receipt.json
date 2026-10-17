@@ -1,0 +1,72 @@
+{
+  "bundle": "worker-ploader-speedup: amended ploader readiness patch 05r (wall-clock deadline + proven-stable readiness memo), staged unit source for the next ploader candidate",
+  "provenance": {
+    "generated_by": "worker-ploader-speedup, 2026-10-05",
+    "worker": "worker-ploader-speedup",
+    "mission": "verify worker-ploader-70s patch 05 against the CURRENT staged ploader source, then land BOTH savings: (a) max_ms as a true wall-clock deadline, (b) readiness result cached/skipped for subsequent plugins in the same boot, fail-closed",
+    "base_staged_source": ".superpowers/native-dependency-spike/ploader-cleanup-candidate-1/candidate/main.c",
+    "base_staged_source_sha256": "82f42fdfc689843f196befb3f545acccca854e2948a52af7b1e493e747a1819e",
+    "supersedes": {
+      "patch": "outputs/2026-10-04-zcode-team/worker-ploader-70s/PATCHES/05-wallclock-deadline.diff",
+      "sha256": "9c0ec7e1d7700ae17c0b109a9eb9d66ccfb0cf8c2bef2a4da5cde5fd5d9ab7d2",
+      "relation": "05r is a strict superset (05 = only its (a) wall-clock deadline). Never stack 05 then 05r: applying both is verified to reject (1/3 hunks) by construction. Controller must stage 05r INSTEAD of 05.",
+      "verified_supersede_reject": true
+    },
+    "latency_series_relation": "worker-injection-latency PATCHES 01,02,04 apply cleanly to BOTH lineages; 05r applies after them on both. 03-steplog hunk 3 (steplog at the per-plugin OK/FAIL notify) does NOT apply to the cleanup-candidate lineage: that candidate rewrote the same block (cleanup-before-notify, FAIL string now includes restore=/detach=, invocation stops on cleanup failure). If the controller stages 03 on the candidate lineage it must re-merge that one hunk manually (add a steplog line carrying the candidate FAIL string). 05r is unaffected by this conflict (disjoint region)."
+  },
+  "divergence": {
+    "summary": "The CURRENT staged ploader source (ploader-cleanup-candidate-1/candidate/main.c, 858 lines) differs from the pinned original (2b521cd7..., 851 lines) by a 7-line offline cleanup rework: restore_creds now attempts all ten credential writes plus both directory setters and returns aggregate failure; the run_plugins caller completes cleanup BEFORE notify, prints restore=/detach= statuses on FAIL, and STOPS the invocation on cleanup failure. Verified this session by byte diff.",
+    "patch05_assumptions_vs_current": {
+      "renamed_functions": "NONE. wait_stable / count_modules / dep_present / deps_ready / wait_for_needs / now_ms / tick_ms / stable_req / max_ticks / mp->stable_ms / mp->settle_ms / mp->min_mod all present with identical shapes.",
+      "line_drift": "Patch 05's two hunks sit after the restore_creds rework (+3 lines): they apply at OFFSET +3 on the candidate (verified dry-run, zero rejects). 05r authored against the candidate: zero offsets on it (hunks at 515/536/601), offset -3 on the pinned original. Clean on both.",
+      "behavioral_assumption": "05's core claim still holds on the candidate: max_ms bounds the tick COUNT (max_ticks = max_ms/50), no clock check in the burn loop, ~264 kernel calls per tick (count_modules 128x2 mapbase + deps_ready). F05 re-payment is STILL LIVE in the candidate: wait_for_needs is called per plugin (candidate lines 779-790, max_ms 25000/18000 per plugin). The cleanup-candidate changes do not touch readiness.",
+      "new_interaction_checked": "The candidate's new 'stop invocation on cleanup failure' return happens AFTER wait_stable; it does not alter wait_stable semantics or the memo's invariants (one pid, one boot, statics restart per launch)."
+    }
+  },
+  "files": {
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-ploader-speedup/staged/main.c": "00bec52be7ac2c8960796b3192f96ecf0fafd5619fee9e54f1d0a9c8a18f99ce",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-ploader-speedup/PATCHES/05r-wallclock-deadline-and-readiness-cache.diff": "5b33bc04e8e631edbf457e0e8d63cd144cb9c57424257633406621fb8a42e0d6",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-ploader-speedup/host-test/host_wait_controls.c": "31b626f70ad3da308245c7ac16b836c5ff6fc93d668f449d4f22cb2a60f53ce6",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-ploader-speedup/host-test/run_wait_controls.py": "124676dbee4f1125f6d045b1bf5b234f1338c0edf9f7d6d0ed52e131dbfcdddd",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-ploader-speedup/host-test/green-staged/receipt.json": "00a992d80f6393ff59302f9b16ce7ada0937de06abd63036bdfc47520d163c9d",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-ploader-speedup/host-test/red-original/receipt.json": "c9145776f61ecab98385b8611cc230f1db61bd677bd4693d184e9c88735f97b2",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-ploader-speedup/host-test/red-candidate/receipt.json": "dc352b5eaa5e2b52e0167f25fea7b9ba9145d7847e63db3bead145530faa8509",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ploader-cleanup-candidate-1/candidate/main.c": "82f42fdfc689843f196befb3f545acccca854e2948a52af7b1e493e747a1819e",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ploader-cleanup-candidate-1/original/main.c": "2b521cd7751636d10291bf14435bebe9590213c2208d9a2dc7f9f49cab09330b",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-ploader-70s/PATCHES/05-wallclock-deadline.diff": "9c0ec7e1d7700ae17c0b109a9eb9d66ccfb0cf8c2bef2a4da5cde5fd5d9ab7d2",
+    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-injection-latency/PATCHES/03-steplog.diff": "e7ab5b4fb56d618776ede18eeb1227c76eb4745f4e9b22e855f805dceb6cd62c"
+  },
+  "host_test": {
+    "pattern": "house extracted.inc pattern (ploader-cleanup-candidate-1/run_controls.py): the REAL count_modules/dep_present/deps_ready/wait_stable/get_mode_params/now_ms text is extracted from the given main.c and compiled with cc -std=c11 -Wall -Wextra -Werror -O1 against mocked kill/usleep/kernel_dynlib_*/pt_resolve/clock_gettime and a simulated-tick clock",
+    "simulated_tick_calibration": "control 03 charges 79000us simulated kernel compute per 50ms tick (129ms/tick), the launch-10 measured burn class: an unbounded 500-tick burn = 64.5s simulated wall (matches the measured 64.6s, K~0.3ms fitted)",
+    "green": "staged/main.c: 9 passed, 0 failed, exit 0",
+    "red_original": "pinned original: 7 passed, 2 failed (02-second-plugin-skips-burn, 03-wallclock-deadline-fires), exit 1 - the two failures ARE the two behavioral deltas of 05r; every other control (fast path timing, death semantics, try-anyway) passes identically, proving zero fast-path regression",
+    "red_candidate": "unamended cleanup-candidate: 7 passed, 2 failed (same two controls), exit 1",
+    "controls": [
+      "01-fast-path-proves-and-settles (19 tick sleeps + 1 settle = 1550ms, memo populated only here)",
+      "02-second-plugin-skips-burn (plugin 2 re-check = exactly 4 ticks/200ms, burn skipped)",
+      "03-wallclock-deadline-fires (never-stable burn breaks at ~194 ticks/~25.0s simulated, not 500 ticks/64.5s; try-anyway return preserved)",
+      "04-regression-dep-dropped-fails-closed (cache detects, full revalidation runs, exhaust exit does not re-cache)",
+      "05-regression-count-flap-fails-closed (moving module count detected, falls through)",
+      "06-death-in-cache-recheck-returns-zero (unchanged death semantics, immediate)",
+      "07-exhaust-path-never-caches (a second caller re-pays in full after a non-proven exhaust)",
+      "08-different-pid-never-reuses-memo (pid-keyed; pid 8 takes the full fast path)",
+      "09-died-while-waiting-first-call (return 0 before any proof)"
+    ]
+  },
+  "expected_saving": {
+    "measured_baseline": "inter-plugin gap 70.7-71.8s over 4 boots (worker-ploader-70s), of which ~64.6s is path_test re-paying the full 500-tick readiness burn (500 x (50ms sleep + ~264 kernel calls), K~0.3ms fitted)",
+    "with_memo_b": "plugin 2's burn is replaced by a ~0.5s bounded re-check (4 x predicate + 200ms sleep): predicted gap ~1.3-8.4s (recheck 0.5 + cleanup 0.3-0.5 + attach 0.3-6.9 + inject-to-stamp 0.2-0.5) -> ~62-69.5s saved per boot (~88-97% of the measured gap)",
+    "with_deadline_a": "even when the memo never proves (genuinely never-stable), any burn is capped at ~25.0-25.3s wall instead of the unbounded ~64.6s measured class (~39s saved in that scenario); removes the unbounded-compute hazard for any future ini permanently",
+    "honesty": "host-simulated only; K is a fitted parameter; no console run, no native ploader build (PS5 SDK unavailable on this host); the split of the measured gap is still worker-ploader-70s's H1 inference until a steplog-class instrument lands; acceptance on the next necessary run = composition FAIL toast dt ~1-2s and time from FAIL to path_test OK <= ~9s (unchanged from that worker's PROPOSAL.md section 4, now delivered by 05r instead of 02+05)"
+  },
+  "admission": {
+    "composition_compatibility": "Receipt is delivered in the exact hash-pinned files-map shape consumed by build_runtime_composition6_fixed_l11.py --replace-receipt/--extra-receipt (load_replace_receipt: every entry must exist and match its sha256; include_dir_map absent). HONEST LIMIT: ploader main.c is NOT a composition runtime unit - '--replace-runtime-unit ploader=<path>' would be rejected ('target must be a composed unit': ploader is neither in selected_runtime_units nor RETAINED_REPLACEABLE {program, luamod, cppmod, settings, asmhelper-asmhelper, native-pad-input, native-pad-PS5PadSource, native-pad-PS5PadNative, input-handler}), and '--extra-unit' would compile it with the runtime loader-context argv template plus undefined-baseline gates, which a standalone PS5 SDK ELF main does not satisfy. The correct admission path for this unit remains the ploader-candidate staging flow (source-pin.json + patch + host controls + result.json, as ploader-cleanup-candidate-1), with this receipt as the attestation artifact.",
+    "ploader_candidate_command_shape": "python3 <staging runner> with base=.superpowers/native-dependency-spike/ploader-cleanup-candidate-1/candidate/main.c, patch=outputs/2026-10-04-zcode-team/worker-ploader-speedup/PATCHES/05r-wallclock-deadline-and-readiness-cache.diff, staged source=outputs/2026-10-04-zcode-team/worker-ploader-speedup/staged/main.c, controls: python3 outputs/2026-10-04-zcode-team/worker-ploader-speedup/host-test/run_wait_controls.py <main.c> <outdir>",
+    "composition_command_shape_if_controller_ever_wires_it": "--replace-runtime-unit <unit>=outputs/2026-10-04-zcode-team/worker-ploader-speedup/staged/main.c --replace-receipt outputs/2026-10-04-zcode-team/worker-ploader-speedup/receipts/ploader-speedup-receipt.json (files map validates mechanically; unit-name gate documented above)"
+  },
+  "scope": "Proposal-only unit work. No console dispatch, no native ploader compilation/execution, no engine/runtime PRX changes, no game claims. staged/main.c is compiled by NOBODY in this delivery; the controller owns all console changes and ploader builds. Host compiler only ran the extracted-logic controls.",
+  "console_contact": false,
+  "native_ploader_compiled": false,
+  "target_executed": false
+}

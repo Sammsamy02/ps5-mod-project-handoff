@@ -1,0 +1,49 @@
+PASS receipt — worker-facts-geometry-fix host fixture
+=====================================================
+
+Date: 2026-10-05 (host). No console contact, no network, no target execution.
+
+Binaries (both linked against the UNMODIFIED canonical comp6 adapter
+outputs/2026-10-04-zcode-controller/comp6-integration/lmf_to_native_loader_facts.cpp):
+
+  BEFORE  geometry_before  = test_geometry_before.o + core_canonical.o
+          (canonical supplier core, sha256
+           5eff2ad9d6b8fb1a58340f31e02eebb5126236f3249f87a83e7c045c7d6b075f)
+  AFTER   geometry_after   = test_geometry_after.o + core_geometryfix.o
+          (staging/live_module_facts.geometryfix.cpp, sha256
+           2527b309a82acc46dc8a348625ff1a4144bfee4204e885b1fbec370618b6fb5c)
+
+Result:
+
+  BEFORE: 16 checks, 0 failures  (receipts/fixture-before.txt)
+          - reproduces the exact launch-9 refusal on the observed shape AND
+            on the bridge-parity six-readable-span shape:
+            error InvalidReadableMappings(16), message verbatim
+            "no observed mapping interval intersects the module image extent
+             with valid geometry"
+          - documents the conversion-side input: exactly ONE anchor span,
+            the exec-only LOAD0 [0x400000,0x787c000) prot=4.
+  AFTER:  26 checks, 0 failures  (receipts/fixture-after.txt)
+          - conversion succeeds on both launch-9 shapes;
+          - six intervals == bridge_lease_reg_spans=6 on the parity shape;
+          - exec-only LOAD0 stays excluded (D2 filter intact), past-extent
+            span clamped out, game_executable_path stays EMPTY (unfabricated);
+          - configured-roots attach reachable (Resolution B path);
+          - readable-anchor contrast converts on BOTH cores (the input
+            difference class documented);
+          - LinkMap-route containing rule unchanged (regression guard).
+
+Toolchain: /usr/bin/clang++ -std=c++23, include chain replicated from
+worker-supplier-ingame-update/verify.py. Staged-copy target-toolchain
+cross-checks (pinned ps5-payload-sdk prospero-clang++, -Werror, rc=0):
+  receipts/runtime_start_bridge_r13.geometrydiag.o
+  receipts/live_module_facts.geometryfix.o
+
+Test source sha256:
+  4d80e70da295e34b33a2337d1daf10f597feac2740e743629f54dbf135902ec8
+  (host-test/test_geometry_fix_host.cpp; BEFORE build defines
+   GEOMETRY_FIX_BEFORE=1, AFTER build GEOMETRY_FIX_BEFORE=0)
+
+LIMIT (honest): this fixture proves the CONVERSION BOUNDARY only — where
+launch-9 actually refused. MakeNativeProgramContext / ReadLease / PS-scan /
+UE4SS init are downstream and remain unexercised here.

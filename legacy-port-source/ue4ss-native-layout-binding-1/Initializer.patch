@@ -1,0 +1,75 @@
+--- .superpowers/native-dependency-spike/ue4ss-native-game-thread-1/src/UnrealInitializer.cpp
++++ src/UnrealInitializer.cpp
+@@ -9,6 +9,7 @@
+ #include <Unreal/UnrealInitializer.hpp>
+ #ifdef __PROSPERO__
+ #include <Unreal/Platform/NativeGameThreadIdentity.hpp>
++#include <NativeLayoutBinding.hpp>
+ #endif
+ #if defined(__PROSPERO__)
+ #include <PsScanAbi.h>
+@@ -697,6 +698,19 @@
+                 Output::send(STR("Stats: off, forced by settings\n"));
+                 break;
+             case StatsMode::Detect:
++#ifdef __PROSPERO__
++                if (results.stats == 1 || results.stats == 2)
++                {
++                    Version::DebugBuild = results.stats == 2;
++                    Output::send(STR("Stats: {}, detected independently of build configuration\n"),
++                                 Version::DebugBuild ? STR("on") : STR("off"));
++                }
++                else
++                {
++                    Version::DebugBuild = bStatsDefault;
++                    Output::send<LogLevel::Warning>(STR("Stats not detected; native layout publication requires an explicit Stats setting\n"));
++                }
++#else
+                 // A forced configuration keeps its own default, otherwise forcing it would not stick.
+                 if (UnrealConfig.DebugBuild != DebugBuildMode::Detect)
+                 {
+@@ -714,6 +728,7 @@
+                     Output::send<LogLevel::Warning>(STR("Stats: not detected, assuming {} from the configuration. Set Stats in UE4SS-settings.ini to override.\n"),
+                                                     bStatsDefault ? STR("on") : STR("off"));
+                 }
++#endif
+                 break;
+             }
+             if (ctx.config.fname_tostring_fstring)
+@@ -740,8 +755,36 @@
+             }
+         }
+ 
++#ifdef __PROSPERO__
++        // Unknown detector outputs remain unknown; shipping/STATS defaults do
++        // not establish target layout facts. Explicit axes remain supported.
++        std::optional<bool> native_non_shipping;
++        std::optional<bool> native_stats;
++        switch (UnrealConfig.DebugBuild)
++        {
++        case DebugBuildMode::ForceDebug:
++        case DebugBuildMode::ForceTest: native_non_shipping = true; break;
++        case DebugBuildMode::ForceShipping: native_non_shipping = false; break;
++        case DebugBuildMode::Detect:
++            if (results.build_configuration >= 1 && results.build_configuration <= 3)
++                native_non_shipping = results.build_configuration != 1;
++            break;
++        }
++        switch (UnrealConfig.Stats)
++        {
++        case StatsMode::ForceOn: native_stats = true; break;
++        case StatsMode::ForceOff: native_stats = false; break;
++        case StatsMode::Detect:
++            if (results.stats == 1 || results.stats == 2) native_stats = results.stats == 2;
++            break;
++        }
++        RC::Platform::NativeLayouts::SetResolvedNativeLayoutAxes(native_non_shipping, native_stats);
++#endif
+         InitializeVersionedContainer();
++#ifndef __PROSPERO__
++        // Exact native offsets already include target configuration effects.
+         ApplyDebugBuildOffsets();
++#endif
+ 
+         // Second pass
+         {

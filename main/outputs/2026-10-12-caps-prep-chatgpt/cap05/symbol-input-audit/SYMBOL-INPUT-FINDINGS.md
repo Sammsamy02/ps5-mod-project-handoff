@@ -1,0 +1,25 @@
+Root follow-up: complete JSON/hash/duplicate-key checks and the actual existing loader now verify the local packaged pairing; see ROOT-LOADER-PAIRING-REPLAY.json. The prefix-only observations below retain their narrower original scope. Full internal symbols and capture/build binding remain unproved.
+
+# Exact local symbol pairing: fresh package-A evidence
+
+The existing packaging sidecar's inspected leading metadata declares dynamic anchors and hashes matching stable local PRX snapshots, without a new build or duplicate generator from this audit. Full consumer pairing is pending the owner's complete sidecar load. CURRENT-PAIRING-RECEIPT.json records stable opened-file PRX snapshots and leading sidecar metadata. This supersedes the historical package-A7fead02d versus stand-in9ef26a8f mismatch only for these newly observed local artifacts; that historical sidecar remains stale.
+
+- Packaged pass-1 and pass-2 PRXs: SHA256 `06913711f6ece468e5db0dbe19d12a343503754e758e3a27666a659088f7dabf`, both equal the existing current sidecar prx_sha256.
+- Bare symbol-extraction PRX: SHA256 `2fb013ef32c967cdcf53158311d9e2eeaf67a234b14910da1d82f923964a509a`, equal the sidecar bare_prx.sha256.
+- Before/after fd identity and path-restat device/inode/size/mtime agree for all three streamed snapshots. This establishes those local snapshot identities, not current deployed identity.
+
+Only bounded ELF metadata was read:11433 bytes total for headers, section/name tables, dynsym/dynstr and dynamic tags. The observed bare PRX has no .symtab. Its210 dynamic entries contain only two defined function symbols: entry/exit anchors at0x15a0 size0x472 and0x1e00 size0x17b, matched to DT_INIT/DT_FINI. PRX-METADATA-OBSERVATION.json intentionally has no full PRX identity; the later stable hash receipt is separate. Coincident entrypoint addresses across old/new artifacts prove no pairing.
+
+The packaging sidecar is39100809 bytes, largely map-reconstruction rows. Only its first65536 bytes were read and a complete leading-metadata object through symbols was parsed; the full document was neither parsed nor hashed here. The raw prefix digest is a metadata observation, not a full-sidecar identity. Prefix parsing establishes neither full JSON validity nor duplicate-key semantics: later duplicate keys could replace the fields consumed by json.loads in the actual loader. Root will validate the whole file before treating it as consumer-verified pairing. Its leading symbols array contains exactly those two dynamic anchors; no reconstructed entries were promoted. Current runtime.map148626940B and relocatable runtime-l26-A.o122646824B were statted only. Small LINK-COMMAND.json confirms ld.lld -r, so this is a partial-link artifact/map, not a final-link symbol source. No large map/object was read.
+
+## Existing reusable seams
+
+crash_report.py:30–41 uses load_prx_symbols_sidecar with a local PRX or extracts elf_dynsym directly. It scopes matches to explicit prx-module ownership and always leaves capture_build_binding UNVERIFIED. symbolize_crash.py:64–145 exposes elf_sections, elf_dynsym and elf_symtab; :305 onward enforces the sidecar's PRX SHA. Existing l26_packaging_driver.py:464–538 already extracts dynamic anchors from the bare ELF, records bare identity, pairs sidecar against packaged twins, and keeps order-assumed -r reconstruction in a separate field. No second generator is needed for dynamic anchors.
+
+Consumer caveat: legacy symbolizer prose calls prx_sha256 a bare-PRX key, but the actual current packaging emitter deliberately binds it to the packaged PRX and separately records the bare extraction hash. With the current sidecar, select the packaged PRX when its fully parsed prx_sha256 agrees. Without a sidecar, dynsym extraction needs the bare ELF PRX; the packaged wrapper is not itself an ELF input. Never silently replace that hash with the bare hash. The cap05 wrapper's earlier README example saying BARE_PRX needs this per-sidecar distinction. No shared file was edited here.
+
+## Exact remaining artifact/schema requirement
+
+For full function coverage, retain either a final-layout unstripped ELF containing real .symtab function addresses/sizes, or a final-layout map with real VMAs PLUS a producer receipt tying that exact symbol artifact to the exact bare PRX layout and packaged PRX bytes. Required relation fields are actual symbol-source SHA, bare PRX SHA, packaged PRX SHA, final-layout address convention and producer transformation/relocation identity. Names, timestamps, the shared build label, input-object hashes, matching DT_INIT/FINI, and a -r map do not establish that relation. Existing sidecar schema1 accepts symbols[{name,addr,size}] and prx_sha256; a producer may add provenance fields but must populate symbols only from verified final addresses. Reconstructed rows stay approximate and separate.
+
+Capture module fingerprint/base → exact uploaded build association remains a distinct missing proof. Exact local sidecar pairing cannot resolve it. No console contact, builds, installs, source/runtime edits or external research were performed. This task only wrote symbol-input-audit/.

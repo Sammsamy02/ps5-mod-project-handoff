@@ -1,0 +1,38 @@
+{
+  "worker": "worker-gate-evolution",
+  "date": "2026-10-04",
+  "task": "Evolve the composition-5 acceptance gate so legitimate composition drift (receipted unit changes) can pass ONLY when declared by a per-run composition-change manifest, while default (no-manifest) behavior stays byte-identical to the live gate.",
+  "scope": {
+    "writes_only_under": "outputs/2026-10-04-zcode-team/worker-gate-evolution/",
+    "forbidden": [
+      "editing the live gate worker-composition5-gate/gate_check_composition5.py",
+      "editing worker-prx-link-gaps/package_prx.py or any production script",
+      "editing engine/payload sources",
+      "console contact or nested subagents"
+    ]
+  },
+  "plan": [
+    "1. Read package_prx.py extended-contract derivation + live gate I1/D1/S1/P1 checks; document exact failure behavior under a legitimate composition change.",
+    "2. Design manifest format (changed units, shas, justification, expected import delta set) and v2 gate semantics (exact-delta match, itemized additions/removals, undeclared drift rejected).",
+    "3. Add Resolution B checks (configured-roots fields in changed units at nm level, bridge refuses substitution via unchanged call-graph, game-identity facts path untouched) and a D2 text_base analog if its design is landable.",
+    "4. Implement gate_check_composition5_v2.py as a fork of the live gate; host-test: (a) no-manifest parity with live gate on existing r11 build dir, (b) matching synthetic manifest passes, (c) undeclared extra import fails, (d) wrong declared delta fails.",
+    "5. Write MANIFEST-SPEC.md and a migration note (REPORT.md last)."
+  ],
+  "deliverables": [
+    "CLAIM.json",
+    "gate_check_composition5_v2.py",
+    "baseline-composition5-r11.json (frozen r11 gate baseline; regenerated verbatim by tools/make_baseline.py)",
+    "MANIFEST-SPEC.md",
+    "host_tests/run_host_tests.py + host_tests/receipts/* (a-parity-live/v2 receipts + stdout, b-pass.json, c-undeclared.json, d-wrong.json, e-real-manifest.json, host-test-run-1.log)",
+    "tools/make_baseline.py",
+    "REPORT.md"
+  ],
+  "status": "complete",
+  "results": {
+    "today_behavior": "Legitimate additions fail P1+I1 (hardcoded 5-import EXTENDED_IMPORTS + 196 harness pins); legitimate removals can NEVER pass (check_i1 requires delta>0); the existing IMPORT-DELTA-JUSTIFIED.md hatch approves any positive count delta without symbol-level or receipt-level evidence.",
+    "v2": "Byte-identical no-manifest behavior (host-test A, same-moment live comparison); manifest mode adds M0/M1/I1+/B1/B2/B3/D2 fail-closed checks against a frozen r11 baseline (UND 211 / contract 196 / bridge external callees 40).",
+    "host_tests": "ALL PASS (30 assertions, host_tests/receipts/host-test-run-1.log): parity, matching synthetic manifest GO, undeclared extra import FAIL naming 'se', wrong declared delta FAIL naming 'sx', real r11 dir + empty-delta manifest with Resolution B/D2 sections GO.",
+    "side_finding": "gate-receipt-composition5-r5.json no longer matches the current prx-candidate-composition5-1 bytes (PRX sha 3695d100… then vs 7774b663… now; dir rebuilt after r5). Re-run the gate before any staging decision."
+  },
+  "scope_honored": "No live-gate/packaging-script/engine edits; no console contact; no nested subagents; all writes under worker-gate-evolution/ plus read-only access to build/spike trees."
+}

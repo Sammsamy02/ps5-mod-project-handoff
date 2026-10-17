@@ -1,0 +1,27 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-pad-coexist/staging/ue4ss-native-pad-provider-coexist/port/PS5PadSource.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l22-runtime/candidate/PS5PadSource.cpp
+@@ -152,10 +152,23 @@
+     bool baseline=!m_have_sample;
+     for (size_t i=0; i<m_bindings.size(); ++i) {
+         const auto& b=m_bindings[i]; bool down=(data.buttons & b.buttons) == b.buttons;
++        // l22: observe real configured rising edges even when delivery is
++        // suppressed. This does not alter the mapping or synthesize input.
++        if (!baseline && down && !m_down[i] &&
++            b.buttons == (PS5_PAD_BUTTON_L3 | PS5_PAD_BUTTON_R3)) {
++            diagnostic_event("pad_l3r3_edge",static_cast<unsigned int>(b.key));
++            diagnostic_event("pad_l3r3_edge_allow",allow ? 1u : 0u);
++            diagnostic_event("pad_l3r3_edge_subscribed",subscribed[b.key] ? 1u : 0u);
++            diagnostic_event("pad_l3r3_edge_modifiers",b.modifiers.keys);
++        }
+         if (!baseline && down && !m_down[i] && allow && subscribed[b.key]) {
+             bool duplicate=false;
+             for (const auto& e:m_events) if (e.key==b.key && e.modifier_keys.keys==b.modifiers.keys) duplicate=true;
+-            if (!duplicate) m_events.push_back({b.key,b.modifiers});
++            if (!duplicate) {
++                m_events.push_back({b.key,b.modifiers});
++                if (b.buttons == (PS5_PAD_BUTTON_L3 | PS5_PAD_BUTTON_R3) && b.key == Key::F7)
++                    diagnostic_event("pad_l3r3_f7_dispatched",static_cast<unsigned int>(b.key));
++            }
+         }
+         m_down[i]=down; // Track even while disabled/unsubscribed, preventing phantom edges.
+     }

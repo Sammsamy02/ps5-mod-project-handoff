@@ -1,0 +1,51 @@
+--- a/TypeChecker.cpp	2026-10-08 11:55:03
++++ b/TypeChecker.cpp	2026-10-08 13:17:21
+@@ -78,6 +78,11 @@
+     auto TypeChecker::store_all_object_types() -> bool
+     {
+         NativeTypeScan::MissingKeys missing_keys;
++#ifdef __PROSPERO__
++        // l24: scan-lifetime refusal buffer (function scope so the post-scan
++        // print sees it regardless of the engine-version branch taken)
++        NativePropertyGuard::RefusalLog store_all_object_types_scan_refusals{};
++#endif
+        //StaticFindObject_InternalSlow is used for compatability reasons.
+         UObject::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Object")));
+         UField::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Field")));
+@@ -656,6 +661,11 @@
+             };
+ 
+             // TODO: Maybe replace all of the calls to 'find_all_property_types' with a GUObjectArray iteration with an early exit once everything's been found ?
++
++#ifdef __PROSPERO__
++            // l24: activate scan-mode (bootstrap class check + refusal collection)
++            NativePropertyGuard::BeginScanCollection(&store_all_object_types_scan_refusals);
++#endif
+ 
+             // Bool, Enum, Byte, Struct, Float, Object, Name, Int, Array
+             // WeakObject, MulticastSparseDelegate
+@@ -819,6 +829,24 @@
+             add_property(STR("/Script/CoreUObject.Property"), FProperty{});
+         }
+ 
++#ifdef __PROSPERO__
++        // l24: end scan-mode, print all collected refusals, then continue
++        NativePropertyGuard::EndScanCollection();
++        if (store_all_object_types_scan_refusals.count > 0 || store_all_object_types_scan_refusals.dropped > 0) {
++            Output::send(STR("[TypeScan] refusals collected={} dropped={}\n"), store_all_object_types_scan_refusals.count, store_all_object_types_scan_refusals.dropped);
++            for (int i = 0; i < store_all_object_types_scan_refusals.count; ++i) {
++                const auto& r = store_all_object_types_scan_refusals.records[i];
++                Output::send<LogLevel::Warning>(STR("[TypeScan] refusal {}/{} reason={} object={} field=0x{:X} class=0x{:X}\n"),
++                    i + 1, store_all_object_types_scan_refusals.count + store_all_object_types_scan_refusals.dropped,
++                    ensure_str(NativePropertyGuard::reason_text(r.reason)),
++                    ensure_str(r.object_name),
++                    r.field_address, r.class_pointer);
++            }
++            if (store_all_object_types_scan_refusals.dropped > 0)
++                Output::send<LogLevel::Warning>(STR("[TypeScan] refusals-truncated stored={} total={}\n"),
++                    store_all_object_types_scan_refusals.count, store_all_object_types_scan_refusals.count + store_all_object_types_scan_refusals.dropped);
++        }
++#endif
+         for (const auto& key : missing_keys.values)
+             Output::send<LogLevel::Warning>(STR("[TypeScan] missing-layout-key={}\n"), StringType(key.begin(),key.end()));
+ #ifdef __PROSPERO__

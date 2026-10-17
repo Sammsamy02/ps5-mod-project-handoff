@@ -1,0 +1,34 @@
+--- a/PS5PadSource.cpp	(baseline)
++++ b/PS5PadSource.cpp	(staged)
+@@ -30,6 +30,12 @@
+ // in-tree header (worker-pad-coexist SDK-ANALYSIS.md); they are NOT attempted
+ // from production code. The launch-window companion probe answers that question.
+ constexpr unsigned int pad_open_class_standard = 0;
++// worker-input-tag: once-per-boot input-arrival evidence flag (acceptance gap
++// G-AP1, read half). File-local on purpose: NO header change, NO ABI change;
++// written only from poll() on the sole processing thread (the same
++// serialized-thread discipline the coexist retry counters are documented
++// under), so no synchronization is needed.
++bool pad_first_state_read_emitted = false;
+ }
+ PS5PadSource::PS5PadSource(std::vector<PadBinding> bindings, PadBackend backend, int user)
+  : m_bindings(std::move(bindings)), m_down(m_bindings.size(),false), m_backend(backend), m_requested_user(user) {
+@@ -129,6 +135,18 @@
+         std::fill(m_down.begin(),m_down.end(),false); return m_events;
+     }
+     m_status.phase=PadPhase::Active; m_status.error=0;
++    // worker-input-tag: once-per-boot proof that the READ path is alive AFTER
++    // the open (pad_available proves only the open path). Fires on the first
++    // err-free AND connected read - the input-dead vs read-dead-after-open
++    // discriminator: pad_available present with NO pad_first_state_read means
++    // reads started failing after a successful open. Value = the RAW buttons
++    // word of that first usable state (the baseline sample - deliberately
++    // BEFORE the duplicate-timestamp guard, so the tag fires even with no
++    // press ever made). Pure diagnostic emission: no behavior change.
++    if (!pad_first_state_read_emitted) {
++        pad_first_state_read_emitted=true;
++        diagnostic_event("pad_first_state_read",static_cast<unsigned int>(data.buttons));
++    }
+     // ReadState is cached; a duplicate sample cannot create another keydown.
+     if (m_have_sample && data.timestamp == m_timestamp) return m_events;
+     bool baseline=!m_have_sample;

@@ -1,0 +1,280 @@
+--- a/.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/src/live_module_facts.cpp
++++ b/.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/src/live_module_facts.cpp
+@@ -4,9 +4,25 @@
+ // OS calls and contains NO firmware or title constants; everything OS- or
+ // firmware-specific enters through LiveModuleOsOps / LiveFirmwareProfile.
+ //
++// IN-GAME UPDATE (checkpoint zcode_ingame_v1_results, 2026-10-04):
++//   * capture() is now VMMAP-FIRST: KERN_PROC_VMMAP (the only proven
++//     mapping source in-game, g5) is queried before anything identity-related
++//     and feeds both the correspondence math and the base scan;
++//   * a refused/failed link-map walk no longer aborts the capture — the
++//     observed in-game state is exactly that (DT_DEBUG absent/unfilled, g2);
++//   * when no name anchor exists, identity is derived from the VMMAP spans
++//     plus the in-memory ELF scan op (IdentitySource::VmScan); on that route
++//     there is no loader name, so retention is honestly degraded (kind None)
++//     rather than fatal — the dl-degraded composition stays as-is;
++//   * the rtld NAME route keeps its original strictness: a failed retain
++//     still yields zero facts (RetainFailed).
++//
+ // Invariants enforced here:
+-//   * no reported address is ever dereferenced (integers only);
+-//   * a failed retain yields NO facts (never a fake "enabled" state);
++//   * no reported address is ever dereferenced by THIS TU (integers only;
++//     span-validated reads happen only inside the scan_image_base op);
++//   * a failed retain on the name route yields NO facts (never a fake
++//     "enabled" state); the vm-scan route yields facts with retention
++//     explicitly absent (kind None, capability Failed);
+ //   * missing evidence stays missing (module_info.obtained, empty strings,
+ //     correspondence counts of zero) instead of defaults;
+ //   * retention accounting is exactly balanced (probe references taken by
+@@ -84,6 +100,22 @@
+     return true;
+ }
+ 
++void copy_scan_facts(const VmScanResult &scan, VmScanFacts &out) noexcept {
++    out = {};
++    out.candidate_count = scan.candidate_count;
++    out.provider_code = 0;
++    out.chosen = scan.chosen_index >= 0;
++    out.chosen_base = scan.chosen_base;
++    out.chosen_extent = scan.chosen_extent;
++    out.chosen_dyn_addr = scan.chosen_dyn_addr;
++    out.chosen_dyn_mode = scan.chosen_dyn_mode;
++    out.chosen_e_type = scan.chosen_e_type;
++    size_t i = 0;
++    for (; i + 1 < sizeof out.provenance && scan.provenance[i] != '\0'; ++i)
++        out.provenance[i] = scan.provenance[i];
++    out.provenance[i] = '\0';
++}
++
+ }  // namespace
+ 
+ RetainedLiveModuleFactsSupplier::RetainedLiveModuleFactsSupplier(
+@@ -142,7 +174,8 @@
+     released_ = false;
+     facts_.capabilities.exec_handle = ProbeResult::NotBound;
+ 
+-    // Required ops slots (optional: get_executable_module_handle).
++    // Required ops slots (optional: get_executable_module_handle,
++    // scan_image_base).
+     if (ops_.link_map_snapshot == nullptr || ops_.loader_retain_noload == nullptr ||
+         ops_.loader_release == nullptr || ops_.get_module_info == nullptr ||
+         ops_.query_vmentry == nullptr || ops_.executable_path == nullptr ||
+@@ -164,6 +197,22 @@
+         facts_.capabilities.pid = ProbeResult::Failed;
+     }
+ 
++    // ---- VMMAP FIRST (primary mapping source; observed in-game g5) -------
++    // Queried before any identity route: it is the only proven mapping
++    // source in the game process and the span basis for the base scan.
++    OsVmMapping mappings[kMaxVmMappings];
++    size_t vm_total = 0;
++    size_t vm_copied = 0;
++    const bool vm_ok =
++        ops_.query_vmentry(ops_.context, mappings, kMaxVmMappings, &vm_total) == 0;
++    if (vm_ok) {
++        facts_.capabilities.vmentry = ProbeResult::Ok;
++        facts_.capabilities.vm_mappings_truncated = vm_total > kMaxVmMappings;
++        vm_copied = vm_total < kMaxVmMappings ? vm_total : kMaxVmMappings;
++    } else {
++        facts_.capabilities.vmentry = ProbeResult::Failed;
++    }
++
+     // ---- observed executable path (non-dereferencing sysctl) -------------
+     char path_buf[kMaxPath];
+     path_buf[0] = '\0';
+@@ -175,12 +224,16 @@
+         facts_.provider_code = -1;  // path probe failed; provider code unknown
+     }
+ 
+-    // ---- link-map walk (rtld object identities) --------------------------
++    // ---- link-map walk (rtld object identities; DEMOTED, g2) -------------
++    // A refused walk is the OBSERVED in-game state (DT_DEBUG absent/unfilled)
++    // and no longer aborts the capture; the distinct refusal code is recorded
++    // verbatim and the VMMAP scan route takes over below.
+     LinkMapEntry entries[kMaxLinkMapEntries];
+     size_t total = 0;
+     const int walk_rc =
+         ops_.link_map_snapshot(ops_.context, entries, kMaxLinkMapEntries, &total);
+     const char *anchor = nullptr;
++    const bool walk_refused = walk_rc != 0;
+     if (walk_rc == 0) {
+         facts_.capabilities.link_map_walk = ProbeResult::Ok;
+         const size_t copied = total < kMaxLinkMapEntries ? total : kMaxLinkMapEntries;
+@@ -225,8 +278,13 @@
+         }
+     } else {
+         facts_.capabilities.link_map_walk = ProbeResult::Failed;
+-        facts_.provider_code = walk_rc;
+-        if (explicit_image_name != nullptr) {
++        facts_.provider_code = walk_rc;  // distinct in-game refusal code (g2)
++        // Legacy fallback, kept ONLY when no scan route exists: an explicit
++        // caller name may still anchor the capture (it will have to survive
++        // the retain gate). When a scan route exists, the OBSERVED span
++        // identity wins over an uncorroborated name.
++        if (walk_refused && explicit_image_name != nullptr &&
++            (ops_.scan_image_base == nullptr || !vm_ok)) {
+             if (!copy_bounded(explicit_image_name, facts_.image_name,
+                               sizeof(facts_.image_name)))
+                 return (facts_.status = Status::InvalidArgument);
+@@ -234,30 +292,60 @@
+         }
+     }
+ 
+-    if (anchor == nullptr) {
++    // ---- identity: VMMAP spans + in-memory ELF scan (primary in-game) ----
++    if (anchor == nullptr && facts_.observed_base == nullptr &&
++        ops_.scan_image_base != nullptr && vm_ok) {
++        VmScanResult scan{};
++        const int scan_rc =
++            ops_.scan_image_base(ops_.context, mappings, vm_copied, &scan);
++        copy_scan_facts(scan, facts_.vm_scan);
++        facts_.vm_scan.provider_code = static_cast<int32_t>(scan_rc);
++        if (scan_rc == 0 && scan.chosen_index >= 0 && scan.chosen_base != 0) {
++            facts_.capabilities.vm_scan = ProbeResult::Ok;
++            facts_.identity_source = IdentitySource::VmScan;
++            facts_.observed_base =
++                reinterpret_cast<void *>(static_cast<uintptr_t>(scan.chosen_base));
++        } else {
++            facts_.capabilities.vm_scan = ProbeResult::Failed;
++        }
++    }
++
++    if (anchor == nullptr && facts_.identity_source != IdentitySource::VmScan) {
+         facts_.status = Status::NoImageAnchor;
+         return facts_.status;  // honest absence; never fall back to dlopen(NULL)
+     }
++    if (anchor != nullptr) facts_.identity_source = IdentitySource::LinkMap;
+ 
+     // ---- retention: genuine loader reference, never a load ---------------
+-    void *handle = ops_.loader_retain_noload(ops_.context, anchor);
+-    if (handle == nullptr) {
++    // Name route only. The VmScan route has no loader name (and the composed
++    // dl retention is degraded by design), so retention is recorded as
++    // honestly absent instead of being faked or fatal.
++    if (anchor != nullptr) {
++        void *handle = ops_.loader_retain_noload(ops_.context, anchor);
++        if (handle == nullptr) {
++            facts_.capabilities.loader_retain = ProbeResult::Failed;
++            facts_.retention.kind = RetainKind::None;
++            facts_.status = Status::RetainFailed;
++            return facts_.status;  // no reference owned: no further facts
++        }
++        facts_.capabilities.loader_retain = ProbeResult::Ok;
++        facts_.retention.kind = RetainKind::LoaderReference;
++        facts_.retention.loader_handle = handle;
++        if (!copy_bounded(anchor, facts_.retention.retained_name,
++                          sizeof(facts_.retention.retained_name))) {
++            // Cannot happen (anchor was just copied); treat as internal failure.
++            (void)ops_.loader_release(ops_.context, handle);
++            reset_retention();
++            facts_.retention.kind = RetainKind::None;
++            return (facts_.status = Status::RetainFailed);
++        }
++    } else {
++        // VmScan identity: structurally degraded retention (observed g3:
++        // no path source, dl route none in-game; LMF_DISABLE_DL_RETENTION
++        // composition returns null unconditionally — kept as-is).
+         facts_.capabilities.loader_retain = ProbeResult::Failed;
+         facts_.retention.kind = RetainKind::None;
+-        facts_.status = Status::RetainFailed;
+-        return facts_.status;  // no reference owned: no further facts
+     }
+-    facts_.capabilities.loader_retain = ProbeResult::Ok;
+-    facts_.retention.kind = RetainKind::LoaderReference;
+-    facts_.retention.loader_handle = handle;
+-    if (!copy_bounded(anchor, facts_.retention.retained_name,
+-                      sizeof(facts_.retention.retained_name))) {
+-        // Cannot happen (anchor was just copied); treat as internal failure.
+-        (void)ops_.loader_release(ops_.context, handle);
+-        reset_retention();
+-        facts_.retention.kind = RetainKind::None;
+-        return (facts_.status = Status::RetainFailed);
+-    }
+ 
+     // ---- module info bridge ----------------------------------------------
+     sce::ModuleHandle module_handle = 0;
+@@ -266,16 +354,20 @@
+     if (ops_.get_executable_module_handle != nullptr) {
+         facts_.capabilities.exec_handle = ProbeResult::Failed;
+         sce::ModuleHandle eh = 0;
+-        if (ops_.get_executable_module_handle(ops_.context, &eh) == 0 && eh != 0) {
++        const int eh_rc = ops_.get_executable_module_handle(ops_.context, &eh);
++        if (eh_rc != 0)
++            facts_.provider_code = eh_rc;  // distinct refusal code (observed g1)
++        if (eh_rc == 0 && eh != 0) {
+             module_handle = eh;
+             have_handle = true;
+             handle_source = ModuleInfoFacts::kSourceExecHandle;
+             facts_.capabilities.exec_handle = ProbeResult::Ok;
+         }
+     }
+-    if (!have_handle && profile_.allow_loader_handle_as_module_handle) {
++    if (!have_handle && anchor != nullptr &&
++        profile_.allow_loader_handle_as_module_handle) {
+         module_handle = static_cast<sce::ModuleHandle>(
+-            reinterpret_cast<uintptr_t>(handle));
++            reinterpret_cast<uintptr_t>(facts_.retention.loader_handle));
+         have_handle = true;  // attempt allowed by profile; call may still fail
+         handle_source = ModuleInfoFacts::kSourceLoaderHandleCast;
+     }
+@@ -285,7 +377,8 @@
+         facts_.capabilities.module_info_degraded = true;
+         facts_.module_info.obtained = false;
+         facts_.module_info.handle_source = ModuleInfoFacts::kSourceNone;
+-        // Retention is owned; mapping info below still records honest facts.
++        // Retention (if any) is owned; mapping info below still records
++        // honest facts.
+     } else {
+         sce::ModuleInfo info{};
+         info.size = profile_.module_info_abi_size;
+@@ -325,13 +418,9 @@
+         }
+     }
+ 
+-    // ---- non-dereferencing mapping correspondence -------------------------
+-    OsVmMapping mappings[kMaxVmMappings];
+-    size_t vm_total = 0;
+-    if (ops_.query_vmentry(ops_.context, mappings, kMaxVmMappings, &vm_total) == 0) {
+-        facts_.capabilities.vmentry = ProbeResult::Ok;
+-        facts_.capabilities.vm_mappings_truncated = vm_total > kMaxVmMappings;
+-        const size_t copied = vm_total < kMaxVmMappings ? vm_total : kMaxVmMappings;
++    // ---- non-dereferencing mapping correspondence (from the FIRST-pass
++    // VMMAP capture; never re-queried) --------------------------------------
++    if (vm_ok) {
+         if (facts_.module_info.obtained) {
+             for (uint32_t s = 0; s < facts_.module_info.segment_count; ++s) {
+                 const uint64_t a =
+@@ -340,7 +429,7 @@
+                 (void)checked_add_u64(a, facts_.module_info.segments[s].size, &e);
+                 SegmentCorrespondence corr{};
+                 corr.segment_index = s;
+-                for (size_t m = 0; m < copied; ++m) {
++                for (size_t m = 0; m < vm_copied; ++m) {
+                     if (segments_overlap(a, e, mappings[m].start, mappings[m].end)) {
+                         ++corr.covering_mappings;
+                         if (mappings[m].start <= a && mappings[m].end >= e)
+@@ -352,9 +441,12 @@
+             }
+         }
+         if (facts_.observed_base != nullptr) {
++            // Works for both routes: rtld-reported base or the span-validated
++            // VmScan chosen base (the adapter plants images[MainExe].base
++            // from the scan result via identity_source/vm_scan).
+             const uint64_t base =
+                 reinterpret_cast<uintptr_t>(facts_.observed_base);
+-            for (size_t m = 0; m < copied; ++m) {
++            for (size_t m = 0; m < vm_copied; ++m) {
+                 if (mappings[m].start <= base && base < mappings[m].end &&
+                     facts_.anchor_mapping_count < kMaxAnchorMappings) {
+                     VmMapping vm{};
+@@ -365,8 +457,6 @@
+                 }
+             }
+         }
+-    } else {
+-        facts_.capabilities.vmentry = ProbeResult::Failed;
+     }
+ 
+     if (facts_.status == Status::InvalidArgument) {

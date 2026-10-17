@@ -1,0 +1,216 @@
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -4,14 +4,15 @@
+ // Candidate bodies exist for dynamic TLS, files, threads, and EH/SEH, but
+ // their full Win32 behavior or guest-callable ABI is not established. They
+ // remain unresolved imports. Static PE TLS is a separate loader refusal.
+-// Imported GetLastError/SetLastError use a process-wide per-thread slot;
+-// direct guest TEB last-error access and pointer encoding are not integrated.
++// Imported GetLastError/SetLastError share a per-thread slot with the guest
++// TEB lifecycle; pointer encoding is not implemented here.
+ //
+ // Raw built-in handlers are private metadata. No PE import receives one
+ // until a per-signature guest-callable wrapper is explicitly published.
+ // CAP13 proposal-only; design-grade; bodies are intentionally small.
+ 
+ #include "win_api_shim.h"
++#include "win32_last_error_state.h"
+ #include "win64_bridge.h"
+ 
+ #include <atomic>
+@@ -41,7 +42,6 @@
+ constexpr uint32_t WAIT_FAILED = 0xFFFFFFFFu;
+ constexpr uint32_t TLS_OUT_OF_INDEXES = 0xFFFFFFFFu;
+ constexpr uint32_t GENERIC_WRITE = 0x40000000u;
+-thread_local uint32_t win32_last_error = 0;
+ 
+ using WinThreadFn = uint32_t (*)(void*); // unsigned __stdcall, x64: Win64 call
+ 
+@@ -196,12 +196,12 @@
+ 
+ static uint32_t impl_GetLastError(WinApiShim::Impl*)
+ {
+-    return win32_last_error;
++    return win32_get_last_error();
+ }
+ 
+ static void impl_SetLastError(WinApiShim::Impl*, uint32_t error)
+ {
+-    win32_last_error = error;
++    win32_set_last_error(error);
+ }
+ 
+ static void impl_GetSystemTimeAsFileTime(WinApiShim::Impl* m, void* output)
+--- a/loader/src/guest_teb_lifecycle.cpp
++++ b/loader/src/guest_teb_lifecycle.cpp
+@@ -1,4 +1,5 @@
+ #include "guest_teb_lifecycle.h"
++#include "win32_last_error_state.h"
+ 
+ #include "win64_bridge.h"
+ 
+@@ -41,6 +42,9 @@
+     const uint64_t tls_pointer = reinterpret_cast<uint64_t>(array_.slots.data());
+     std::memcpy(prefix_.data() + TEB_SELF_OFFSET, &self_pointer, sizeof(self_pointer));
+     std::memcpy(prefix_.data() + TEB_TLS_ARRAY_OFFSET, &tls_pointer, sizeof(tls_pointer));
++    const uint32_t last_error = win32_get_last_error();
++    std::memcpy(prefix_.data() + WIN32_TEB_LAST_ERROR_OFFSET,
++                &last_error, sizeof(last_error));
+     return array_;
+ }
+ 
+@@ -76,6 +80,7 @@
+     catch (const std::bad_alloc&) { return GuestNotifyStatus::TlsPreparationFailed; }
+     if (!segment_.enter(teb.address())) return GuestNotifyStatus::BackendRefused;
+     LeaveOnExit guard(segment_);
++    ScopedGuestLastErrorBinding error_binding(teb.address());
+     for (uint64_t callback : callbacks_)
+         (void)cap13_win64_call3(reinterpret_cast<void*>(callback), image_base_, reason, 0);
+     if (entry_)
+--- /dev/null
++++ b/loader/src/win32_last_error_state.h
+@@ -0,0 +1,79 @@
++// Shared per-host-thread Win32 error slot and the current guest x64 TEB view.
++// The x64 TEB prefix used by this loader stores LastErrorValue at 0x68.
++#ifndef CAP13_WIN32_LAST_ERROR_STATE_H
++#define CAP13_WIN32_LAST_ERROR_STATE_H
++
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++
++namespace cap13 {
++
++constexpr size_t WIN32_TEB_LAST_ERROR_OFFSET = 0x68;
++
++struct Win32LastErrorState
++{
++    uint32_t code = 0;
++    uint8_t* active_teb = nullptr;
++};
++
++inline Win32LastErrorState& win32_last_error_state() noexcept
++{
++    static thread_local Win32LastErrorState state{};
++    return state;
++}
++
++inline uint32_t win32_get_last_error() noexcept
++{
++    auto& state = win32_last_error_state();
++    if (state.active_teb)
++        std::memcpy(&state.code, state.active_teb + WIN32_TEB_LAST_ERROR_OFFSET,
++                    sizeof(state.code));
++    return state.code;
++}
++
++inline void win32_set_last_error(uint32_t code) noexcept
++{
++    auto& state = win32_last_error_state();
++    state.code = code;
++    if (state.active_teb)
++        std::memcpy(state.active_teb + WIN32_TEB_LAST_ERROR_OFFSET, &code,
++                    sizeof(code));
++}
++
++// Bind after the segment backend has accepted entry. Destroy before the
++// backend leaves; direct guest writes are then copied to the host-thread
++// slot and nested bindings restore their prior TEB view.
++class ScopedGuestLastErrorBinding
++{
++  public:
++    explicit ScopedGuestLastErrorBinding(void* guest_teb) noexcept
++    {
++        auto& state = win32_last_error_state();
++        const uint32_t current = win32_get_last_error();
++        previous_ = state.active_teb;
++        state.active_teb = static_cast<uint8_t*>(guest_teb);
++        if (state.active_teb)
++            std::memcpy(state.active_teb + WIN32_TEB_LAST_ERROR_OFFSET,
++                        &current, sizeof(current));
++    }
++
++    ~ScopedGuestLastErrorBinding() noexcept
++    {
++        auto& state = win32_last_error_state();
++        const uint32_t current = win32_get_last_error();
++        state.active_teb = previous_;
++        if (previous_)
++            std::memcpy(previous_ + WIN32_TEB_LAST_ERROR_OFFSET,
++                        &current, sizeof(current));
++    }
++
++    ScopedGuestLastErrorBinding(const ScopedGuestLastErrorBinding&) = delete;
++    ScopedGuestLastErrorBinding& operator=(const ScopedGuestLastErrorBinding&) = delete;
++
++  private:
++    uint8_t* previous_ = nullptr;
++};
++
++} // namespace cap13
++#endif // CAP13_WIN32_LAST_ERROR_STATE_H
+--- a/loader/tests/teb_lifecycle_test.cpp
++++ b/loader/tests/teb_lifecycle_test.cpp
+@@ -1,4 +1,5 @@
+ #include "guest_teb_lifecycle.h"
++#include "win32_last_error_state.h"
+ 
+ #include <atomic>
+ #include <cstdint>
+@@ -15,6 +16,7 @@
+ static std::atomic<bool> teb_ok{true};
+ static std::atomic<bool> entry_should_fail{false};
+ static int failures = 0;
++static uint32_t observed_guest_error = 0;
+ 
+ static void check(bool value, const char* name)
+ {
+@@ -55,6 +57,21 @@
+ {
+     note("entry", module, reason, reserved);
+     return entry_should_fail ? 0 : 1;
++}
++
++extern "C" __attribute__((ms_abi)) void guest_writes_teb_error(
++    uint64_t, uint64_t, uint64_t)
++{
++    const uint32_t value = 0x55aa33ccu;
++    std::memcpy(static_cast<uint8_t*>(published_teb) + 0x68, &value, sizeof(value));
++}
++
++extern "C" __attribute__((ms_abi)) uint64_t guest_reads_and_sets_error(
++    uint64_t, uint64_t, uint64_t)
++{
++    observed_guest_error = cap13::win32_get_last_error();
++    cap13::win32_set_last_error(0x66bb44ddu);
++    return 1;
+ }
+ 
+ class RecordingSwitch : public cap13::GuestSegmentSwitch
+@@ -169,6 +186,26 @@
+           events.size() == before_no_backend,
+           "production placeholder refuses guest calls without a segment backend");
+ 
++    cap13::win32_set_last_error(0x1234abcd);
++    (void)main_teb.refresh();
++    uint32_t teb_error = 0;
++    std::memcpy(&teb_error, static_cast<uint8_t*>(main_teb.address()) + 0x68,
++                sizeof(teb_error));
++    check(teb_error == 0x1234abcdu,
++          "TEB refresh publishes the calling thread's last-error value");
++    cap13::GuestModuleLifecycle error_lifecycle(
++        bank, sw, 0x12345000,
++        reinterpret_cast<uint64_t>(&guest_reads_and_sets_error),
++        {reinterpret_cast<uint64_t>(&guest_writes_teb_error)});
++    check(error_lifecycle.process_attach(main_teb) == GuestNotifyStatus::Ok &&
++          observed_guest_error == 0x55aa33ccu &&
++          cap13::win32_get_last_error() == 0x66bb44ddu,
++          "direct guest TEB write reaches GetLastError and imported write survives exit");
++    std::memcpy(&teb_error, static_cast<uint8_t*>(main_teb.address()) + 0x68,
++                sizeof(teb_error));
++    check(teb_error == 0x66bb44ddu && !published_teb,
++          "TEB field and host-thread slot agree after segment restoration");
++
+     std::printf("TOTAL: %d failed\n", failures);
+     return failures ? 1 : 0;
+ }

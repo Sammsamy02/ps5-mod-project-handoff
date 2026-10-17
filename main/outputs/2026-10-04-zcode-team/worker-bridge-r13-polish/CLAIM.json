@@ -1,0 +1,21 @@
+{
+  "worker": "worker-bridge-r13-polish",
+  "date": "2026-10-04",
+  "mode": "bridge revision chain owner; applies the r12 GO-WITH-FIXES review diffs as r13, refreshes the production host test, syntax-gates with the prospero toolchain",
+  "authorizations": [
+    "worker-bridge-r12-final-review/REVIEW-VERDICT.md GO-WITH-FIXES (P2-1 + P3 diffs, all unblocked)",
+    "coordinator task: apply polish as r13 so the shipped bridge is contract-clean and better-instrumented"
+  ],
+  "base": {
+    "path": "outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_start_bridge_r12.cpp",
+    "sha256": "feed52544023360326c17f7015336f90c4906789b344a805cfb6debb67bdd7a9"
+  },
+  "claims": [
+    "r13 = r12 + exactly the five reviewed diffs: P2-1 activation adopted FIRST (before the early returns, per the header ALWAYS-TRANSFERRED contract), P3-1 bridge_lease_reg_spans saturation diagnostic, P3-2 static_assert(kve_sizeof_ == sizeof(kinfo_vmentry)), P3-3 probe[8] zero-init, P3-4 MRS_ERR_STOP_EXN renumbered 2->5 in the shared header.",
+    "Entry-coherence check for the renumber: entry r4 compares only MRS_OK and MRS_ERR_START at start and '!= 0' at stop; post_launch_check.py keys on the runtime_stop_result tag and 'nonzero' prose only. No consumer reads the numeric 2; no entry change needed.",
+    "Production test refreshed (host_test_r13): r9-era source=3 comment debris removed, vacuous bridge_kve_prefix check replaced with real bridge_kve_distinct0/eboot assertions, r12/r13-delta assertions added (configured-roots bridge_cfg_* via the diagnostic capture + resolved-path ladder, lease page-quantization pure-function test), full suite run green including the RUN_LEASE_SECTION process.",
+    "r13 syntax-gated with the same prospero argv the dry build used for the bridge TU (-std=c++20 -Wall -Wextra -Werror -O1 ...); comp6 driver BRIDGE pins updated to r13 (BRIDGE_DEFAULT, BRIDGE_MEASURED_SHA, runtime_start_bridge.h staging pin)."
+  ],
+  "deliverables": ["CLAIM.json", "runtime_start_bridge_r13.cpp", "host_test_r13/test_r13.cpp + run receipts", "syntax-gate receipt", "REPORT.md"],
+  "constraints": ["no console contact", "no nested subagents", "r12 stays byte-frozen", "driver pin edits limited to the bridge/entry pin block the task names"]
+}

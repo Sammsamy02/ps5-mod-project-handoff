@@ -1,0 +1,66 @@
+{
+  "worker": "worker-e2e-composer-splice",
+  "date": "2026-10-04",
+  "task": "Execute PROMOTION-PREP.md sec 5 step 4 (the composer splice) left honestly undone by worker-e2e-promotion-apply: splice the verified G1 chain (pristine 45c04d08 -> 330d47f2 -> 91a122a8 -> 43ea66c1) into the worker-d1-chain-relink composer so the spliced tree REBUILDS byte-reproducibly to the promoted receipt endpoint, closing the receipt-tree divergence. Then record the three-way reconciliation (promoted receipt == spliced tree == byte-exact rebuild) and rollback instructions.",
+  "constraints": [
+    "no console contact",
+    "no nested subagents",
+    "writes confined to worker-e2e-composer-splice/ plus the explicitly in-scope worker-d1-chain-relink composition tree (driver, generated inner, vendored core, receipts, build outputs) per PROMOTION-PREP sec 5 step 4",
+    "no duplicate dispatch; all other workers' files read-only",
+    "AST verbatim extraction only for G1_BLOCK (no retyping); every tuple verified against the promoted patches.json pins before any write",
+    "rebuild must use the tree's own driver with the exact D1 recipe (MODBRIDGE_ROOT pinned, --flavor all)"
+  ],
+  "inputs_pinned": {
+    "splice_spec": "worker-e2e-suite-completion/PROMOTION-PREP.md sec 5 step 4",
+    "promoted_receipt": {
+      "path": "worker-d1-chain-relink/composition/receipts/patches.json",
+      "sha256": "63c28979d21a9a563f29334cd094568f11fd6cc2d56abfe31158ec14a42c80f9",
+      "tuples": 54,
+      "patched_sha256": "43ea66c1c5dcf52bfb9158bae5f782438911b61f699eeb1f8dc29c6b702dcda0",
+      "identical_to": "worker-e2e-payload-build/patches.json.new"
+    },
+    "g1_block_source": {
+      "path": "worker-e2e-payload-build/g1_block.py",
+      "sha256": "9f46b66aeb38a1d4737888da8bf91a1c15437d258d8b71aec68abc6c4bbe85ca",
+      "cross_check_copy": "worker-e2e-suite-completion/promotion/g1_block.copy.py"
+    },
+    "pristine_tree_state": {
+      "driver": "worker-d1-chain-relink/compose_merged_relink.py = aedcd8eaf899bd20f200415728c676fb82505844a6b74b2bd2cf92c16c74492e",
+      "inner": "worker-d1-chain-relink/composition_zb_console_inner.py = de3a4a3dbaaf7200971f0a85345678e928b378bbab0a592fb6bed3ce69d8988b",
+      "core": "worker-d1-chain-relink/composition/vendored/modinst_core.c = 45c04d084215cb5da520ff1a5bf70219f5ce0e86baf55bda4da706dd8dda044d",
+      "receipt_backup": "worker-d1-chain-relink/composition/receipts/patches.json.51.bak = 252ad699d183a1b63cc2118edff51b8f0fbf5cb48a22dfd0f40b1d7341340c3b"
+    },
+    "g1_chain": ["45c04d084215cb5da520ff1a5bf70219f5ce0e86baf55bda4da706dd8dda044d", "330d47f2fe07d0bbf61641383a5c0a93106b6bbd972854d2b9bedf3f1a2b9b5f", "91a122a8065858032296ab7a748bc91936d310de9b67e69935d98d6b6ed69e16", "43ea66c1c5dcf52bfb9158bae5f782438911b61f699eeb1f8dc29c6b702dcda0"]
+  },
+  "plan": [
+    "1. BEFORE: full sha256 inventory of worker-d1-chain-relink/ (tree + scripts + receipts); archive pristine driver, inner, and vendored core (worker dir archive/ + in-tree .bak copies).",
+    "2. Build (in this worker dir, tree read-only at this stage) the spliced driver via the D1 builder pattern: AST-extract G1_BLOCK verbatim from worker-e2e-payload-build/g1_block.py; verify its 3 tuples against the promoted receipt tail pins; simulate adapt_driver's full existing splice sequence on worker-e2e-final/compose_e2e.py to prove each new anchor unique; then append recorded MY_SPLICES entries to a copy of compose_merged_relink.py: g1-block-append (EXTRA_PATCHES += the three 4-tuples after r2-install-status-ok) plus receipt-promoted-form splices so the regenerated receipts/patches.json byte-matches the promoted form (g1_tuples_build.py: json.dumps(indent=2) + newline; promoted `patched` label; UTF-8 byte lengths for G1 new_bytes).",
+    "3. Install the spliced driver into the tree (pristine driver archived first), run the tree's own build: MODBRIDGE_ROOT=<root> python3 compose_merged_relink.py --flavor all (exact D1 recipe).",
+    "4. VERIFY: composition/vendored/modinst_core.c == 43ea66c1...; regenerated composition/receipts/patches.json BYTE-IDENTICAL to worker-e2e-payload-build/patches.json.new (63c28979...); core byte-identical to worker-e2e-config-entry/owned/modinst_core.c; intermediate chain shas via independent replay; host + console build receipts (host-build.json, console-build.json) regenerated; AFTER inventory diff exactly scoped.",
+    "5. Receipts + REPORT.md + rollback instructions."
+  ],
+  "success_criteria": [
+    "spliced tree rebuild produces vendored core sha 43ea66c1c5dcf52bfb9158bae5f782438911b61f699eeb1f8dc29c6b702dcda0",
+    "regenerated receipt byte-identical to promoted 63c28979d21a9a563f29334cd094568f11fd6cc2d56abfe31158ec14a42c80f9 (the receipt-tree divergence is closed AND stays closed under rebuild)",
+    "every splice anchor count == 1 asserted before replacement; build dies loudly otherwise",
+    "host-build receipts present for the rebuilt binary; all deltas inventoried"
+  ],
+  "honesty_notes": [
+    "The G1 core bytes were already suite-proven (SUITE-RESULTS.md ran them in patch-apply form); this worker proves TREE REPRODUCIBILITY of those bytes, not new gameplay semantics.",
+    "Rebuilding advances the tree's build/ artifacts (payload ELF, host binary) to the promoted 54-tuple revision; previously pinned artifact shas (e.g. D1 payload e3489297...) remain recorded in their own receipts; staging re-pin is a separate controller concern and is NOT silently updated.",
+    "The trailing-newline receipt fix is a recorded, anchored composer splice required for byte-identity with the promoted receipt; without it a rebuild would emit content-identical JSON with a different sha and reopen a divergence."
+  ],
+  "status": "DONE",
+  "result": {
+    "splice": "3 recorded MY_SPLICES entries appended to worker-d1-chain-relink/compose_merged_relink.py (aedcd8ea... -> dd5fb428...): g1-block-append (EXTRA_PATCHES += 3 G1 4-tuples after r2-install-status-ok, AST verbatim from worker-e2e-payload-build/g1_block.py 9f46b66a..., pin-verified against the promoted receipt), g1-receipt-promoted-form-def + -seq (regenerated receipt byte-matches the promoted form: trailing newline, promoted `patched` label, UTF-8 byte lengths for G1 new_bytes)",
+    "rebuild": "tree's own build, exact D1 recipe (MODBRIDGE_ROOT pinned, --flavor all): exit 0; console payload ELF b0d73e93de55a0d55a35e19995a6ee0f00eaedf32e05130636ae7bcfb9476598 (681888 B, 116 imports, missing=[]); host binary bbc7f96f4445a32401b0b05eaf986452e87678e3889f74e181e07cd75695f3d7 (14/14 compile+link commands exit 0)",
+    "reconciliation": {
+      "promoted_receipt": "63c28979d21a9a563f29334cd094568f11fd6cc2d56abfe31158ec14a42c80f9 (installed by worker-e2e-promotion-apply; unchanged)",
+      "spliced_tree_receipt": "composition/receipts/patches.json regenerated by the tree's own patch_modinst — BYTE-IDENTICAL to worker-e2e-payload-build/patches.json.new",
+      "rebuilt_core": "composition/vendored/modinst_core.c = 43ea66c1c5dcf52bfb9158bae5f782438911b61f699eeb1f8dc29c6b702dcda0, BYTE-IDENTICAL to worker-e2e-config-entry/owned/modinst_core.c; chain tail 45c04d08 -> 330d47f2 -> 91a122a8 -> 43ea66c1 reproduced in-tree",
+      "verdict": "receipt-tree divergence CLOSED and stays closed under rebuild"
+    },
+    "changed_files_vs_before": 15,
+    "evidence": ["receipts/01-dry-run-proof.log (dry run caught 2 receipt-content divergences BEFORE any tree write)", "receipts/03-build-all.log", "receipts/05-inventory-diff.txt", "receipts/06-post-verification.log", "receipts/g1-splice-provenance.json", "archive/ (pristine driver/inner/core + stale 51-chain build artifacts moved aside, none deleted)"]
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "worker": "worker-static-tls",
+  "date": "2026-10-04",
+  "task": "Implement the static TLS family (PE TLS directory parsing, per-thread static TLS block allocation, TLS callback dispatch for DLL_PROCESS/THREAD ATTACH/DETACH, index management, and the __tls_import/__tls_index ABI binder) as the next windows-services family after CRT startup, following the InitOnce/Mutex/FileIO/CRT-startup family patterns exactly: mb_win owner unit, ms_abi PE binder unit, host typed tests, pinned prospero-clang native/bridge object evidence, integration wiring notes.",
+  "output_area_root": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-static-tls/",
+  "owned_files_written_here_only": [
+    "CLAIM.json",
+    "sources/mb_win_static_tls.h",
+    "sources/mb_win_static_tls.c",
+    "sources/mb_win_static_tls_abi.h",
+    "sources/mb_win_static_tls_abi.c",
+    "sources/tests/test_win_static_tls.c",
+    "verify_static_tls.py",
+    "INTEGRATION.md",
+    "receipts/ (verifier output, uuid subdirectories)",
+    "REPORT.md"
+  ],
+  "origin_labeling": "All C sources are new files following the existing windows-services family patterns (structural templates outputs/ps5-mod-bridge/windows-services/mb_win_init_once.{h,c}, mb_win_init_once_abi.{h,c} and outputs/2026-10-04-zcode-team/worker-4-win-services/sources/, and outputs/2026-10-04-zcode-team/worker-crt-startup-implement/sources/, all unchanged); verifier follows worker-4-win-services/verify_init_once.py (unchanged).",
+  "inputs_read_only": [
+    "outputs/2026-10-04-zcode-team/worker-dll-mod-retention/baseline-dll-census.json (TLS directory facts: UE4SS.dll directory present, 728 raw bytes, zero fill 0, characteristics 0x500000, 2 callbacks; dwmapi.dll directory_present=false)",
+    "outputs/ps5-mod-bridge/windows-services/ (mb_win_threads.h/.c domain, mb_win_tls_bridge.{h,c} dynamic TLS surface, mb_win_entry.h, verify.py helpers, family READMEs; read-only)",
+    "outputs/ps5-mod-bridge/windows-execution/pe_module.h (module states and loader contracts; read-only)",
+    "outputs/ps5-mod-bridge/windows-image/pe_image.h (mb_pe_import/mb_pe_string/mb_pe_bind_result contract; read-only)",
+    "outputs/2026-10-04-zcode-team/worker-crt-startup-implement/ (preceding family shape; read-only)"
+  ],
+  "dependencies_reused_unchanged": [
+    "mb_win_threads domain (admission pins, dynamic TLS index pool, allocate/release, last-error) as the backing store for per-thread static TLS blocks and index allocation",
+    "PE import contract mb_pe_import/mb_pe_string/mb_pe_bind_result and module states",
+    "PS5 payload SDK v0.43 prospero compiler and pinned LLVM 21.1.8 tools (read-only) for native/bridge object evidence"
+  ],
+  "census_corrections": [
+    "Task premise said both retained DLLs have static TLS; the census is the authority: dwmapi.dll has tls.directory_present=false (no static TLS, 2 callbacks claim does not apply). Only UE4SS.dll has a TLS directory (728 raw bytes, size_of_zero_fill=0, characteristics 0x500000, 2 callbacks at VAs 0x180c956f0 and 0x180c95a10, callbacks_field_kind=va). Reported honestly in REPORT.md; the family still supports both shapes (zero and multiple callbacks)."
+  ],
+  "explicit_non_goals": [
+    "No edits to any existing file (build.py wiring points documented in INTEGRATION.md for the controller only)",
+    "No target/PS5 execution claim; SDK declarations and host evidence are component evidence only",
+    "No network calls, no console contact, no full-runtime rebuilds",
+    "No FLS (FlsAlloc/FlsFree/FlsSetValue observed in UE4SS census) - distinct dynamic-TLS family surface, not static TLS",
+    "No Windows TEB emulation, gs:[0x58] access, loader lock, thread-create/exit notifications or exception delivery; the documented divergences (lazy per-thread block allocation, adapter-defined __tls_import thunk signature, no eager blocks for pre-existing threads) are listed in REPORT.md",
+    "No claim of full Windows loader static-TLS parity"
+  ]
+}

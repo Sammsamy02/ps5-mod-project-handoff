@@ -1,0 +1,58 @@
+--- a/typescan-r4/include/Platform/NativeModHostCore.hpp
++++ b/typescan-r4/include/Platform/NativeModHostCore.hpp
+@@ -136,8 +136,9 @@
+         VmtEngineTick,  // copied-vtable UEngine::Tick drain (also delivers ENGINE_TICK)
+     };
+ 
+-    // [FIX F5] At most one per-frame service frame (the #11 GUI render) per
+-    // engine frame, whatever the pump cadence. The pumps can be called many
++    // [FIX F5] At most one per-frame service frame (the #11 GUI render and,
++    // [FU5], the native mods' game-thread frame) per engine frame, whatever
++    // the pump cadence. The pumps can be called many
+     // times per frame (1700-2300 calls/s seen in earlier harvests) and both
+     // pumps can be live at once. Rule:
+     //   * once the copied-vtable Tick pump (exactly one call per UEngine::Tick)
+@@ -463,7 +464,7 @@
+         }
+ 
+         // ---------------------------------------------------------------
+-        // Game thread: called once per frame by the runtime's pump(s).
++        // Game thread: called once per frame (through game_thread_pump).
+         // Runs the tasks queued BEFORE this call (tasks queued while running go
+         // to the next frame, like upstream ExecuteInGameThread), then ticks.
+         // ---------------------------------------------------------------
+@@ -506,7 +507,27 @@
+                 bump(&Counters::tick_calls);
+                 if (s != MBM_OK) fault_in_scope(cb.token, "tick", s, nullptr);
+             }
++        }
++
++        // [FU5] Game thread: the runtime's pumps call this on EVERY pump call
++        // (the marshal pump runs ~170-1,960 times per second). The ABI promises
++        // MBM_HOOK_GAME_THREAD_TICK "once per frame", so game_thread_frame
++        // (queued tasks + tick callbacks) runs only when the FrameGate says a
++        // new engine frame started (the copied-vtable Tick pump owns the frame
++        // while it is live, else the marshal pump at most every 8 ms), with
++        // dt = time since the previous frame that ran. Returns true when the
++        // frame ran (*frame_dt set) so per-frame services (#11 GUI) run in the
++        // same pump call. Not thread-safe on purpose (both pumps are on the
++        // game thread).
++        auto game_thread_pump(FrameGate::Clock::time_point now, PumpSource source, float* frame_dt = nullptr) -> bool
++        {
++            float dt = 0.0f;
++            if (!m_frame_gate.due(now, source, &dt)) return false;
++            game_thread_frame(dt, source);
++            if (frame_dt) *frame_dt = dt;
++            return true;
+         }
++        auto frame_gate_stats() const -> FrameGate::Stats { return m_frame_gate.stats(); }
+ 
+         // Engine-side hook trampolines call these with the HOST record id.
+         void dispatch_ufunction(uint64_t record, bool pre, const mbm_hook_call& call)
+@@ -1174,5 +1195,6 @@
+         uint64_t m_next_id{};
+         bool m_pump_seen{};
+         Counters m_counters{};
++        FrameGate m_frame_gate{}; // [FU5] game thread only (game_thread_pump)
+     };
+ } // namespace RC::Platform::NativeMods

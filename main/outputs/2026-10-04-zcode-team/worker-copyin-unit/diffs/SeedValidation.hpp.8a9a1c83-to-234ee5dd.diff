@@ -1,0 +1,191 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch11-combined/units/SeedValidation.hpp	2026-10-05 19:40:27
++++ staging/SeedValidation.hpp	2026-10-05 21:23:45
+@@ -396,48 +396,97 @@
+                 "published-readable-spans", PoolShapeCheck::FailureClass::NotCovered};
+     }
+ 
+-    // v5 listing-gap resolution (hypothesis-driven, evidence-strict). Live
+-    // facts (full-fix run 2026-10-05, candidate label until validation
+-    // passes): Blocks[0] = 0x22C0000000 (139 GiB) while the COMPLETE listing
+-    // envelope tops at 0x1100400000 (68 GiB) over ALL decoded records — the
+-    // listing returned no record covering Blocks[0]. Because the envelope
+-    // covers every decoded record, the 126-candidate/64-slot publication
+-    // window CANNOT explain this above-envelope result; the working
+-    // hypothesis is a direct-memory-class mapping omitted by the listing
+-    // itself. That allocation class is NOT established — only the omission
+-    // is observed.
++    // v5.2 listing-gap resolution (sole-probe, sink-fed). Live facts and
++    // provenance: (a) full-fix run 2026-10-05 — Blocks[0] = 0x22C0000000
++    // (139 GiB) while the COMPLETE listing envelope tops at 0x1100400000
++    // (68 GiB) over ALL decoded records: the listing returned no record
++    // covering Blocks[0] and the 126-candidate/64-slot publication window
++    // cannot explain an above-envelope miss; the direct-memory-class
++    // omission is the working hypothesis, the omission itself is the only
++    // observed fact. (b) Session 934 (2026-10-05): the mincore raw-syscall
++    // range verdict is GONE — the raw `syscall` instruction is FATAL inside
++    // the sandboxed game process (0xa002030a SYSTEM_ILLEGAL_FUNCTION_CALL;
++    // only NID-resolved calls are permitted in-game), and the controller
++    // removed bridge_kernel_range_verdict (edits 13b/14). The write-copyin
++    // probe is therefore the SOLE listing-gap oracle, and this resolver
++    // takes its classification DIRECTLY — there is no range verdict to
++    // couple to anymore.
+     //
+-    // Evidence contract (user corrections 2026-10-05):
+-    //   1. A mapped/residency verdict (mincore class) does NOT prove read
+-    //      permission or owned-read coverage. This process contains
+-    //      exec-only text, so mapped!=readable is a real case. Mapped-ness
+-    //      over the FULL REQUIRED READ RANGE is necessary, never sufficient.
+-    //   2. Readable-coverage authorization needs a supported source. Today
+-    //      the pinned surface has exactly one: the listing's READ bit
+-    //      (ListedSpan) — which by construction cannot cover a
+-    //      listing-absent address. So a listing-gap admission is IMPOSSIBLE
+-    //      today and the helper must refuse, recording the range verdict as
+-    //      fresh per-address evidence (NOT part of the earlier frozen VMMAP
+-    //      capture; any future registration/reads must carry that
+-    //      provenance explicitly).
+-    //   3. The on-target standalone payload (separate process, no game) is
+-    //      the evidence route that may extend the source set: if the
+-    //      actually-linked kernel proves the range verdict is protection-
+-    //      aware (fails on exec-only), RangeVerdictImpliesReadable becomes
+-    //      an evidence-backed source. A header constant and an available
+-    //      trampoline are build evidence only, never a successful target
+-    //      test.
++    // Evidence contract (user corrections 2026-10-05 + worker-copyin-smoke
++    // review R-4):
++    //   1. The probe classification rests on kernel-mediated evidence only:
++    //      write(2)-copyin of the FULL required read range into a REAL
++    //      bridge-owned file under /data (worker-write-copyin standalone
++    //      payload, builds 186dab02e289 / 98d370be8eeb: image .bss / stack /
++    //      malloc-heap sources transfer byte-true; munmap hole / PROT_NONE /
++    //      DM-class / high-unmapped sources all refuse leaving the sink
++    //      byte-empty; all-or-nothing per call; partials never observed).
++    //      A READABLE classification means the read ALREADY HAPPENED — the
++    //      admission is authorization AND execution in one event.
++    //   2. ADDRESS-CLASS CAVEAT (documented, not a blocker): the kernel
++    //      enforces a SOURCE-REGION-CLASS allowlist on copyin — a runtime
++    //      mmap(MAP_ANON) page that is directly CPU-readable still refuses
++    //      (proven twice standalone). A REFUSED verdict therefore never
++    //      implies unmapped (unmapped OR PROT_NONE OR non-allowlisted class)
++    //      and never speaks about CPU readability either way; the source
++    //      class of a probed address is ADDRESS-CLASS-UNKNOWN. In-game
++    //      semantics on game image/heap ranges remain a hypothesis on the
++    //      untestable-until-game-run list; the first in-game boot of this
++    //      probe IS the smoke test.
++    //   3. SINK-FED VALIDATION (R-4 + the user's standing rule: copy success
++    //      must not silently authorize later unsupported direct reads): once
++    //      admitted via copyin, EVERY downstream pool read in that boot
++    //      consumes SINK-CAPTURED bytes — the entry-0 'None' anchor AND the
++    //      entry byte comparisons. The address-arithmetic bounds checks stay
++    //      pure. A capture that cannot cover a needed entry byte range
++    //      refuses loudly; it NEVER falls back to a direct block read. On
++    //      span-membership-admitted boots the direct volatile reads stay
++    //      exactly as before.
++    //   4. TRANSPORT LAW (session 934 + the definitive l11-1
++    //      supplier-contract facts): every kernel touch is NID-resolved —
++    //      the POSIX fd wrapper set open/write/read/close/unlink, all
++    //      in-contract (libScePosix/libkernel); lseek and the
++    //      sceKernelOpen/sceKernelClose spellings are NOT in the contract
++    //      and are not used. Sink size is verified by WRITE-RETURN
++    //      ACCOUNTING (rc==chunk over page-granular chunks) plus the
++    //      first-page read-back (read) — the vacuity law without any seek.
++    //      Convention: the wrappers use the classic -1/errno form (errno
++    //      via __error, itself a contract import), matching the standalone
++    //      payload's wrapper evidence. No raw syscall instruction remains
++    //      anywhere on this path.
+     enum class RangeMappedVerdict : int8_t
+     {
++        // RETIRED with edits 13b/14 (session 934): the mincore range verdict
++        // no longer exists in the live bridge. Kept only as provenance for
++        // the former resolve_listing_gap contract; nothing consumes it.
+         Unavailable = -1, // kernel refused the call class (any other errno)
+         NotMapped = 0,    // ENOMEM over the range: genuine unmapped proof
+         Mapped = 1,       // 0 over the range: mapped-ness only (not readable)
+     };
+     enum class ReadableCoverageSource : uint8_t
+     {
+-        None = 0,          // no supported source for this address today
+-        ListedSpan = 1,    // listing READ bit (cannot cover listing gaps)
++        // Source taxonomy (documentation). Since edit 14 the resolver takes
++        // the copyin classification directly (CopyinProbeClass below); this
++        // enum records which sources have ever been evidence-backed.
++        None = 0,              // no supported source for this address today
++        ListedSpan = 1,        // listing READ bit (cannot cover listing gaps)
++        KernelWriteCopyin = 2, // ACTIVE: write(2)-copyin owned-read probe —
++                               // authorization AND execution in one event
+     };
++    // The write-copyin probe's three-class verdict (bridge
++    // bridge_kernel_write_copyin_probe; same int codes as the function
++    // returns and the pool_copyin_probe_fresh tag emits).
++    enum class CopyinProbeClass : int8_t
++    {
++        Unavailable = -1, // sink-open failure, policy abort, partial, or
++                          // vacuous-sink class: the oracle itself failed —
++                          // never admitted, never claimed as a refusal
++        Refused = 0,      // EFAULT-class: the kernel refuses THIS source
++                          // (address-class-unknown: never read as "unmapped"
++                          // nor as "CPU-unreadable")
++        Readable = 1,     // full transfer of the probed range into the sink,
++                          // double-verified sink size: the read HAPPENED
++    };
+     struct ListingGapResolution
+     {
+         bool ok;
+@@ -445,35 +494,41 @@
+         const char* note;          // admission explanation or refusal reason
+     };
+     [[nodiscard]] inline auto resolve_listing_gap(const PoolShapeCheck& shape,
+-                                                  RangeMappedVerdict range_verdict,
+-                                                  ReadableCoverageSource readable_source) -> ListingGapResolution
++                                                  CopyinProbeClass copyin_class) -> ListingGapResolution
+     {
+         if (shape.ok)
+         {
+-            return {true, shape.bounds_source, "shape already admitted by span membership; range verdict not consulted"};
++            return {true, shape.bounds_source, "shape already admitted by span membership; copyin probe not consulted"};
+         }
+         if (shape.failure_class != PoolShapeCheck::FailureClass::CaptureTruncated &&
+             shape.failure_class != PoolShapeCheck::FailureClass::NotCovered)
+         {
+-            return {false, nullptr, "range verdict does not rescue this failure class (structural checks gate everything)"};
++            return {false, nullptr, "copyin probe does not rescue this failure class (structural checks gate everything)"};
+         }
+-        if (range_verdict == RangeMappedVerdict::NotMapped)
++        if (copyin_class == CopyinProbeClass::Refused)
+         {
+-            return {false, nullptr, "kernel range verdict: NOT mapped over the required read range (genuine unmapped proof, stronger than the listing refusal)"};
++            return {false, nullptr,
++                    "kernel write-copyin probe: REFUSED over the required read range (EFAULT class — the kernel refuses this source). "
++                    "This is NOT an unmapped proof: PROT_NONE and non-allowlisted source classes refuse identically "
++                    "(source-class allowlist; the probed address's class is address-class-unknown). Refusing; no read happened"};
+         }
+-        if (range_verdict == RangeMappedVerdict::Unavailable)
++        if (copyin_class == CopyinProbeClass::Unavailable)
+         {
+-            return {false, nullptr, "kernel range verdict unavailable (call class refused); listing gap unresolved — refuse honestly"};
++            return {false, nullptr,
++                    "kernel write-copyin probe unavailable (sink-open / policy / partial / vacuous-sink class); the oracle itself "
++                    "failed, nothing is proven about the range — listing gap unresolved, refuse honestly"};
+         }
+-        if (readable_source == ReadableCoverageSource::ListedSpan)
+-        {
+-            return {true, "listed-span-plus-range-verdict", "listing READ bit covers the range; range verdict corroborates"};
+-        }
+-        return {false, nullptr,
+-                "kernel range verdict: MAPPED over the full required read range, but read permission is UNPROVEN for a listing-absent address "
+-                "(mapped!=readable; exec-only mappings exist in this process) and no supported readable-coverage source exists for listing-absent "
+-                "addresses in the pinned surface. Direct-memory omission remains a hypothesis. Refusing; the on-target range-verdict semantics "
+-                "evidence (standalone payload, separate process) may extend the source set"};
++        // Readable: the probe transferred the FULL required read range into
++        // the bridge-owned sink (any refusal would have classified above).
++        // The classification alone carries the admission: this is BOTH
++        // authorization AND execution. bounds_source records the provenance;
++        // the initializer's downstream entry validation consumes the SINK
++        // CAPTURE (R-4: never a direct block read on this path).
++        return {true, "kernel-write-copyin-read",
++                "write(2)-copyin probe transferred the full required read range into the bridge-owned sink "
++                "(kernel-mediated owned read via NID wrappers; a refusal on any part of the range would have classified "
++                "Refused): the read already happened, so this source is authorization AND execution together; all "
++                "downstream pool reads on this boot consume the sink capture"};
+     }
+ 
+     // Bounds that must hold before any entry byte is touched — v4 engine

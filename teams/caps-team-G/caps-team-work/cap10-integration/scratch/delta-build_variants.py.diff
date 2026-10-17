@@ -1,0 +1,139 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l25-prep/intake/gpt-7-10-v2-20261013/unpacked/caps-team-work/cap07-mac-ready/derived/target-ready/outputs/2026-10-08-l26-runtime/build_variants.py	2026-10-13 12:41:36
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l25-prep/intake/gpt-7-10-v2-20261013/unpacked/caps-team-work/cap10-integration-ready/derived/target-ready/outputs/2026-10-08-l26-runtime/build_variants.py	2026-10-13 13:08:44
+@@ -106,6 +106,8 @@
+ BASE=br.BASE;LLVM=br.LLVM
+ sha,pin,write,deps,rewrite_compile,run=br.sha,br.pin,br.write,br.deps,br.rewrite_compile,br.run
+ 
++import cap10_integration as cap10
++CAP10=cap10.load(HERE)
+ TOKEN='MODBRIDGE_L25_SKIP_DELETE_LISTENER'
+ # [NEW-UNITS root 2026-10-10] Claude round-2 TUs with no l25-A BASE unit:
+ # lua-lfb (agent FD: bridge out-of-line definitions), buildstamp + tcselftest
+@@ -115,7 +117,7 @@
+ # a template unit (same include set), rewritten -c/-o/-MF by the normal
+ # compile_unit path, objects APPENDED to the BASE link command (the zip
+ # remap pairs BASE[i]↔units[i]; new units append at the END so the pairing
+-# is preserved), census expected 391+len(NEW_UNITS). Always fresh (never
++# is preserved), census expected 391+len(NEW_UNITS)+len(CAP10['artifacts']). Always fresh (never
+ # retained by --incremental; no previous receipts exist for them).
+ NEW_UNITS={
+     'pakmount':{'source':HERE/'typescan-r4/candidate/src/RuntimePakMount.cpp','template':'unreal-unrealinitializer','note':'cap07 synchronized native pak mount (always fresh)','source_sha256':'a8894176856f67ad13eacafb910bfcbd214658f02bb55a6709db9785a5747945'},
+@@ -126,6 +128,8 @@
+ 
+ 
+ }
++NEW_UNITS.update(CAP10['units'])
++
+ def make_new_units(units,passno,sel,objects):
+     by_name={u['name']:u for u in units}
+     made=[]
+@@ -358,6 +362,8 @@
+     # receipts to retain from) — appended after every affected-set derivation.
+     affected=affected+[n for n in NEW_UNITS if n not in affected]
+     include_dirs=sorted(set(declared_include_dirs)|{str(Path(p).parent) for p in added}|{str(Path(x['candidate']).parent) for x in changes if Path(x['candidate']).suffix in ['.hpp','.h']})
++    include_dirs=sorted(set(include_dirs)|set(CAP10['include_dirs']))
++    added+= [r['path'] for r in CAP10['header_pins']]
+     # Z9 loud no-op guard: every CHANGES row must key on an original the l25-A
+     # BASE build actually consumed (unit source, dep-universe path, inherited
+     # overlay target, or alias-identical (name,digest) universe file). A row
+@@ -966,6 +972,7 @@
+         argv[1:1]=['-ivfsoverlay',str(overlay),*[a for p in sel['include_dirs'] for a in ['-I',p]],'-I',str(Path(u['source']).parent)]
+         if u['name'] in define_units:argv[1:1]=[variant['define']]
+         if u['name'] in sel.get('lua_cpp_units',()):argv=lua_cpp_argv(argv)
++        argv=cap10.compile_argv(argv,u['name'],CAP10)
+         routes,route_violations=header_route_check(sel,argv)
+         route_agg['units'].append(u['name'])
+         if route_violations:
+@@ -1054,29 +1061,22 @@
+         # NEW_UNITS have no BASE link-command entries: inject their
+         # objects just before the linker -o so they actually link (the
+         # lfb phantom class, prevented at the link layer).
+-        cmd[cmd.index('-o'):0]=[str(u['object']) for u in units if u['name'] in NEW_UNITS]
++        cmd=cap10.wire_link(cmd,units,NEW_UNITS,CAP10)
++        cap10.link_census(cmd,units,CAP10,391+len(NEW_UNITS)+len(CAP10['artifacts']))
+         cmd=['-Map='+str(pdir/'runtime.map') if a.startswith('-Map=') else a for a in cmd]
+         input_paths=[a for i,a in enumerate(cmd) if a.endswith(('.o','.a')) and i!=cmd.index('-o')+1]
+-        _expected_inputs=391+len(NEW_UNITS)
++        _expected_inputs=391+len(NEW_UNITS)+len(CAP10['artifacts'])
+         record('G6-link-input-census',len(input_paths)==len(set(input_paths))==_expected_inputs and all(input_paths.count(u['object'])==1 for u in units),{'variant':variant['key'],'pass':passno,'inputs':len(input_paths),'expected':_expected_inputs})
+         for p in link['fixed_inputs']:assert sha(p['path'])==p['sha256']
++        predicted_raw=cap10.link_import_contract(cmd)
+         budgeted_run(cmd,pdir,'link')
+         after=budgeted_run([LLVM/'llvm-nm','-u',runtime],pdir,'undefined')
+         before=(BASE/f'pass{passno}/undefined.stdout').read_text()
+         symbols=lambda s:{tuple(line.split()[-2:]) for line in s.splitlines() if line.split()}
+-        if LUA_AS_CPP:
+-            expected=(symbols(before)-set(LUA_CPP_IMPORT_DELTA['removed']))|set(LUA_CPP_IMPORT_DELTA['added'])
+-            ok=symbols(after)==expected and len(symbols(after))>0 and len(symbols(before))>0
+-            record('G7-import-delta-declared-lua-as-cpp',ok,{'variant':variant['key'],'pass':passno,'baseline':str(BASE/f'pass{passno}/undefined.stdout'),
+-                   'declared':{k:[list(t) for t in v] for k,v in LUA_CPP_IMPORT_DELTA.items()},
+-                   'actual_added':sorted([list(t) for t in symbols(after)-symbols(before)]),'actual_removed':sorted([list(t) for t in symbols(before)-symbols(after)]),
+-                   'unexpected_added':sorted([list(t) for t in symbols(after)-expected]),'unexpected_missing':sorted([list(t) for t in expected-symbols(after)]),
+-                   'counts':(len(symbols(before)),len(symbols(after)))})
+-            if not ok:raise RuntimeError('Lua-as-C++ raw import delta differs from the declared delta')
+-        else:
+-            record('G7-import-delta-none',symbols(after)==symbols(before),{'variant':variant['key'],'pass':passno,'baseline':str(BASE/f'pass{passno}/undefined.stdout')})
+-            if symbols(after)!=symbols(before):raise RuntimeError('raw import delta must be declared before packaging')
+-        write(pdir/'LINK-COMMAND.json',{'argv':cmd,'ordered_inputs':input_paths,'fixed_inputs':link['fixed_inputs']})
++        raw_contract=cap10.verify_raw(after,predicted_raw)
++        write(pdir/'CAP10-RAW-CONTRACT.json',predicted_raw)
++        record('G7-cap10-exact-raw-import-contract',True,raw_contract)
++        write(pdir/'LINK-COMMAND.json',{'argv':cmd,'ordered_inputs':input_paths,'fixed_inputs':link['fixed_inputs']+CAP10['artifacts'],'cap10_integration':CAP10['manifest']})
+         write(pdir/'COMPILE-RECEIPT.json',{'fresh_units':[{'name':u['name'],'command':pin(objects/(u['name']+'.command.json')),'object':pin(u['object'])} for u in units if u['name'] in sel['affected']],'retained_units':len(units)-len(sel['affected']),'header_overlay':pin(overlay)})
+         # [agent FY] DEPENDENCY-GRAPH.json + COMPOSITION-RECEIPT.json moved to
+         # finish_variant: pass2's dependency graph is cumulative over pass1's
+@@ -1091,9 +1091,9 @@
+                 'undefined_delta':(sorted([list(t) for t in symbols(after)-symbols(before)]),sorted([list(t) for t in symbols(before)-symbols(after)]))}
+     else:
+         link_argv=json.loads(Path(parent['link_command']['path']).read_text())['argv']
+-        record('G6-link-input-census',None,{'variant':variant['key'],'pass':passno,'planned_inputs':391+len(NEW_UNITS),'note':'387 retained pinned objects + fresh objects + %d NEW_UNITS; exact census enforced at execute'%len(NEW_UNITS)})
+-        record('G7-import-delta-declared-lua-as-cpp' if LUA_AS_CPP else 'G7-import-delta-none',None,{'variant':variant['key'],'pass':passno,'baseline':str(BASE/f'pass{passno}/undefined.stdout'),'baseline_sha256':sha(BASE/f'pass{passno}/undefined.stdout'),
+-               'note':('llvm-nm -u must equal BASE minus exactly '+repr(LUA_CPP_IMPORT_DELTA['removed'])+' (enforced at execute)') if LUA_AS_CPP else 'llvm-nm -u equality with BASE enforced at execute'})
++        record('G6-link-input-census',None,{'variant':variant['key'],'pass':passno,'planned_inputs':391+len(NEW_UNITS)+len(CAP10['artifacts']),'note':'387 retained pinned objects + fresh objects + %d NEW_UNITS; exact census enforced at execute'%len(NEW_UNITS)})
++        record('G7-cap10-exact-raw-import-contract',None,{'variant':variant['key'],'pass':passno,'baseline':str(BASE/f'pass{passno}/undefined.stdout'),'baseline_sha256':sha(BASE/f'pass{passno}/undefined.stdout'),
++               'note':'llvm-nm -u must exactly equal the independently computed ELF/AR input closure, including any selected Lua-as-C++ object changes'})
+         steps.append({'step':'link-runtime','variant':variant['key'],'pass':passno,'output':str(runtime),'link_command_source':parent['link_command']['path'],'argv_shape':link_argv[:3]+['...','-o',str(runtime)]})
+         steps.append({'step':'llvm-nm-undefined-gate','variant':variant['key'],'pass':passno,'object':str(runtime),'baseline':{'path':str(BASE/f'pass{passno}/undefined.stdout'),'sha256':sha(BASE/f'pass{passno}/undefined.stdout')}})
+         return {'passno':passno,'pdir':pdir,'units':units,'pins':pass_pins,
+@@ -1115,10 +1115,10 @@
+         for pp,pins_for_graph in ((p1,p1['pins']),(p2,merged_pins)):
+             pdir=pp['pdir']
+             write(pdir/'DEPENDENCY-GRAPH.json',{'selected_dependencies':[{'name':u['name'],'dependency':pin(u['dependency'])} for u in pp['units']],'new_effective_dependency_pins':list(pins_for_graph.values()),'driver_staged_source_pins':[pin(Path(k)) for k in sorted(sel['driver_staged_sources'])],'header_aliases':sel['aliases'],'added_headers':[pin(p) for p in sel['added']]})
+-            receipt={'status':variant['status'],'variant':marker,'pass':pp['passno'],'object':pin(pdir/variant['artifact']),'selected_units':pp['units'],'selected_count':pp['selected_count'],'full_link_inputs':391+len(NEW_UNITS),
++            receipt={'status':variant['status'],'variant':marker,'pass':pp['passno'],'object':pin(pdir/variant['artifact']),'selected_units':pp['units'],'selected_count':pp['selected_count'],'full_link_inputs':391+len(NEW_UNITS)+len(CAP10['artifacts']),
+                      'parent_composition':pin(BASE/f'pass{pp["passno"]}/COMPOSITION-RECEIPT.json'),'fresh_current_pass':len(sel['affected']),'retained_current_units':pp['selected_count']-len(sel['affected']),
+                      'scope':'l26 variant '+variant['key']+' accepted local code on the l25-A BASE; '+variant['label']+'; no console proof',
+-                     'link_command':pin(pdir/'LINK-COMMAND.json'),'header_overlay':pin(overlay),'compile_receipt':pin(pdir/'COMPILE-RECEIPT.json'),'dependency_graph':pin(pdir/'DEPENDENCY-GRAPH.json'),'import_delta':pin(pdir/'IMPORT-DELTA.json'),
++                     'link_command':pin(pdir/'LINK-COMMAND.json'),'header_overlay':pin(overlay),'compile_receipt':pin(pdir/'COMPILE-RECEIPT.json'),'dependency_graph':pin(pdir/'DEPENDENCY-GRAPH.json'),'import_delta':pin(pdir/'IMPORT-DELTA.json'),'cap10_raw_contract':pin(pdir/'CAP10-RAW-CONTRACT.json'),
+                      'baseline_undefined_count':pp['undefined_counts'][0],'candidate_undefined_count':pp['undefined_counts'][1],'actual_undefined_added':pp['undefined_delta'][0],'actual_undefined_removed':pp['undefined_delta'][1],
+                      'native_execution':False,'menu_success':False,'console_contact':False}
+             write(pdir/'COMPOSITION-RECEIPT.json',receipt)
+@@ -1140,13 +1140,14 @@
+         selection=copy.deepcopy(oldsel)
+         selection['source_pins']+=list(actual_pins.values())+[pin(x['candidate']) for x in sel['changes']]+[pin(p) for p in sel['added']]+[pin(overlay)]+[pin(sel['copyin_probe']['composed_path']),pin(QPART/'MANIFEST.json'),pin(STAMP_PATH)]
+         selection['receipt_pins']+=[x['composition'] for x in results]
+-        selection['artifact_pins']+=[x['runtime'] for x in results]
++        selection['artifact_pins']+=[x['runtime'] for x in results]+CAP10['artifacts']+CAP10['runtime_assets']
++        selection['source_pins']+=CAP10['pinned_inputs']+[CAP10['manifest']]
+         selection.update(parent_selection=pin(BASE/'SOURCE-SELECTION.json'),native_execution=False,selected_changes=sel['changes'],l26_variant=marker)
+         write(out/'ACTUAL-DEPENDENCIES.json',list(actual_pins.values()));write(out/'SOURCE-SELECTION.json',selection)
+-        write(out/'CHANGE-SELECTION.json',{'files':sel['changes'],'added_headers':sel['added'],'aliases':sel['aliases'],'affected_units':sel['affected'],'retained_units':len(sel['base']['selected_units'])-len(sel['affected']),'no_console_contact':True,'l26_variant':marker,'incremental':(None if not sel.get('incremental') else {'fresh_units':len(sel['affected']),'fresh_units_full_mode':len(sel['affected_full']),'retained_from':{k:v['dir'] for k,v in sel['retained'].items()},'forced_fresh_units':sorted(sel.get('forced_fresh') or []),'header_rows_skipped':sel['header_skip_rows'],'upload_grade':'NOT upload-grade; full build (the default, without --incremental) is the only upload-grade mode'}),'copyin_probe_wiring':sel['copyin_probe']['receipt_section'],'second_hop_source_overrides':{'unreal-unrealinitializer':str(sel['copyin_probe']['composed_path'])},'driver_staged_sources':{k:v for k,v in sel['driver_staged_sources'].items()},'build_stamp':sel.get('build_stamp')})
++        write(out/'CHANGE-SELECTION.json',{'files':sel['changes'],'added_headers':sel['added'],'aliases':sel['aliases'],'affected_units':sel['affected'],'retained_units':len(sel['base']['selected_units'])+len(NEW_UNITS)-len(sel['affected']),'no_console_contact':True,'l26_variant':marker,'incremental':(None if not sel.get('incremental') else {'fresh_units':len(sel['affected']),'fresh_units_full_mode':len(sel['affected_full']),'retained_from':{k:v['dir'] for k,v in sel['retained'].items()},'forced_fresh_units':sorted(sel.get('forced_fresh') or []),'header_rows_skipped':sel['header_skip_rows'],'upload_grade':'NOT upload-grade; full build (the default, without --incremental) is the only upload-grade mode'}),'copyin_probe_wiring':sel['copyin_probe']['receipt_section'],'second_hop_source_overrides':{'unreal-unrealinitializer':str(sel['copyin_probe']['composed_path'])},'driver_staged_sources':{k:v for k,v in sel['driver_staged_sources'].items()},'build_stamp':sel.get('build_stamp')})
+         write(out/'VARIANT-MARKER.json',marker)
+         write(out/'TWIN-RECEIPT.json',{'status':variant['twin_status'],'variant':marker,'passes':results,'source_selection':pin(out/'SOURCE-SELECTION.json'),
+-            'fresh_units_each_pass':len(sel['affected']),'selected_units':len(sel['base']['selected_units']),'full_link_inputs':391+len(NEW_UNITS),'new_imports':[],'console_contact':False,'native_execution':False,
++            'fresh_units_each_pass':len(sel['affected']),'selected_units':len(sel['base']['selected_units'])+len(NEW_UNITS),'full_link_inputs':391+len(NEW_UNITS)+len(CAP10['artifacts']),'new_imports':p1['undefined_delta'][0],'cap10_integration':CAP10['manifest'],'console_contact':False,'native_execution':False,
+             'copyin_probe_wiring':sel['copyin_probe']['receipt_section']})
+     else:
+         steps.append({'step':'write-variant-receipts','variant':variant['key'],'dir':str(out),'files':['TWIN-RECEIPT.json','SOURCE-SELECTION.json','CHANGE-SELECTION.json','ACTUAL-DEPENDENCIES.json','VARIANT-MARKER.json'],'passes':results})
+@@ -1370,8 +1371,8 @@
+     pair_receipt(built,merged_targets,record,execute,steps,root,sel)
+     plan={'mode':'execute' if execute else 'plan','driver':str(Path(__file__).resolve()),'driver_sha256':sha(Path(__file__).resolve()),'token':TOKEN,'ctoken':CTOKEN,
+           'base':str(BASE),'variants':[{'key':v['key'],'dir':str(v['dir']),'artifact':v['artifact'],'token':v['token'],'define':v['define'],'label':v['label'],'unsafe':v['unsafe'],'safety':UNSAFE_NOTE if v['unsafe'] else None} for v in VARIANTS],
+-          'selected_units':len(sel['base']['selected_units']),'affected_units':len(sel['affected']),'retained_units':len(sel['base']['selected_units'])-len(sel['affected']),
+-          'incremental':(None if not args.incremental else {'fresh_units':len(sel['affected']),'fresh_units_full_mode':len(sel['affected_full']),'retained_units':len(sel['base']['selected_units'])-len(sel['affected']),'forced_fresh_units':sorted(sel.get('forced_fresh') or []),
++          'selected_units':len(sel['base']['selected_units'])+len(NEW_UNITS),'affected_units':len(sel['affected']),'retained_units':len(sel['base']['selected_units'])+len(NEW_UNITS)-len(sel['affected']),
++          'incremental':(None if not args.incremental else {'fresh_units':len(sel['affected']),'fresh_units_full_mode':len(sel['affected_full']),'retained_units':len(sel['base']['selected_units'])+len(NEW_UNITS)-len(sel['affected']),'forced_fresh_units':sorted(sel.get('forced_fresh') or []),
+                         'retained_from':{k:{'dir':v['dir'],'source':v['source']} for k,v in sel['retained'].items()},
+                         'header_rows_skipped':sel['header_skip_rows'],
+                         'upload_grade':'NOT upload-grade; the full build (default, without --incremental) is the only upload-grade mode'}),

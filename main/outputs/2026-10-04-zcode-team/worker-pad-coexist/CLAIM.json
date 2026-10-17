@@ -1,0 +1,77 @@
+{
+ "worker": "worker-pad-coexist",
+ "packet": "worker-pad-coexist",
+ "utc_authored": "2026-10-05",
+ "status": "proposal-only staged fix; nothing folded, nothing executed on console",
+ "mission": "the Item Spawner menu's last dependency: usable controller input alongside the game (outcome B) on the wpd1 lineage",
+ "live_blocker_inherited": {
+  "evidence": "launch-10 run 3 (pid 355) and run 4 (pid 370), runtime_start_failed code=3 (wpd1 made startup survive; the pad stays unavailable forever on wpd1 bytes)",
+  "error": "0x80920004 PS5_PAD_ERROR_ALREADY_OPENED at PadPhase::Open, scePadOpen at PS5PadSource.cpp:43",
+  "holder": "the host game's own pad stack (pad-defer ANALYSIS.md §2: exactly one open attempt by our port; refusal proves per-process exclusivity)"
+ },
+ "claims": [
+  {
+   "id": "C1",
+   "claim": "The brief's pinned-SDK header path (sdk-v0.43/ps5-payload-sdk/target/include/sce_pad.h) does not exist; the pinned SDK's pad evidence is the libScePad.so link stub with 130 exported scePad* symbols, all strong size-0 aliases at one address (0x3334) - the ps5-payload-sdk stub convention, proving entry-point EXISTENCE on SDK v0.43 and carrying zero semantics",
+   "grade": "verified by direct file inspection (find + nm + objdump on the pinned stub; no sce_pad.h anywhere in the tree)"
+  },
+  {
+   "id": "C2",
+   "claim": "Open-class entry points present on SDK v0.43: scePadOpen (standard, the only one with an in-tree declaration and any in-tree semantics), scePadOpenExt, scePadOpenExt2, scePadDeviceOpen, scePadGetHandle, scePadIsValidHandle, scePadGetInfo, scePadGetInfoByPortType, plus the virtual-device (emulation) family; scePadGetHandleId does NOT exist anywhere",
+   "grade": "verified by stub symbol enumeration (nm -D --defined-only, 130 symbols inventoried in SDK-ANALYSIS.md §0)"
+  },
+  {
+   "id": "C3",
+   "claim": "No in-tree signature carries any non-exclusive/shared open mode (scePadOpen param is opaque void*; SDL opens (user, STANDARD, 0, NULL)); ALREADY_OPENED (0x80920004) exists as a distinct error documenting at least one exclusive open class, but its SCOPE (per (user,type,index) tuple / per port-type class / per process) is UNDECIDABLE from headers, stubs or primary sources",
+   "grade": "verified by exhaustive in-tree read (SDL_ps5joystick.h/.c, Rufidj ps5_sdk_pad.h, stub surface); the live evidence covers exactly one tuple (first logged-in user, STANDARD, 0), refused run3/run4"
+  },
+  {
+   "id": "C4",
+   "claim": "scePadReadState is a cached snapshot (not a queue consumer), so a hypothetical second handle would plausibly mirror the shared controller - but mirroring is strictly conditional on a second handle existing, which no in-tree evidence can produce; scePadRead/ReadHistory consume per-handle queues and would be the wrong instrument",
+   "grade": "code-derived (menu-input-map REPORT §2c, PS5PadSource.cpp:81 duplicate-timestamp guard, SDL read loop); UNVERIFIED in-game - handed to the probe (SDK-ANALYSIS.md §6)"
+  },
+  {
+   "id": "C5",
+   "claim": "The user-list class is NOT the blocker: sceUserServiceGetLoginUserIdList is Townfall-proven, and run3/run4 got PAST phases 2-5 (service up, pad initialized, user listed, user selected) before the phase-6 open refusal; the source's user-initialize already accepts the already-initialized class 0x80960003",
+   "grade": "verified against launch-10 evidence (pad-defer ANALYSIS.md §2) + provider code (PS5PadSource.cpp:29-44 lineage)"
+  },
+  {
+   "id": "C6",
+   "claim": "VERDICT: no open class is decidable from in-tree evidence to yield a readable handle alongside the game's; the production retry therefore stays on the ONLY proven class (scePadOpen logged-in-user, STANDARD, 0, nullptr) and no second-handle primary is implemented (no unverifiable behavior claims)",
+   "grade": "synthesis of C1-C5; recorded in SDK-ANALYSIS.md §5"
+  },
+  {
+   "id": "C7",
+   "claim": "PROBE NEEDED: the remaining open-class question (does ANY argument tuple of the proven scePadOpen succeed while the game holds its handle, and does such a handle mirror buttons) is answered by the specced zero-new-import variant matrix V0-V5 on the existing modbridge_pad_probe.prx instrument, run once in a launch-window companion; new-identity classes (GetHandle/OpenExt/Ext2/DeviceOpen) are deferred to a separate per-row loader experiment",
+   "grade": "spec recorded in SDK-ANALYSIS.md §6 (decision table included); probe dir verified present with host-tested runner, JSONL sink and prepared-module ordering"
+  },
+  {
+   "id": "C8",
+   "claim": "THE FIX (coexist over wpd1): the deferred source is now ATTACHED (NativePadInput assigns instead of dropping); Handler::init deferred-attaches an unavailable injected source (never displacing an active one); Handler::process_event polls the attached source so PS5PadSource::poll's bounded event-driven retry (one activate() per 200 polls, doubling to a 3200-poll cap, <=4 SDK calls per attempt) runs on the SOLE PROCESSING THREAD; Handler::register_keydown_event accepts binds against an attached-but-unavailable source (the load-rung enabler for main.lua's six binds); Handler::set_input_source (injected branch) checks identity, not availability, keeping the wpd1 program gate succeeding",
+   "grade": "host-proven end-to-end (54 checks): deferred attach, retry-on-poll, availability observed, OPTIONS rising edge dispatched to the registered F7 callback, bounded backoff (2 attempts in 1000 ticks, no busy loop), borrowed service never terminated, no close of a never-acquired handle"
+  },
+  {
+   "id": "C9",
+   "claim": "Lifecycle contract holds: every retry-phase SDK call runs on the thread that drives process_event (host-asserted via per-call thread-id recording, including a cross-thread driver case); construction-time calls stay on the configuring thread; no cross-thread Handler::init re-injection path exists (second init performs zero backend calls); same-thread serialized per PlatformInputSource.hpp:11-14 + Handler.hpp:60-64",
+   "grade": "host-proven (tests/host_pad_coexist.cpp case d)"
+  },
+  {
+   "id": "C10",
+   "claim": "Outcome A is preserved and separable: permanent unavailability keeps startup alive with the source attached-unavailable (bounded retries per the backoff schedule, exactly 2 open attempts in 1000 ticks, no busy loop), inherited wpd1 behaviors preserved (absent-INI no-op, parse refusal, conflict throw, available-source assignment), and the wpd1 program-wpd1 staging is REQUIRED as-is for deferred boots (its input-gate downgrade) - this packet adds NO program delta",
+   "grade": "host-proven (case c + preserved-semantics blocks); wpd1 dependency stated in FOLD.md"
+  },
+  {
+   "id": "C11",
+   "claim": "The appended provider members keep byte-identical offsets for every pre-existing member (append-only after m_timestamp), so TUs still compiled against the base header remain layout-consistent; the provider's OWN two TUs are kept ODR-consistent by byte-identical relocations compiled against the staged header (PS5PadNative gate: base sha == staged sha); the host fixture initially hit the allocation-side mismatch and the sanitizers caught it (heap-buffer-overflow in the ctor) - fixed by giving the allocating TU the staged header, documented in DIFF.md §4",
+   "grade": "verified by the ODR-consistent gate run + ASan-clean lineage-flag host run (receipt: 'lineage ASan+UBSan flags', exit 0)"
+  }
+ ],
+ "evidence": {
+  "host": "outputs/2026-10-04-zcode-team/worker-pad-coexist/host-prove/receipt.json (54 checks, run_exit 0, lineage ASan+UBSan flags)",
+  "gates": "outputs/2026-10-04-zcode-team/worker-pad-coexist/compile-*/command.json (4 gates, exact pinned composition argv, source/-o/-MF redirected only, all exit 0)",
+  "diffs": "outputs/2026-10-04-zcode-team/worker-pad-coexist/diffs/*.wpc.diff",
+  "sdk": "outputs/2026-10-04-zcode-team/worker-pad-coexist/SDK-ANALYSIS.md",
+  "inherited": "outputs/2026-10-04-zcode-team/worker-pad-defer/{ANALYSIS.md,REPORT.md,host-prove/receipt.json}, outputs/2026-10-04-zcode-team/worker-menu-input-map/{REPORT.md,RUNG-TABLE.md,CLAIM.json}"
+ },
+ "bounds": "No console contact; no engine/provider execution; the retry connecting in-game requires the game's exclusive handle to free (or a probe-discovered second-handle class) - may never happen in a session, which host case (c) proves is safe; no claim that outcome B is achievable on the live console until a launch run shows pad_available followed by a dispatched press"
+}

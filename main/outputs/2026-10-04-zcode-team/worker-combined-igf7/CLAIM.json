@@ -1,0 +1,53 @@
+{
+  "worker": "worker-combined-igf7",
+  "team": "2026-10-04-zcode-team",
+  "task": "ONE combined probe (igf7- build): C2 alternative data-window reads (B->C->D->E->A, promotion gate C2(b)) PLUS rung-3 chunk reads (Objects** at GUA+0x10 -> chunk[0]/chunk[1] -> FUObjectItem -> UObjectBase fields) PLUS rung-3 predicates (batch2 UStruct chain on UObjectBase data) in a SINGLE game session; one shared VMMAP walk gates everything; summary with per-check results; host-test; two-run determinism.",
+  "scope": {
+    "writes": "outputs/2026-10-04-zcode-team/worker-combined-igf7/ ONLY",
+    "reads": [
+      "outputs/2026-10-04-zcode-team/worker-c2-probe/ (partially delivered src + offline expected values; read-only)",
+      "outputs/2026-10-04-zcode-team/worker-c2-alt-correspondence/C2-ALTERNATIVE-SPEC.md",
+      "outputs/2026-10-04-zcode-team/worker-rung3-chunk-probe/ (20/20-tested add-on + bridge; read-only)",
+      "outputs/2026-10-04-zcode-team/worker-batch2-live-prep/ (igu read core; read-only)",
+      "outputs/2026-10-04-zcode-team/worker-5-layout-validator/ (tlp probes; read-only)",
+      "outputs/2026-10-04-zcode-team/worker-layout-batch2/ (rfl predicates; read-only)",
+      "outputs/2026-10-04-zcode-team/worker-igf5-diagnosis-rebuild/ (igf6 build lineage; read-only)",
+      "outputs/2026-10-04-zcode-team/worker-anchor-validation/harness (Packager.dll used IN PLACE)"
+    ],
+    "console": "NONE — controller stages+launches; this worker builds and host-tests only",
+    "network": "NONE",
+    "nested_subagents": false
+  },
+  "probe_contract": {
+    "module": "modbridge_ingame_facts (same name/path/log as igf4/igf5/igf6 lineage)",
+    "log_path": "/data/modbridge-ingame-facts.jsonl",
+    "build_id_prefix": "igf7-",
+    "imports": "the SAME 7 verbatim frozen-contract rows (__error, sceKernelOpen, sceKernelWrite, sceKernelClose, sysctl, getpid, clock_gettime); ZERO new identities; freestanding memcpy/memmove/memset/memcmp defined locally (no libc import)",
+    "sequence": [
+      "seq1 entry marker (FIRST write)",
+      "seq2 startup (post init_array)",
+      "seq3 mapscan: ONE bounded sysctl KERN_PROC_VMMAP collection + ONE rc3_vmmap_walk_min walk (v3 stride) -> the single shared span table; derived base (lowest prot&4 span start), exec extent cross-check, trust gate",
+      "seq4.. paged mapspans records persisting the READABLE span list (closes the igf6 gap)",
+      "seq5.. C2 candidate reads in order B, C, D, E, A (A last), each gated FIRST on the same-invocation table: refusal (map_untrusted | exec_span_intersection | uncovered | straddle | covered_not_readable) or raw live_hex + covering-span fields; NO expected bytes on console, NO comparison",
+      "then rung3 record: rc3_probe_chunks over the SAME table (header -> Objects** -> chunk[0]/chunk[1] -> first FUObjectItem each -> UObjectBase) + all batch2 check family + rc3_class",
+      "then batch2 record: rc3b::run_ustruct_chain (gated UStruct/UClass CDO predicate on published readable spans)",
+      "final summary record: base, exec extent, walk stats, per-candidate gated/refused flags, exec_reads_attempted=0, write failures, rung3 rc/class + per-check states, batch2 ran/gate/verdict"
+    ],
+    "forbidden_in_probe": [
+      "expected bytes for C2 candidates (none embedded, none compared on-console, no byte_match field)",
+      "raw syscall instruction (build gate asserts 0; 0F 05 scan of combined object and inner ELF .text)",
+      "mprotect in any form (forbidden symbol gate)",
+      "exec-span dereferences (C2 candidates data-only with explicit derived-exec-span intersection refusal; igf6 lesson)",
+      "writes to game memory; syscalls; nested subagents"
+    ]
+  },
+  "bounds": {
+    "max_tool_calls": 60,
+    "reads_only": "probe reads data segments + GC structures via span-gated igu_read only; no exec-span access; no game-memory writes"
+  },
+  "honesty": {
+    "native_executed": false,
+    "in_game_results": false,
+    "claims": "host build + host logic test + determinism ONLY; any live correspondence/chunk claim requires the controller-staged launch and offline comparison; Tick/SCO remain UNRESOLVED"
+  }
+}

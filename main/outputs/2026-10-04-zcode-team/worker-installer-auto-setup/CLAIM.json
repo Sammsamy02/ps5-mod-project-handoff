@@ -1,0 +1,30 @@
+{
+  "id": "worker-installer-auto-setup",
+  "team": "zcode-team-2026-10-04",
+  "role": "installer/builder auto-setup: make /data/modbridge creation and /data/ report-path default product behavior instead of recurring manual fixes",
+  "claimed_utc": "2026-10-04",
+  "output_dir": "outputs/2026-10-04-zcode-team/worker-installer-auto-setup/",
+  "inputs_consumed_read_only": [
+    "outputs/2026-10-04-zcode-team/worker-installer-ps5io/src/ps5_io.{c,h} (adapter open path, semantic layer)",
+    "outputs/2026-10-04-zcode-team/worker-installer-composition/compose_installer.py (recorded anchor patch chain)",
+    "outputs/2026-10-04-zcode-team/worker-7-installer/src/modinst.c (main() anchors; patched copy only, original untouched)",
+    "outputs/2026-10-04-zcode-team/worker-fileio-apply/vendor/windows-candidate/build.py (canonical fileio SDK build; argparse default line 32)",
+    "outputs/2026-10-04-zcode-team/worker-fileio-prep/SELFTEST/*/windows-candidate/build.py (3 staged copies, same anchors, noted not diffed)"
+  ],
+  "deliverables": [
+    "fix1-ps5_io.h.diff: PS5IO_NAMESPACE_ROOT ('/data/modbridge') shared constant, compile-time overridable",
+    "fix1-ps5_io.c.diff: ps5io_open auto-creates the namespace root on first use (console builds only, one-shot, best-effort; host builds get a no-op)",
+    "fix1-compose_installer.py.diff: new recorded patch 'namespace-bootstrap' in the PATCHES chain — verifies/creates PS5IO_NAMESPACE_ROOT in main() before any fileio owner opens; dies with ps5io_status_string on real failure; console-only (#ifndef PS5IO_HOST) so host smoke tests never create console namespaces",
+    "fix2-build.py.diff: default --report-path '/tmp/modbridge-owned-dll-candidate.jsonl' -> '/data/modbridge-owned-dll-candidate.jsonl' (fix repeats the InitOnce c49108fe / fileio cd9b5aec manual fix); stderr warning (not failure) when a report path starts with /tmp/ so host-only tests stay usable; adds the missing sys import",
+    "fix2-build.py.staged-copies.txt: note that the same diff applies verbatim to the 3 SELFTEST copies (all anchors verified 1/1/1 in each)",
+    "REPORT.md: what each fix does, insertion-point rationale, validation evidence, honesty bounds"
+  ],
+  "bounds": {
+    "no_network": true,
+    "no_console_execution": "nothing compiled for or run on a PS5; local host-compile checks only, inside this output dir",
+    "existing_files_immutable": "all inputs read-only; modified copies + unified diffs produced under this output dir only",
+    "no_nested_subagents": true,
+    "call_budget": 40
+  },
+  "honesty": "Diffs are review-ready but not applied anywhere; nothing was rebuilt or re-run end to end. Local validation covers: host-compile of patched ps5_io.c (-Werror), console-branch compile of ps5_io.c with host clang (pinned prospero-clang build still required for the real target object), full 30+1 patch-chain anchor replay of the preview compose_installer.py against the actual modinst.c, and py_compile of the preview build.py. No console-side effect is proven; the namespace mkdir on a real console remains target-unverified."
+}

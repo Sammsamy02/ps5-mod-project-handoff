@@ -1,0 +1,39 @@
+{
+  "worker": "worker-staging-order",
+  "date": "2026-10-04",
+  "task": "Fix the launch9 staging-order incident in the host-side console_batch.py: enforce upload+verify EVERY enabled plugin file FIRST and publish the enabling ploader.ini LAST (pre-upload guard + loud refusal + restore-ini rollback helper), preserving all existing flow behavior except where the order law requires change; selftest + fake-drive suites must pass with 0 failures.",
+  "scope": [
+    "console_batch.py patched IN PLACE (controller-owned, was untracked-dirty): final_ini_decision_step split into LOCAL-ONLY decision + deferred publish; stage-ridealongs reordered (ride.0,1,2,2b,3,5 -> ride.6,7,8,9,9b uploads -> NEW ride.9c pre-publish guard -> ride.4 publish LAST -> ride.10 handoff; id ride.4 kept for stability)",
+    "NEW ini_publish_guard_fn + ini_enabled_paths (order-law pre-upload guard, shared): every =2 entry of the new ini must be verified-present (this-run SHT-strip law verdict for the 5 staged PRXs, fresh RETR presence proof for historical pre-existing entries); any missing/0-byte entry = loud refusal, ini NOT published",
+    "Guard steps also added to stage-observer (obs.3b) and stage-qdrv1 (qdrv1.3b) — they already uploaded their PRX before the ini STOR; the guard adds the enabled-entry presence law",
+    "NEW restore-ini flow: byte-exact restore of ploader.ini from a locally saved pre-publish copy (default: outputs/2026-10-04-zcode-controller/launch9-evidence/ploader-ini-9entry-restore.txt, sha fd9c7393…/440 B), --ini-src override, --allow-divergent-pre recorded operator override; freeze-classified pre-states (already-restored -> noop; post-incident 3-enabled minimal sha 32d0c0d9… -> sanctioned; anything else -> REFUSED); runs the SAME pre-publish guard",
+    "Selftest additions (selftest A3/A4): flow-order assertions, decision-step-stores-nothing assertion, single-publish-STOR assertion, guard helper fixtures, restore-ini anchors",
+    "tests/fake_console_drive.py extended: 3 pre-existing PRX branches, ordered stor_sequence log, and 4 new law scenarios (happy verify-then-publish; mid-flow law FAIL -> ini never published; missing enabled file -> publish refused; restore-ini byte-exact/no-op/refusals)",
+    "MINIMAL repair required to make the dirty file runnable: _dll_payload_flow manage:check step referenced undefined `alias`; fixed to d[\"alias\"] (the prior in-place edit had left both suites crashing with NameError)"
+  ],
+  "non_goals": [
+    "No console/network contact (LOCAL ONLY; the controller runs the tool against the console)",
+    "No replay of the incident and no manual ini state change from this worker",
+    "No behavior change to plan/dll7/dll8/e2e/stage-settings/game-evidence/rollback-ridealongs beyond the shared guard insertion points and deferred-publish refactor",
+    "rollback-ridealongs intentionally NOT guard-gated: its publish only DISABLES (=2 -> =0) entries, never enables"
+  ],
+  "inputs_read": [
+    "console_batch.py (full, 5103-line prior revision)",
+    "tests/fake_console_drive.py (full)",
+    "outputs/2026-10-04-zcode-controller/launch9-evidence/ploader-ini-9entry-restore.txt (440 B, sha256 fd9c73937b2b1e45d0cc22721c3e03d977cf027a7a335e5599577b2b7f7c3507 — byte-identical to worker-final-ini-layout/ploader.ini.canonical)"
+  ],
+  "verification": {
+    "selftest": "430 ok, 0 failed (exit 0) — was 405/0 at the last good revision",
+    "fake_drive": "117 checks ok, 0 failed (exit 0) — was 92/0; includes the 4 new staging-order scenarios",
+    "plan_mode": "plan --only stage-ridealongs / restore-ini inspected: publish step is strictly after uploads+guard"
+  },
+  "status": "complete",
+  "honesty": "Host-side logic verified only. The guard's RETR presence proof proves presence (fetchable + non-empty + sha recorded) for pre-existing console files, NOT byte-identity (no pinned identities exist for composition/aligned_entry/path_test); the 5 staged PRXs are verified by the full established SHT-strip content law. Fake-drive simulates the ftpsrv channel; real-console behavior of the new steps is untested until the controller runs stage-ridealongs. The pre-patch dirty revision was broken (NameError) and could not run either suite; the 5ca8d1c7-lineage figures (405/0, 92/0) were reproduced only after the minimal d[\"alias\"] repair.",
+  "deliverables": {
+    "console_batch.py (in place, controller-owned)": "patched tool, NEW sha256 6940971eb3de879637e14824f9953445b36bb21496af6022e61096fa7432040c (pre-patch dirty snapshot: b8a9dd628e36256f84b9bc42b7e24445f84272e3915d92ab8a52cce43515efc2)",
+    "tests/fake_console_drive.py (in place)": "extended fake console, NEW sha256 bd309ccb84d679bb4bbba8434d8fddd6ba4c49611d07a3521866ecd9ec8b4281",
+    "DIFF.md": "unified diff of this worker's changes (both files, vs pre-patch snapshots)",
+    "SELFTEST-RECEIPT.txt": "full pass output: selftest 430/0 + fake-drive 117/0",
+    "REPORT.md": "honest report: what changed, what could not be tested locally, limits"
+  }
+}

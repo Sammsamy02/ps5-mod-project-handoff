@@ -1,0 +1,156 @@
+{
+  "status": "FIELD_CLASS_STATIC_AUDIT_PASS",
+  "receipts": [
+    {
+      "receipt": "outputs/2026-10-07-l19-unresolved-evidence/FIELDC-FACTS.json",
+      "sha256": "76aa9df32429b26a378649719ce2bafffae21e100ac2dfa7e20b0475eb1e693c",
+      "instruction_windows_exact": 25,
+      "data_windows_exact": 1,
+      "source_pins_exact": 11,
+      "accepted_facts": [
+        {
+          "status": "validated-static",
+          "confidence": "high",
+          "live_validation": false,
+          "key": "FFieldClass.FName",
+          "value": "0x0",
+          "width_bytes": 8,
+          "evidence_keys": [
+            "0x364560",
+            "0x36457e",
+            "0x3639a5",
+            "0x3639e6",
+            "0x3639eb",
+            "0x3639ef"
+          ],
+          "inference": "The FField static class getter supplies UTF16 FField to the common descriptor constructor. The constructor skips the leading type prefix, constructs an FName into temporary storage, then copies its full qword to descriptor+0."
+        },
+        {
+          "status": "validated-static",
+          "confidence": "high",
+          "live_validation": false,
+          "key": "FFieldClass.CastFlags",
+          "value": "0x10",
+          "width_bytes": 8,
+          "evidence_keys": [
+            "0x36456e",
+            "0x364573",
+            "0x36457e",
+            "0x3639b7",
+            "0x3639bb",
+            "0x363e87",
+            "0x363e8b",
+            "0x363e94"
+          ],
+          "inference": "Common descriptor constructor stores cast-mask parameter RCX as a qword at+10; FFieldVariant IsA-like helper loads the native field class through already-proved field+8 and tests qword[class+10] against desired descriptor Id at+8. Full-width native qword access independently closes prior one-byte flag tests."
+        },
+        {
+          "status": "validated-static",
+          "confidence": "high",
+          "live_validation": false,
+          "key": "FFieldClass.SuperClass",
+          "value": "0x20",
+          "width_bytes": 8,
+          "evidence_keys": [
+            "0x364578",
+            "0x36457e",
+            "0x3639c6",
+            "0x363ec0"
+          ],
+          "inference": "Descriptor constructor stores R8 superclass qword+20; FField root passes null. The same IsA-like helper walks repeated class+20 parent pointers until desired class identity or null."
+        }
+      ],
+      "unresolved": [
+        {
+          "key": "FFieldClass.UEP_TotalSize",
+          "status": "unknown",
+          "reason": "Constructor last store at+38 width4 only gives lower bound3C. Root static descriptor starts939ec98 and neighboring guard939ecd8 are40 apart, but object/guard placement does not independently determine sizeof; do not promote40."
+        }
+      ]
+    },
+    {
+      "receipt": "outputs/2026-10-07-l19-unresolved-evidence/UCLASS-FACTS.json",
+      "sha256": "10495e5740008dc389729934e6e1a36f00108f771fff52d58fb9c3754d3372f1",
+      "instruction_windows_exact": 24,
+      "data_windows_exact": 2,
+      "source_pins_exact": 10,
+      "accepted_facts": [
+        {
+          "status": "validated-static",
+          "confidence": "high",
+          "live_validation": false,
+          "key": "UClass.ClassCastFlags",
+          "value": "0xd8",
+          "width_bytes": 8,
+          "evidence_keys": [
+            "0x32650a",
+            "0x32651d",
+            "0x3265d9",
+            "0x32280e",
+            "0x322828",
+            "0x32282f"
+          ],
+          "inference": "Named Class descriptor creation constructs FName Class and stores CASTCLASS_UClass20 as a qword atD8. Independent class-super inheritance reads super+D8 as qword and ORs into self+D8. Native width8 independently matches selected enum:uint64_t accessor type."
+        },
+        {
+          "status": "validated-static",
+          "confidence": "high",
+          "live_validation": false,
+          "key": "UClass.ClassDefaultObject",
+          "value": "0x110",
+          "width_bytes": 8,
+          "evidence_keys": [
+            "0x326531",
+            "0x326599",
+            "0x3222c6",
+            "0x3222ea",
+            "0x3222fc",
+            "0x322302",
+            "0x322398",
+            "0x3223a6",
+            "0x3223ad",
+            "0x3223d1",
+            "0x3223d6",
+            "0x3223f2",
+            "0x322625"
+          ],
+          "inference": "Named UClass vtable400 relocates to3222A0. Function checks existing self110, obtains superclass CDO through identical slot400, calls known StaticAllocateObjectInternal490FB0 with self class, self Outer20 and RF_Public|RF_ClassDefaultObject|RF_ArchetypeObject31, stores returned UObject pointer into self110, and returns same field."
+        },
+        {
+          "status": "validated-static",
+          "confidence": "high",
+          "live_validation": false,
+          "key": "UClass.CreateDefaultObject.vtable_byte_offset",
+          "value": "0x400",
+          "width_bytes": 8,
+          "required": false,
+          "evidence_keys": [
+            "0x326531",
+            "0x326599",
+            "0x3235b4",
+            "0x3235b7",
+            "0x3222fc",
+            "0x3223ad",
+            "0x3223d1",
+            "0x3223f2"
+          ],
+          "data_evidence_keys": [
+            "UClass_CreateDefaultObject_rela"
+          ],
+          "inference": "Named UClass descriptor installs native vptr7ED7A28; exact standard DT_RELA record targets7ED7E28=vptr+400 with addend3222A0. Separate GetDefaultObject thunk and superclass creation use virtual400; callee semantics allocate and publish the CDO. Supplemental fact only: selected port wrapper has no traced active caller. Slot is byteoffset400."
+        }
+      ],
+      "unresolved": []
+    }
+  ],
+  "image_sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+  "semantic_review": {
+    "FFieldClass": "Named FField class descriptor constructor copies constructed FName qword0, stores CastFlags qword10 and SuperClass qword20. Independent class-id/cast-test/hierarchy walk corroborates roles. Neither descriptor guard spacing nor largest touched extent proves total size.",
+    "UClass": "Named Class descriptor sets ClassCastFlagsD8 and inherits superclass flags through qwordD8. CDO body checks cached qword110, recursively checks super110 using virtual400, calls StaticAllocateObjectInternal with this Class, stores returned object110 and returns it. Named UClass vptr7ED7A28+400 has exactly one actual DT_RELA RELATIVE binding3222A0.",
+    "CDO_slot_scope": "CreateDefaultObject400 is supplemental; absent selected caller trace does not make it a required slot."
+  },
+  "findings": [],
+  "source_mutations": 0,
+  "console_network_contact": false,
+  "limitations": "Static saved image only; no live object/menu/spawn proof."
+}

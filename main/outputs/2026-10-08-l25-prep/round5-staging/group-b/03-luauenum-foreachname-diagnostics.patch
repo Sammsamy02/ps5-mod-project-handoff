@@ -1,0 +1,66 @@
+--- a/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUEnum.cpp
++++ b/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/LuaType/LuaUEnum.cpp
+@@ -1,7 +1,10 @@
++#include <DynamicOutput/Output.hpp>
+ #include <LuaType/LuaFName.hpp>
+ #include <LuaType/LuaUEnum.hpp>
+ #include <Unreal/CoreUObject/UObject/Class.hpp>
+ 
++#include <atomic>
++
+ namespace RC::LuaType
+ {
+     UEnum::UEnum(Unreal::UEnum* object) : RemoteObjectBase<Unreal::UEnum, UEnumName>(object)
+@@ -77,8 +80,32 @@
+ 
+             auto& lua_object = lua.get_userdata<UEnum>();
+ 
++            // [UEN][IU-GROUP-B] Claude r13 item 5 / self-test call 100.
++            // Console 2026-10-11: ForEachName executed without error but
++            // iterated n=0 names and GetNameByValue(0) yielded nil for
++            // /Script/Engine.ENetRole — the Names data read comes back empty.
++            // The binding and the versioned generator (Class.hpp
++            // UEnum::ForEachName; 4.15-5.6 path via GetNames415 at
++            // MemberOffsets["Names"], 5.06 default 0x40) are upstream-
++            // identical, so the remaining gap is data-side for THIS game:
++            // layout offset or version dispatch. No blind offset edit
++            // (offset law). Bounded first-3 diagnostics to discriminate on
++            // the next console run: NumEnums() (reader's view of the count)
++            // versus the count the generator actually yields.
++            int32_t uen_reported{};
++            int32_t uen_expected{-1};
++            auto* uen_enum = lua_object.get_remote_cpp_object();
++            try
++            {
++                uen_expected = uen_enum->NumEnums();
++            }
++            catch (...)
++            {
++            }
+             for (auto& [name, value] : lua_object.get_remote_cpp_object()->ForEachName())
+             {
++                ++uen_reported;
++
+                 // Duplicate the Lua function so that we can use it in subsequent iterations of this loop (call_function pops the function from the stack)
+                 lua_pushvalue(lua.get_lua_state(), 1);
+ 
+@@ -105,6 +132,19 @@
+                 }
+             }
+ 
++            static std::atomic<int32_t> uen_diag_budget{3};
++            if (uen_diag_budget.fetch_sub(1, std::memory_order_relaxed) >= 0)
++            {
++                try
++                {
++                    Output::send<LogLevel::Warning>(STR("[UEN] ForEachName: expected {} (NumEnums), iterated {} for {}\n"),
++                                                    uen_expected, uen_reported, uen_enum->GetFullName());
++                }
++                catch (...)
++                {
++                }
++            }
++
+             return 0;
+         });
+ 

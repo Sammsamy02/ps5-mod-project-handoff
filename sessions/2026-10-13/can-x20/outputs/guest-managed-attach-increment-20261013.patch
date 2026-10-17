@@ -1,0 +1,195 @@
+--- a/loader/include/guest_thread_manager.h
++++ b/loader/include/guest_thread_manager.h
+@@ -55,6 +55,7 @@
+     // one-shot; invalid queued starts complete with InvalidStart.
+     bool activate(GuestPeBatchResult& batch);
+     bool abort_pending();
++    bool awaiting_batch() const;
+     GuestThreadWaitStatus wait(uint64_t handle, uint32_t milliseconds);
+     GuestThreadQueryResult query(uint64_t handle);
+     bool close(uint64_t handle);
+--- a/loader/src/guest_thread_manager.cpp
++++ b/loader/src/guest_thread_manager.cpp
+@@ -213,6 +213,12 @@
+     return true;
+ }
+ 
++bool GuestThreadManager::awaiting_batch() const
++{
++    std::lock_guard<std::mutex> guard(m_->mutex);
++    return m_->deferred && m_->accepting;
++}
++
+ GuestThreadWaitStatus GuestThreadManager::wait(uint64_t handle,
+                                                uint32_t milliseconds)
+ {
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -84,6 +84,7 @@
+     // Configure before PE preparation and retain through worker quiescence.
+     // Only default CreateThread options are currently admitted.
+     bool set_guest_thread_manager(GuestThreadManager* manager);
++    bool uses_guest_thread_manager(const GuestThreadManager* manager) const;
+     bool write_guest_bytes(void* address, const void* source, size_t bytes) const;
+     void set_mod_root(std::string utf8_root); // T2 confinement root
+ 
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -303,6 +303,14 @@
+     m->guest_thread_create = create;
+     m->guest_thread_close = close;
+     return true;
++}
++
++bool WinApiShim::uses_guest_thread_manager(
++    const GuestThreadManager* manager) const
++{
++    std::lock_guard guard(m->mu);
++    return manager && m->guest_thread_user == manager &&
++           m->guest_thread_create && m->guest_thread_close;
+ }
+ 
+ bool WinApiShim::write_guest_bytes(void* address, const void* source,
+--- a/loader/include/guest_pe_batch.h
++++ b/loader/include/guest_pe_batch.h
+@@ -11,6 +11,8 @@
+ #include <vector>
+ 
+ namespace cap13 {
++
++class GuestThreadManager;
+ 
+ struct GuestPeBatchInput
+ {
+@@ -48,6 +50,14 @@
+     const std::vector<GuestPeBatchInput>& inputs, WinApiShim& shim,
+     const LoadOptions& options, StaticTlsBank& bank, GuestTebView& teb);
+ 
++// One-shot attach into a stable caller-owned result, followed by queued
++// worker activation. Failed attachment aborts queued thread objects. The
++// manager must already be bound to the shim and outlive the result's workers.
++bool pe_attach_guest_batch_managed(
++    const std::vector<GuestPeBatchInput>& inputs, WinApiShim& shim,
++    const LoadOptions& options, StaticTlsBank& bank, GuestTebView& teb,
++    GuestThreadManager& manager, GuestPeBatchResult& out);
++
+ // Recursively collect static DLL imports from one root image and fetch
+ // locally available dependencies without per-game names or fixed addresses.
+ // System/framework imports already known to the shim are left to the shim.
+--- /dev/null
++++ b/loader/src/guest_pe_managed_batch.cpp
+@@ -0,0 +1,40 @@
++#include "guest_pe_batch.h"
++#include "guest_thread_manager.h"
++#include "win_api_shim.h"
++
++#include <utility>
++
++namespace cap13 {
++
++bool pe_attach_guest_batch_managed(
++    const std::vector<GuestPeBatchInput>& inputs, WinApiShim& shim,
++    const LoadOptions& options, StaticTlsBank& bank, GuestTebView& teb,
++    GuestThreadManager& manager, GuestPeBatchResult& out)
++{
++    if (out.ok || !out.modules.empty() || !manager.awaiting_batch() ||
++        !shim.uses_guest_thread_manager(&manager))
++    {
++        out.reason = "managed batch requires an empty result and its bound pending thread manager";
++        return false;
++    }
++    out = pe_attach_guest_batch(inputs, shim, options, bank, teb);
++    if (!out.ok)
++    {
++        if (!manager.abort_pending())
++            out.reason += "; pending thread abort failed";
++        return false;
++    }
++    if (manager.activate(out)) return true;
++    out.ok = false;
++    out.reason = "queued guest thread activation failed";
++    if (!manager.abort_pending())
++        out.reason += "; pending thread abort failed";
++    if (!pe_detach_guest_batch(out, teb))
++    {
++        out.rollback_failed = true;
++        out.reason += "; batch rollback failed";
++    }
++    return false;
++}
++
++} // namespace cap13
+--- a/loader/tests/guest_pe_thread_test.cpp
++++ b/loader/tests/guest_pe_thread_test.cpp
+@@ -490,6 +490,60 @@
+         check(!shim.write_guest_bytes(mapped_output, &value, 1),
+               "detaching PE revokes its registered writable section");
+     }
++    {
++        cap13::WinApiShim managed_shim;
++        managed_shim.register_builtin_exports();
++        check(managed_shim.set_executable_backend(backend),
++              "managed batch has reviewed import backend");
++        managed_shim.register_module("UE4SS.dll", reinterpret_cast<void*>(0x101),
++                                     lookup_ue4ss);
++        cap13::GuestThreadManager managed(bank, blocked_runner);
++        check(managed_shim.set_guest_thread_manager(&managed),
++              "managed batch binds thread owner before preparation");
++        RecordingSwitch managed_segment;
++        cap13::GuestPeBatchResult managed_batch;
++        check(cap13::pe_attach_guest_batch_managed(
++                  {{"/mods/managed.dll", fixture.data(), fixture.size(),
++                    &managed_segment}}, managed_shim, options, bank, main_teb,
++                  managed, managed_batch) && managed_batch.ok &&
++              managed_batch.modules.size() == 1,
++              "managed attachment activates a stable successful batch");
++        if (managed_batch.ok)
++        {
++            void* managed_start = managed_shim.resolve("managed.dll",
++                                                        "start_mod", 0);
++            blocked_started.store(false);
++            blocked_release.store(false);
++            auto created = managed.create(managed_start, nullptr);
++            check(created.status == cap13::GuestThreadCreateStatus::Ok,
++                  "managed attachment admits a valid worker afterward");
++            while (!blocked_started.load()) std::this_thread::yield();
++            blocked_release.store(true);
++            check(managed.wait(created.handle, 10000) ==
++                      cap13::GuestThreadWaitStatus::Object0 &&
++                  managed.close(created.handle) && managed.quiesce_all() &&
++                  cap13::pe_detach_guest_batch(managed_batch, main_teb),
++                  "managed worker quiesces before batch detach");
++            blocked_started.store(false);
++            blocked_release.store(false);
++        }
++        cap13::GuestThreadManager aborted(bank);
++        auto pending = aborted.create(reinterpret_cast<void*>(&ue4ss_initialized),
++                                      nullptr);
++        cap13::WinApiShim failed_shim;
++        failed_shim.register_builtin_exports();
++        cap13::GuestPeBatchResult failed_batch;
++        check(failed_shim.set_guest_thread_manager(&aborted) &&
++              !cap13::pe_attach_guest_batch_managed(
++                  {}, failed_shim, options, bank, main_teb,
++                  aborted, failed_batch) &&
++              aborted.wait(pending.handle, 0) ==
++                  cap13::GuestThreadWaitStatus::Object0 &&
++              aborted.query(pending.handle).run.status ==
++                  cap13::GuestThreadRunStatus::StartFailed &&
++              aborted.close(pending.handle) && aborted.quiesce_all(),
++              "failed managed attachment aborts queued worker objects");
++    }
+ 
+     // A copy changes only the synthetic import name so DllMain no longer
+     // calls DisableThreadLibraryCalls; the original fixture stays unchanged.
+--- a/loader/tests/run_guest_pe_thread.py
++++ b/loader/tests/run_guest_pe_thread.py
+@@ -17,7 +17,7 @@
+     'tests/guest_pe_thread_test.cpp',
+     'src/guest_thread_manager.cpp', 'src/guest_thread_import.cpp',
+     'src/guest_pe_thread.cpp',
+-    'src/guest_pe_batch.cpp',
++    'src/guest_pe_batch.cpp', 'src/guest_pe_managed_batch.cpp',
+     'src/pe_import_scan.cpp', 'src/guest_pe_loader.cpp',
+     'src/pe_loader.cpp', 'src/pe_tls_registration.cpp',
+     'src/static_tls_bank.cpp', 'src/guest_teb_lifecycle.cpp',

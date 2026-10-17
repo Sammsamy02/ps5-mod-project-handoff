@@ -1,0 +1,33 @@
+{
+  "worker": "worker-e2e-promotion-apply",
+  "date": "2026-10-04",
+  "task": "Apply the prepared patches.json 51->54 promotion (worker-e2e-suite-completion/promotion/) to the frozen worker-d1-chain-relink/composition/ tree via the gated helper apply-promotion.sh, with before/after sha inventories; apply the EXCONFIG6 memo's one-line schema amendment (EX_CONFIG 6 ack) with provenance; re-run G1 block replay on the promoted tree and re-verify the 13 staged cmd files are unchanged; record rollback instructions.",
+  "scope": [
+    "WRITE: worker-d1-chain-relink/composition/receipts/patches.json (promoted via gated helper; backup patches.json.51.bak created by helper)",
+    "WRITE: worker-e2e-console-dry/E2E-CMD-SCHEMA.md (amendment + provenance)",
+    "WRITE: worker-e2e-staging-final/STAGED-E2E-COMMANDS.md (sec 4 mirror amendment + provenance)",
+    "WRITE: this worker dir only (inventories, replay script/log, REPORT.md)",
+    "NO console contact; NO nested subagents; 13 cmd json files and all other frozen-tree files verified byte-identical by full inventory diff"
+  ],
+  "inputs_verified": {
+    "patches_json_new_sha256": "63c28979d21a9a563f29334cd094568f11fd6cc2d56abfe31158ec14a42c80f9 (payload-build original == suite-completion copy, cmp identical)",
+    "g1_block_copy_sha256": "9f46b66aeb38a1d4737888da8bf91a1c15437d258d8b71aec68abc6c4bbe85ca",
+    "pristine_core_sha256": "45c04d084215cb5da520ff1a5bf70219f5ce0e86baf55bda4da706dd8dda044d",
+    "promoted_patched_sha256": "43ea66c1c5dcf52bfb9158bae5f782438911b61f699eeb1f8dc29c6b702dcda0"
+  },
+  "status": "APPLIED",
+  "results": {
+    "promotion": "PROMOTION-OK via worker-e2e-suite-completion/promotion/apply-promotion.sh (all gates passed before any write; helper exit 0)",
+    "receipts_dir_delta": "exactly 3 inventory lines: patches.json 252ad699->63c28979 (byte-identical to patches.json.new), patches.json.51.bak added at 252ad699; all other 122 files unchanged; 123->124 files",
+    "promoted_receipt": "54 tuples; ids[:51] == backup prefix; tail g1-cmd-entry-{parse,allowlist,consume}; source/source_sha256/bridge unchanged; patched_sha256 43ea66c1...",
+    "g1_replay_on_promoted_tree": "PASS: 45c04d08 -> 330d47f2 (86235 B) -> 91a122a8 (88006 B) -> 43ea66c1 (100238 B), occurrences==1 each; endpoint byte-identical to promotion/g1-chain-replay-core.c; 3 tail tuples' occurrences/byte-counts/shas == G1_BLOCK literals",
+    "schema_amendment": "E2E-CMD-SCHEMA.md (worker-e2e-console-dry, owning doc) sec 1 bullet + sec 6 AMENDMENT block + sec 8(3): present-but-invalid exits 6 EX_CONFIG, absent-file/consume remain EX_BAD 2; mirrored in STAGED-E2E-COMMANDS.md sec 4 intro; provenance = EXCONFIG6-MEMO.md",
+    "doc_shas": {
+      "E2E-CMD-SCHEMA.md": "before 97a33efd... -> after e940137d3f440969ef39991e2b044ee60dd22fad8cc1cbf8a1083d1e1cb7d461",
+      "STAGED-E2E-COMMANDS.md": "before 77886097... -> after 873ad49003721166273cae5415a799ab63957ae2f40d2397ba856af406d0ba00"
+    },
+    "cmd_files": "13/13 unchanged (inventory diff empty; shasum -c SHASUMS.txt: 13 OK, 0 failed)",
+    "vendored_core": "still pristine 45c04d08 (receipt-only promotion; composer splice NOT performed - explicitly out of scope per PROMOTION-PREP sec 5 step 4 'can be a separate controller step')"
+  },
+  "rollback": "See REPORT.md sec 6 (restore from patches.json.51.bak, sha 252ad699...; revert docs to before-shas)"
+}

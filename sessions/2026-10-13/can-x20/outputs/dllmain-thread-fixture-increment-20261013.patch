@@ -1,0 +1,214 @@
+--- /dev/null
++++ b/loader/tests/make_dllmain_thread_fixture.py
+@@ -0,0 +1,75 @@
++"""Derive a synthetic PE with DllMain CreateThread.
++
++The original fixture's bytes are never changed on disk. This exact PE shape
++has spare executable and writable section space for one controlled probe.
++"""
++
++import struct
++
++
++def derive(source: bytes) -> bytes:
++    if len(source) != 0xA00 or source[:2] != b"MZ":
++        raise ValueError("unexpected source fixture size or DOS header")
++    pe = struct.unpack_from("<I", source, 0x3C)[0]
++    if source[pe:pe + 4] != b"PE\0\0":
++        raise ValueError("unexpected PE signature")
++    optional = pe + 4 + 20
++    if struct.unpack_from("<H", source, optional)[0] != 0x20B or \
++       struct.unpack_from("<I", source, optional + 16)[0] != 0x1000:
++        raise ValueError("unexpected PE32+ fixture entry")
++    old_name = b"DisableThreadLibraryCalls\0"
++    if source.count(old_name) != 1:
++        raise ValueError("unexpected KERNEL32 import name")
++    changed = bytearray(source)
++    name_at = source.index(old_name)
++    changed[name_at:name_at + len(old_name)] = \
++        b"CreateThread\0".ljust(len(old_name), b"\0")
++    struct.pack_into("<I", changed, optional + 16, 0x1080)
++
++    entry_rva = 0x1080
++    worker_rva = 0x10D0
++    iat_rva = 0x3060
++    handle_rva = 0x3080
++    marker_rva = 0x3088
++    body = bytearray()
++
++    def emit(code: bytes) -> int:
++        at = len(body)
++        body.extend(code)
++        return at
++
++    def rel32(at: int, instruction_length: int, target_rva: int) -> None:
++        disp = target_rva - (entry_rva + at + instruction_length)
++        struct.pack_into("<i", body, at + instruction_length - 4, disp)
++
++    emit(bytes.fromhex("4883ec38"))                 # sub rsp, 0x38
++    emit(bytes.fromhex("83fa01"))                   # cmp edx, DLL_PROCESS_ATTACH
++    skip_at = emit(bytes.fromhex("7500"))           # jne done
++    emit(bytes.fromhex("31c9"))                     # null attributes
++    emit(bytes.fromhex("31d2"))                     # default stack
++    lea_at = emit(bytes.fromhex("4c8d0500000000"))  # r8 = worker entry
++    emit(bytes.fromhex("4531c9"))                   # null worker argument
++    emit(bytes.fromhex("48c744242000000000"))     # flags = 0
++    emit(bytes.fromhex("48c744242800000000"))     # no thread-ID output
++    call_at = emit(bytes.fromhex("ff1500000000"))   # IAT CreateThread
++    save_at = emit(bytes.fromhex("48890500000000")) # save HANDLE in .idata
++    done_at = len(body)
++    emit(bytes.fromhex("b801000000"))               # return TRUE
++    emit(bytes.fromhex("4883c438c3"))               # restore stack, ret
++    if not -128 <= done_at - (skip_at + 2) <= 127 or len(body) > 0x50:
++        raise ValueError("DllMain probe exceeds reserved code space")
++    struct.pack_into("<b", body, skip_at + 1, done_at - (skip_at + 2))
++    rel32(lea_at, 7, worker_rva)
++    rel32(call_at, 6, iat_rva)
++    rel32(save_at, 7, handle_rva)
++
++    # Worker stores a marker in the PE's writable .idata then returns 42.
++    worker = bytearray(bytes.fromhex("c7050000000001000000b82a000000c3"))
++    struct.pack_into("<i", worker, 2,
++                     marker_rva - (worker_rva + 10))
++    text_raw = 0x400
++    changed[text_raw + 0x80:text_raw + 0x80 + len(body)] = body
++    changed[text_raw + 0xD0:text_raw + 0xD0 + len(worker)] = worker
++    if any(changed[0x800 + 0x80:0x800 + 0x8C]):
++        raise ValueError("probe output slots were not zero")
++    return bytes(changed)
+--- a/loader/tests/run_guest_pe_thread.py
++++ b/loader/tests/run_guest_pe_thread.py
+@@ -4,12 +4,17 @@
+ import hashlib
+ import subprocess
+ import sys
++from make_dllmain_thread_fixture import derive
+ 
+ root = Path(__file__).resolve().parents[1]
+ fixture = root.parent.parent / 'cap13/FIXTURES/cap13-ue4ss-native-mod-FIXTURE.dll'
+ digest = 'acc201987edcee968a052ef889cb0e8bdcc5c5cd63fcdb4c0dda699cace51bce'
+ if hashlib.sha256(fixture.read_bytes()).hexdigest() != digest:
+     raise RuntimeError('unchanged fixture hash mismatch')
++threaded_fixture = root / 'tests/dllmain-thread-FIXTURE.dll'
++threaded_fixture.write_bytes(derive(fixture.read_bytes()))
++print('derived DllMain thread fixture sha256=' +
++      hashlib.sha256(threaded_fixture.read_bytes()).hexdigest(), flush=True)
+ asan = '--asan' in sys.argv[1:]
+ out = root / ('tests/guest-pe-thread-asan' if asan else
+               'tests/guest-pe-thread-host')
+@@ -31,7 +36,8 @@
+     *[str(root / source) for source in sources], '-o', str(out),
+ ]
+ subprocess.run(compile_command, check=True, timeout=60)
+-subprocess.run(['arch', '-x86_64', str(out), str(fixture)], check=True,
++subprocess.run(['arch', '-x86_64', str(out), str(fixture),
++                str(threaded_fixture)], check=True,
+                timeout=30)
+ if hashlib.sha256(fixture.read_bytes()).hexdigest() != digest:
+     raise RuntimeError('unchanged fixture bytes modified')
+--- a/loader/tests/guest_pe_thread_test.cpp
++++ b/loader/tests/guest_pe_thread_test.cpp
+@@ -99,9 +99,10 @@
+ 
+ int main(int argc, char** argv)
+ {
+-    if (argc != 2) return 2;
++    if (argc != 3) return 2;
+     const auto fixture = read_file(argv[1]);
+-    if (fixture.empty()) return 2;
++    const auto threaded_fixture = read_file(argv[2]);
++    if (fixture.empty() || threaded_fixture.empty()) return 2;
+     cap13::WinApiShim shim;
+     shim.register_builtin_exports();
+     uint32_t stack_output = 0;
+@@ -600,6 +601,90 @@
+               aborted.close(pending.handle) && aborted.quiesce_all(),
+               "failed managed attachment aborts queued worker objects");
+     }
++    {
++        cap13::WinApiShim dllmain_shim;
++        dllmain_shim.register_builtin_exports();
++        dllmain_shim.register_module("UE4SS.dll", reinterpret_cast<void*>(0x102),
++                                     lookup_ue4ss);
++        cap13::GuestThreadManager queued(bank);
++        check(dllmain_shim.set_executable_backend(backend) &&
++              dllmain_shim.set_guest_thread_manager(&queued),
++              "DllMain thread fixture has a bound manager and sealed imports");
++        RecordingSwitch dllmain_segment;
++        auto threaded = cap13::pe_attach_guest_batch(
++            {{"/mods/dllmain-thread.dll", threaded_fixture.data(),
++              threaded_fixture.size(), &dllmain_segment}},
++            dllmain_shim, options, bank, main_teb);
++        if (!threaded.ok)
++            std::printf("threaded attach reason: %s\n",
++                        threaded.reason.c_str());
++        check(threaded.ok && threaded.modules.size() == 1,
++              "derived PE calls CreateThread from real DllMain entry");
++        if (threaded.ok && threaded.modules.size() == 1)
++        {
++            auto* base = static_cast<uint8_t*>(
++                threaded.modules[0]->mapped_handle());
++            uint64_t handle = 0;
++            uint32_t marker = 0;
++            std::memcpy(&handle, base + 0x3080, sizeof(handle));
++            std::memcpy(&marker, base + 0x3088, sizeof(marker));
++            check(handle != 0 && marker == 0 &&
++                  queued.wait(handle, 0) ==
++                      cap13::GuestThreadWaitStatus::Timeout,
++                  "DllMain worker is queued and cannot enter before activation");
++            check(queued.activate(threaded) &&
++                  queued.wait(handle, 10000) ==
++                      cap13::GuestThreadWaitStatus::Object0 &&
++                  queued.query(handle).run.status ==
++                      cap13::GuestThreadRunStatus::Ok &&
++                  queued.query(handle).run.exit_code == 42,
++                  "activation enters queued Win64 worker and returns code 42");
++            std::memcpy(&marker, base + 0x3088, sizeof(marker));
++            check(marker == 1 && queued.close(handle) &&
++                  queued.quiesce_all() &&
++                  cap13::pe_detach_guest_batch(threaded, main_teb),
++                  "worker writes only after activation, then quiesces before detach");
++        }
++    }
++    {
++        cap13::WinApiShim automatic_shim;
++        automatic_shim.register_builtin_exports();
++        automatic_shim.register_module("UE4SS.dll",
++                                        reinterpret_cast<void*>(0x103),
++                                        lookup_ue4ss);
++        cap13::GuestThreadManager automatic(bank);
++        check(automatic_shim.set_executable_backend(backend) &&
++              automatic_shim.set_guest_thread_manager(&automatic),
++              "automatic DllMain thread path has a bound manager");
++        RecordingSwitch automatic_segment;
++        cap13::GuestPeBatchResult automatic_batch;
++        check(cap13::pe_attach_guest_batch_managed(
++                  {{"/mods/dllmain-auto.dll", threaded_fixture.data(),
++                    threaded_fixture.size(), &automatic_segment}},
++                  automatic_shim, options, bank, main_teb,
++                  automatic, automatic_batch) && automatic_batch.ok,
++              "managed batch activates DllMain-created worker after attach");
++        if (automatic_batch.ok)
++        {
++            auto* base = static_cast<uint8_t*>(
++                automatic_batch.modules[0]->mapped_handle());
++            uint64_t handle = 0;
++            std::memcpy(&handle, base + 0x3080, sizeof(handle));
++            check(handle != 0 &&
++                  automatic.wait(handle, 10000) ==
++                      cap13::GuestThreadWaitStatus::Object0 &&
++                  automatic.query(handle).run.status ==
++                      cap13::GuestThreadRunStatus::Ok &&
++                  automatic.query(handle).run.exit_code == 42,
++                  "automatic DllMain worker reaches Win64 start and completes");
++            uint32_t marker = 0;
++            std::memcpy(&marker, base + 0x3088, sizeof(marker));
++            check(marker == 1 && automatic.close(handle) &&
++                  automatic.quiesce_all() &&
++                  cap13::pe_detach_guest_batch(automatic_batch, main_teb),
++                  "automatic worker marker and shutdown precede PE detach");
++        }
++    }
+ 
+     // A copy changes only the synthetic import name so DllMain no longer
+     // calls DisableThreadLibraryCalls; the original fixture stays unchanged.

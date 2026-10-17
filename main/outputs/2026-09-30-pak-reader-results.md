@@ -1,0 +1,15 @@
+# Generic PAK reader result
+
+This is historical synthetic-fixture evidence. Later independent upstream archives exposed a one-byte versus four-byte presence-field defect in this first reader and its fixtures. The [independent archive checkpoint](2026-09-30-pak-independent-fixtures.md) records the corrected reader, actual metadata/payload comparisons and tracked source library. Earlier experiment sources and receipts remain preserved.
+
+The first bounded read-only C module parsed its synthetic unencrypted PAK v11 footer/primary fixtures, verified their complete primary SHA-1, and returned owned scalar metadata. That host suite passed 79 assertions, including a procedural 1.27 GB logical source that required only 54,863 bytes of footer and primary reads. The same module compiled and linked for the PS5 SDK target but was not executed. This follows the [reader design](2026-09-30-pak-reader-experiment-design.md); those tests did not establish correct presence-field serialization in real archives.
+
+The operation uses a fixed 64 KiB caller workspace, explicit byte/call/file/mount caps and a trusted synchronous read-at provider. It distinguishes malformed, unsupported, checksum, resource, short-read, unavailable, changed and cancelled results. A caller snapshot token is an assertion; it does not prove a live file remained immutable. The raw engine mount is metadata, never an installation destination.
+
+A separate host runner now feeds this unchanged module only exact copied footer and primary ranges. It rejects requests outside those copies rather than inventing bytes for missing archive content. Root reran its two focused controls: valid synthetic metadata and outside-range rejection both passed. No actual game sample was used.
+
+The attempted current-source check stopped before reading metadata. FTP returned `213 18446744073709551615` for SIZE, then `550 No such file or directory` for the historical Stellar Blade path. A bounded `/data` listing no longer contained that dump. The historical [container audit](2026-09-30-stellar-blade-container-audit.md) remains unchanged; its earlier observations are not current source availability or this module's game-validation evidence. The current dump location has been requested while independent work continues.
+
+Secondary indexes are declared but unread and unverified. Entry inventory, encoded entries, payload checks, extraction, decryption, filesystem writes and mod/game acceptance remain unimplemented. This is a generic format module, with no game-name or mod-ID parsing branch; it establishes neither universal PAK support nor PC-to-PS5 asset compatibility.
+
+Detailed source, command and result notes remain in the managed worktree at `.superpowers/native-dependency-spike/native-pak-reader-experiment-1/`, `.superpowers/native-dependency-spike/native-pak-sample-validation-1/`, and their matching `.superpowers/native-observations/` notes. No console write, service command, mod install, full review bundle or sanitizer sweep occurred in these experiments.

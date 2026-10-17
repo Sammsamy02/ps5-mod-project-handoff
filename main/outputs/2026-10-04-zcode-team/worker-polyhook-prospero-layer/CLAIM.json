@@ -1,0 +1,62 @@
+{
+  "worker": "worker-polyhook-prospero-layer",
+  "date": "2026-10-04",
+  "mission": "Implement the missing Prospero platform branches PolyHook needs for its x64Detour path (protection translation, old-protection lookup via the proven KERN_PROC_VMMAP walker, near-address executable allocator, DebugBreak), host-test them with mock VMMAP fixtures, and compile-gate them against the composition's polyhook unit argv. Deliver an additive integration diff; composition absorption is a launch-11 matrix row.",
+  "scope": {
+    "in_scope": [
+      "Host-side implementation of the PLH Prospero branches (proposal code, compiled and host-tested; never executed on target)",
+      "Protection translation PROT_* <-> PLH::ProtFlag (SDK numbering PROT_NONE 0 / READ 1 / WRITE 2 / EXEC 4, pinned SDK sys/mman.h:52-55)",
+      "Old-protection lookup before every mprotect, using a byte-close port of the proven v3 mode-1 KERN_PROC_VMMAP walk (ig_vmmap_walk lineage) with the proven trust gate",
+      "Map-gated fail-closed MemAccessor read/write/copy (refuses, never dereferences, uncovered or untrusted memory; igf4 covered_not_readable discipline)",
+      "Executable allocator (bounded hint-mmap policy RWX-then-RW-with-exec-transition-flag) for PLH boundAlloc/boundAllocLegacy",
+      "Raw-syscall backend shims (SYS_mprotect 74, SYS_munmap 73, SYS_mmap 477 parsed from pinned SDK sys/syscall.h:81-82,398) compiled but never executed",
+      "Compile gate with the exact composition polyhook unit argv (prospero-clang++, patched/include first, ASMJIT_STATIC etc.)"
+    ],
+    "out_of_scope": [
+      "Any console contact, target execution, linking, or in-game probe (IGW-1 remains controller+user gated)",
+      "Resolution of the exec-writability verdict (W_WORKS / W_FAILS_R_WORKS / BOTH_FAIL) - this layer documents its dependencies on that verdict, it does not settle it",
+      "Composition absorption (launch-11 matrix row), UE4SS-side wiring, hook activation"
+    ]
+  },
+  "claims": [
+    {
+      "id": "CLAIM-1",
+      "text": "The missing verified contract (port report lines 20-22) is implementable additively: all absent PLH symbols (TranslateProtection x2, MemAccessor::mem_copy/safe_mem_write/safe_mem_read/mem_protect, boundedAllocSupported/boundAlloc/boundAllocLegacy/boundAllocFree/getAllocationAlignment/getPageSize, PolyHook2DebugBreak) can be defined in ONE new TU with zero edits to canonical or port-overlay PLH sources, because on __PROSPERO__ the existing sources' platform chains select no branch and define none of these symbols (no ODR conflict).",
+      "status": "implemented + compile-gated (proposal)"
+    },
+    {
+      "id": "CLAIM-2",
+      "text": "Protection translation is exact under the SDK numbering and needs no kernel verdict: the SDK PROT_* values (0/1/2/4) are the FreeBSD values the Linux branch already translates; host tests cover round-trips for every flag combination PLH passes (X, R, W, R|W, RWX, NONE).",
+      "status": "host-tested"
+    },
+    {
+      "id": "CLAIM-3",
+      "text": "Old-protection lookup is implementable from the proven walker: a byte-close C++ port of ig_vmmap_walk (mode 1, variable kve_structsize stride, offsets 0/8/16/56, per-record sanity, 16-KiB alignment census) plus ig_vmmap_trustworthy gate gives current-invocation old-prot from the raw kve_protection bits; host fixtures reuse the proven synthetic-record pattern including the exact live spans [0x400000,0x787c000) prot=4 and [0x970c000,0x9a34000) prot=3.",
+      "status": "host-tested on synthetic fixtures"
+    },
+    {
+      "id": "CLAIM-4",
+      "text": "mem_protect must return UNSET + status=false when no single trusted span covers the aligned request; PLH's MemoryProtector destructor then skips the restore and isGood() is false, so an uncovered hook fails gracefully instead of crashing. This is host-tested against the real PLH MemProtector.hpp RAII code compiled on the host.",
+      "status": "host-tested"
+    },
+    {
+      "id": "CLAIM-5",
+      "text": "The allocator's RWX-vs-RW choice is a documented policy, not a verified permission: mmap RWX (one syscall, SYS_mmap 477) is attempted first; on refusal the backend retries PROT_READ|PROT_WRITE and records exec_transition_required, and publishing exec permission later goes through the same raw SYS_mprotect 74 path whose success IS the open kernel verdict. If both transitions fail (BOTH_FAIL branch), PLH cannot obtain executable+writable memory and detour arming must stay disabled. Nothing in this worker settles which branch reality takes.",
+      "status": "implemented + verdict dependency documented"
+    },
+    {
+      "id": "CLAIM-6",
+      "text": "All four platform TUs (PolyHookProsperoPlatform.cpp, MemAccessor.cpp, MemProtector.cpp, Misc.cpp) plus a branch-selection control compile exit 0 under the composition's exact polyhook unit argv; nm on the new object shows the previously missing PLH symbols now defined; nothing is linked and nothing is executed.",
+      "status": "receipted (compile-gate/)"
+    }
+  ],
+  "honesty_bounds": {
+    "not_claimed": [
+      "No in-game behavior of any syscall (74/73/477) - the numbers are FreeBSD-generic parsed from the pinned SDK; SYS_mmap 477 and SYS_munmap 73 are themselves unverified on this kernel; only getpid 20 and sysctl 202 are console-proven",
+      "No claim that mmap/mprotect succeed or fail gracefully on Prospero (igf5's raw syscall-74 attempt is crash-correlated with the harshest outcome of the day and never returned a record)",
+      "No claim that AsmJit's JitRuntime works on PS5 (out of scope, port report line 22)",
+      "No hook activation, no quality score, no completion claim"
+    ],
+    "proposal_only": true
+  }
+}

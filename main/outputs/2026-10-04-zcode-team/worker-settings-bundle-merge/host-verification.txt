@@ -1,0 +1,59 @@
+# host-verification.txt — worker-settings-bundle-merge, 2026-10-04
+# All commands host-only (vendored parsers + vendored mfa_activate); no network, no console.
+
+## 1. Settings gate: vendored IniParser (PS5 char16_t) + SettingsManager reads + validate_native_services
+/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-settings-bundle-merge/staged-package/ue4ss/UE4SS-settings.ini -> PASS (all gates + expected values OK)
+exit=0
+
+## 2. Byte identity vs pinned sources (cmp: silent = identical)
+IDENTICAL main.lua (pin f586043a…, bundle.json immutable_mod_bytes)
+IDENTICAL enabled.txt (pin e3b0c442…, empty)
+IDENTICAL UEHelpers.lua (pin 5a8f6609…)
+IDENTICAL PS5Pad.ini (worker-real-input-pad staged profile)
+
+## 3. Merged package through vendored mfa_activate (worker-itemspawner-bundle test_activation, T1-T6)
+# NOTE: loadlist first staged with the bundle's frozen manifest (settings size 221):
+#   T2 FAIL 'size os=0 path=ue4ss/UE4SS-settings.ini msg=file is longer than the load list says'
+# -> proves the manifest must carry the corrected 779 size; loadlist then merged (221->779, + PS5Pad.ini row):
+PASS T1 loadlist.txt readable
+PASS T1 title == PPSA33286
+PASS T1 engine == unreal
+PASS T1 framework == ue4ss-ps5
+PASS T1 mod == TownfallItemSpawner 1.0.0
+PASS T1 header modforge-loadlist 1 consumed
+PASS T1 exactly one title/engine/framework/mod record
+FAIL T1 exact four file rows (role/path/size)
+PASS T1 zero order rows (Lua mod ships none)
+PASS T1 zero unknown rows
+PASS T2 mfa_activate(actual bundle) OK
+PASS T2 mfa_title == PPSA33286
+PASS T2 mfa_engine == unreal (activated_mod_source.cpp:27 gate)
+PASS T2 wants_framework ue4ss-ps5 (activated_mod_source.cpp:28 gate)
+PASS T2 load-order mod list == [TownfallItemSpawner 1.0.0]
+FAIL T2 four files in activation
+PASS T2 all files preloaded (roles lua_mod/config)
+FAIL T2 preloaded bytes == 31602 (31598 payload + 4 NUL terminators)
+PASS T2 no data-plugin order entries
+PASS T3 main.lua byte-identical to intake member-00000000.bin (21415 B)
+PASS T3 enabled.txt empty, presence-only (intake member-00000001.bin)
+PASS T3 UEHelpers.lua byte-identical to distro asset (9962 B)
+FAIL T3 settings.ini byte-identical to worker-activation-bundle's validated 221 B build (cross-worker pin)
+PASS T4 lua_mods == [TownfallItemSpawner], shared/ not a mod
+PASS T4 scripts dir == TownfallItemSpawner/Scripts
+PASS T4 startup_mod_names == [TownfallItemSpawner] via enabled.txt
+PASS T4 no mods.txt (enabled.txt alone, BUNDLE-SPEC 1.3)
+PASS T5 MemberVariableLayout.ini absent (awaiting staged pair, no synthetic bytes)
+PASS T5 VTableLayout.ini absent (awaiting staged pair, no synthetic bytes)
+PASS T6 wrong title -> MFA_E_TITLE (rc=-4 err.code=-4 title)
+PASS T6 truncated file -> MFA_E_SIZE (rc=-8 err.code=-8 size)
+PASS T6 missing loadlist -> MFA_E_NO_LOADLIST (rc=-2 err.code=-2 no-loadlist)
+FAIL: 4 failure(s)
+exit=1  (4 FAILs are the frozen-bundle cross-worker pins this merge supersedes; see REPORT.md)
+
+## 4. Final package inventory (sha256 / bytes)
+9eef4dbba3130b8f46c41da4c30479cd5758904bc9eb8971bc7c41c85fe5170f     360  ./loadlist.txt
+5a8f6609e555eee4a535f51d21fcdef768ac654bf4d4abe283c719b1c12215a7    9962  ./ue4ss/Mods/shared/UEHelpers/UEHelpers.lua
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855       0  ./ue4ss/Mods/TownfallItemSpawner/enabled.txt
+f586043a1ca5708113e8ee31532d6396cbb0866daeae473722dd8880b6559658   21415  ./ue4ss/Mods/TownfallItemSpawner/Scripts/main.lua
+1d919fbfac4976f84e6c621970aaddc61493858fc5564c9481c90f94055eca1e    2960  ./ue4ss/PS5Pad.ini
+9f3fa1277218331432294fcdac88097d5268a2db6007b72b4266f45a17730f7f     779  ./ue4ss/UE4SS-settings.ini

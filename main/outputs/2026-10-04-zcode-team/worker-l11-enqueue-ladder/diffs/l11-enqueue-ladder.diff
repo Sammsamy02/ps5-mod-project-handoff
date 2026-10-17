@@ -1,0 +1,112 @@
+--- a/LuaMod.cpp
++++ b/LuaMod.cpp
+@@ -5004,7 +5004,9 @@
+                     // EngineTick -> ProcessEvent -> FuncPtrMarshal -> throw
+                     if (is_process_event_hook_available())
+                     {
+-                        LuaMod::ensure_process_event_hooked(mod);
++                        // [R3-L11EL] method selection only; the lazy detour arm
++                        // moved AFTER the enqueue (below), so a refused
++                        // registration can never discard the closure.
+                         method = GameThreadExecutionMethod::ProcessEvent;
+                     }
+                     else if (is_funcptr_marshal_armed())
+@@ -5021,7 +5023,25 @@
+                 }
+                 else
+                 {
++#if defined(__PROSPERO__)
++                    // [R3-L11EL] (worker-l11-enqueue-ladder, RUNBOOK 5.1 item 1):
++                    // address-availability is NOT registrability (R3D 4.5 trap).
++                    // In W_FAILS_R_WORKS the EngineTick address IS assigned
++                    // (vtable fallback) and the lazy arm below used to run here,
++                    // THROW before anything was enqueued, and bypass the armed
++                    // FuncPtr marshal entirely (main.lua:695 default method).
++                    // Marshal-first when armed: the marshal is the game-thread
++                    // pump in this world; no second EngineTick pump may be
++                    // attempted (the initializer deferred those registrations).
++                    if (is_funcptr_marshal_armed())
++                    {
++                        method = kFuncPtrMarshalExecutor;
++                    }
++                    // else: keep EngineTick; the lazy arm is attempted only
++                    // AFTER the closure is enqueued (order guarantee below).
++#else
+                     LuaMod::ensure_engine_tick_hooked();
++#endif
+                 }
+             }
+             else if (method == GameThreadExecutionMethod::ProcessEvent)
+@@ -5033,7 +5053,8 @@
+                     // ProcessEvent -> EngineTick -> FuncPtrMarshal -> throw
+                     if (is_engine_tick_hook_available())
+                     {
+-                        LuaMod::ensure_engine_tick_hooked();
++                        // [R3-L11EL] method selection only; the lazy detour arm
++                        // moved AFTER the enqueue (below).
+                         method = GameThreadExecutionMethod::EngineTick;
+                     }
+                     else if (is_funcptr_marshal_armed())
+@@ -5050,7 +5071,18 @@
+                 }
+                 else
+                 {
++#if defined(__PROSPERO__)
++                    // [R3-L11EL] mirror of the EngineTick branch: when the marshal
++                    // is armed it outranks the address check (R3D 4.5), and the
++                    // lazy arm runs only AFTER the closure is enqueued.
++                    if (is_funcptr_marshal_armed())
++                    {
++                        method = kFuncPtrMarshalExecutor;
++                    }
++                    // else: keep ProcessEvent; armed after the enqueue below.
++#else
+                     LuaMod::ensure_process_event_hooked(mod);
++#endif
+                 }
+             }
+             else if (method == kFuncPtrMarshalExecutor)
+@@ -5100,6 +5132,43 @@
+                 }
+             }
+ 
++#if defined(__PROSPERO__)
++            // [R3-L11EL] THE ORDER GUARANTEE (worker-l11-enqueue-ladder; RUNBOOK
++            // 5.1 item 1): the lazy detour arm runs only AFTER the closure has
++            // been enqueued, so a refused registration can never discard enqueued
++            // work. The queue survives; drain happens via whatever pump exists.
++            // Marshal-selected paths arm nothing here: the marshal is armed by the
++            // calibration consumer and its pump drains the game-thread queue; a
++            // second EngineTick/ProcessEvent pump is exactly what DIFF-2's
++            // deferred initializer registrations must not become. The
++            // recursive_mutex is already held by this thread (recursive re-entry,
++            // same as the RegisterHook path); the pump queues are guarded by it.
++            if (method == GameThreadExecutionMethod::EngineTick || method == GameThreadExecutionMethod::ProcessEvent)
++            {
++                TRY([&]() {
++                    if (method == GameThreadExecutionMethod::EngineTick)
++                    {
++                        LuaMod::ensure_engine_tick_hooked();
++                    }
++                    else
++                    {
++                        LuaMod::ensure_process_event_hooked(mod);
++                    }
++                });
++                // Loud stall honesty: a refused arm leaves the closure queued with
++                // no drainer. The closure is NOT discarded (enqueue-first); say so
++                // every time so "queued forever" is never silent.
++                if (method == GameThreadExecutionMethod::EngineTick && !LuaMod::m_is_engine_tick_hooked)
++                {
++                    Output::send<LogLevel::Error>(STR("[R3] ExecuteInGameThread: closure enqueued but the EngineTick pump is not registered (detour registration refused); it stays queued until a pump exists\n"));
++                }
++                else if (method == GameThreadExecutionMethod::ProcessEvent && !mod->m_is_process_event_hooked)
++                {
++                    Output::send<LogLevel::Error>(STR("[R3] ExecuteInGameThread: closure enqueued but the ProcessEvent pump is not registered (detour registration refused); it stays queued until a pump exists\n"));
++                }
++            }
++#endif
++
+             return 0;
+         });
+ 

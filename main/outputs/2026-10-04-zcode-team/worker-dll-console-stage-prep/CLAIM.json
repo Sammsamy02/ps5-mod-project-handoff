@@ -1,0 +1,42 @@
+{
+  "worker": "worker-dll-console-stage-prep",
+  "claimed_at": "2026-10-04T00:00:00Z",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "write_scope": [
+    "outputs/2026-10-04-zcode-team/worker-dll-console-stage-prep/"
+  ],
+  "read_only_inputs": [
+    "outputs/2026-10-04-zcode-team/worker-combined-dll-allfam/",
+    "outputs/2026-10-04-zcode-team/worker-static-tls/",
+    "outputs/2026-10-04-zcode-team/worker-fileio-apply/",
+    "outputs/2026-10-04-zcode-team/worker-mutex-sdk-retry/",
+    "outputs/2026-10-04-zcode-team/worker-crt-integrate/",
+    "outputs/2026-10-04-zcode-controller/console/",
+    "outputs/2026-10-04-zcode-controller/CONSOLE-LOG.md",
+    "outputs/2026-10-04-zcode-controller/CONTROLLER.md",
+    ".superpowers/native-dependency-spike/windows-mutex-candidate-1/6f5bf85a0f314df6acfe2f15e464ef69/receipt.json"
+  ],
+  "task": "Console stage prep for the all-families owned-dll candidate 133c5e9e59f24c2fb57e7e3422c665a1 (owned-dll-candidate.elf, 300456 B, sha 96296c1c92850623...): distill the exact working upload/dispatch/readback pattern from prior family console receipts; write CONSOLE-STAGE-PLAN.md with an EXPECTED-RESULTS-LEDGER (exact expected appended records in /data/modbridge-owned-dll-candidate.jsonl) and failure signatures; risk-review the 55 SDK imports vs previously console-passed payloads; assess static-TLS-as-7th-family timing; recommend sequencing vs the UE4SS composition-5 critical path",
+  "budget_calls_max": 60,
+  "constraints": [
+    "no console contact",
+    "no network",
+    "no target execution",
+    "no nested subagents",
+    "writes only in this worker directory"
+  ],
+  "status": "COMPLETED",
+  "completed_at": "2026-10-04",
+  "result": {
+    "plan": "CONSOLE-STAGE-PLAN.md",
+    "ledger": "EXPECTED-RESULTS-LEDGER.md",
+    "report": "REPORT.md",
+    "headline_findings": [
+      "All four family console runs (f72faea5, 6d295f56, 1a6b37b7, 6f5bf85a) used the identical zero-decision pattern: single POST /manage:upload, FTP readback sha verify, single GET /loadpayload, FTP readback of /data/modbridge-owned-dll-candidate.jsonl - all with game_launched=false (payload-only).",
+      "libSceLibcInternal malloc/free and libkernel_web clock_gettime/sceKernelMprotect are NOT new: the console-PASSED mutex payload (6f5bf85a, 43 undefined imports) already imported all of them. The true new-to-console delta is exactly 12 fileio-driven imports (closedir, lstat, mkdir, opendir, pread, pwrite, readdir, strcmp, strdup, strlen, strrchr, unlink); both provider libraries are already console-proven.",
+      "Expected console worker.calls is 4/4 (host oracle), not the 2/2 seen in every prior console run - the +2 pair was introduced by the fileio integration (fileio-apply host record also 4/4). Pre-staged so the controller does not misread it.",
+      "Static TLS as 7th family: RECOMMEND WAIT. Zero new ELF imports, but integration requires a pe_module TLS-admission design decision plus lifecycle/trampoline wiring; do it after the 6-family console pass.",
+      "Sequencing: run the DLL console stage BEFORE the composition-5 game launch, in payload-only state (game closed), via pldmgr 8084 - exactly the state of all four family precedents."
+    ]
+  }
+}

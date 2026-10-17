@@ -1,0 +1,55 @@
+--- a/src/ClassListener.cpp	2026-10-08 19:15:02
++++ b/src/ClassListener.cpp	2026-10-11 21:19:01
+@@ -20,6 +20,17 @@
+ 
+ namespace RC::Unreal
+ {
++    namespace UObjectGlobals
++    {
++        // [IT lookup-speed 04] staged name-keyed FindXOf cache API. Definitions
++        // live in UObjectGlobals.cpp (same namespace); redeclared here so this
++        // TU needs no new header overlay.
++        void FindXOfCache_AddObjectToBuckets(UObject* Object);
++        void FindXOfCache_RemoveObjectFromBuckets(const FUObjectItem* Item, UObject* Object);
++        [[nodiscard]] bool FindXOfCache_IsActive();
++        void FindXOfCache_SetActive(bool bActive);
++    }
++
+     // =====================================================================================
+     // L25 (Claude l25 item 3): throttled first-call markers. These prove from the log
+     // whether the ENGINE ever dispatches into our registered delete listeners (a
+@@ -159,6 +170,21 @@
+ 
+     void FClassCreateListener::NotifyUObjectCreated(const UObjectBase* Object, int32 Index)
+     {
++        // [IT lookup-speed 04] The create-listener half of the FindXOf name
++        // cache maintenance (the delete half is the console-proven variant-C
++        // engine-side listener). Body implemented now; REGISTRATION stays
++        // skipped until an engine AddUObjectCreateListener op is pinned and
++        // admitted exactly like the delete pair (see the cache block in
++        // UnrealInitializer.cpp — the hand-rolled TArray Append registration
++        // is the GMalloc virtual-call fault family and must never run).
++        // Maintenance without it: init walk + StaticConstructObject post-hook
++        // (both call the same idempotent AddObjectToBuckets).
++        (void)Index;
++        if (UnrealInitializer::StaticStorage::bUObjectArrayCacheRetired)
++        {
++            return;
++        }
++        UObjectGlobals::FindXOfCache_AddObjectToBuckets(std::bit_cast<UObject*>(Object));
+     }
+ 
+     void FClassCreateListener::OnUObjectArrayShutdown()
+@@ -186,6 +212,12 @@
+ 
+         auto* ObjectItem = Object->GetObjectItem();
+ 
++        // [IT lookup-speed 04] name-keyed FindXOf cache: remove the dying
++        // object from every bucket its class chain inserted it into (the
++        // UObjectBase is still readable inside NotifyUObjectDeleted; same
++        // contract the pool removals below rely on).
++        UObjectGlobals::FindXOfCache_RemoveObjectFromBuckets(ObjectItem, std::bit_cast<UObject*>(Object));
++
+         // All classes.
+         {
+             std::lock_guard<std::mutex> Lock(ObjectSearcherPool<UClass, AnySuperStruct>::PoolMutex);

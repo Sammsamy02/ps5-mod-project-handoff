@@ -1,0 +1,85 @@
+--- a/tests/worker-fixture.c
++++ b/tests/worker-fixture.c
+@@ -1,6 +1,10 @@
+ /* Owned PE fixture: internal Windows callback is real machine code in this DLL.
+  * No DllMain invocation, CRT, static TLS, exception/unwind or host callback seam.
+- * Suitable for standalone /noentry and inclusion in the opt-in entry consumer. */
++ * Suitable for standalone /noentry and inclusion in the opt-in entry consumer.
++ * worker-mutex-fix-2 vendored FIXED revision of the real
++ * outputs/ps5-mod-bridge/windows-candidate/tests/worker-fixture.c (MFR-2 only:
++ * mutex token retirement on every failure exit; success flow byte-for-byte
++ * equivalent, all failure codes unchanged). */
+ #include "worker-state.h"
+ #ifndef MB_WORKER_CLOSE_EARLY
+ #define MB_WORKER_CLOSE_EARLY 0
+@@ -81,14 +85,24 @@
+ /* Force a DIR64 pointer relocation and retain a non-exported start function. */
+ static mb_worker_u32 (*volatile mb_worker_relocated_start)(void *)=mb_worker_internal_start;
+ /* Every failure after CreateThread opens the gate and attempts handle closure.
+- * Failed closure keeps the exact handle in out[0] for native cleanup retry. */
++ * Failed closure keeps the exact handle in out[0] for native cleanup retry.
++ * MFR-2 (worker-mutex-fix-2): when the worker may still be running (no joined
++ * exit observed), drain it with a bounded done-flag wait so its mutex token is
++ * already recorded, then retire every kept mutex token before returning, so a
++ * failed Begin/Collect can never leave mb_win_mutex_close BUSY forever. */
+ static mb_worker_i32 mb_worker_fixture_fail(struct mb_worker_fixture_state *s,mb_worker_u64 *out,mb_worker_i32 failure) {
+ #if MB_OWNED_SYNC
+  mb_worker_sync_unblock(&s->gate);
+ #else
+  __atomic_store_n(&s->gate,1,__ATOMIC_RELEASE);
+ #endif
++#if MB_OWNED_MUTEX
++ for(mb_worker_u32 spins=0;s->handle && spins<2000 && !__atomic_load_n(&s->done,__ATOMIC_ACQUIRE);++spins)Sleep(1);
++#endif
+  if(s->handle && CloseHandle(s->handle)){s->handle=(void *)0;s->begun=0;}
++#if MB_OWNED_MUTEX
++ (void)mb_worker_mutex_finish();
++#endif
+  out[0]=(mb_worker_u64)(mb_worker_ptr)s->handle;
+  return failure;
+ }
+@@ -118,6 +132,9 @@
+ #if MB_OWNED_SYNC
+   mb_worker_sync_unblock(&s->gate);(void)mb_worker_sync_finish();
+ #endif
++#if MB_OWNED_MUTEX
++  (void)mb_worker_mutex_finish();
++#endif
+   s->begun=0;return -2;
+  }
+  out[0]=(mb_worker_u64)(mb_worker_ptr)s->handle;out[1]=id.value;
+@@ -161,10 +178,31 @@
+  if(exit.left!=0x51c1beefU||exit.right!=0x51c2beefU)return mb_worker_fixture_fail(s,out,-14);
+  out[1]=s->observed_cookie;out[2]=s->worker_error;out[3]=WaitForSingleObject(s->handle,0);
+  if(!CloseHandle(s->handle))return mb_worker_fixture_fail(s,out,-15);s->handle=(void *)0;s->begun=0;
+- if(exit.value!=MB_WORKER_EXPECTED_EXIT||out[1]!=MB_WORKER_PARAMETER_COOKIE||out[2]!=MB_WORKER_LAST_ERROR||out[3]!=0)return -16;
++ if(exit.value!=MB_WORKER_EXPECTED_EXIT||out[1]!=MB_WORKER_PARAMETER_COOKIE||out[2]!=MB_WORKER_LAST_ERROR||out[3]!=0){
++#if MB_OWNED_SYNC
++  (void)mb_worker_sync_finish();
+ #endif
+- if(!__atomic_load_n(&s->entered,__ATOMIC_ACQUIRE)||!__atomic_load_n(&s->done,__ATOMIC_ACQUIRE)||s->failure)return -17;
+- if(GetLastError()!=MB_WORKER_CREATOR_ERROR)return -18;
++#if MB_OWNED_INIT_ONCE
++  (void)mb_worker_initonce_finish();
++#endif
++#if MB_OWNED_MUTEX
++  (void)mb_worker_mutex_finish();
++#endif
++  return -16;
++ }
++#endif
++ if(!__atomic_load_n(&s->entered,__ATOMIC_ACQUIRE)||!__atomic_load_n(&s->done,__ATOMIC_ACQUIRE)||s->failure){
++#if MB_OWNED_MUTEX
++  (void)mb_worker_mutex_finish();
++#endif
++  return -17;
++ }
++ if(GetLastError()!=MB_WORKER_CREATOR_ERROR){
++#if MB_OWNED_MUTEX
++  (void)mb_worker_mutex_finish();
++#endif
++  return -18;
++ }
+ #if MB_OWNED_SYNC
+  if(mb_worker_sync_finish()!=1)return -43;
+ #endif

@@ -1,0 +1,404 @@
+# zzdiag v11 — EXPECTED-MARKERS.txt (agent-FJ, 2026-10-08-l25-prep wave)
+# Pickup read probe. Instruments the ONE failing hop of the working
+# TownfallItemSpawner flow: pickup.PickupInventoryItem.ItemId (mod
+# main.lua:317, read inside a swallowing pcall -> "Spawned pickup has
+# no valid inventory ID"). The mod is NEVER edited; this script rides
+# the v10 chassis (6s T auto-probe, ONE probe at +18s on the game
+# thread via ExecuteInGameThread, +45s WD, F7 rerun).
+#
+# Harvest: grep the UE4SS log for each marker below. Raw lines look
+# like: "[<ts>] [Lua] [zz] [PRB-2] id ok=1 type=userdata". Grep on
+# the bracketed token (e.g. "\[PRB-2\]") to survive wide-char writer
+# interleaving. Probe set appears once ~18s after mod start and again
+# per F7 press. Byte size 4084 (< 4096 admission cap); loadlist row
+# must record the ACTUAL size (size-exact law).
+# Registrations used (src/LuaMod.cpp, from v10 header): print :1687;
+# Key.F7 :714; FindFirstOf :1806; FindAllOf :1857; RegisterKeyBind
+# :2118; LoopAsync :3663; ExecuteInGameThread :5745.
+# NOTE on error display: when a step's pcall caught a throw, the
+# val=/t= field shows the RAW error head (may include chunk prefix)
+# and an indented "   " line follows with file:line stripped, 60
+# chars. type=e on a marker line = that read threw.
+
+## Startup / chassis (v10 semantics, DRY renamed PRB)
+
+- `[zz] Z0 v11`
+  Script top-level executed; Lua VM + mod start alive. ABSENT ->
+  script never admitted: check loadlist zzdiag row size == 4084
+  (size-exact), then mod-start gating.
+
+- `[PRB] Q 18s`
+  One-shot armed at load. ABSENT with Z0 present -> top-level aborted
+  mid-file (LoopAsync registration path) — read surrounding log.
+
+- `[zz] T<n> db=<t> pc=<t>`  (t one of v|n|i|e; every 6s)
+  Auto-probe alive: FindFirstOf("ItemDatabaseSubsystem") /
+  FindFirstOf("PlayerController") wrapper validity (v=valid wrapper,
+  n=real nil, i=wrapper-but-IsValid-false, e=pcall error). T-lines
+  PRECEDE the P-set (T1/T2 at 6s/12s) and outlive it. ALL T ABSENT ->
+  whole Lua action pump dead. T present + no P-lines + WD -> pump
+  alive, game-thread queue not drained (see WD).
+
+- `[zz] K1 f7` / `[zz] K2 q`
+  Manual F7 rerun fired / re-enqueued. K1 without K2 or P-set -> same
+  drain question as WD.
+
+- `[PRB] WD no-drain`  (at +45s)
+  The 18s enqueue happened but the game-thread body NEVER ran (ran
+  flag unset): ExecuteInGameThread queue not drained. Discriminates
+  "pump dead / queue lost" from "steps ran and failed". P-lines
+  present + WD line = stale line from an earlier mod instance.
+
+## The P0..P6 probe ladder
+
+Ladder shape (verified offline against a stub harness, luac 5.5 -p
+clean; console Lua 5.4-conservative syntax only):
+
+  [PRB-0] targets n=<c>[ ffo] | none
+  [PRB-1] pick t<i>
+  [PRB-1] inv ok=<1|0> type=<t>      (main target)
+  [PRB-1] udt ok=<1|0> t=<40>        (only when inv is userdata)
+  [PRB-2] id ok=<1|0> type=<t> | SKIP no-inv
+  [PRB-3] tos ok=<1|0> val=<40> | SKIP no-id
+  [PRB-4] ToString ok=<1|0> val=<40> (+ indented err 60 on fail)
+  [PRB-7] fname-eq ok=<1|0> w=<1|0> | e (+ indented err 60 on fail)
+  [PRB-5] field k=<k> t=<t> (<=12) | empty-table | pairs-throw |
+          struct-probe skipped-not-table
+  [PRB-6] actor ok=<1|0> val=<40>
+  [PRB-1..4,7] t<i> ...             (per-target compact repeats,
+                                      SAME P-n = SAME hop as main)
+  [PRB] done
+
+On a SKIP the ladder stops at that hop for that object: "[PRB-2] SKIP
+no-inv" implies P3/P4/P7 implicitly skipped for it; "[PRB-3] SKIP
+no-id" implies P4/P7 skipped.
+
+- `[PRB-0] targets n=<c>` / `[PRB-0] none` (+ 7 SKIP no-target lines)
+  P0 = acquisition: FindAllOf("PickupInteractable") first 3, else
+  FindFirstOf fallback (suffix " ffo" names the fallback arm).
+  none -> NO live pickup at probe time (pickups may only exist near
+  the player / after a spawn): NOT a bridge failure; spawn one with
+  the (working) mod menu, then press F7 to rerun. An indented error
+  line above n= means FindAllOf itself threw — read the tail (FName/
+  conversion flavor = seam-shaped; walk flavor = iteration).
+  "n=1 ffo" -> FindAllOf admitted ZERO while FindFirstOf found one:
+  ITERATION over-exclusion in the FindAllOf walk (same shape as v10
+  M1) — the read chain below is then tested on the fallback instance
+  only; do not blame the read hops for the count.
+
+- `[PRB-1] pick t<i>`
+  First wrapper passing pcall IsValid; t2/t3 -> earlier wrappers were
+  i-class (stale/GC'd actors or wrapper auto_construct bug) —
+  iteration/wrapper detail, not the read chain.
+
+- `[PRB-1] inv ok=0 type=e` (+ indented tail)
+  HOP-1 THROW: the struct property read p.PickupInventoryItem threw
+  in the property-read backend. FIX SITE: property-read return path —
+  CustomProperty struct branch / NativePropertyReadBackend (struct
+  wrap) in LuaUObject. Tail mentioning conversion/FName = converter
+  throw; tail mentioning index/nil = wrapper __index shape mismatch.
+
+- `[PRB-1] inv ok=1 type=nil`
+  HOP-1 NIL RETURN: the read completed but returned nothing — the
+  return converter dropped the struct. FIX SITE: same property-read
+  return path (CustomProperty / NativePropertyReadBackend returns).
+
+- `[PRB-1] inv ok=1 type=table|userdata`
+  Struct delivered as table (mainline UE4SS form) or userdata.
+  Continue to P2 for the field hop.
+
+- `[PRB-1] udt ok=1 t=<X>`
+  The userdata HAS :type() and it returns X: wrapper metatable knows
+  the reflected struct type. Any later failure is FIELD-level, not
+  wrapper-level.
+
+- `[PRB-1] udt ok=0 t=<err 40>`
+  Userdata with NO :type() metamethod ("attempt to call a nil value
+  (method 'type')"): an OPAQUE userdata came back — the bridge
+  reverse converter produced a raw/foreign userdata, not a UE4SS
+  typed struct. FIX SITE: bridge reverse converter product type
+  (LuaFNameBridge / struct return wrap).
+
+- `[PRB-2] id ok=0 type=e` (+ indented tail)
+  HOP-2 THROW: struct field read inv.ItemId threw (struct __index ->
+  field reader dispatch). FIX SITE: property-read backends, field
+  branch (LuaUObject/CustomProperty/NativePropertyReadBackend).
+
+- `[PRB-2] id ok=1 type=nil`
+  HOP-2 NIL: "ItemId" did not resolve to a value inside the struct —
+  either the field-name lookup missed (FName resolution of "ItemId"
+  in the struct field table — GATE-1-adjacent READ miss) or the
+  property is genuinely unset on this instance. Disambiguate with P5
+  and the t<i> repeats (all instances nil = name/table population
+  gap; one instance nil = data).
+
+- `[PRB-2] id ok=1 type=string`
+  READ CHAIN CLEAN at the value level: the mod-side pcall swallowed
+  something else (or the mod's validity guard is stricter than a nil
+  check). No bridge defect named by this probe; re-test with a fresh
+  spawn before touching C++.
+
+- `[PRB-2] id ok=1 type=number`
+  Numeric/enum ID: conversion expectations mismatch, not a failure.
+
+- `[PRB-2] id ok=1 type=userdata`
+  FName/FPrimaryAssetId-style wrap: H3/H4 discrimination follows.
+
+- `[PRB-3] tos ok=1 val=<v>`
+  tostring(id) works. val "FName:xxx"-like -> __tostring present.
+  val "table: 0x…" / "userdata: 0x…" -> NO __tostring metamethod:
+  conversion layer ABSENT for this type. FIX SITE: LuaFNameBridge
+  reverse converter tostring registration.
+
+- `[PRB-3] tos ok=0 val=<err>`
+  __tostring itself threw (broken metamethod): reverse converter bug.
+
+- `[PRB-4] ToString ok=1 val=<name>`
+  The id:ToString() member call works: full chain healthy.
+
+- `[PRB-4] ToString ok=0` + indented
+  "attempt to call a nil value (field 'ToString')"
+  -> NO ToString member on the userdata: the member index resolved to
+  nil without throwing, i.e. the port's FName/FPrimaryAssetId
+  userdata did NOT register the ToString API mainline UE4SS FName
+  userdata has. FIX SITE: LuaFNameBridge reverse converter userdata
+  API/metatable registration. (P4 uses the pcall(id.ToString, id)
+  call form; the member index is fenced inside the same closure —
+  id.ToString(id) — so an __index throw would instead surface as a
+  different tail: read it.)
+  Other tails -> the member EXISTS but the call threw at marshaling
+  inside the bridge: bridge conversion bug at call marshaling.
+
+- `[PRB-7] fname-eq ok=1 w=1`  (FNAME TEXT VERDICT — Claude round-8 item 2)
+  Round-trip proof that the id text (the SAME string P4's ToString
+  returned; falls back to P3's tostring text if ToString failed) is the
+  REAL NAME of the pool entry, not an index-fallback rendering:
+  FName(<text>) was constructed in Lua and compared against the id
+  userdata with `==`. Lua consults __eq from EITHER operand's
+  metatable, and a freshly constructed userdata can never be
+  identity-equal, so ok=1 is ONLY reachable through a registered
+  bridged __eq that returned true — i.e. constructing FName("5e")
+  re-interned to the SAME entry the id holds (FL's ComparisonIndex
+  compare, LuaFName.cpp). DEFECT-FREE at the name level: whatever
+  wrote that ID and however it round-trips, the TEXT IS THE NAME.
+  w= (WEAKER, LABELED fallback check, always co-reported) adds the
+  tostring round-trip tostring(FName(text)) == tostring(id).
+
+- `[PRB-7] fname-eq ok=1 w=0`
+  __eq says same entry but the two sides RENDER differently
+  (tostring layer inconsistent with __eq — LuaFNameBridge
+  __tostring vs __eq disagree). Trust ok=1; note the tostring skew.
+
+- `[PRB-7] fname-eq ok=0 w=1`
+  No usable __eq verdict (default identity == said false) BUT the
+  tostring round-trip matched: WEAK-POSITIVE — the text round-trips
+  through the tostring layer only. Cannot rule out an index-fallback
+  text that FName re-interns to a DIFFERENT entry; FIX SITE if this
+  dominates: LuaFNameBridge __eq registration (mainline UE4SS FName
+  userdata has it; its absence here is itself a finding).
+
+- `[PRB-7] fname-eq ok=0 w=0`
+  Negative: the text does not re-intern to the id's entry under
+  either compare. With P4 ok=1 val=<hex-ish> this is the
+  INDEX-FALLBACK SIGNATURE (ToString printed an index/rendering, not
+  the name). FIX SITE: LuaFNameBridge ToString/name resolution.
+
+- `[PRB-7] fname-eq e` + indented tail 60
+  The probe itself threw (fenced). Tail "attempt to call a nil value
+  (global 'FName')" -> the port does NOT expose the FName
+  constructor to mod Lua at all (registration gap; compare FS
+  parity table). Other tails -> FName constructor or tostring threw
+  inside the bridge. P1..P4 verdicts above remain valid; only the
+  text-vs-name question stays open.
+
+- `[PRB-5] field k=<k> t=<t>` (up to 12) / `empty-table` /
+  `pairs-throw` / `struct-probe skipped-not-table`
+  Struct-as-table probe. ItemId PRESENT in fields while P2 said
+  type=nil -> field exists but nil ON THIS INSTANCE (data). ItemId
+  ABSENT while sibling fields present -> struct field-table
+  population gap (field enumeration). empty-table -> reader populated
+  nothing. skipped-not-table -> inv is userdata/nil (consistent with
+  P1's type=). pairs-throw -> metatable iteration guard threw.
+
+- `[PRB-6] actor ok=1 val=<full object name>`
+  KNOWN-GOOD CONTROL: tostring on the actor wrapper works. P6 PASS +
+  P3/P4 FAIL -> the failure is SPECIFIC to the id userdata
+  conversion (bridge), not the generic wrapper/tostring layer.
+  P6 FAIL (ok=0) -> even the actor wrapper tostring is broken:
+  generic userdata tostring/marshaling layer (LuaUObject) — deeper
+  than the pickup chain; treat all P-val findings as suspect.
+
+- `[PRB-x] t<i> ...`
+  Same hops per instance (P1=inv read, P2=id read, P3=tostring,
+  P4=ToString; SKIPs same rule). One-instance failure vs all-instance
+  failure separates DATA from SYSTEMATIC (bridge/back-end) defects.
+  t1 duplicates the main target (corroboration; identical verdicts
+  expected within one run).
+
+- `[PRB] done`
+  END ATTESTATION: the whole probe body completed — no mid-body
+  native crash (pcall cannot fence those) and NO AddToViewport (the
+  script contains no viewport call; replaces v10's [DRY] no-viewport
+  attestation). ABSENT with some P-lines present -> body died inside
+  an un-fenceable engine call; pull klog; the LAST printed P-line
+  names the call that crashed.
+
+## Engine-side corroborating markers (same log, from the PRX)
+
+- `[FFO] query-fallback [n:<X> num:<N> ts:'<name>' ...]`
+  ts shows "PickupInteractable" as the engine saw it. TRUNCATED/
+  garbled -> STRING SEAM signature.
+- `[FFO] query-embedded-NUL (len=... stride-corruption signature)`
+  Definitive STRING SEAM signature, independent of any P-verdict.
+- `[FFO] add-fallback [n:<X>]`
+  Name was NOT pool-resident on read -> GATE-1 pool admission
+  read-miss (relevant to a P2 type=nil field-name miss).
+- `[UF] nofn [n:<X> ...]`
+  Wrapper __index missed a reflected function name — pairs with
+  [PRB-1] udt ok=0 (method 'type') and [PRB-4] ToString-missing:
+  function-name resolution miss, GATE-1-adjacent.
+
+## Oracle summary — outcome -> failing hop -> fix site
+
+1. STRUCT READ (property -> struct value):
+   [PRB-1] ok=0 (throw) or ok=1 type=nil -> property-read return
+   path in LuaUObject / CustomProperty struct branch /
+   NativePropertyReadBackend.
+2. OPAQUE WRAPPER PRODUCT: [PRB-1] type=userdata + udt ok=0 ->
+   bridge reverse converter product type (LuaFNameBridge).
+3. FIELD READ: [PRB-2] ok=0 -> struct field dispatch (same
+   property-read backends, field branch).
+4. FIELD NAME/POPULATION: [PRB-2] type=nil + P5 fields missing
+   ItemId (or empty-table) -> struct field-table population / FName
+   field-name resolution; cross-check [FFO] add-fallback.
+5. CONVERSION (tostring): [PRB-3] 0x-dump val or ok=0 ->
+   LuaFNameBridge reverse converter tostring registration.
+6. USERDATA API: [PRB-4] "attempt to call a nil value (field
+   'ToString')" -> LuaFNameBridge userdata API registration
+   (ToString member missing vs mainline UE4SS).
+7. GENERIC LAYER: [PRB-6] ok=0 -> LuaUObject userdata tostring layer
+   (invalidates hop-specific conclusions).
+8. FNAME TEXT VERDICT: [PRB-7] ok=0 w=0 with P4 ok -> LuaFNameBridge
+   ToString/name resolution (index-fallback text); ok=0 w=1 ->
+   LuaFNameBridge __eq registration; `e` + nil-global-FName tail ->
+   Lua FName constructor registration itself.
+
+## Absence patterns
+
+- No `[zz]` lines at all -> admission/loadlist/size mismatch (4084)
+  or mod-start gating; nothing below is interpretable.
+- Z0 + Q only, no T, no WD -> LoopAsync actions never processed:
+  the delayed-action pump itself is dead.
+- Z0 + T-lines, no P-lines, WD no-drain at 45s -> enqueue lost or
+  game-thread queue not drained: pump/drain problem, NOT the read
+  chain. One F7 press re-tests drain manually.
+- P-lines stop mid-sequence without SKIP lines and no [PRB] done ->
+  native crash inside an engine call; pull klog; the last printed
+  P-line names the call that crashed.
+
+## GY addendum 2026-10-10 — cb= sustained-driver rate field (v11.1)
+
+- `[zz] T<n> ... cb=<c>` (c integer, per 6s window)
+  NEW trailing field on every T-line (agent-GY, carrier-drive work;
+  size now 4094 bytes — loadlist must record the ACTUAL size). c =
+  number of fires of a ONE-instance LoopAsync(250, ...) counter in
+  the PRECEDING 6s window (counter reset each T-line). This loop
+  rides the per-mod ASYNC ACTION THREAD (LuaMod event loop,
+  process_delayed_actions), the same sustained driver as the 6s
+  T-cycle itself — NOT the R3 carrier/game-thread queue.
+  - c ~= 24  : async action thread driving callbacks at the asked
+    250ms rate in this state (T itself printing already proves the
+    6s loop; cb additionally pins the 250ms granularity).
+  - c == 0 with T present : async thread degraded between T-lines
+    (fired at 6s cadence but starved at 250ms — long Lua GC /
+    action backlog). T ABSENT entirely -> action pump dead (old
+    Z0+Q-only pattern).
+  - c == 1 : single-fire-then-erase signature (LoopAsync return
+    semantics flipped again — see CARRIER-DRIVE.md before relying
+    on any cb reading).
+- SEMANTICS CHANGE vs shipped v11: the 6s T-cycle and the 250ms cb
+  counter both return FALSE now (v11 as shipped returned true).
+  Console log claude2-menu-session-20261010 proved this build's
+  LoopAsync erases a loop whose callback returns true (v10 T1 fired
+  once at 00:53:14 and never again; the 18s return-false loop fired
+  every 18s for the whole session). "Every 6s" T-lines above now
+  actually hold. See CARRIER-DRIVE.md (a)/(b)/(c).
+
+## IC addendum 2026-10-10 — P7 fname-eq revision (Claude round-8 item 2)
+
+- BYTE SIZE IS NOW 4086 (was 4094 after GY). Size-exact law: the
+  loadlist zzdiag row must record the ACTUAL 4086. The Z0 marker
+  string is unchanged ("Z0 v11"); this revision is identified by the
+  new size, not a marker bump.
+- Comments were compressed to fund P7 (logic untouched): the two-line
+  FJ header, the ids() ladder comment, and the st() legend
+  ("-- e/n/v/i" now; v=valid n=nil i=invalid e=err, same codes).
+  Notes relocated HERE so nothing is lost:
+  - [MAP] marker (unchanged code): `[zz] [MAP] <name> @<n*6>s` —
+    FindFirstOf("World"):GetName() value change detection, one line
+    per map change (v10 heritage, was undocumented).
+  - cb field: see GY addendum above.
+  - LAW (authoring, unchanged): every hop pcall-fenced; no
+    FindFunction/bpfn/class-children; P4 uses pcall(id.ToString, id).
+- P7 CODE (main.lua:44-47): builds FName from the SAME text ToString
+  returned (s4; tostring text s3 if ToString failed — the degraded
+  src is visible from P4's ok= flag one line above), then ONE pcall'd
+  `==` plus the labeled weak tostring round-trip, both verdicts on
+  one marker line; an indented el() tail follows on throw. Runs in
+  the main ladder AND per-target repeats (sfx " t<i>"), after P4,
+  before P5/pairs. SKIP ladder widened: no-target now emits PRB-1..7
+  SKIP, no-valid emits PRB-2..7 SKIP (was ..6).
+- HOST VALIDATION (agent IC, lua 5.5.1 host): luac -p clean; the
+  preserved FJ stub harness (evidence/tmp-preserved-20261010/tmp/
+  zzdiag-v11-harness.lua, NO FName global) runs all six scenarios +
+  WD clean — every P7 line there reads `e` + indented "attempt to
+  call a nil value (global 'FName')" (the fenced missing-global
+  path, tail now STRIPPED of the chunk path prefix by the el() form).
+  Supplemental stubs (IC /tmp, not repo files): FName with bridged
+  __eq + name __tostring -> `[PRB-7] fname-eq ok=1 w=1`; same stub
+  with __eq removed -> `ok=0 w=1` (weak-positive fallback verdict).
+  Both verdict paths and the error path are exercised.
+- INTERPRETATION ORDER: ok=1 is definitive (only a bridged __eq can
+  produce it — see the P7 section above); w= is the labeled weaker
+  check; ok=0 w=0 + P4 ok = index-fallback signature.
+
+## IK addendum 2026-10-11 — mname() GetFullName + P8 gw probe (Claude round-8 item 4, IF audit)
+
+- BYTE SIZE IS NOW 3919 (was 4086 after IC). Size-exact law: the
+  loadlist zzdiag row must record the ACTUAL 3919. Z0 marker string
+  unchanged ("Z0 v11"); this revision is identified by the new size.
+  Whitespace was compressed (logic + every marker string untouched,
+  IC precedent); the header comment shrank to "-- zzdiag v11".
+- [MAP] NAMING CHANGE: mn() now reads w:GetFullName() (was
+  w:GetName()). Rationale (IF audit §1.3 / IA diagnosis step 6-7):
+  GetName is NOT a reflected UFunction on the UWorld chain (round-4
+  log :851-852 "[UF] miss/nofn ... v=4") and no native binding exists
+  on the frozen build, so mn() returned "?" forever; GetFullName is a
+  native metatable member (LuaUObject.hpp GetFullName binding) and
+  works where GetName hits nofn. Expected: `[zz] [MAP] <full-name-48>
+  @<n*6>s` — full name shape "/Game/Maps/<Pkg>.<WorldName>" (48-char
+  cap); still "?" only if FindFirstOf("World") misses or the wrapper
+  is invalid. With IA's 02 GetName binding also applied, either
+  renders; GetFullName is the no-new-binding receipt.
+- P8 CODE (main.lua ids(), after the P7 fname-eq block): ONE pcall'd
+  `require("UEHelpers").GetWorld()` (the spawner's lazy-require shape,
+  townfall-main.lua.console-copy :15-16), one marker line
+  `[PRB-8] gw ok=<1|0> val=<40>` (+ indented el() tail on throw, same
+  law as other hops). Runs in the main ladder AND per-target repeats
+  (sfx " t<i>"). SKIP ladder widened: no-target now emits PRB-1..8
+  SKIP, no-valid PRB-2..8.
+  - `ok=0` + tail "Virtual UObject::GetWorld is unavailable" →
+    CONFIRMS the IF §1.2 blocker (missing [UObject] GetWorld vtable
+    entry) — the PREDICTED result on the frozen round-4 build.
+  - `ok=1 val=userdata-ish/40` → 02b fallback (or a future audited
+    vtable entry) delivered a World; compare val with the [MAP] full
+    name and the [FL-MAP] map= lines.
+  - `ok=1` + val invalid-object shape (UEHelpers CreateInvalidObject
+    fallback) → both FindAllOf arms AND FindFirstOf("GameInstance")
+    missed (menu phase) — feeds IA's shared-core diagnosis.
+  - `ok=0` + tail "module 'UEHelpers' not found" or nil-global
+    'require' → shared lib/require surface, not the vtable question.
+- HOST VALIDATION (agent IK, lua 5.5.1 host): luac 5.5 -p clean; the
+  preserved FJ stub harness runs all scenarios + WD clean — every P8
+  line there reads ok=0 with the fenced require-missing tail (host
+  has no UEHelpers module), P0..P7 verdicts unchanged from IC.

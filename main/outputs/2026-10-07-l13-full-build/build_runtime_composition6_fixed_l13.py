@@ -1,0 +1,302 @@
+#!/usr/bin/env python3
+"""composition-6 FIXED-SCRIPT EDITION (worker-comp6-driver, 2026-10-04).
+
+Lineage (Procedure B of worker-composition-replace-mechanics/REPLACE-MECHANICS.md):
+  ue4ss-native-tick-file-owner-1/build_runtime.py (f9ca46fb...)
+  -> composition-4 delivered 7a83cb38... -> composition-4-fix on-disk baseline
+     b77fd70a... -> THIS edition, forked from
+     outputs/2026-10-04-zcode-team/worker-composition-4-fix/build_runtime_composition4_fixed.py
+     sha256 36cc8199b7e5a2528badd4da53ff3750075cbbe4d76ca115490b50a008ed8ff3.
+
+Implement EXACTLY RESOLUTION-DESIGN.md §3.2 (worker-configured-roots-design):
+one new bounded fixed-script edition; frozen gates unchanged; additive
+mechanism only. Deltas vs 36cc8199 (each tagged SEC32-...):
+
+  SEC32-1  The --replace-receipt map (rr/idmap) is built ONCE, BEFORE the
+           validate_inputs pin set and the units loop; pins are PRE-SEEDED
+           with exactly the rr-attested files, and validate_inputs' pin
+           assertion admits rr-covered files against their attested hash
+           (edited canonical port files, e.g. Platform/NativeProgramContext.hpp,
+           refuse otherwise).
+  SEC32-2  The :59 strict unit-source check is skip-relaxed for EXACTLY the
+           rr-attested source paths (pins carry the attested hash).
+  SEC32-3  --replace-runtime-unit eligibility is extended, for names in the
+           explicit attested RETAINED allow-list {"program"} only, with the
+           replacement source REQUIRED to be rr-covered. The retained unit
+           recompiles with its OWN pinned argv (asserted: only the source,
+           -o and -MF tokens differ) and its fresh .d dependency walk must be
+           fully covered by pins | rr ("Unpinned retained-replacement
+           dependency" otherwise).
+  SEC32-4  The affected-set assertion (:61) is UNCHANGED for the original
+           affected set; retained replacements are tracked in the new receipt
+           field "retained_units_replaced" (old receipts stay diffable).
+  SEC32-5  The program.o replacement participates in the existing
+           "replacements" map exactly like a runtime-unit replacement
+           (link-order via input-hashes substitution).
+
+Everything else (bootstrap replacement, extra units, extra-receipt recording,
+ld -r + undefined-delta/SDK gates, Rust witness exports, final pin re-check,
+receipt shape) is byte-for-byte the composition-4-fix behavior.
+
+Requires a final reviewed witness Rust receipt and a successful current host
+receipt. Does not link a prior composite, package a PRX, execute target code
+or contact a console. No bypass flags exist.
+"""
+
+# =============================================================================================
+# LAUNCH-11 COMBINED FIXED EDITION (worker-combined-editions pre-build, 2026-10-05). LOCAL ONLY.
+# Base: launch10-build/build_runtime_composition6_fixed_l10.py
+#       sha256 b78fb031fa81efd454d1932596df20977b65c5032cd06c5a27163598329640d7
+#       (= frozen worker-comp6-driver/build_runtime_composition6_fixed.py 8dd92a6f... plus that
+#        file's one l10 tagged edit: the linker_provided bridge-span accessor extension at the
+#        undefined-delta gate, preserved below). THIS file changes NO executable behavior: the
+#        entire byte delta vs b78fb031... is EXACTLY THIS comment block. Frozen gates, the
+#        SEC32 mechanism, the RETAINED_REPLACEABLE allow-list
+#        {'program','luamod','cppmod','settings','asmhelper-asmhelper'} and the linker_provided
+#        set {'_DYNAMIC','bridge_capture_envelope','bridge_readable_span_at',
+#        'bridge_readable_span_count'} are byte-carried unchanged.
+# LAUNCH11-PLAN A-chain admission notes (COMMENTS ONLY — admissions live in the driver/runner):
+#   PAD-DEFER (plan A3, BLOCKING): the pad unit enters the BACKEND/BOOTSTRAP lineage via the
+#     replace/extra receipt (--file admissions per the pad worker's own DIFF) plus a
+#     replace-bootstrap-unit / replace-runtime-unit argv entry. Its exact unit name, staging
+#     path and receipt class are decided by the pad worker's FOLD.md — PLACEHOLDER ONLY; see
+#     the "LAUNCH11 PAD PLACEHOLDER" block in build_runtime_composition6_l11.py compose_argv
+#     and the "LAUNCH11 PAD PLACEHOLDER" block in launch11_one_pass.py regen_receipts.
+#     Never admit by guessing a name/path; never patch pad content into the luamod stack.
+#   FOLD-1 asmhelper (worker-fold1-preverify FOLD1-READY.md): DEFAULT OFF. This edition's
+#     asmhelper path stays the byte-carried launch-10 fold-0 staging
+#     (worker-launch10-walkguard-prep/staging/asmhelper-guard/ASMHelper.guarded.cpp; fold-0
+#     object 81dd832bd59fab43a57c0feb0c9c15b756b2e62f74e667e320e666a2c66b4bb6, reproduced
+#     byte-identically under the current headers). If the controller ever orders the fold-1
+#     flip, it MUST be the basename-preserving one-token flip of that SAME staged file
+#     (#define RC_ASM_WALK_RX_GUARD 0 -> 1), whose admissible object comparator is
+#     6604ce2d423c5d0dee4de6a089bd8141126e0fb02e7538ae08a4076d9b5af8d5 (exactly one inline
+#     mprotect syscall, UND 60==60 set-identical, defined 784==784, RC::ASM exports 9==9).
+#     Comparator f5627427131f53ac... (walkguard-prep L10WGP-5 "declared object") is REJECTED:
+#     it is only reachable from the renamed probe source ASMHelper.guarded.fold1flip.cpp,
+#     which violates basename discipline and would fail the compose receipts late.
+#   COMBINED luamod (plan A1/A2): this edition admits the merged LuaMod.cpp
+#     (dc68760253ec141f2eec4696050b8a2dd9f01b7f2894829d5f543516fb44f7f4) through the retained
+#     allow-list above; its expected composed unit object comparator
+#     813b249d0ba3c16a641db53c3c4dc04b52442cccc553b88369d0ca50eb96f4a9 is pinned in the
+#     driver comments and enforced by launch11_one_pass.py post_build (drift = STOP, plan D;
+#     never widen the comparator silently).
+# =============================================================================================
+import argparse,hashlib,importlib.util,json,os,struct,subprocess
+from pathlib import Path
+W=Path('/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1');S=W.parent;ROOT=S.parent.parent
+BASE=S/'ue4ss-native-notify-cancel-1/build-1/receipt.json'
+BASE_SHA='bcd23a2a4abef518d8f220786e80cb131036e351b2218a322d26aee6adca8384'
+OLD_RUST_SHA='3c18b2caf57616267685d81c8439478dbafe9619f049df9f9878605563367f75'
+# SEC32-3: explicit, attested retained-unit allow-list (RESOLUTION-DESIGN §3.2.2).
+RETAINED_REPLACEABLE={'program','luamod','cppmod','settings','asmhelper-asmhelper','native-pad-input','native-pad-PS5PadSource','native-pad-PS5PadNative','input-handler'}  # +wpd2 coexist  # +pad-defer-1 (FOLD.md 2: SEC32-3 own-pinned-argv path)
+def read(p):return json.loads(Path(p).read_text())
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def save(p,v):Path(p).write_text(json.dumps(v,indent=2)+'\n')
+def check(p,h):
+ if not Path(p).is_file() or sha(p)!=h:raise ValueError('Changed input: '+str(p))
+def deps(p):return {str(Path(x).resolve()) for x in Path(p).read_text().replace('\\\n',' ').split()[1:] if Path(x).is_file()}
+def load_replace_receipt(p):
+ # SEC32-1: built once, before validate_inputs and the units loop.
+ rrd=read(p);rr={};idmap={}
+ for k,h in rrd['files'].items():
+  rp=str(Path(k).resolve())
+  if not Path(rp).is_file() or sha(rp)!=h:raise ValueError('Replace-receipt hash mismatch: '+k)
+  rr[rp]=h
+ for k,v in rrd.get('include_dir_map',{}).items():idmap[str(Path(k).resolve())]=str(Path(v).resolve())
+ return rr,idmap
+def validate_inputs_rr(build,rr):
+ # SEC32-1: the native-coherent-runtime-1/build_runtime.py::validate_inputs()
+ # pin set, with rr-attested files asserted against their attested (edited)
+ # hash instead of the frozen snapshot hash. Pin SET is unchanged.
+ before={str(build.R/p):h for p,h in read(build.W/'pinned-external-inputs.json')['files'].items()}
+ before.update({str(build.W/'source'/r['destination']):r['sha256'] for r in read(build.W/'snapshot-plan.json')['files']})
+ pins={}
+ for p,h in before.items():
+  rp=str(Path(p).resolve())
+  if rp in rr:
+   if sha(p)!=rr[rp]:raise ValueError('Replace-receipt hash mismatch: '+p)
+   pins[rp]=rr[rp]
+  else:
+   if not Path(p).is_file() or sha(p)!=h:raise ValueError('input pin mismatch: '+p)
+   pins[rp]=h
+ return pins
+def main():
+ ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--output',required=True,type=Path);ap.add_argument('--rust-receipt',required=True,type=Path);ap.add_argument('--host-receipt',required=True,type=Path);ap.add_argument('--extra-unit',action='append',default=[],help='name=source_path; compiled with the loader-context argv template and appended to the link inputs');ap.add_argument('--extra-receipt',type=Path,help='hash-pinned attestation receipt covering the extra units');ap.add_argument('--extra-define',action='append',default=[],help='preprocessor define appended to extra-unit compiles')
+ ap.add_argument('--extend-undefined-baseline',action='store_true',help='Allow NEW undefined native symbols introduced by extra units; every added symbol must be declared by a pinned SDK target library; the extended baseline is recorded');ap.add_argument('--replace-bootstrap-unit',action='append',default=[],help='name=source_path; recompile a base bootstrap unit from an attested replacement source');ap.add_argument('--replace-receipt',type=Path,help='hash-pinned attestation covering replacement sources and every spike project file the replacement touches');ap.add_argument('--replace-runtime-unit',action='append',default=[],help='name=source_path; recompile a freshly compiled affected runtime unit, or an attested retained allow-list unit %s, from an attested replacement source'%sorted(RETAINED_REPLACEABLE));a=ap.parse_args()
+ check(BASE,BASE_SHA);base=read(BASE);rust=read(a.rust_receipt);host=read(a.host_receipt)
+ if host['status']!='OWNED_CPP_FILE_FALLBACK_HOST_PASS':raise ValueError('Host connection has not passed')
+ # SEC32-4 (controller 2026-10-04): host/rust lineage pin layers become
+ # rr-aware — files attested in the replace-receipt assert against their
+ # ATTESTED (edited) hash instead of the frozen lineage hash, mirroring
+ # validate_inputs_rr. Without this, in-place Resolution-B header edits
+ # (W/include/NativeLoaderContext.hpp et al.) trip the plain pin check.
+ _rr0,_=load_replace_receipt(a.replace_receipt) if a.replace_receipt else ({},{})
+ def _rrcheck(p,h):
+  rp=str(Path(p).resolve())
+  if rp in _rr0:
+   if sha(p)!=_rr0[rp]:raise ValueError('Replace-receipt hash mismatch (receipt layer): '+str(p))
+  else:check(p,h)
+ for p,h in host['input_hashes'].items():_rrcheck(p,h)
+ for p,h in host.get('rust_source_hashes',{}).items():_rrcheck(p,h)
+ obj=rust['object'];check(obj['path'],obj['sha256'])
+ if 'ps_ugameengine_tick_file_witness_v1' not in rust['public_exports']:raise ValueError('Rust witness ABI absent')
+ for p,h in rust['source_hashes'].items():check(a.rust_receipt.parent/'source'/p,h)
+ for i in rust['inputs']:check(i['path'],i['sha256'])
+ spec=importlib.util.spec_from_file_location('sealed_build',S/'native-coherent-runtime-1/build_runtime.py');build=importlib.util.module_from_spec(spec);spec.loader.exec_module(build)
+ rr={};idmap={}
+ if a.replace_receipt:rr,idmap=load_replace_receipt(a.replace_receipt)
+ pins=validate_inputs_rr(build,rr) # SEC32-1: pin set unchanged, rr-admitted edits
+ pins.update(rr) # SEC32-1: pre-seed with EXACTLY the rr-attested files
+ originals=read(BASE.parent/'input-hashes.json')
+ for p,h in originals.items():
+  if str(Path(p).resolve()) in rr:continue # SEC32-2: skip-relax exactly rr files
+  check(p,h)
+ if base['runtime_object'] in originals:raise ValueError('Prior combined object input refused')
+ old_rust=[p for p,h in originals.items() if h==OLD_RUST_SHA]
+ if len(old_rust)!=1:raise ValueError('Expected exactly one pinned old Rust object')
+ units=base['selected_runtime_units'];affected=[];headers=['OwnedMappedScanSource.hpp','NativeLoaderContext.hpp','OwnedMappedCandidateSelection.hpp','NativeProgramFactory.hpp']
+ for name,u in units.items():
+  src=str(Path(u['source']).resolve())
+  if src in rr:pins[src]=rr[src];check(src,pins[src]) # SEC32-2: attested source override
+  else:check(u['source'],u['source_sha256']);pins[src]=u['source_sha256']
+  check(u['object'],u['object_sha256'])
+  if any(h in Path(u['dependency_file']).read_text() for h in headers):affected.append(name)
+ if set(affected)!={'unreal-unrealinitializer','native-ownedmappedscansource','native-psscanbinding','native-ownedmappedcandidateselection','native-loadercontext','native-programfactory'}:raise ValueError('Affected header inventory changed')
+ for u in base['bootstrap_units'].values():check(u['source'],u['source_sha256']);check(u['object'],u['object_sha256'])
+ for p in [*W.glob('include/*'),*W.glob('src/*'),W/'build_runtime.py',S/'ue4ss-native-tick-witness-1/include/patternsleuth_tick_file_witness.h']:pins[str(p)]=sha(p)
+ for name in affected:
+  for p in deps(units[name]['dependency_file']):
+   if p not in pins:raise ValueError('Unpinned original unit dependency: '+p)
+   check(p,pins[p])
+ receipt_pins={str(BASE):sha(BASE),str(a.rust_receipt.resolve()):sha(a.rust_receipt),str(a.host_receipt.resolve()):sha(a.host_receipt)}
+ out=a.output.resolve();out.mkdir(parents=True,exist_ok=False);calls=[]
+ def run(name,args,env=None):
+  argv=list(map(str,args));p=subprocess.run(argv,capture_output=True,text=True,env=env);(out/(name+'.stdout')).write_text(p.stdout);(out/(name+'.stderr')).write_text(p.stderr);calls.append(dict(name=name,argv=argv,exit=p.returncode));save(out/'commands.json',calls)
+  if p.returncode:raise RuntimeError(name+': '+p.stderr[-5000:])
+  return p
+ selected=dict(units);replacements={};fresh=[];template=units['native-loadercontext']['argv'].copy();template_source=next(x for x in template if x.endswith('NativeLoaderContext.cpp'))
+ new_sources={'native-ownedmappedscansource':W/'src/OwnedMappedScanSource.cpp','native-loadercontext':W/'src/NativeLoaderContext.cpp','native-programfactory':W/'src/NativeProgramFactory.cpp','native-ownedserializedelfsource':W/'src/OwnedSerializedElfSource.cpp'}
+ rt_repl=[];ret_repl=[] # SEC32-3: retained allow-list replacements tracked separately
+ for rspec in a.replace_runtime_unit:
+  rname,rsep,rsrc=rspec.partition('=')
+  if not rsep or rname not in units or not Path(rsrc).is_file():raise ValueError('Bad replace-runtime-unit spec (target must be a composed unit): '+rspec)
+  if rname in affected:rt_repl.append((rname,Path(rsrc)))
+  elif rname in RETAINED_REPLACEABLE:
+   if str(Path(rsrc).resolve()) not in rr:raise ValueError('Retained-unit replacement source must be covered by the --replace-receipt attestation (allow-list %s): '%sorted(RETAINED_REPLACEABLE)+rspec)
+   ret_repl.append((rname,Path(rsrc)))
+  else:raise ValueError('Bad replace-runtime-unit spec (target must be a freshly compiled affected unit or an attested retained allow-list unit %s): '%sorted(RETAINED_REPLACEABLE)+rspec)
+ if (rt_repl or ret_repl) and not a.replace_receipt:raise ValueError('Runtime-unit replacement requires --replace-receipt attestation')
+ for rname,rsrc in rt_repl:
+  if rname in new_sources:raise ValueError('Runtime-unit replacement target already has a staged source: '+rname)
+  new_sources[rname]=rsrc
+ for name in affected+['native-ownedserializedelfsource']:
+  old=units['native-ownedmappedscansource' if name=='native-ownedserializedelfsource' else name];source=new_sources.get(name,Path(old['source']));target=out/(name+'.o');dep=out/(name+'.d');argv=old['argv'].copy();argv[argv.index(old['source'])]=str(source);argv[argv.index('-o')+1]=str(target);argv[argv.index('-MF')+1]=str(dep);argv[1:1]=['-I',str(W/'include'),'-I',str(S/'ue4ss-native-tick-witness-1/include')]
+  run(name,argv,dict(os.environ,LLVM_CONFIG=old['LLVM_CONFIG']))
+  for p in deps(dep):
+   if p not in pins:
+    rp=str(Path(p).resolve())
+    if rp in rr:pins[rp]=rr[rp];check(p,pins[rp])
+    else:raise ValueError('Unpinned fresh dependency: '+p)
+   else:check(p,pins[p])
+  selected[name]={**old,'name':name,'source':str(source),'source_sha256':sha(source),'object':str(target),'object_sha256':sha(target),'dependency_file':str(dep),'argv':argv,'exit':0};fresh.append(name)
+  if name!='native-ownedserializedelfsource':replacements[old['object']]=str(target)
+ # SEC32-3/SEC32-5: retained-unit replacement, own pinned argv, fresh .d gate.
+ retained_replaced=[]
+ for rname,rsrc in ret_repl:
+  old=units[rname];si=old['argv'].index(old['source']);oi=old['argv'].index('-o')+1;mi=old['argv'].index('-MF')+1
+  target=out/(rname+'.o');dep=out/(rname+'.d');argv=old['argv'].copy()
+  argv[si]=str(rsrc);argv[oi]=str(target);argv[mi]=str(dep)
+  drifted=[i for i in range(len(argv)) if argv[i]!=old['argv'][i]]
+  if len(argv)!=len(old['argv']) or set(drifted)-{si,oi,mi}:raise ValueError('Retained-unit replacement argv drifted beyond source/-o/-MF redirection: '+rname)
+  run('retained-'+rname,argv,dict(os.environ,LLVM_CONFIG=old.get('LLVM_CONFIG') or units['native-loadercontext']['LLVM_CONFIG']))
+  for p in deps(dep):
+   if p not in pins:
+    rp=str(Path(p).resolve())
+    if rp in rr:pins[rp]=rr[rp];check(p,pins[rp])
+    else:raise ValueError('Unpinned retained-replacement dependency (pre-seed the replace-receipt with every file the fresh dependency walk touches): '+p)
+   else:check(p,pins[p])
+  selected[rname]={**old,'name':rname,'runtime_replaced':True,'retained_replaced':True,'source':str(rsrc),'source_sha256':sha(rsrc),'object':str(target),'object_sha256':sha(target),'dependency_file':str(dep),'argv':argv,'exit':0}
+  replacements[old['object']]=str(target);fresh.append(rname);retained_replaced.append(rname) # SEC32-5: link order via replacements map
+ for rname,_ in rt_repl:selected[rname]['runtime_replaced']=True
+ extras=[];extra_pinned=[]
+ if a.extra_unit and not a.extend_undefined_baseline:raise ValueError('Extra units require --extend-undefined-baseline')
+ if a.extra_unit and not a.extra_receipt:raise ValueError('Extra units require --extra-receipt attestation')
+ for spec in a.extra_unit:
+  name,sep,src=spec.partition('=')
+  if not sep or not name or not Path(src).is_file():raise ValueError('Bad extra unit spec: '+spec)
+  src=Path(src);target=out/(name+'.o');dep=out/(name+'.d');argv=template.copy();argv[1:1]=['-I',str(W/'include'),'-I',str(S/'ue4ss-native-tick-witness-1/include')]
+  for d in a.extra_define:argv.insert(1,'-D'+d)
+  argv[argv.index(template_source)]=str(src);argv[argv.index('-o')+1]=str(target);argv[argv.index('-MF')+1]=str(dep)
+  run('extra-'+name,argv,dict(os.environ,LLVM_CONFIG=units['native-loadercontext']['LLVM_CONFIG']))
+  for pd in deps(dep):
+   rp=str(Path(pd).resolve())
+   if rp.startswith(str(ROOT)):
+    if rp not in pins:
+     if rp in rr:pins[rp]=rr[rp]
+     elif rp.startswith(str(S)) or rp.startswith(str(ROOT/'.superpowers')):raise ValueError('Unpinned extra project dependency: '+pd)
+     else:pins[rp]=sha(pd);extra_pinned.append(rp)
+    check(pd,pins[rp])
+  selected[name]={'name':name,'source':str(src),'source_sha256':sha(src),'object':str(target),'object_sha256':sha(target),'dependency_file':str(dep),'argv':argv,'exit':0,'extra_unit':True}
+  fresh.append(name);extras.append(str(target))
+
+ boot_repl=[]
+ for spec in a.replace_bootstrap_unit:
+  name,sep,rsrc=spec.partition('=')
+  if not sep or name not in base['bootstrap_units'] or not Path(rsrc).is_file():raise ValueError('Bad replace-bootstrap-unit spec: '+spec)
+  boot_repl.append((name,Path(rsrc)))
+ if boot_repl and not a.replace_receipt:raise ValueError('Bootstrap replacement requires --replace-receipt attestation')
+ for name,rsrc in boot_repl:
+  old=base['bootstrap_units'][name];target=out/('bootstrap-'+name+'.o');dep=out/('bootstrap-'+name+'.d');argv=old['argv'].copy()
+  for i,x in enumerate(argv):
+   if x=='-I' and i+1<len(argv):
+    m=str(Path(argv[i+1]).resolve())
+    if m in idmap:argv[i+1]=idmap[m]
+  old_src=next(x for x in argv if x.endswith('/'+Path(old['source']).name))
+  argv[argv.index(old_src)]=str(rsrc);argv[argv.index('-o')+1]=str(target);argv[argv.index('-MF')+1]=str(dep)
+  lcfg=old.get('LLVM_CONFIG') or units['native-loadercontext']['LLVM_CONFIG']
+  run('bootstrap-'+name,argv,dict(os.environ,LLVM_CONFIG=lcfg))
+  for pd in deps(dep):
+   rp=str(Path(pd).resolve())
+   if rp.startswith(str(ROOT)):
+    if rp not in pins:
+     if rp in rr:pins[rp]=rr[rp]
+     elif rp.startswith(str(S)) or rp.startswith(str(ROOT/'.superpowers')):raise ValueError('Unpinned replaced-bootstrap dependency: '+pd)
+     else:pins[rp]=sha(pd)
+    check(pd,pins[rp])
+  selected[name]={**old,'source':str(rsrc),'source_sha256':sha(rsrc),'object':str(target),'object_sha256':sha(target),'dependency_file':str(dep),'argv':argv,'exit':0,'bootstrap_replaced':True}
+  replacements[old['object']]=str(target);fresh.append(name)
+ replacements[old_rust[0]]=obj['path'];inputs=[]
+ for p in originals:
+  inputs.append(replacements.get(p,p))
+  if p==units['native-ownedmappedscansource']['object']:inputs.append(selected['native-ownedserializedelfsource']['object'])
+ inputs.extend(extras)
+ hashes={p:sha(p) for p in inputs};save(out/'input-hashes.json',hashes)
+ target=out/'coherent-tick-file-witness-runtime.o';run('link',[build.LLVM/'ld.lld','-m','elf_x86_64','-r',*inputs,'-Map='+str(out/'runtime.map'),'-o',target])
+ raw=target.read_bytes();assert raw[:6]==b'\x7fELF\x02\x01' and struct.unpack_from('<HH',raw,16)==(1,62)
+ current={line.split()[0]:line.split()[1] for line in run('undefined',[build.LLVM/'llvm-nm','--extern-only','--undefined-only','--format=posix',target]).stdout.splitlines() if line.strip()};previous=base['undefined_delta']['current']
+ delta=dict(added=sorted(current.keys()-previous.keys()),removed=sorted(previous.keys()-current.keys()),changed_bindings={p:[previous[p],current[p]] for p in current.keys()&previous.keys() if current[p]!=previous[p]},current_count=len(current),current=current)
+ if delta['added'] or delta['removed'] or delta['changed_bindings']:
+  if a.extra_unit and a.extend_undefined_baseline and not delta['removed'] and not delta['changed_bindings']:
+   sdk_lib_dir=ROOT/'outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/target/lib'
+   libsyms={lib.name:set(line.split()[0] for line in run('sdknm-'+lib.name,[build.LLVM/'llvm-nm','-D','--defined-only','--format=posix',lib]).stdout.splitlines() if line.strip()) for lib in sorted(sdk_lib_dir.glob('*.so'))}
+   linker_provided={'_DYNAMIC','bridge_capture_envelope','bridge_readable_span_at','bridge_readable_span_count','diagnostic_event','bridge_kernel_range_verdict', 'bridge_kernel_write_copyin_probe', 'bridge_write_copyin_capture', 'bridge_kernel_write_copyin_probe_until', 'bridge_copyin_range_faulted', 'scePadGetHandle'}  # +diagnostic_event: declared extern C by the wpd1 program unit; defined by the diagnostic.c bootstrap unit at packaging link (same class)  # resolved against the final PRX's own dynamic section at link time  # l11 v5.1 tagged edit: +bridge_kernel_range_verdict — declared extern C by the initializer unit (listing-gap resolution), defined by the bridge packaging TU (same class as the span accessors; pre-build one-TU bridge compile proves the definition)
+   providers={sym:(['<linker-provided>'] if sym in linker_provided else [n for n,s in libsyms.items() if sym in s]) for sym in delta['added']}
+   missing=[s for s,v in providers.items() if not v]
+   if missing:raise ValueError('Extra-unit imports not declared by any pinned SDK library: '+','.join(missing))
+   delta['baseline_extended']=True;delta['providers']=providers;delta['expected_bootstrap_resolutions']=[x for x in delta['added'] if x in linker_provided]# l10 edit 4 (revised per user directive): RAW runtime-object delta PRESERVED in 'added';# the bootstrap-resolved subset (bind at packaging link, never PRX imports) recorded separately
+   delta['provider_library_hashes']={str(lib):sha(lib) for lib in sorted(sdk_lib_dir.glob('*.so'))}
+  else:raise ValueError('Unexpected native import change: '+json.dumps(delta))
+ symbols={line.split()[0]:line.split()[1] for line in run('exports',[build.LLVM/'llvm-nm','--extern-only','--defined-only','--format=posix',target]).stdout.splitlines() if line.strip()}
+ for name,kind in rust['public_exports'].items():
+  if symbols.get(name)!=kind:raise ValueError('Lost Rust ABI export: '+name)
+ for p,h in {**hashes,**pins,**receipt_pins}.items():check(p,h)
+ for p,h in host.get('rust_source_hashes',{}).items():check(p,h)
+ fixed=[{**i,'path':obj['path'],'resolved_path':obj['path'],'sha256':obj['sha256'],'reason':'reviewed Rust mapped/file resolvers with additive bounded Tick witness ABI'} if i.get('sha256')==OLD_RUST_SHA else i for i in base['retained_fixed_dependencies']]
+ receipt={**base,'status':'NATIVE_SELECTED_TICK_FILE_WITNESS_RELOCATABLE_COMPOSED','base_receipt':str(BASE),'base_receipt_sha256':BASE_SHA,'host_receipt':str(a.host_receipt.resolve()),'host_receipt_sha256':sha(a.host_receipt),'rust_receipt':str(a.rust_receipt.resolve()),'rust_receipt_sha256':sha(a.rust_receipt),'runtime_object':str(target),'runtime_sha256':sha(target),'runtime_bytes':target.stat().st_size,'runtime_compilation_units':len(selected),'freshly_compiled_units':fresh,'retained_runtime_units':len(units)-len(affected),'selected_runtime_units':selected,'retained_fixed_dependencies':fixed,'undefined_delta':delta,'source_hashes':pins,'commands':calls,'runtime_object_order':[{u['object']:n for n,u in selected.items()}[p] for p in inputs if p in {u['object'] for u in selected.values()}],'reused_composed_runtime_object':False,'linked_prx':False,'target_executed':False,'console_contact':False,'new_live_facts_supplier':bool(a.extra_unit),'optional_file_witness_connected':True,'scope':'Owned host mapping proof and native relocatable composition. No engine identity, callable Tick ABI, live-wide uniqueness, native game-thread or target execution claim.'}
+ receipt['retained_units_replaced']=retained_replaced # SEC32-4: diffable field
+ receipt['extra_pinned_dependencies']={p:pins[p] for p in extra_pinned}
+ if a.extra_receipt:receipt['extra_receipt']={'path':str(a.extra_receipt.resolve()),'sha256':sha(a.extra_receipt)}
+ receipt.pop('plan_sha256',None);save(out/'receipt.json',receipt);save(out/'undefined-delta.json',delta)
+ print(json.dumps({k:receipt[k] for k in ['status','runtime_bytes','runtime_sha256','runtime_compilation_units','freshly_compiled_units','retained_runtime_units','retained_units_replaced']},indent=2))
+if __name__=='__main__':main()

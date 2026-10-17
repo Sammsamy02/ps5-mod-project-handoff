@@ -1,0 +1,81 @@
+{
+  "worker": "worker-combined-igf7",
+  "team": "2026-10-04-zcode-team",
+  "purpose": "OFFLINE expected values for the 5 C2 alternative candidate data windows. This file stays OFFLINE: the combined probe (igf7-695a17bd2c6f) embeds NONE of these bytes and performs NO comparison. After the controller-staged launch, compare each emitted c2cand record's live_hex against expected_hex here, after re-verifying the capture sha256, that rt - vaddr == the record's derived base == 0x400000, and that each record's covering span shows prot & 1 (C2-ALTERNATIVE-SPEC.md sec.6).",
+  "provenance": {
+    "authoritative_source": "outputs/2026-10-04-zcode-team/worker-c2-probe/EXPECTED-VALUES-OFFLINE.json",
+    "derived_by": "worker-c2-alt-correspondence (C2-ALTERNATIVE-SPEC.md sec.5, byte-verified from the retained capture)",
+    "authoritative_source_sha256": "TO_RECOMPUTE_AT_COMPARE_TIME (controller re-verifies the capture, not this copy)",
+    "retained_capture": {
+      "path": ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+      "sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+      "size": 194241424
+    },
+    "file_offset_deltas": "phdr 0/1/3/7: file = vaddr + 0x4000; phdr 8: file = vaddr - 0x324000"
+  },
+  "base_rule": {
+    "expected_base": "0x400000",
+    "check": "recorded derived_base (lowest prot&4 span start of the same-invocation map) MUST equal 0x400000 for the comparison to be valid",
+    "mapscan_record_fields": ["derived_base", "base_eq_expected", "exec_span_lo", "exec_span_hi", "exec_extent_eq_expected"]
+  },
+  "candidates": [
+    {
+      "id": "B",
+      "what": "branch name L\"UE5\" (UTF-16), phdr 1 rodata",
+      "vaddr": "0x7826782",
+      "rt_base_0x400000": "0x7c26782",
+      "len": 8,
+      "file_offset": "0x782a782",
+      "expected_hex": "5500450035000000",
+      "occurrences_in_file": 1
+    },
+    {
+      "id": "C",
+      "what": "UTF-16 \"BuildIdOverride\\0\" + 2B, phdr 1 rodata",
+      "vaddr": "0x75cffda",
+      "rt_base_0x400000": "0x79cffda",
+      "len": 32,
+      "file_offset": "0x75d3fda",
+      "expected_hex": "4200750069006c006400490064004f0076006500720072006900640065000000",
+      "occurrences_in_file": 2,
+      "note": "second occurrence (file 0x76cce58) is the same text inside bUseBuildIdOverride; comparison is at a fixed address"
+    },
+    {
+      "id": "D",
+      "what": "ASCII \"Current Changelist\\0\", phdr 1 rodata",
+      "vaddr": "0x7b8845d",
+      "rt_base_0x400000": "0x7f8845d",
+      "len": 19,
+      "file_offset": "0x7b8c45d",
+      "expected_hex": "43757272656e74204368616e67656c69737400",
+      "occurrences_in_file": 1
+    },
+    {
+      "id": "E",
+      "what": "canonical AES S-box (64 B), phdr 1 rodata deep-window guard",
+      "vaddr": "0x7dd2a40",
+      "rt_base_0x400000": "0x81d2a40",
+      "len": 64,
+      "file_offset": "0x7dd6a40",
+      "expected_hex": "637c777bf26b6fc53001672bfed7ab76ca82c97dfa5947f0add4a2af9ca472c0b7fd9326363ff7cc34a5e5f171d8311504c723c31896059a071280e2eb27b275",
+      "occurrences_in_file": 1
+    },
+    {
+      "id": "A",
+      "what": "NT_GNU_BUILD_ID note record (link identity), phdr 8 aux (phdr flags 0x0 - gated, read LAST)",
+      "vaddr": "0xbc5f250",
+      "rt_base_0x400000": "0xc05f250",
+      "len": 36,
+      "file_offset": "0xb93b250",
+      "expected_hex": "040000001400000003000000474e550004bb4330a7d71dcefe1cc2c4d19769d500000000",
+      "occurrences_in_file": 1
+    }
+  ],
+  "pass_matrix": {
+    "PASS_full": "5/5 matches, base == 0x400000, every covering span prot & 1",
+    "PASS_minimum": "A and B both match, >= 2 of {C, D, E} match, mismatches == 0 (refusals justified by the persisted same-invocation mapspans records)",
+    "NOT_a_pass": "B matches without A (A carries the only link identity)",
+    "FAIL": "any live_hex != expected_hex on a read candidate; or recorded base != 0x400000; or the module dies at its first DATA read (new fact class - re-arbitrate before reuse)",
+    "rung3_and_batch2": "independent of C2 PASS/FAIL: rung3 record carries its own rc/class machine-readable verdicts; batch2 record carries the bridge gate/verdict"
+  }
+}

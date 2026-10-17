@@ -1,0 +1,463 @@
+--- a/cap13/native-loader/include/pe_loader.h
++++ b/cap13/native-loader/include/pe_loader.h
+@@ -7,7 +7,8 @@
+ //     plus every missing import, never a null-filled IAT or silent stub;
+ //   * images are mapped once and never unmapped (retained-module law of the
+ //     #9 host: a mod may have started threads; unloading is never safe);
+-//   * a PE with a static TLS directory is refused (TEB/gs wall, design 3e).
++//   * a PE with real static TLS data/callbacks is refused (TEB/gs wall);
++//     an empty linker-artifact TLS directory is admitted after validation.
+ //
+ // Host-portable by design: the memory primitives are isolated in Os namespace
+ // so macOS (SysV x86_64) can unit-test the whole mapper without a console.
+@@ -34,11 +35,14 @@
+ 
+ struct LoadOptions
+ {
+-    // PS5 page size; macOS uses 16 KiB too on arm64 hosts, matching tests.
++    // PS5 page size; Rosetta host tests explicitly select its 4 KiB pages.
+     uint32_t page_size = 0x4000;
+     // When true, a permission partition that would require W+X in one page
+     // is refused (default: refuse unless the J1 console probe proved RWX).
+     bool allow_rwx_partition = false;
++    // Host fixtures known to be position-independent may opt in. The target
++    // loader refuses a nonzero slide without a relocation directory by default.
++    bool allow_no_relocs = false;
+ };
+ 
+ struct LoadResult
+@@ -60,15 +64,18 @@
+     // the process lifetime (retained-module law).
+     struct Impl
+     {
++        struct ExecRange { uint32_t begin; uint32_t end; };
+         uint8_t* image = nullptr;
++        uint64_t image_size = 0;
+         uint32_t export_dir_rva = 0;
+         uint32_t export_dir_size = 0;
++        std::vector<ExecRange> executable_ranges;
+     };
+     Impl* impl = nullptr;
+ };
+ 
+ // Map the PE at 'file_bytes/file_size' through 'resolver'. Refuses with a
+-// named reason on: not PE32+/x64, CLR/COM descriptor, static TLS directory,
++// named reason on: not PE32+/x64, CLR/COM descriptor, real static TLS,
+ // RWX-requiring 16 KiB partition (unless allowed), unknown relocation type,
+ // unresolvable import (all missing symbols listed in one pass).
+ LoadResult pe_load(const void* file_bytes, size_t file_size, ImportResolver& resolver,
+--- a/cap13/native-loader/src/pe_loader.cpp
++++ b/cap13/native-loader/src/pe_loader.cpp
+@@ -22,6 +22,7 @@
+ 
+ #if defined(__APPLE__) || defined(__unix__) || defined(__PROSPERO__)
+ #include <sys/mman.h>
++#include <unistd.h>
+ #define CAP13_HAS_MMAP 1
+ #else
+ #define CAP13_HAS_MMAP 0
+@@ -55,6 +56,16 @@
+         (void)prot;
+         (void)page_size;
+         return true;
++#endif
++    }
++
++    void release(void* addr, size_t size)
++    {
++#if CAP13_HAS_MMAP
++        if (addr && size) munmap(addr, size);
++#else
++        (void)addr;
++        (void)size;
+ #endif
+     }
+ } // namespace Os
+@@ -84,7 +95,8 @@
+ {
+     if (rva < s.opt->SizeOfHeaders)
+     {
+-        if (size_t(rva) + read_bytes > s.file_size) return false;
++        if (read_bytes > s.opt->SizeOfHeaders - rva ||
++            rva > s.file_size || read_bytes > s.file_size - rva) return false;
+         out_off = rva;
+         return true;
+     }
+@@ -93,11 +105,49 @@
+         const PeSectionHeader& sec = s.sections[i];
+         if (rva >= sec.VirtualAddress && rva - sec.VirtualAddress < sec.SizeOfRawData)
+         {
+-            const uint32_t off = sec.PointerToRawData + (rva - sec.VirtualAddress);
+-            if (size_t(off) + read_bytes > s.file_size) return false;
+-            out_off = off;
++            const uint32_t into = rva - sec.VirtualAddress;
++            const uint64_t off = uint64_t(sec.PointerToRawData) + into;
++            if (read_bytes > sec.SizeOfRawData - into ||
++                off > s.file_size || read_bytes > s.file_size - off || off > UINT32_MAX) return false;
++            out_off = uint32_t(off);
+             return true;
+         }
++    }
++    return false;
++}
++
++size_t rva_file_span(const Impl& s, uint32_t rva)
++{
++    uint32_t off = 0;
++    if (!rva_to_file_offset(s, rva, 1, off)) return 0;
++    if (rva < s.opt->SizeOfHeaders) return s.opt->SizeOfHeaders - rva;
++    for (uint16_t i = 0; i < s.coff->NumberOfSections; ++i)
++    {
++        const PeSectionHeader& sec = s.sections[i];
++        if (rva >= sec.VirtualAddress && rva - sec.VirtualAddress < sec.SizeOfRawData)
++            return sec.SizeOfRawData - (rva - sec.VirtualAddress);
++    }
++    return 0;
++}
++
++bool image_range(const Impl& s, uint64_t rva, uint64_t bytes)
++{
++    return rva <= s.opt->SizeOfImage && bytes <= uint64_t(s.opt->SizeOfImage) - rva;
++}
++
++bool executable_rva(const Impl& s, uint32_t rva)
++{
++    if (!image_range(s, rva, 1)) return false;
++    for (uint16_t i = 0; i < s.coff->NumberOfSections; ++i)
++    {
++        const PeSectionHeader& sec = s.sections[i];
++        // Callable code must have bytes in the file, not only zero-filled
++        // executable virtual tail space.
++        const uint32_t exec_bytes = sec.VirtualSize && sec.VirtualSize < sec.SizeOfRawData ?
++                                    sec.VirtualSize : sec.SizeOfRawData;
++        const uint64_t end = uint64_t(sec.VirtualAddress) + exec_bytes;
++        if ((sec.Characteristics & PE_SCN_MEM_EXECUTE) &&
++            rva >= sec.VirtualAddress && uint64_t(rva) < end) return true;
+     }
+     return false;
+ }
+@@ -134,6 +184,11 @@
+ 
+ LoadResult fail(LoadResult& r, std::string reason)
+ {
++    // Successful modules stay mapped for the process lifetime. A failed
++    // preflight or incomplete map does not retain untrusted allocation.
++    Os::release(r.image, r.image_size);
++    r.image = nullptr;
++    r.image_size = 0;
+     r.ok = false;
+     r.reason = std::move(reason);
+     return r;
+@@ -151,6 +206,14 @@
+     s.opts = options;
+ 
+     // ---- header parsing ----
++    if (!s.file) return fail(out, kReasonTooSmall);
++    if (s.opts.page_size < 0x1000 || (s.opts.page_size & (s.opts.page_size - 1)) != 0)
++        return fail(out, "invalid page size");
++#if defined(__APPLE__)
++    const long host_page = sysconf(_SC_PAGESIZE);
++    if (host_page <= 0 || uint64_t(host_page) != s.opts.page_size)
++        return fail(out, "configured page size differs from host page size");
++#endif
+     if (file_size < sizeof(PeDosHeader) + 4 + sizeof(PeFileHeader)) return fail(out, kReasonTooSmall);
+     const PeDosHeader* dos = reinterpret_cast<const PeDosHeader*>(s.file);
+     if (dos->e_magic != 0x5A4D) return fail(out, kReasonNotPe);
+@@ -166,19 +229,63 @@
+     if (s.opt->Magic != 0x020B) return fail(out, "not PE32+ (OptionalHeader Magic != 0x020B)");
+     if (s.opt->NumberOfRvaAndSizes <= PE_DIR_TLS) return fail(out, "NumberOfRvaAndSizes < 10; PE too old for this loader");
+     if (s.opt->SizeOfImage == 0) return fail(out, "implausible SizeOfImage");
++    if (s.opt->SizeOfImage > 512u * 1024u * 1024u) return fail(out, "SizeOfImage exceeds loader cap");
+     if (s.opt->SizeOfHeaders > s.opt->SizeOfImage) return fail(out, "SizeOfHeaders exceeds SizeOfImage");
+     const uint16_t num_sections = s.coff->NumberOfSections;
+     if (num_sections == 0 || num_sections > 96) return fail(out, "implausible section count");
+-    if (size_t(opt_ptr - s.file) + sizeof(PeOptionalHeader64) + size_t(num_sections) * sizeof(PeSectionHeader) > file_size)
+-        return fail(out, kReasonTooSmall);
++    const size_t section_end = size_t(opt_ptr - s.file) + s.coff->SizeOfOptionalHeader +
++                               size_t(num_sections) * sizeof(PeSectionHeader);
++    if (section_end > file_size || section_end > s.opt->SizeOfHeaders)
++        return fail(out, "section table exceeds file or SizeOfHeaders");
++    if (s.opt->SizeOfHeaders > file_size) return fail(out, "SizeOfHeaders exceeds file");
+     s.sections = reinterpret_cast<const PeSectionHeader*>(opt_ptr + s.coff->SizeOfOptionalHeader);
++    for (uint16_t i = 0; i < num_sections; ++i)
++    {
++        const PeSectionHeader& sec = s.sections[i];
++        const uint64_t mapped_size = sec.VirtualSize > sec.SizeOfRawData ?
++                                     sec.VirtualSize : sec.SizeOfRawData;
++        if (uint64_t(sec.VirtualAddress) + mapped_size > s.opt->SizeOfImage ||
++            uint64_t(sec.PointerToRawData) + sec.SizeOfRawData > file_size)
++            return fail(out, "section range exceeds image or file");
++        if (mapped_size && sec.VirtualAddress < s.opt->SizeOfHeaders)
++            return fail(out, "section overlap with headers");
++        for (uint16_t j = 0; j < i; ++j)
++        {
++            const PeSectionHeader& prev = s.sections[j];
++            const uint64_t prev_size = prev.VirtualSize > prev.SizeOfRawData ?
++                                       prev.VirtualSize : prev.SizeOfRawData;
++            if (mapped_size && prev_size &&
++                uint64_t(sec.VirtualAddress) < uint64_t(prev.VirtualAddress) + prev_size &&
++                uint64_t(prev.VirtualAddress) < uint64_t(sec.VirtualAddress) + mapped_size)
++                return fail(out, "section overlap in image");
++        }
++    }
++    if (s.opt->AddressOfEntryPoint != 0 && !executable_rva(s, s.opt->AddressOfEntryPoint))
++        return fail(out, "entry point outside executable section");
+ 
+     // ---- zero-cost refusals (before any allocation) ----
+-    if (s.opt->DataDirectory[14].Size != 0) // PE_DIR_COM (CLR .NET runtime header)
++    if (s.opt->DataDirectory[14].Size != 0 ||
++        s.opt->DataDirectory[14].VirtualAddress != 0) // PE_DIR_COM (CLR .NET runtime header)
+         return fail(out, "PE carries a CLR/COM descriptor; managed images belong to capability #10");
+-    if (s.opt->DataDirectory[PE_DIR_TLS].Size != 0)
+-        return fail(out, "PE has a static TLS directory; TEB/gs thread-local access is not "
+-                         "emulatable in userspace on this target (design 3e) -- refused");
++    if (s.opt->NumberOfRvaAndSizes > PE_DIR_DELAYIMPORT &&
++        (s.opt->DataDirectory[PE_DIR_DELAYIMPORT].Size != 0 ||
++         s.opt->DataDirectory[PE_DIR_DELAYIMPORT].VirtualAddress != 0))
++        return fail(out, "PE has delay imports; delay import resolution unsupported -- refused");
++    const PeDataDirectory tls_dir = s.opt->DataDirectory[PE_DIR_TLS];
++    if (tls_dir.Size != 0 || tls_dir.VirtualAddress != 0)
++    {
++        uint32_t tls_off = 0;
++        if (tls_dir.VirtualAddress == 0 || tls_dir.Size < sizeof(PeTlsDirectory64) ||
++            !image_range(s, tls_dir.VirtualAddress, tls_dir.Size) ||
++            !rva_to_file_offset(s, tls_dir.VirtualAddress, tls_dir.Size, tls_off))
++            return fail(out, "corrupt TLS directory");
++        PeTlsDirectory64 tls;
++        std::memcpy(&tls, s.file + tls_off, sizeof(tls));
++        if (tls.StartAddressOfRawData != tls.EndAddressOfRawData ||
++            tls.AddressOfCallBacks != 0 || tls.SizeOfZeroFill != 0)
++            return fail(out, "PE has a static TLS directory with data or callbacks; "
++                             "TEB/gs thread-local access unsupported -- refused");
++    }
+ 
+     std::string reason;
+     if (!partition_ok(s, reason)) return fail(out, std::move(reason));
+@@ -217,32 +324,46 @@
+     out.entry_rva = s.opt->AddressOfEntryPoint;
+ 
+     // ---- base relocations (design 3c) ----
++    if (s.slide != 0 && !s.opts.allow_no_relocs &&
++        (s.opt->DataDirectory[PE_DIR_BASERELOC].Size == 0 ||
++         (s.coff->Characteristics & 0x0001u) != 0))
++        return fail(out, "nonzero slide without usable base relocation directory");
+     if (s.slide != 0 && s.opt->DataDirectory[PE_DIR_BASERELOC].Size != 0)
+     {
+         const uint32_t dir_rva = s.opt->DataDirectory[PE_DIR_BASERELOC].VirtualAddress;
+         const uint32_t dir_size = s.opt->DataDirectory[PE_DIR_BASERELOC].Size;
+-        if (uint64_t(dir_rva) + dir_size > rounded) return fail(out, "base relocation directory exceeds image");
++        if (dir_rva == 0 || dir_size < sizeof(PeRelocBlock) ||
++            !image_range(s, dir_rva, dir_size))
++            return fail(out, "base relocation directory exceeds image");
+         uint32_t walked = 0;
++        size_t applied_relocations = 0;
+         while (walked + sizeof(PeRelocBlock) <= dir_size)
+         {
+             const PeRelocBlock* block = reinterpret_cast<const PeRelocBlock*>(image + dir_rva + walked);
+-            if (block->BlockSize < sizeof(PeRelocBlock) || walked + block->BlockSize > dir_size)
++            if (block->BlockSize < sizeof(PeRelocBlock) ||
++                (block->BlockSize - sizeof(PeRelocBlock)) % sizeof(PeRelocEntry) != 0 ||
++                uint64_t(walked) + block->BlockSize > dir_size)
+                 return fail(out, "corrupt base relocation block");
+             const size_t count = (block->BlockSize - sizeof(PeRelocBlock)) / sizeof(PeRelocEntry);
+             const PeRelocEntry* entries = reinterpret_cast<const PeRelocEntry*>(block + 1);
+             for (size_t e = 0; e < count; ++e)
+             {
+-                uint8_t* at = image + block->PageRva + entries[e].Offset;
+-                if (at + 8 > image + rounded) return fail(out, "relocation target outside image");
++                const uint64_t at_rva = uint64_t(block->PageRva) + entries[e].Offset;
+                 switch (entries[e].Type)
+                 {
+                     case PE_REL_ABSOLUTE:
+                         break; // padding
+                     case PE_REL_DIR64:
+-                        *reinterpret_cast<uint64_t*>(at) += s.slide;
++                        if (!image_range(s, at_rva, sizeof(uint64_t)))
++                            return fail(out, "relocation target outside image");
++                        *reinterpret_cast<uint64_t*>(image + at_rva) += s.slide;
++                        ++applied_relocations;
+                         break;
+                     case PE_REL_HIGHLOW:
+-                        *reinterpret_cast<uint32_t*>(at) += uint32_t(s.slide);
++                        if (!image_range(s, at_rva, sizeof(uint32_t)))
++                            return fail(out, "relocation target outside image");
++                        *reinterpret_cast<uint32_t*>(image + at_rva) += uint32_t(s.slide);
++                        ++applied_relocations;
+                         break;
+                     default:
+                         return fail(out, "unsupported base relocation type (not DIR64/HIGHLOW)");
+@@ -250,25 +371,39 @@
+             }
+             walked += block->BlockSize;
+         }
++        if (walked != dir_size) return fail(out, "corrupt base relocation block trailing bytes");
++        if (applied_relocations == 0 && !s.opts.allow_no_relocs)
++            return fail(out, "nonzero slide without usable base relocation entries");
+     }
+ 
+     // ---- imports (design 3d): resolve all, then refuse listing every miss ----
+-    if (s.opt->DataDirectory[PE_DIR_IMPORT].Size != 0)
++    if (s.opt->DataDirectory[PE_DIR_IMPORT].Size != 0 ||
++        s.opt->DataDirectory[PE_DIR_IMPORT].VirtualAddress != 0)
+     {
+         const uint32_t dir_rva = s.opt->DataDirectory[PE_DIR_IMPORT].VirtualAddress;
+-        for (uint32_t idx = 0;; ++idx)
++        const uint32_t dir_size = s.opt->DataDirectory[PE_DIR_IMPORT].Size;
++        uint32_t dir_off = 0;
++        if (dir_rva == 0 || dir_size < sizeof(PeImportDescriptor) ||
++            !image_range(s, dir_rva, dir_size) ||
++            !rva_to_file_offset(s, dir_rva, dir_size, dir_off))
++            return fail(out, "corrupt import directory bounds");
++        bool terminated = false;
++        for (uint32_t idx = 0;
++             uint64_t(idx + 1) * sizeof(PeImportDescriptor) <= dir_size; ++idx)
+         {
+             uint32_t off = 0;
+             if (!rva_to_file_offset(s, dir_rva + idx * sizeof(PeImportDescriptor), sizeof(PeImportDescriptor), off))
+                 return fail(out, "corrupt import directory (descriptor out of range)");
+             const PeImportDescriptor d = *reinterpret_cast<const PeImportDescriptor*>(s.file + off);
+-            if (d.FirstThunk == 0 && d.Name == 0) break; // null terminator
+-            if (d.FirstThunk >= s.opt->SizeOfImage) return fail(out, "corrupt import descriptor (IAT out of range)");
++            if (d.FirstThunk == 0 && d.Name == 0) { terminated = true; break; }
++            if (!image_range(s, d.FirstThunk, 8))
++                return fail(out, "corrupt import descriptor (IAT out of range)");
+ 
+             uint32_t name_off = 0;
+             if (!rva_to_file_offset(s, d.Name, 1, name_off)) return fail(out, "corrupt import descriptor name");
+             const char* dll = reinterpret_cast<const char*>(s.file + name_off);
+-            const size_t dll_cap = file_size - name_off;
++            const size_t dll_cap = rva_file_span(s, d.Name);
++            if (!std::memchr(dll, '\0', dll_cap)) return fail(out, "unterminated import DLL name");
+ 
+             // Prefer the INT (OriginalFirstThunk) for names; write resolutions
+             // into the IAT (FirstThunk) in the mapped image.
+@@ -276,7 +411,11 @@
+             for (uint32_t t = 0;; ++t)
+             {
+                 uint32_t toff = 0;
+-                if (!rva_to_file_offset(s, thunk_rva + t * 8, 8, toff))
++                const uint64_t thunk_at = uint64_t(thunk_rva) + uint64_t(t) * 8;
++                const uint64_t iat_at = uint64_t(d.FirstThunk) + uint64_t(t) * 8;
++                if (thunk_at > UINT32_MAX || !image_range(s, thunk_at, 8) ||
++                    !image_range(s, iat_at, 8) ||
++                    !rva_to_file_offset(s, uint32_t(thunk_at), 8, toff))
+                     return fail(out, "corrupt import thunk table");
+                 const uint64_t thunk = *reinterpret_cast<const uint64_t*>(s.file + toff);
+                 if (thunk == 0) break; // end of this DLL's thunk array
+@@ -291,13 +430,14 @@
+                 else
+                 {
+                     uint32_t soff = 0;
+-                    if (!rva_to_file_offset(s, uint32_t(thunk), 3, soff))
++                    if (thunk > UINT32_MAX || !rva_to_file_offset(s, uint32_t(thunk), 3, soff))
+                         return fail(out, "corrupt import name entry");
+                     const char* nm = reinterpret_cast<const char*>(s.file + soff + 2); // skip Hint
+-                    const size_t cap = file_size - (soff + 2);
++                    const size_t cap = rva_file_span(s, uint32_t(thunk)) - 2;
+                     size_t len = 0;
+                     while (len < cap && len < sizeof(symbol) - 1 && nm[len] != '\0') ++len;
+-                    if (len >= sizeof(symbol) - 1) return fail(out, "import symbol name too long");
++                    if (len >= cap || len >= sizeof(symbol) - 1)
++                        return fail(out, "unterminated or oversized import symbol name");
+                     std::memcpy(symbol, nm, len);
+                     symbol[len] = '\0';
+                 }
+@@ -311,10 +451,11 @@
+                 }
+                 else
+                 {
+-                    *reinterpret_cast<uint64_t*>(image + d.FirstThunk + t * 8) = uint64_t(resolved);
++                    *reinterpret_cast<uint64_t*>(image + iat_at) = uint64_t(resolved);
+                 }
+             }
+         }
++        if (!terminated) return fail(out, "corrupt import directory (missing terminator)");
+         if (!out.missing.empty())
+             return fail(out, "unresolved imports (fail-closed; no null-filled IAT)");
+     }
+@@ -345,8 +486,19 @@
+     // retained-module law) ----
+     LoadResult::Impl* kept = new LoadResult::Impl();
+     kept->image = image;
++    kept->image_size = s.opt->SizeOfImage;
+     kept->export_dir_rva = s.opt->DataDirectory[PE_DIR_EXPORT].VirtualAddress;
+     kept->export_dir_size = s.opt->DataDirectory[PE_DIR_EXPORT].Size;
++    for (uint16_t i = 0; i < num_sections; ++i)
++    {
++        const PeSectionHeader& sec = s.sections[i];
++        if (sec.Characteristics & PE_SCN_MEM_EXECUTE)
++        {
++            const uint32_t exec_bytes = sec.VirtualSize && sec.VirtualSize < sec.SizeOfRawData ?
++                                        sec.VirtualSize : sec.SizeOfRawData;
++            kept->executable_ranges.push_back({sec.VirtualAddress, sec.VirtualAddress + exec_bytes});
++        }
++    }
+     out.ok = true;
+     out.impl = kept;
+     return out;
+@@ -357,18 +509,39 @@
+ {
+     if (!ok || !impl || impl->export_dir_size == 0 || !name) return nullptr;
+     uint8_t* img = impl->image;
+-    const PeExportDirectory& ex = *reinterpret_cast<const PeExportDirectory*>(img + impl->export_dir_rva);
++    const auto inside = [&](uint64_t rva, uint64_t bytes) {
++        return rva <= impl->image_size && bytes <= impl->image_size - rva;
++    };
++    if (impl->export_dir_size < sizeof(PeExportDirectory) ||
++        !inside(impl->export_dir_rva, impl->export_dir_size)) return nullptr;
++    PeExportDirectory ex;
++    std::memcpy(&ex, img + impl->export_dir_rva, sizeof(ex));
++    if (!inside(ex.AddressOfNames, uint64_t(ex.NumberOfNames) * sizeof(uint32_t)) ||
++        !inside(ex.AddressOfNameOrdinals, uint64_t(ex.NumberOfNames) * sizeof(uint16_t)) ||
++        !inside(ex.AddressOfFunctions, uint64_t(ex.NumberOfFunctions) * sizeof(uint32_t)))
++        return nullptr;
+     const uint32_t* names = reinterpret_cast<const uint32_t*>(img + ex.AddressOfNames);
+     const uint16_t* ords = reinterpret_cast<const uint16_t*>(img + ex.AddressOfNameOrdinals);
+     const uint32_t* funcs = reinterpret_cast<const uint32_t*>(img + ex.AddressOfFunctions);
+     for (uint32_t i = 0; i < ex.NumberOfNames; ++i)
+     {
+-        const char* n = reinterpret_cast<const char*>(img + names[i]);
++        const uint32_t name_rva = names[i];
++        if (!inside(name_rva, 1)) return nullptr;
++        const char* n = reinterpret_cast<const char*>(img + name_rva);
++        if (!std::memchr(n, '\0', impl->image_size - name_rva)) return nullptr;
+         if (std::strcmp(n, name) != 0) continue;
++        if (ords[i] >= ex.NumberOfFunctions) return nullptr;
+         const uint32_t fn_rva = funcs[ords[i]];
++        if (!inside(fn_rva, 1)) return nullptr;
+         // Forwarded exports point inside the export directory itself; this
+         // loader does not follow forwarders and reports them as unresolved.
+-        if (fn_rva >= impl->export_dir_rva && fn_rva < impl->export_dir_rva + impl->export_dir_size) return nullptr;
++        if (fn_rva >= impl->export_dir_rva &&
++            uint64_t(fn_rva) < uint64_t(impl->export_dir_rva) + impl->export_dir_size)
++            return nullptr;
++        bool executable = false;
++        for (const auto& range : impl->executable_ranges)
++            if (fn_rva >= range.begin && fn_rva < range.end) { executable = true; break; }
++        if (!executable) return nullptr;
+         return img + fn_rva;
+     }
+     return nullptr;
+@@ -379,12 +552,18 @@
+ {
+     if (!file_bytes || file_size < sizeof(PeDosHeader) + 4 + sizeof(PeFileHeader) + sizeof(PeOptionalHeader64))
+         return false;
+-    const PeDosHeader* dos = reinterpret_cast<const PeDosHeader*>(file_bytes);
++    const auto* data = static_cast<const uint8_t*>(file_bytes);
++    const PeDosHeader* dos = reinterpret_cast<const PeDosHeader*>(data);
+     if (dos->e_magic != 0x5A4D) return false;
+-    const auto* coff = reinterpret_cast<const PeFileHeader*>(static_cast<const uint8_t*>(file_bytes) + dos->e_lfanew + 4);
+-    if (coff->Machine != 0x8664 || coff->SizeOfOptionalHeader < sizeof(PeOptionalHeader64)) return false;
++    if (dos->e_lfanew < 0 || uint64_t(dos->e_lfanew) + 4 + sizeof(PeFileHeader) > file_size)
++        return false;
++    const auto* coff = reinterpret_cast<const PeFileHeader*>(data + dos->e_lfanew + 4);
++    if (coff->Machine != 0x8664 || coff->SizeOfOptionalHeader < sizeof(PeOptionalHeader64))
++        return false;
++    const uint64_t opt_off = uint64_t(dos->e_lfanew) + 4 + sizeof(PeFileHeader);
++    if (opt_off + coff->SizeOfOptionalHeader > file_size) return false;
+     const auto* opt = reinterpret_cast<const PeOptionalHeader64*>(reinterpret_cast<const uint8_t*>(coff) + sizeof(PeFileHeader));
+-    if (opt->Magic != 0x020B || opt->NumberOfRvaAndSizes <= index) return false;
++    if (index >= 16 || opt->Magic != 0x020B || opt->NumberOfRvaAndSizes <= index) return false;
+     return opt->DataDirectory[index].Size != 0;
+ }
+ } // namespace

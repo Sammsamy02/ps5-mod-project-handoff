@@ -1,0 +1,177 @@
+--- a/src/CodePatch.cpp
++++ b/src/CodePatch.cpp
+@@ -177,9 +177,12 @@
+     out->prot = prot;
+     char dec[8];
+     prot_decode(prot, dec);
+-    emitf("[CAP3][QUERY] qmp addr=%p rc=%d errno=%d prot=0x%x(%s) span=%p..%p",
+-          addr, rc, errno, (unsigned)prot, dec, start, end);
+-    if(rc != 0)
++    const uintptr_t queried = (uintptr_t)addr;
++    const bool bracketed = start && end &&
++        (uintptr_t)start <= queried && queried < (uintptr_t)end;
++    emitf("[CAP3][QUERY] qmp addr=%p rc=%d errno=%d prot=0x%x(%s) span=%p..%p bracketed=%d",
++          addr, rc, errno, (unsigned)prot, dec, start, end, (int)bracketed);
++    if(rc != 0 || !bracketed)
+         return PatchResult::kQueryFailed;
+     return PatchResult::kOk;
+ }
+@@ -199,7 +202,9 @@
+     prot_decode(info.prot, dec);
+     /* Layout sanity: a wrong PS5 struct layout must SHOW here, not pass
+      * garbage onward (U3 detection). */
+-    int bracketed = (info.start <= addr) && (addr < info.end);
++    int bracketed = info.start && info.end &&
++        (uintptr_t)info.start <= (uintptr_t)addr &&
++        (uintptr_t)addr < (uintptr_t)info.end;
+     emitf("[CAP3][QUERY] vq addr=%p rc=%d errno=%d prot=0x%x(%s) span=%p..%p "
+           "name='%.32s' bracketed=%d",
+           addr, rc, errno, (unsigned)info.prot, dec,
+@@ -259,6 +264,12 @@
+         span->orig_prot[i] = -1;
+ }
+ 
++static bool span_address_valid(const void* target, size_t length)
++{
++    return target && length > 0 && length <= kMaxPatchBytes &&
++        (uintptr_t)target <= UINTPTR_MAX - (length - 1);
++}
++
+ /* ================================================================== */
+ /* Protocol helpers                                                    */
+ /* ================================================================== */
+@@ -459,7 +470,8 @@
+           target, length, flags);
+ 
+     /* STEP 0: arguments. */
+-    if(!target || !replacement || length == 0)
++    if(!target || !replacement || length == 0 ||
++       (length <= kMaxPatchBytes && !span_address_valid(target, length)))
+         return PatchResult::kBadArgs;
+     if(length > kMaxPatchBytes)
+         return PatchResult::kTooLarge;
+@@ -570,7 +582,7 @@
+ 
+     void* target = backup->target;
+     size_t length = backup->length;
+-    if(!target || length == 0 || length > kMaxPatchBytes ||
++    if(!span_address_valid(target, length) ||
+        backup->page_count == 0 || backup->page_count > kMaxPatchPages)
+         return PatchResult::kBackupInvalid;
+     Span expected;
+--- a/tests/host_test_protocol.cpp
++++ b/tests/host_test_protocol.cpp
+@@ -121,6 +121,7 @@
+ static std::map<uintptr_t, int> g_frozen;         /* stale qmp snapshot  */
+ static bool g_qmp_use_frozen   = false;
+ static int  g_qmp_fail_next    = 0;               /* one-shot rc!=0      */
++static int  g_qmp_wrong_span_next = 0;            /* success, wrong span */
+ static int  g_qmp_lie_rwx_left = 0;               /* report R|X n times  */
+ static long g_qmp_lie_at_call  = 0;               /* 1-based qmp call to
+                                                      lie on (0 = off)    */
+@@ -207,8 +208,17 @@
+         v = PROT_READ | PROT_WRITE | PROT_EXEC;
+     }
+     uintptr_t base = (uintptr_t)addr & ~(uintptr_t)PAGE_MASK;
+-    if(start) *start = (void*)base;
+-    if(end)   *end   = (void*)(base + PAGE_SIZE);
++    if(g_qmp_wrong_span_next > 0)
++    {
++        --g_qmp_wrong_span_next;
++        if(start) *start = (void*)(base + PAGE_SIZE);
++        if(end)   *end   = (void*)(base + 2 * PAGE_SIZE);
++    }
++    else
++    {
++        if(start) *start = (void*)base;
++        if(end)   *end   = (void*)(base + PAGE_SIZE);
++    }
+     if(prot)  *prot  = v;
+     return 0;
+ }
+@@ -281,6 +291,7 @@
+ {
+     g_qmp_use_frozen   = false;
+     g_qmp_fail_next    = 0;
++    g_qmp_wrong_span_next = 0;
+     g_qmp_lie_rwx_left = 0;
+     g_qmp_lie_at_call  = 0;
+     g_qmp_calls        = 0;
+@@ -340,6 +351,43 @@
+           "bytes untouched after query failure");
+     CHECK(page_prot_is(g_span, kOrigProt), "prot untouched after query failure");
+     fixture_reset_injections();
++}
++
++static void test_query_span_validation(void)
++{
++    log_clear();
++    PatchBackup b;
++    memset(&b, 0, sizeof(b));
++    g_qmp_wrong_span_next = 1;
++    PatchResult r = cap03::patch_code_ex(g_span, kReplacement, kPatchLen,
++                                         &b, cap03::kFlagSkipLiveness);
++    CHECK(r == PatchResult::kQueryFailed,
++          "successful query with unrelated span -> kQueryFailed");
++    CHECK(!log_contains("STEP=OPEN") &&
++          memcmp(g_span, kOriginal, sizeof(kOriginal)) == 0 &&
++          page_prot_is(g_span, kOrigProt),
++          "unrelated query span cannot open or modify text");
++    if(r == PatchResult::kOk)
++        (void)cap03::unpatch_code_ex(&b, cap03::kFlagSkipLiveness);
++    fixture_reset_injections();
++}
++
++static void test_address_overflow(void)
++{
++    pid_t child = fork();
++    if(child == 0)
++    {
++        PatchBackup b;
++        memset(&b, 0, sizeof(b));
++        void* wrap = (void*)(UINTPTR_MAX - 2);
++        PatchResult r = cap03::patch_code_ex(wrap, kReplacement, kPatchLen,
++                                             &b, cap03::kFlagSkipLiveness);
++        _exit(r == PatchResult::kBadArgs ? 0 : 1);
++    }
++    int status = 0;
++    const bool waited = child > 0 && waitpid(child, &status, 0) == child;
++    CHECK(waited && WIFEXITED(status) && WEXITSTATUS(status) == 0,
++          "wrapping patch address refuses before reading target");
+ }
+ 
+ static void test_execute_only_refused_before_read(void)
+@@ -743,6 +791,10 @@
+     b.page_count = cap03::kMaxPatchPages + 1;
+     CHECK(cap03::unpatch_code_ex(&b, 0) == PatchResult::kBackupInvalid,
+           "invalid page count rejected before fixed-array access");
++    b.page_count = 1;
++    b.target = (void*)(UINTPTR_MAX - 2);
++    CHECK(cap03::unpatch_code_ex(&b, 0) == PatchResult::kBackupInvalid,
++          "wrapping backup target refuses before span calculation");
+ }
+ 
+ static void test_module_slot_entries(void)
+@@ -797,6 +849,8 @@
+ 
+     test_arg_validation();
+     test_query_failure();
++    test_query_span_validation();
++    test_address_overflow();
+     test_execute_only_refused_before_read();
+     test_mixed_protection();
+     test_happy_patch_unpatch();
+--- a/tests/run_host_test.sh
++++ b/tests/run_host_test.sh
+@@ -50,6 +50,11 @@
+                "_ZN5cap0313kekcall_checkEv:build/ps5-obj/CodePatch.o:ps5"; do
+     SYM="${SYM_OBJ%%:*}"; REST="${SYM_OBJ#*:}"
+     OBJ="${REST%%:*}"; KIND="${REST##*:}"
++    if [ ! -f "$OBJ" ]; then
++        echo "[run] STATIC-NOT-RUN [$KIND] object absent; target compilation remains unverified"
++        if [ "$KIND" = host ]; then STATIC_RC=1; fi
++        continue
++    fi
+     DIS="$("$OBJDUMP" -d --disassemble-symbols="$SYM" "$OBJ" 2>/dev/null)"
+     echo "$DIS" > "$OBJDIR/kekcall_check.$KIND.dis.txt"
+     if echo "$DIS" | grep -q "0xFFFFFFFF00000027" && echo "$DIS" | grep -q "	syscall"; then

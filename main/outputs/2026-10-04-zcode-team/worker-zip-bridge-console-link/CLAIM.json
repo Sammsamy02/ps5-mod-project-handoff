@@ -1,0 +1,76 @@
+{
+  "worker": "worker-zip-bridge-console-link",
+  "date": "2026-10-04",
+  "task": "Link worker-zip-to-mfb F-R1 bridge TU (owned/modinst_zip_bridge.{c,h}) into the compose_installer console-flavor payload; provider check must pass; 75/75 bridge suite must stay green via the composed copy.",
+  "status": "DELIVERED",
+  "scope": {
+    "workspace_root": "/WORKSPACE/.codex/worktrees/translation-core/what",
+    "write_dir": "outputs/2026-10-04-zcode-team/worker-zip-bridge-console-link/",
+    "read_only_inputs": [
+      "outputs/2026-10-04-zcode-team/worker-installer-composition/compose_installer.py",
+      "outputs/2026-10-04-zcode-team/worker-e2e-final/compose_e2e.py",
+      "outputs/2026-10-04-zcode-team/worker-zip-to-mfb/owned/*",
+      "outputs/ps5-mod-bridge/* (pinned SDK, closure, mbed, llvm)"
+    ],
+    "network": false,
+    "console_contact": false,
+    "nested_agents": false,
+    "tool_calls_used": 31,
+    "tool_calls_budget": 35
+  },
+  "deliverables": {
+    "driver": "compose_console_bridge.py",
+    "adapted_inner": "composition_zb_console_inner.py",
+    "patch_chain_receipt": "receipts/console-bridge-script-patches.json",
+    "owned_vendoring_receipt": "receipts/vendored-owned.json",
+    "console_payload": "composition/build/console/modbridge-installer.payload.elf",
+    "console_map": "composition/build/console/modbridge-installer.payload.map",
+    "host_regression": "test/run_bridge_tests.sh (verbatim suite copy; BIN resolves to this dir's binary)",
+    "report": "REPORT.md"
+  },
+  "console_payload": {
+    "sha256": "cfa96ab5aa408491c74d996f65058b737274a5bb109a7de6e213f9554bbda4f9",
+    "bytes": 681632,
+    "imports": 116,
+    "missing_imports": [],
+    "import_set_delta_vs_baseline": [],
+    "baseline": {
+      "source": "worker-installer-composition/composition/receipts/console-import-providers.json",
+      "sha256": "55ae402c95d2bc7e2036a5486b298d950c77c1cdd329aa894979fc9b4b70217d",
+      "bytes": 647928,
+      "imports": 116
+    },
+    "bridge_linked_proof": "map shows modinst_zip_bridge.ps5.o with mi_bridge_run/mi_bridge_wants_auto/mi_bridge_mod_arg defined and referenced from modinst_core.ps5.o",
+    "bridge_compile_receipts": "console-compile-modinst_zip_bridge.{stdout,stderr} both 0 bytes (clean under console core_flags)"
+  },
+  "host_regression": {
+    "suite": "test/run_bridge_tests.sh",
+    "result": "PASS=75 FAIL=0 exit=0",
+    "summary_log": "test/bridge-e2e-summary.log",
+    "transcript": "test/bridge-e2e.log"
+  },
+  "provenance": {
+    "chain_root_pin": "compose_installer.py sha == e2e-final script-patches.json vendored_script_sha256 (e9074052...)",
+    "e2e_layer_pin": "compose_e2e.py sha == zip-to-mfb bridge-script-patches.json vendored_driver_sha256 (3f310101...)",
+    "replay_proof": "intermediate driver after zip-to-mfb's 4 verbatim splices == zip-to-mfb adapted_driver_sha256 (897cf0eb...)",
+    "honest_notes": [
+      "e2e-final's own adapted_script_sha256 pin (606a8a98...) covers a pre-delivery revision; the zip-to-mfb vendored-driver pin (the bytes that produced the green 75/75 delivery) is used instead; divergence recorded",
+      "portability defect was in the delivered composition wiring (console target list missing the bridge TU while zb-dispatch-bridge references mi_bridge_* on both flavors); the bridge TU itself needed no changes",
+      "host running=1 remains simulate-runtime ack-file proof only; console runtime module_start ack is the real acceptance and was NOT performed"
+    ]
+  },
+  "corrections": [
+    {
+      "id": "zb-console-target-bridge",
+      "splices": ["zb-console-inner-name", "zb-console-targets-seq", "zb-console-target-def"],
+      "finding": "delivered chain adds modinst_zip_bridge to the host target list only; delivered console link would abort on undefined mi_bridge_*",
+      "fix": "S_CONSOLE_TARGETS exact-anchor splice tuple adds the bridge TU to the console target list with the shared core_flags"
+    }
+  ],
+  "remaining_console_only_steps": [
+    "FTP-stage payload + launch ritual (controller-owned; not performed here)",
+    "console stage-1 download transport still open (merge worker-ps5io-rdwr native download closure or stage archives by another route; then staged E2E per worker-e2e-rehearsal READINESS.md GO conditions)",
+    "on-console acceptance: injected runtime module_start ack",
+    "bridge v1 bounds (<=256 members, <=64MiB member bytes, <=1MiB manifest) and open F-R2 unchanged"
+  ]
+}

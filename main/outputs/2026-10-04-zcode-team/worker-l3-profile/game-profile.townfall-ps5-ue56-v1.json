@@ -1,0 +1,1359 @@
+{
+  "profile_format": 1,
+  "profile_kind": "game-build-profile",
+  "schema_id": "game-profile",
+  "schema_version": 1,
+  "profile_id": "townfall-ps5-ue56-game-profile-v1",
+  "generated": "2026-10-05",
+  "generator": {
+    "path": "tools/gen_profile.py",
+    "inputs_manifest": "inputs-manifest.json",
+    "regenerate_command": "python3 tools/gen_profile.py"
+  },
+  "layer_model": {
+    "l1": "compat runtime (UE4SS-PS5 composition): consumes addresses.memory_geometry + runtime_facts; owns hooks, leases, capture, spanpub",
+    "l2": "engine adapter (UnrealInitializer seed path): consumes engine.key_structures to bind FName/GUObjectArray/GMalloc/SCO services",
+    "l3": "this profile: the per-build facts both layers resolve against; regenerates from the pinned sources"
+  },
+  "identity": {
+    "title": "Silent Hill Townfall",
+    "title_id": "PPSA33286",
+    "executable": "eboot.bin (decrypted)",
+    "executable_console_path": "/data/homebrew/Silent Hill Townfall PPSA33286/decrypted/eboot.bin",
+    "image_bytes": 194241424,
+    "image_sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+    "sha_provenance": "recomputed from the pinned decrypted image at generation (S-image); equals S1/S2/S-capture/S3 pins",
+    "target": "prospero-x86_64-sysv",
+    "pointer_size": 8,
+    "elf": {
+      "e_type": 65040,
+      "e_machine": 62,
+      "e_phnum": 14,
+      "e_entry": 128,
+      "sections": "none",
+      "symbols": "Sony-scrambled dynamic symbol names"
+    },
+    "build_id_staged_layout": null
+  },
+  "engine": {
+    "family": "Unreal",
+    "version": {
+      "major": 5,
+      "minor": 6,
+      "patch": null,
+      "revision": null,
+      "resolution": "static survey endpoint ps_engine_version_file_image, status=0 major=5 minor=6 (E-survey-stdout)",
+      "provenance_class": "host-derived",
+      "note": "RE workers label the shipping build 'PS5 UE 5.6.1' (FNAME-POOL-RE.md header); the survey resolves only major.minor — patch/revision remain unverified and are NOT promoted into version fields."
+    },
+    "version_override": {
+      "settings_section": "[EngineVersionOverride]",
+      "value": "5.6",
+      "effect": "consumed at comp6-program:1011-1023; sets Unreal::Version and nulls the version scan — the engine_version slot (slot 6) is settings-owned, never seeded",
+      "provenance_class": "re-verified"
+    },
+    "key_structures": {
+      "FNamePool": {
+        "label": "0x9365ec0",
+        "runtime": "0x9765ec0",
+        "offsets": {
+          "current_block": "+0x8 (u32)",
+          "current_byte_offset": "+0xC (u32)",
+          "blocks": "+0x10 (u64 Blocks[8192])",
+          "hash_buckets": "+0x10040 (256 x 0x40 descriptors; aux buckets Malloc(0x400,4), mask 0xff)",
+          "none_id": "+0x14040 (u32)",
+          "byte_property_id": "+0x14044 (u32)"
+        },
+        "constants": {
+          "block_offset_bits": 16,
+          "max_blocks": 8192,
+          "block_size_bytes": 131072,
+          "block_alloc_call": "FMemory::Malloc(0x20000, 2)",
+          "entry_stride_bytes": 2,
+          "entry_header": "u16 LE: bit0 bIsWide, bits5:1 LowercaseProbeHash, bits15:6 Len",
+          "id_decomposition": "block = id >> 16; byte offset = (id & 0xFFFF) * 2",
+          "init_memset": "memset(pool+8, 0, 0x10008) -> CurrentBlock=0, CBO=0, Blocks[]=null",
+          "default_name_count": 236
+        },
+        "functions": {
+          "init": {
+            "label": "0x23a5d0",
+            "runtime": "0x63a5d0"
+          },
+          "reserve": {
+            "label": "0x246090",
+            "runtime": "0x646090"
+          },
+          "find_or_store_core": {
+            "label": "0x242470",
+            "runtime": "0x642470"
+          },
+          "store_entry_alloc": {
+            "label": "0x246090",
+            "runtime": "0x646090"
+          },
+          "default_name_store": {
+            "label": "0x23c0b0",
+            "runtime": "0x63c0b0"
+          },
+          "getter": {
+            "label": "0x243240",
+            "runtime": "0x643240"
+          },
+          "init_flag_guard": {
+            "label": "0x9365ea0",
+            "runtime": "0x9765ea0",
+            "note": "bInitialized byte at pool-0x20; gate pool validation on it == 1"
+          }
+        },
+        "semantics": {
+          "current_block": "0-BASED INDEX of the block currently being filled, NOT a count; 0 is valid and common (corrected semantics, FNAME-POOL-RE R1; v3's '>= 1' predicate false-refused legitimate pools)",
+          "engine_invariant": "id >> 16 <= CurrentBlock (engine getter @0x23d570)",
+          "entry0_anchor": "Blocks[0] entry 0 is ANSI 'None': u16 header h>>6 == 4 && (h&1) == 0 && payload == 'None' (FNAME-POOL-RE R3)",
+          "sliver_terminator": "on block rollover the 2-byte tail is masked to 0x3f (len 0 header)"
+        },
+        "corroboration": {
+          "channel_1": "worker-re-fname-pool Tier-1 capstone 5.0.7 + lief 1.0.0 (S6): 103 exact field hits, 100+ refs to the pool label",
+          "channel_2": "worker-rea-trial Ghidra provider (S7): 49/49 pool-label xrefs identical to the byte scan; init 0x23a5d0 decompiled (CORROB_pool_init) confirming memset/Malloc(0x20000,2)/Blocks[0] store/236 default names; ctor 0x23d590 decompiled line-by-line identical",
+          "agreement": "point-by-point AGREE on every structural claim (S7 cross-check table)"
+        },
+        "notes": [
+          "Blocks[0] storage class is NOT pinned: the allocator OBJECT is static image BSS, but the BLOCK follows the allocator's pools; the launch-9 region-class observation placed its mapping in LOAD7's BSS tail — image residency is not refusal evidence (R2 storage separation)",
+          "validator admission = published-readable-span membership + entry-0 'None' content anchor; the frozen heap envelope kHeapLo/kHeapHi is RETIRED"
+        ],
+        "provenance_class": "re-verified",
+        "sources": [
+          "S1",
+          "S4",
+          "S6",
+          "S7"
+        ]
+      },
+      "FName_ctor_wchar": {
+        "label": "0x23d590",
+        "runtime": "0x63d590",
+        "signature": "FName::FName(FName* this=rdi, const wchar_t* name=rsi) [PS5 SysV]",
+        "prologue_bytes": "554889e553504889f04889fb4885f674",
+        "binding": "seeded (slot 2, code): assign + behavioral probe; detour verification skipped while seed-bound",
+        "semantic": "wchar ctor: OR-reduce wchar units (cmp 0x7f -> NAME_WIDE flag at bit 32), bextr length, intern via 0x23d600, 8-byte handle store",
+        "consumer": "FName::ConstructorInternal.assign_address; Lua FName/NAME_None/EFindName",
+        "derivation_summary": "shipped resolve_ctor_elf route executed offline with full read access: five UTF-16 module-name anchors (linked content addrs Engine 0x782b06e, Renderer 0x79a1b12, AnimGraphRuntime 0x75f2fc0, Landscape 0x763551e, RenderCore 0x79f42e2); lea rip-relative xref census 10284/5/2/18/2 sites (exactly matching worker-fname-fc1-materialize diagnostics); five-anchor cluster (all five anchors with xref sites within +/-0x400 of a RenderCore site); within cluster windows: mov edx,1 + nearest e8 rel32 -> consensus target 3/4 windows = 0x23d590 (1 outlier 0x23d8a0, itself a valid function prologue nearby) | worker-fname-ctor-audit/FNAME-VERDICT.md:95 ctor candidate 0x23d590, same prologue; worker-fname-fc1-materialize/calls_by_anchor.materialized.json: address 0x23d590, runtime 0x63d590, 9 call sites rel32-re-verified against this image three ways; worker-fname-runtime-probe FC1 fixtures: byte[site]==E8 and site+5+rel32==0x23d590 for all 9 sites",
+        "corroboration": {
+          "routes": "shipped resolve_ctor_elf five-anchor route + worker-fname-ctor-audit + worker-fname-fc1-materialize (9 call sites rel32 re-verified) + worker-fname-runtime-probe FC1 fixtures",
+          "ghidra": "REA decompile (CORROB_fname_ctor) line-by-line identical to capstone trace; 14,401 e8 call sites = byte-level upper bound, 2 instruction-verified in analyzed code"
+        },
+        "provenance_class": "re-verified",
+        "sources": [
+          "S1",
+          "S3",
+          "S6",
+          "S7"
+        ]
+      },
+      "GUObjectArray": {
+        "label": "0x93ba110",
+        "runtime": "0x97ba110",
+        "semantic": "FUObjectArray global singleton",
+        "consumer": "UObjectArray::SetupGUObjectArrayAddress",
+        "derivation_summary": "validated in-game + offline code-ref corroboration (1565 rip-relative lea/mov code sites target linked 0x93ba110 exactly; 0 mov-imm32 refs) | 0x2b1e57; 0x2b212a; 0x2b2399; 0x2b25f0; 0x2b27fc; 0x2b329e",
+        "corroboration": {
+          "survey": "guobject_original 0x93ba110 corroborated by guobject_cfg_candidate (alloc 0x483b40, free 0x4840b0, flags 63)",
+          "offline": "1565 rip-relative lea/mov sites target the label exactly; 0 mov-imm32 refs"
+        },
+        "notes": [
+          "member layout offsets (FUObjectArray/FUObjectItem internals) remain unresolved — only the singleton label is profiled",
+          "igf4 GUA structural header predictions REFUTED; placement/read/writeback is the proven surface"
+        ],
+        "provenance_class": "in-game-observed",
+        "sources": [
+          "S1",
+          "S2",
+          "S3"
+        ]
+      },
+      "GMalloc": {
+        "label": "0x930add8",
+        "runtime": "0x970add8",
+        "offsets": {},
+        "constants": {
+          "interface_ptr_label": "0x9350950",
+          "interface_ptr_runtime": "0x9750950",
+          "instance_label": "0x93089b8",
+          "instance_runtime": "0x97089b8",
+          "vtable_label": "0x7ec26e0",
+          "vtable_runtime": "0x82c26e0",
+          "malloc_vtable_slot": 6,
+          "free_vtable_slot": 8,
+          "free_slot_offset": "+0x50",
+          "fast_path": "size < 0x20001 && align < 0x11; pthread_getspecific freelists; 16-byte size classes",
+          "pool_tables": "76 tables x 0x78 B with per-table mutex (binned family)",
+          "wrapper_chain": "decorator 0xbeb20 (vtable 0x7ec3f20) -> optional 0x28-B thread-forwarder (vtable 0x7ec4030) -> binned base"
+        },
+        "functions": {
+          "fmemory_malloc": {
+            "label": "0xb7a20",
+            "runtime": "0x4b7a20"
+          },
+          "fmemory_free": {
+            "label": "0xb7a90",
+            "runtime": "0x4b7a90"
+          },
+          "instance_ctor": {
+            "label": "0x4afd40",
+            "runtime": "0x8afd40"
+          },
+          "factory": {
+            "label": "0xb3f0",
+            "runtime": "0x40b3f0"
+          },
+          "bootstrap_store": {
+            "label": "0xb660",
+            "runtime": "0x40b660",
+            "note": "ONE store image-wide into the GMalloc slot; 11 loads, all FMalloc virtual dispatch"
+          },
+          "malloc_impl": {
+            "label": "0xb48e0",
+            "runtime": "0x4b48e0"
+          },
+          "slow_path": {
+            "label": "0x4b1460",
+            "runtime": "0x8b1460"
+          }
+        },
+        "semantic": "FMalloc* GMalloc global -> FMallocBinned-family static instance (MallocBinned3.cpp string present; leaf label Binned2-vs-3 not symbolically proven)",
+        "consumer": "GMalloc = bit_cast<FMalloc**>(slot); null GMalloc throws upstream",
+        "validators": {
+          "V1": "[GMalloc] == derived instance 0x93089b8 exactly (slot 3 arms only if V1 AND V2 pass)",
+          "V2": "instance vptr == derived vtable 0x7ec26e0 (RELA-reconstructed; compared as link-time constant, never dereferenced)"
+        },
+        "derivation_summary": "worker-gmalloc-derivation NEW ROUTE: FMallocBinned3 UTF-16 literals (4x) -> Malloc/Realloc/Free validation roots -> RELA-reconstructed vtable linked 0x7ec26e0 (runtime 0x82c26e0, phdr-3 RELRO readable) -> ctor 0xafd40 -> factory 0xb3f0 constructs the GLOBAL instance at linked 0x93089b8 -> bootstrap store at 0xb660 into 0x930add8 (ONE store image-wide; 11 loads all FMalloc virtual dispatch) | ",
+        "provenance_class": "re-verified",
+        "sources": [
+          "S1",
+          "S2",
+          "S4",
+          "S6",
+          "S7"
+        ]
+      },
+      "StaticConstructObjectInternal": {
+        "label": "0x490aa0",
+        "runtime": "0x890aa0",
+        "prologue_bytes": "554889e54157415641554154534881ec",
+        "binding": "seeded (slot 4, code): assign + indirect call only",
+        "semantic": "terminal near-call of the FStaticConstructObjectParameters ctor pair route",
+        "consumer": "StaticConstructObjectInternal.assign_address; Lua StaticConstructObject",
+        "derivation_summary": "shipped resolve_static_construct_string_elf route executed offline: UTF-16 anchor 'NewObject with empty name can't be used to create default' at linked 0x7999084 (unique hit); 1918 lea rip-relative xref sites; capstone 5.0.7 decode of each 130-byte post-xref window (real instruction boundaries): the dominant FINAL consecutive near-call pair is (0x493530 -> 0x490aa0) in 744/1918 windows and 0x490aa0 is the dominant TERMINAL near-call in 744 windows — exactly the shipped route's documented sequence 'call FStaticConstructObjectParameters ctor; call StaticConstructObjectInternal' | ",
+        "corroboration": {
+          "expected_bytes": "worker-anchor-validation expected_bytes_tick_sco.txt extracted at file offset 0x494aa0 of this same image — byte-identical"
+        },
+        "provenance_class": "re-verified",
+        "sources": [
+          "S1",
+          "S3"
+        ]
+      },
+      "UGameEngine_Tick": {
+        "label": "0x2fac8c0",
+        "runtime": "0x33ac8c0",
+        "binding": "NEVER seeded: vtable-fallback-owned (binds from the live object vtable); the derived constant is documentation-only (slot 10 record, seeding refuses)",
+        "semantic": "UEngine::TickInternal target used by the EngineTick pump / ExecuteInGameThread drain",
+        "consumer": "UEngine::TickInternal.assign_address fallback path (initializer :1919-1947)",
+        "derivation_summary": "byte-evidenced correction: linked 0x2fac8c0 -> runtime 0x33ac8c0; the once-circulated 0x37ac8c0 was a base-convention error (runtime value mislabeled as linked); linked 0x33ac8c0 decodes mid-instruction with ud2",
+        "provenance_class": "re-verified",
+        "sources": [
+          "S1",
+          "S2",
+          "S3",
+          "S5"
+        ]
+      }
+    }
+  },
+  "addresses": {
+    "translation_rule": {
+      "rule": "runtime = linked_file_vaddr + 0x400000 (uniform per-PT_LOAD slide)",
+      "slide": 4194304,
+      "file_offset_rule": "file byte offset = linked_vaddr + 0x4000 for LOAD0/LOAD1 (p_off - p_vaddr = 0x4000); LOAD8 maps vaddr - 0x324000. Never seek() a file vaddr directly — the +0x4000 trap produced the retracted wrong-base artifact.",
+      "runtime_image_extent": [
+        4194304,
+        201720520
+      ],
+      "file_image_extent_vaddr": [
+        0,
+        197526216
+      ],
+      "provenance_class": "in-game-observed",
+      "evidence": "validated in-game: B/D/E window anchors live >= 0x7c26782; GUA live-validated at 0x97ba110; igf7 byte-matched B/C/D/E reads prove L1 file content sits at L1+0x400000; extent reproduced on launch-10 runs 1/3/4 (lmf_extent events)"
+    },
+    "seed_slots": [
+      {
+        "slot_id": 0,
+        "name": "g_uobject_array",
+        "kind": "data",
+        "label": "0x93ba110",
+        "runtime": "0x97ba110",
+        "segment": "phdr7 BSS (RW-, past filesz end)",
+        "address_class": "data-readable",
+        "read_policy": "reads permitted only under the bridge's own kernel-VMMAP lease/registration (same-capture frozen snapshot)",
+        "semantic": "GUObjectArray (FUObjectArray global)",
+        "consumer": "UObjectArray::SetupGUObjectArrayAddress (UnrealInitializer.cpp:885-895)",
+        "derivation_summary": "validated in-game + offline code-ref corroboration (1565 rip-relative lea/mov code sites target linked 0x93ba110 exactly; 0 mov-imm32 refs) | 0x2b1e57; 0x2b212a; 0x2b2399; 0x2b25f0; 0x2b27fc; 0x2b329e",
+        "ingame_evidence": "The only REQUIRED slot with live structural validation: anchor-validation layout A at 0x97ba110 (71959 objects, read+write, GC-order predicate re-validated); igf4 read of 96 B at 0x97ba110 rc=0 inside RW span [0x970c000,0x9a34000) + same-value writeback. Structural header predictions beyond placement were REFUTED (gua_validated_any_cfg=0) — placement + readability is what is proven.",
+        "provenance_class": "in-game-observed",
+        "sources": [
+          "S1",
+          "S2",
+          "S3",
+          "S6"
+        ]
+      },
+      {
+        "slot_id": 2,
+        "name": "fname_ctor_wchar",
+        "kind": "code",
+        "label": "0x23d590",
+        "runtime": "0x63d590",
+        "segment": "phdr0 --X (exec-only)",
+        "address_class": "exec-only-call-only",
+        "read_policy": "call-only: assign + indirect call; data reads refused (kernel prot=4 pages are read-blocked; igf4 rc=3 covered_not_readable proven at this class)",
+        "semantic": "FName::FName(const wchar_t*, EFindName)",
+        "consumer": "FName::ConstructorInternal.assign_address (initializer :885-888); behavioral probe ByteProperty id (SeedValidation check_probe_id)",
+        "derivation_summary": "shipped resolve_ctor_elf route executed offline with full read access: five UTF-16 module-name anchors (linked content addrs Engine 0x782b06e, Renderer 0x79a1b12, AnimGraphRuntime 0x75f2fc0, Landscape 0x763551e, RenderCore 0x79f42e2); lea rip-relative xref census 10284/5/2/18/2 sites (exactly matching worker-fname-fc1-materialize diagnostics); five-anchor cluster (all five anchors with xref sites within +/-0x400 of a RenderCore site); within cluster windows: mov edx,1 + nearest e8 rel32 -> consensus target 3/4 windows = 0x23d590 (1 outlier 0x23d8a0, itself a valid function prologue nearby) | worker-fname-ctor-audit/FNAME-VERDICT.md:95 ctor candidate 0x23d590, same prologue; worker-fname-fc1-materialize/calls_by_anchor.materialized.json: address 0x23d590, runtime 0x63d590, 9 call sites rel32-re-verified against this image three ways; worker-fname-runtime-probe FC1 fixtures: byte[site]==E8 and site+5+rel32==0x23d590 for all 9 sites",
+        "ingame_evidence": null,
+        "provenance_class": "re-verified",
+        "sources": [
+          "S1",
+          "S2",
+          "S3",
+          "S6"
+        ]
+      },
+      {
+        "slot_id": 3,
+        "name": "gmalloc",
+        "kind": "data",
+        "label": "0x930add8",
+        "runtime": "0x970add8",
+        "segment": "phdr7 BSS (RW-, past filesz end)",
+        "address_class": "data-readable",
+        "read_policy": "reads permitted only under the bridge's own kernel-VMMAP lease/registration (same-capture frozen snapshot)",
+        "semantic": "GMalloc interface pointer (FMalloc** global)",
+        "consumer": "GMalloc = bit_cast<FMalloc**>(slot) (initializer :889-892); V1/V2 arming gate",
+        "derivation_summary": "worker-gmalloc-derivation NEW ROUTE: FMallocBinned3 UTF-16 literals (4x) -> Malloc/Realloc/Free validation roots -> RELA-reconstructed vtable linked 0x7ec26e0 (runtime 0x82c26e0, phdr-3 RELRO readable) -> ctor 0xafd40 -> factory 0xb3f0 constructs the GLOBAL instance at linked 0x93089b8 -> bootstrap store at 0xb660 into 0x930add8 (ONE store image-wide; 11 loads all FMalloc virtual dispatch) | ",
+        "ingame_evidence": "Arming pending Phase F (never reached in launch-10 runs 1-4); V1/V2 data-side validators built and host-tested.",
+        "provenance_class": "re-verified",
+        "sources": [
+          "S1",
+          "S2",
+          "S6"
+        ]
+      },
+      {
+        "slot_id": 4,
+        "name": "static_construct_object_internal",
+        "kind": "code",
+        "label": "0x490aa0",
+        "runtime": "0x890aa0",
+        "segment": "phdr0 --X (exec-only)",
+        "address_class": "exec-only-call-only",
+        "read_policy": "call-only: assign + indirect call; data reads refused (kernel prot=4 pages are read-blocked; igf4 rc=3 covered_not_readable proven at this class)",
+        "semantic": "StaticConstructObjectInternal",
+        "consumer": "StaticConstructObjectInternal.assign_address (initializer :1031-1034)",
+        "derivation_summary": "shipped resolve_static_construct_string_elf route executed offline: UTF-16 anchor 'NewObject with empty name can't be used to create default' at linked 0x7999084 (unique hit); 1918 lea rip-relative xref sites; capstone 5.0.7 decode of each 130-byte post-xref window (real instruction boundaries): the dominant FINAL consecutive near-call pair is (0x493530 -> 0x490aa0) in 744/1918 windows and 0x490aa0 is the dominant TERMINAL near-call in 744 windows — exactly the shipped route's documented sequence 'call FStaticConstructObjectParameters ctor; call StaticConstructObjectInternal' | ",
+        "ingame_evidence": null,
+        "provenance_class": "re-verified",
+        "sources": [
+          "S1",
+          "S2",
+          "S3",
+          "S6"
+        ]
+      },
+      {
+        "slot_id": 1,
+        "name": "fname_pool",
+        "kind": "data",
+        "label": "0x9365ec0",
+        "runtime": "0x9765ec0",
+        "segment": "phdr7 BSS (RW-, past filesz end)",
+        "address_class": "data-readable",
+        "read_policy": "reads permitted only under the bridge's own kernel-VMMAP lease/registration (same-capture frozen snapshot)",
+        "semantic": "FNamePool pool object (FNameEntryAllocator); structure in engine.key_structures.FNamePool",
+        "consumer": "initializer slot 1 pool chain (UnrealInitializer.cpp:870-929): shape + entry-0 anchor + ByteProperty content match",
+        "derivation_summary": "SeedTable.h support label kFNamePoolLabel; structure from FNAME-POOL-RE.md + FINDINGS.md",
+        "ingame_evidence": null,
+        "provenance_class": "re-verified",
+        "sources": [
+          "S1",
+          "S2",
+          "S6",
+          "S7"
+        ]
+      },
+      {
+        "slot_id": 5,
+        "name": "gmalloc_instance",
+        "kind": "data-validator-anchor",
+        "label": "0x93089b8",
+        "runtime": "0x97089b8",
+        "segment": "phdr7 BSS (RW-, past filesz end)",
+        "address_class": "data-readable",
+        "read_policy": "reads permitted only under the bridge's own kernel-VMMAP lease/registration (same-capture frozen snapshot)",
+        "semantic": "FMallocBinned-family static instance (in-place-constructed global; V1 identity target)",
+        "consumer": "SeedValidation check_gmalloc_instance (V1)",
+        "derivation_summary": "SeedTable.h kGMallocInstanceLabel: V1 validator constant, never bound",
+        "ingame_evidence": "Never bound; V1 gates slot 3 arming ([GMalloc] == this instance).",
+        "provenance_class": "re-verified",
+        "sources": [
+          "S1",
+          "S2",
+          "S6",
+          "S7"
+        ]
+      }
+    ],
+    "support_constants": [
+      {
+        "name": "gmalloc_vtable",
+        "label": "0x7ec26e0",
+        "runtime": "0x82c26e0",
+        "role": "V2 validator constant (RELA-reconstructed FMallocBinned vtable); compared, never dereferenced",
+        "segment": "phdr3 RW- RELRO/filesz (readable in-game)",
+        "provenance_class": "re-verified",
+        "sources": [
+          "S1",
+          "S4",
+          "S6"
+        ]
+      },
+      {
+        "name": "gmalloc_interface_ptr",
+        "label": "0x9350950",
+        "runtime": "0x9750950",
+        "role": "GMalloc interface pointer slot read by FMemory::Malloc (0xb7a20); wrapper chain installs here",
+        "segment": "phdr7 BSS",
+        "provenance_class": "re-verified",
+        "sources": [
+          "S6",
+          "S7"
+        ]
+      },
+      {
+        "name": "ugameengine_tick_pinned",
+        "label": "0x2fac8c0",
+        "runtime": "0x33ac8c0",
+        "role": "documentation-only tick constant (slot 10); runtime binds from the live vtable, seeding refuses",
+        "segment": "phdr0 --X",
+        "provenance_class": "re-verified",
+        "sources": [
+          "S2",
+          "S3",
+          "S5"
+        ]
+      },
+      {
+        "name": "fname_heap_envelope_RETIRED",
+        "label": "[0x8018c000,0x100118000)",
+        "runtime": "[0x8058c000,0x100518000)",
+        "role": "RETIRED from admission (v4): vintage-transient giant span, absent at the igf3 vintage; consumers must re-derive allocation targets from a fresh same-invocation mapscan",
+        "segment": "non-image (vintage-churned)",
+        "provenance_class": "in-game-observed",
+        "sources": [
+          "S1",
+          "S2",
+          "S4"
+        ]
+      }
+    ],
+    "runtime_examples": [
+      {
+        "name": "slot0 g_uobject_array runtime",
+        "value": "0x97ba110",
+        "run": "anchor-validation + igf4 gua_read rc=0 (96 B, span [0x970c000,0x9a34000) prot 3) + launch-10 extent events",
+        "provenance_class": "in-game-observed"
+      },
+      {
+        "name": "slot1 fname_pool runtime",
+        "value": "0x9765ec0",
+        "run": "derived (pool label); in-game validation is Phase F pool predicates",
+        "provenance_class": "re-verified"
+      },
+      {
+        "name": "slot2 fname_ctor runtime",
+        "value": "0x63d590",
+        "run": "derived; FC-1 probe built, not yet executed in-game",
+        "provenance_class": "re-verified"
+      },
+      {
+        "name": "slot3 gmalloc runtime",
+        "value": "0x970add8",
+        "run": "derived (single-store bootstrap); observed runtime 0x970add8 in GEOMETRY gmalloc_label_tests",
+        "provenance_class": "re-verified"
+      },
+      {
+        "name": "slot4 SCO runtime",
+        "value": "0x890aa0",
+        "run": "derived; igf4 refusal class covered_not_readable proven at this exec-only class",
+        "provenance_class": "re-verified"
+      },
+      {
+        "name": "slot5 gmalloc_instance runtime",
+        "value": "0x97089b8",
+        "run": "derived; never bound (V1 target)",
+        "provenance_class": "re-verified"
+      },
+      {
+        "name": "runtime image extent",
+        "value": "[0x400000, 0xc0602c8)",
+        "run": "lmf_extent_base_low=0x00400000 / lmf_extent_end_low=0x0c0602c8 on runs 1/3/4 — exact",
+        "provenance_class": "in-game-observed"
+      },
+      {
+        "name": "tick runtime (pinned, doc-only)",
+        "value": "0x33ac8c0",
+        "run": "igf4 tick_anchor refusal at 0x33ac8c0 (covered_not_readable) proves the address class, not the bind",
+        "provenance_class": "in-game-observed"
+      }
+    ]
+  },
+  "memory_geometry": {
+    "page_size": 16384,
+    "segments": [
+      {
+        "phdr_index": 0,
+        "flags": "--X",
+        "p_flags": 1,
+        "vaddr_start": 0,
+        "memsz_end": 122133276,
+        "filesz_end": 122133276,
+        "bss_bytes": 0,
+        "rt_start": 4194304,
+        "rt_end_memsz": 126327580,
+        "rt_page_rounded": [
+          4194304,
+          126337024
+        ],
+        "igf3_observed_spans": [
+          {
+            "start": 4194304,
+            "end": 126337024,
+            "prot": 4
+          }
+        ]
+      },
+      {
+        "phdr_index": 1,
+        "flags": "R--",
+        "p_flags": 4,
+        "vaddr_start": 122142720,
+        "memsz_end": 132884760,
+        "filesz_end": 132884760,
+        "bss_bytes": 0,
+        "rt_start": 126337024,
+        "rt_end_memsz": 137079064,
+        "rt_page_rounded": [
+          126337024,
+          137084928
+        ],
+        "igf3_observed_spans": [
+          {
+            "start": 126337024,
+            "end": 137084928,
+            "prot": 1
+          }
+        ]
+      },
+      {
+        "phdr_index": 3,
+        "flags": "RW-",
+        "p_flags": 6,
+        "vaddr_start": 132890624,
+        "memsz_end": 152289280,
+        "filesz_end": 152282344,
+        "bss_bytes": 6936,
+        "rt_start": 137084928,
+        "rt_end_memsz": 156483584,
+        "rt_page_rounded": [
+          137084928,
+          156483584
+        ],
+        "igf3_observed_spans": [
+          {
+            "start": 137084928,
+            "end": 156483584,
+            "prot": 1
+          }
+        ]
+      },
+      {
+        "phdr_index": 7,
+        "flags": "RW-",
+        "p_flags": 6,
+        "vaddr_start": 152289280,
+        "memsz_end": 157496344,
+        "filesz_end": 154174962,
+        "bss_bytes": 3321382,
+        "rt_start": 156483584,
+        "rt_end_memsz": 161690648,
+        "rt_page_rounded": [
+          156483584,
+          161693696
+        ],
+        "igf3_observed_spans": [
+          {
+            "start": 156483584,
+            "end": 156663808,
+            "prot": 3
+          },
+          {
+            "start": 156663808,
+            "end": 158187520,
+            "prot": 1
+          },
+          {
+            "start": 158187520,
+            "end": 158384128,
+            "prot": 3
+          },
+          {
+            "start": 158384128,
+            "end": 161693696,
+            "prot": 3
+          }
+        ]
+      },
+      {
+        "phdr_index": 8,
+        "flags": "---",
+        "p_flags": 0,
+        "vaddr_start": 157496352,
+        "memsz_end": 197526216,
+        "filesz_end": 197526216,
+        "bss_bytes": 0,
+        "rt_start": 161690656,
+        "rt_end_memsz": 201720520,
+        "rt_page_rounded": [
+          161693696,
+          201736192
+        ],
+        "igf3_observed_spans": []
+      }
+    ],
+    "phdr_gaps_file_space": [
+      {
+        "between": [
+          0,
+          1
+        ],
+        "range": [
+          122133276,
+          122142720
+        ],
+        "bytes": 9444,
+        "sub_page": true
+      },
+      {
+        "between": [
+          1,
+          3
+        ],
+        "range": [
+          132884760,
+          132890624
+        ],
+        "bytes": 5864,
+        "sub_page": true
+      },
+      {
+        "between": [
+          3,
+          7
+        ],
+        "range": [
+          152289280,
+          152289280
+        ],
+        "bytes": 0,
+        "sub_page": true
+      },
+      {
+        "between": [
+          7,
+          8
+        ],
+        "range": [
+          157496344,
+          157496352
+        ],
+        "bytes": 8,
+        "sub_page": true
+      }
+    ],
+    "vmmap_observed": {
+      "source": "outputs/2026-10-04-zcode-controller/console/igf6-results.jsonl line 67 (build igf3-de0c0cb644d3, seq 4, exp v1_vmmap_page part 0; same records re-exported in ingame-v3-full-results.jsonl)",
+      "spans_intersecting_image": 7,
+      "readable_spans_intersecting_image": 6,
+      "notes": [
+        "igf3 clean walk tiles [0x400000,0x9a34000) with 7 contiguous kernel spans (L0..L7); 6 readable — matches launch-9 bridge_lease_reg_spans=6 and launch-10 runs 1/3/4",
+        "L7 kernel-split into four entries prots 3/1/3/3 (mechanism unidentified)",
+        "LOAD8 [0x9a34000,0xc0602c8) had NO vmmap span at the igf3 vintage — treat as unmapped-until-proven",
+        "the giant R-- span [0x8018c000,0x100118000) is vintage-transient (real at igf/igf2, absent at igf3) — never a frozen allocation target",
+        "launch-10 runs: vmentry 22761/10028/9993 walked; run1's 22761 > kBridgeVmmapEntries=16384 with clean stop is an unreconciled counter question (G7) — run3/run4 verdicts unaffected"
+      ],
+      "provenance_class": "in-game-observed"
+    },
+    "seed_address_classes": {
+      "ranges": [
+        {
+          "file_vaddr_range": [
+            0,
+            122133276
+          ],
+          "class": "exec-only-call-only",
+          "segment": "LOAD0 --X"
+        },
+        {
+          "file_vaddr_range": [
+            122142720,
+            132884760
+          ],
+          "class": "data-readable",
+          "segment": "LOAD1 R--"
+        },
+        {
+          "file_vaddr_range": [
+            132890624,
+            157496344
+          ],
+          "class": "data-readable",
+          "segment": "LOAD3+LOAD7 RW-"
+        },
+        {
+          "file_vaddr_range": [
+            157496344,
+            197526216
+          ],
+          "class": "refused",
+          "segment": "LOAD7 tail gap + LOAD8 ---"
+        }
+      ],
+      "provenance_class": "re-verified",
+      "source": "SeedValidation.hpp classify_seed_address (byte-equal to the shipped validator)"
+    },
+    "owned_read_policy": {
+      "rules": [
+        "every read must be ownership-covered by the runtime's OWN kernel VMMAP walk (same-capture frozen snapshot; no host fixture, no frozen envelope)",
+        "exec-only pages (kernel prot=4, no READ bit) are hardware-read-blocked: code seeds are CALL-ONLY (assign + indirect call); detour-verification reads stay skipped while seed-bound (igf4 rc=3 covered_not_readable at 0x33ac8c0/0x890aa0; igf6 died twice reading exec spans)",
+        "LOAD8 and all inter-LOAD alignment gaps: refused for both reads and calls (classify_seed_address -> Refused)",
+        "span-table loud refusal: zero published readable spans => FName pool admission refuses loudly; never a frozen fallback",
+        "truncation honesty: capture is address-ordered, so a truncated snapshot is a PREFIX — a miss below the envelope is genuinely unmapped/unreadable, a miss at/above it refuses as 'snapshot truncated', never as 'unmapped'",
+        " Blocks[0] admission: nonzero, 8-aligned, inside EXACTLY ONE published readable span (image or non-image), engine invariant none_id>>16 <= CurrentBlock, entry-0 'None' content anchor",
+        "writeback proven only as same-value writeback (igf4: 96 B, 8-byte stores, restored 1) — no arbitrary-write claim exists"
+      ],
+      "provenance_class": "in-game-observed"
+    },
+    "known_false_claims": [
+      {
+        "claim": "continuous hole [0x787c000,0x8018c000) with nothing mapped inside",
+        "status": "FALSE — RETRACTED",
+        "why_wrong": "stitched the v1/v2-era exec-span end (0x787c000) to the v1/v2-era giant-span start (0x8018c000) and treated 'nothing recovered between' (an artifact of the 1160-stride vmmap corruption) as emptiness. The igf3 clean walk tiles [0x400000,0x9a34000) with 7 contiguous kernel spans (L0..L7); igf7 byte-matched reads and igf4 GUA read/write sit inside the alleged hole; launch-9 counted 6 readable spans intersecting the image extent."
+      },
+      {
+        "claim": "single global bias DISPROVEN (transport-ledger pinned verdict)",
+        "status": "FALSE — REVERSED",
+        "why_wrong": "the disproof rested on SEGMENT-CORRESPONDENCE section 5's overlap claim that 0x8018c000 lies inside L1's expected range [0x787c000,0x82bc000); it does not (0x8018c000 is ~2.0 GiB, the L1 range ends ~137 MB — a digit-width error). igf3/igf4/igf7 all confirm bias 0x400000 for L0/L1/L3/L7."
+      },
+      {
+        "claim": "LOAD7 file+0x400000 would start 0xd13c000 so the observed RW fragment cannot be LOAD7",
+        "status": "FALSE — arithmetic slip in the controller seed",
+        "why_wrong": "0x913c000+0x400000 = 0x953c000, not 0xd13c000 (0x4000000 was added instead of 0x400000). The observed fragment [0x970c000,0x9a34000) equals LOAD7's BSS (label filesz-end 0x93085f2 .. memsz-end 0x9633418, shifted +0x400000) page-rounded at 16 KiB, exactly."
+      },
+      {
+        "claim": "image extent [0x400000,0xfc602c8)",
+        "status": "FALSE — digit error",
+        "why_wrong": "extent_end = 0x400000 + 0xbc602c8 = 0xc0602c8. The bridge computes this correctly (runtime_start_bridge_r13.cpp:493); 0xfc602c8 appears only in a comment typo at :509."
+      },
+      {
+        "claim": "LOAD3 memsz=0x12800000",
+        "status": "FALSE — extra zero in the controller seed",
+        "why_wrong": "phdr bytes give p_memsz=0x1280000 (0x7ebc000+0x1280000=0x913c000 exact; parse_phdrs.py record @file 0xe8)."
+      },
+      {
+        "claim": "gmalloc_deletefile_candidate file label 0x9350950 explains runtime GMalloc 0x970add8",
+        "status": "FALSE — wrong label",
+        "why_wrong": "0x9350950+0x400000=0x9750950 != 0x970add8; the implied slide 0x3b0488 fits no pinned span. The layout profile marks 0x9350950 candidate-only (worker-2-layout-facts REPORT.md:59) and worker-gmalloc-derivation measured-and-rejected the DeleteFile route. The derived label is 0x930add8 (unique store site, 11 consumer sites), which lands exactly on the observed runtime under the uniform slide."
+      }
+    ],
+    "consumer_read_risks": [
+      "FName ctor 0x63d590, SCO 0x890aa0, Tick 0x33ac8c0 all live on LOAD0's exec-only pages ([0x400000,0x787c000), kernel prot=4, no READ bit registered): igf4 refusal class covered_not_readable (rc=3) proven at 0x33ac8c0/0x890aa0; igf6 died twice at the first exec-span read. The scan stage must gate these on exec-coverage, never read them as data.",
+      "LOAD8 runtime range [0x9a34000,0xc0602c8) had NO vmmap span at the igf3 vintage and window A (0xc05f250) was refused uncovered by igf7 — anchors in L8 deadlock; treat L8 as unmapped-until-proven.",
+      "SEED-TABLE.json fname_remedy.heap_span [0x8018c000,0x100118000) is inherited from the v1/v2 giant span and is NOT stable geometry (absent at igf3 vintage); any consumer must re-derive allocation targets from a fresh same-invocation mapscan.",
+      "Host mock prospero_platform_host.cpp:452 encodes a fake 'gap [0x787c000,0x970c000)' for allocator hinting; on the real map that range is L1+L3+L7 image memory — allocator hole-hints must use the live mapscan, not this fixture."
+    ]
+  },
+  "api_surface": {
+    "provided": [
+      {
+        "api": "print",
+        "status": "REGISTERED",
+        "definition": "LuaMod.cpp:1521; impl LuaLibrary.cpp:35 (`[Lua] ` prefix)",
+        "used_by_mod": true
+      },
+      {
+        "api": "require(\"UEHelpers\")",
+        "status": "REGISTERED (native searcher)",
+        "definition": "LuaMod.cpp:1149-1164, 848-893 (5th candidate path :874 hits staged `shared/UEHelpers/UEHelpers.lua`)",
+        "used_by_mod": true
+      },
+      {
+        "api": "FindFirstOf",
+        "status": "REGISTERED",
+        "definition": "LuaMod.cpp:1632",
+        "used_by_mod": true
+      },
+      {
+        "api": "FindAllOf",
+        "status": "REGISTERED",
+        "definition": "LuaMod.cpp:1667",
+        "used_by_mod": true
+      },
+      {
+        "api": "StaticFindObject",
+        "status": "REGISTERED",
+        "definition": "LuaMod.cpp:1529",
+        "used_by_mod": true
+      },
+      {
+        "api": "StaticConstructObject",
+        "status": "REGISTERED",
+        "definition": "LuaMod.cpp:2200",
+        "used_by_mod": true
+      },
+      {
+        "api": "FName / NAME_None / EFindName",
+        "status": "REGISTERED",
+        "definition": "LuaMod.cpp:6201, :6202-6203, :698-702",
+        "used_by_mod": true
+      },
+      {
+        "api": "FText",
+        "status": "REGISTERED",
+        "definition": "LuaMod.cpp:6210",
+        "used_by_mod": true
+      },
+      {
+        "api": "LoadAsset",
+        "status": "REGISTERED",
+        "definition": "LuaMod.cpp:3618",
+        "used_by_mod": true
+      },
+      {
+        "api": "RegisterKeyBind + Key table (F7/RETURN/UP/DOWN/LEFT/RIGHT_ARROW)",
+        "status": "REGISTERED",
+        "definition": "LuaMod.cpp:1915; Key global :614 (F7 :553, RETURN :458, arrows :480-483)",
+        "used_by_mod": true
+      },
+      {
+        "api": "ExecuteInGameThread",
+        "status": "REGISTERED (main state) — drain gated",
+        "definition": "LuaMod.cpp:4700; queue :4774; drain `engine_tick_hook` :4467-4513 (identity gate :4475); availability UE4SSRuntime.cpp:10-16",
+        "used_by_mod": true
+      },
+      {
+        "api": "RegisterLoadMapPreHook",
+        "status": "REGISTERED",
+        "definition": "LuaMod.cpp:2711; callback :6909-6912; engine gate `HookLoadMap` default true (SettingsManager.hpp:119)",
+        "used_by_mod": true
+      },
+      {
+        "api": "CreateInvalidObject",
+        "status": "REGISTERED",
+        "definition": "LuaMod.cpp:1524",
+        "used_by_mod": true
+      },
+      {
+        "api": "ModRef:Get/SetSharedVariable",
+        "status": "REGISTERED",
+        "definition": "ModRef global LuaMod.cpp:6316-6317; methods LuaModRef.cpp:61/:170",
+        "used_by_mod": true
+      },
+      {
+        "api": "UnrealVersion:IsBelow",
+        "status": "REGISTERED",
+        "definition": "LuaMod.cpp:6194 (global), IsBelow ≈:6172",
+        "used_by_mod": true
+      },
+      {
+        "api": "obj:IsValid()",
+        "status": "REGISTERED (metatable)",
+        "definition": "port LuaUObject.hpp:185, :761",
+        "used_by_mod": true
+      },
+      {
+        "api": "dynamic UFunction calls / property read+write (GetPawn, K2_GetPawn, K2_GetActorLocation, GetControlRotation, LineTraceSingle, BeginDeferredActorSpawnFromClass, FinishSpawningActor, GetComponentByClass, DB getters :163/:168, UMG setters, SetEnabled, SetActorHiddenInGame, SetActorEnableCollision, K2_DestroyActor, SetIgnoreLook/MoveInput, ToString)",
+        "status": "DYNAMIC REFLECTION (resolved vs UClass at runtime; nothing to register)",
+        "definition": "port LuaUObject.cpp:151-327 (`call_ufunction_from_lua` → `ProcessEvent` :327); `GetWorld` example LuaUObject.hpp:640",
+        "used_by_mod": true
+      }
+    ],
+    "provided_but_unused_by_this_mod": [
+      {
+        "api": "RegisterHook/RegisterCustomEvent/script hooks",
+        "status": "REGISTERED but silently disabled by settings v3 (see §4)",
+        "definition": "LuaMod.cpp:7677-7686"
+      },
+      {
+        "api": "RegisterConsoleCommand(GlobalHandler), NotifyOnNewObject, LoopAsync, ExecuteWithDelay, InitGameState/BeginPlay hooks, IterateGameDirectories, …",
+        "status": "REGISTERED",
+        "definition": "LuaMod.cpp registrations block :1519-4573"
+      }
+    ],
+    "dynamic_reflection": "UFunction calls / property read+write resolve via UClass reflection at runtime (LuaUObject.cpp:151-327 call_ufunction_from_lua -> ProcessEvent) — in-game only; nothing to register",
+    "provenance_class": "re-verified",
+    "source": "S10 (worker-mod-load-readiness API inventory, file:line-evidenced in its CLAIM.json)"
+  },
+  "mod_requirements": {
+    "loadlist": {
+      "format": "modforge-loadlist 1",
+      "title": "PPSA33286",
+      "engine": "unreal",
+      "framework": "ue4ss-ps5",
+      "mods": [
+        {
+          "name": "TownfallItemSpawner",
+          "version": "1.0.0"
+        }
+      ],
+      "files": [
+        {
+          "role": "config",
+          "path": "ue4ss/UE4SS-settings.ini",
+          "size_bytes": 1448
+        },
+        {
+          "role": "config",
+          "path": "ue4ss/MemberVariableLayout.ini",
+          "size_bytes": 588
+        },
+        {
+          "role": "config",
+          "path": "ue4ss/VTableLayout.ini",
+          "size_bytes": 186
+        },
+        {
+          "role": "config",
+          "path": "ue4ss/PS5Pad.ini",
+          "size_bytes": 2958
+        },
+        {
+          "role": "lua_mod",
+          "path": "ue4ss/Mods/TownfallItemSpawner/Scripts/main.lua",
+          "size_bytes": 21415
+        },
+        {
+          "role": "lua_mod",
+          "path": "ue4ss/Mods/TownfallItemSpawner/enabled.txt",
+          "size_bytes": 0
+        },
+        {
+          "role": "lua_mod",
+          "path": "ue4ss/Mods/shared/UEHelpers/UEHelpers.lua",
+          "size_bytes": 9962
+        }
+      ],
+      "source": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-evidence/loadlist-sizefixed.txt",
+      "sha256_16": "54e3c2a0d3ba94f4",
+      "variants": {
+        "final-package": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-loadlist-final/final-package/loadlist.txt — same mod tree; UE4SS-settings.ini 779 B and PS5Pad.ini 2960 B (pre-sanitize sizes); the launch-10 verified runs consumed the sizefixed variant (PS5Pad.ini 2958 B ASCII-sanitized)",
+        "run2-refusal-lesson": "run2's mfa_activate_failed code=-8 proves activation enforces declared sizes byte-exact — the profile ships the sizefixed numbers"
+      }
+    },
+    "input_map": {
+      "profile_file": "ue4ss/PS5Pad.ini (2958 B ASCII; control bytes refuse with code=3)",
+      "bindings": {
+        "OPTIONS": "F7",
+        "UP": "UP_ARROW",
+        "DOWN": "DOWN_ARROW",
+        "CROSS": "RETURN",
+        "LEFT": "LEFT_ARROW",
+        "RIGHT": "RIGHT_ARROW"
+      },
+      "note": "PS5 is pad-only: mod registers 6 keybinds, every callback wrapped in ExecuteInGameThread; user = -1 (first logged-in user)",
+      "provenance_class": "re-verified"
+    },
+    "mod_api_usage": [
+      {
+        "api": "print",
+        "used_at": "main.lua:6,189,194,335,342,501,636,643,746"
+      },
+      {
+        "api": "require(\"UEHelpers\")",
+        "used_at": "main.lua:15"
+      },
+      {
+        "api": "FindFirstOf",
+        "used_at": "main.lua:21,64; UH:41,51"
+      },
+      {
+        "api": "FindAllOf",
+        "used_at": "UH:72"
+      },
+      {
+        "api": "StaticFindObject",
+        "used_at": "main.lua:44,283,499; UH:22"
+      },
+      {
+        "api": "StaticConstructObject",
+        "used_at": "main.lua:50,516,524,527,530,550,560"
+      },
+      {
+        "api": "FName / NAME_None / EFindName",
+        "used_at": "main.lua:50,516; UH:252-270"
+      },
+      {
+        "api": "FText",
+        "used_at": "main.lua:434,469"
+      },
+      {
+        "api": "LoadAsset",
+        "used_at": "main.lua:285"
+      },
+      {
+        "api": "RegisterKeyBind + Key table (F7/RETURN/UP/DOWN/LEFT/RIGHT_ARROW)",
+        "used_at": "main.lua:694-729"
+      },
+      {
+        "api": "ExecuteInGameThread",
+        "used_at": "main.lua:695,700,705,710,716,725"
+      },
+      {
+        "api": "RegisterLoadMapPreHook",
+        "used_at": "main.lua:731 (pcall-wrapped)"
+      },
+      {
+        "api": "CreateInvalidObject",
+        "used_at": "UH:15,35,45,62,81,91,106,116,127,148,195"
+      },
+      {
+        "api": "ModRef:Get/SetSharedVariable",
+        "used_at": "UH:18,23"
+      },
+      {
+        "api": "UnrealVersion:IsBelow",
+        "used_at": "UH:198,200"
+      },
+      {
+        "api": "obj:IsValid()",
+        "used_at": "main.lua:10; UH: throughout"
+      },
+      {
+        "api": "dynamic UFunction calls / property read+write (GetPawn, K2_GetPawn, K2_GetActorLocation, GetControlRotation, LineTraceSingle, BeginDeferredActorSpawnFromClass, FinishSpawningActor, GetComponentByClass, DB getters :163/:168, UMG setters, SetEnabled, SetActorHiddenInGame, SetActorEnableCollision, K2_DestroyActor, SetIgnoreLook/MoveInput, ToString)",
+        "used_at": "main.lua:32-33,59,163,168,208,233-234,245,295,303,325-330,345,364-561,450-451"
+      }
+    ],
+    "oracle_line": "[Lua] [TownfallItemSpawner] Loaded v1.0. Clean pickup-only release. F7 opens the menu. (main.lua:746 -> LuaLibrary.cpp:35)",
+    "settings_gates": [
+      "HookProcessInternal=0 + HookProcessLocalScriptFunction=0 (v3) disable only the custom-events script hook — the mod uses neither",
+      "dependencies kept at defaults: HookLoadMap/HookEngineTick/HookUObjectProcessEvent true, DefaultExecuteInGameThreadMethod=EngineTick",
+      "[EngineVersionOverride] 5.6 consumed; [Overrides] absent (native activation refuses ModsFolderPath/ControllingModsTxt)",
+      "native services gate: dumping 0, consoles 0, RenderMode ExternalThread, hot-reload unset"
+    ],
+    "provenance_class": "re-verified"
+  },
+  "runtime_facts": {
+    "constants": [
+      {
+        "name": "kCandidateBase",
+        "value": 4194304,
+        "meaning": "validated load bias",
+        "provenance_class": "in-game-observed",
+        "source": "S5"
+      },
+      {
+        "name": "kImageExtentVaddr",
+        "value": 197526216,
+        "meaning": "max(p_vaddr+p_memsz), file vaddrs; runtime extent end = base + this",
+        "provenance_class": "re-verified",
+        "source": "S5 == S4 kImageFileExtentBytes"
+      },
+      {
+        "name": "kBridgeVmmapEntries",
+        "value": 16384,
+        "meaning": "capture capacity (~19 MiB BSS; launch-2 ENOMEM at 1408)",
+        "provenance_class": "re-verified",
+        "source": "S5"
+      },
+      {
+        "name": "kKveHdr / kve_sizeof",
+        "value": "64 / 1160",
+        "meaning": "kinfo_vmentry pre-path header bytes / pinned SDK sizeof (variable-size records, structsize walk)",
+        "provenance_class": "host-derived",
+        "source": "S5"
+      },
+      {
+        "name": "kPage",
+        "value": 16384,
+        "meaning": "PS5 page size",
+        "provenance_class": "host-derived",
+        "source": "S5 == S2"
+      },
+      {
+        "name": "lease array",
+        "value": 128,
+        "meaning": "g_lease_spans capacity; per-page-quantized registration (start down, end up)",
+        "provenance_class": "re-verified",
+        "source": "S5"
+      },
+      {
+        "name": "kMaxPublishedSpans",
+        "value": 16,
+        "meaning": "spanpub top-N readable spans by size, published ascending by address",
+        "provenance_class": "re-verified",
+        "source": "S4"
+      },
+      {
+        "name": "kFNameBlockCapacityBytes",
+        "value": 131072,
+        "meaning": "publication floor: a span can host Blocks[0] only if >= one FName block",
+        "provenance_class": "re-verified",
+        "source": "S4"
+      },
+      {
+        "name": "kVmProtRead",
+        "value": 1,
+        "meaning": "kernel VMMAP read bit (observed: 1=read, 4=exec, 3=rw)",
+        "provenance_class": "in-game-observed",
+        "source": "S5"
+      },
+      {
+        "name": "kDataWindowAnchors",
+        "value": 6,
+        "meaning": "window-anchor BYTE PROBES (B/C/C2/D/E/A; C required via either-site clause) — identity gate on readable spans; distinct from lmf_anchor_count, which counts image-intersecting kernel spans",
+        "provenance_class": "in-game-observed",
+        "source": "S5"
+      },
+      {
+        "name": "kMaxAnchorMappings",
+        "value": 16,
+        "meaning": "lmf anchor-mapping cap (8->16 fold; observed 7 = igf3 shape, wide margin)",
+        "provenance_class": "re-verified",
+        "source": "S-lmf/S-edition"
+      },
+      {
+        "name": "kMaxVmMappings",
+        "value": 16384,
+        "meaning": "lmf vm-mapping cap (1024->16384 fold)",
+        "provenance_class": "re-verified",
+        "source": "S-lmf/S-edition"
+      },
+      {
+        "name": "kConfiguredGameDirectory",
+        "value": "/app0",
+        "meaning": "title-mount config value; game_executable_path is NEVER satisfied by the adapter PRX (Resolution B)",
+        "provenance_class": "re-verified",
+        "source": "S5"
+      }
+    ],
+    "observed_runs": [
+      {
+        "run": "run3",
+        "pid": 355,
+        "values": {
+          "bridge_lease_reg_spans": 6,
+          "bridge_lease_reg": 6,
+          "lmf_anchor_count": 7,
+          "lmf_intervals_found": 1,
+          "lmf_extent_base_low": 4194304,
+          "lmf_extent_end_low": 201720520,
+          "bridge_cfg_gamedir": 1,
+          "bridge_spanpub_count": 16,
+          "bridge_spanpub_total": 127,
+          "bridge_spanpub_cap": 1,
+          "bridge_spanpub_env_low": 4259840,
+          "bridge_spanpub_env_high": 17,
+          "bridge_vmentry_entries": 10028
+        },
+        "spanpub_envelope_end": "0x1100410000",
+        "note": "sdiag jsonl is cumulative across the boot's sessions; per-session pid from runtime-status/oracle records (pid_first in the file is stale — classifier gap G2)",
+        "verdict": "run3 = MINIMAL-ACCEPT CONFIRMED (conversion clauses D1-D5 met, E4 by evidence-equivalence, no-crash); run4 = same geometry quartet reproduced (6/6/7/1 + extent), same E2 pad refusal; runs 1-4 share one console boot",
+        "provenance_class": "in-game-observed"
+      },
+      {
+        "run": "run4",
+        "pid": 370,
+        "values": {
+          "bridge_lease_reg_spans": 6,
+          "bridge_lease_reg": 6,
+          "lmf_anchor_count": 7,
+          "lmf_intervals_found": 1,
+          "lmf_extent_base_low": 4194304,
+          "lmf_extent_end_low": 201720520,
+          "bridge_cfg_gamedir": 1,
+          "bridge_spanpub_count": 16,
+          "bridge_spanpub_total": 123,
+          "bridge_spanpub_cap": 1,
+          "bridge_spanpub_env_low": 3997696,
+          "bridge_spanpub_env_high": 17,
+          "bridge_vmentry_entries": 9993
+        },
+        "spanpub_envelope_end": "0x11003d0000",
+        "note": "sdiag jsonl is cumulative across the boot's sessions; per-session pid from runtime-status/oracle records (pid_first in the file is stale — classifier gap G2)",
+        "verdict": "run3 = MINIMAL-ACCEPT CONFIRMED (conversion clauses D1-D5 met, E4 by evidence-equivalence, no-crash); run4 = same geometry quartet reproduced (6/6/7/1 + extent), same E2 pad refusal; runs 1-4 share one console boot",
+        "provenance_class": "in-game-observed"
+      }
+    ]
+  },
+  "provenance_classes": {
+    "in-game-observed": "Validated on the live console: reads/writebacks under lease, run sdiag values, window anchors, extents, refusal classes (igf4/igf7/launch-9/launch-10 runs 1-4).",
+    "re-verified": "Offline reverse-engineering of the sha-pinned image through at least two independent channels (capstone/lief + Ghidra/REA, or cross-worker agreement), with re-derived arithmetic — no target execution claimed.",
+    "host-derived": "Computed on the host from pinned sources without target execution: phdr parsing, static survey endpoints, SDK constants, arithmetic, host fixtures."
+  },
+  "sources": [
+    {
+      "id": "S-capture",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-observations/townfall-static-executable-2026-10-02/capture.json",
+      "role": "read-only capture record",
+      "sha256": "7709994bc1baa177ddd6c7b3d8cacb97d60664af5765b75fb51857ec5e1810a6",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S-edition",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-build/EDITION.json",
+      "role": "launch-10 build EDITION (header-cap fold provenance)",
+      "sha256": "4c568b4293992066fc8bd35c6e35aadeeaed10ae8b8b914112c8fbe59953878d",
+      "sha256_16": "4c568b4293992066",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S-image",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+      "role": "decrypted eboot (identity anchor)",
+      "sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S-lmf",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-build/staging/live_module_facts.hpp",
+      "role": "staged live_module_facts caps (kMaxAnchorMappings/kMaxVmMappings)",
+      "sha256": "67170b21fc3b00947d848fa94337c94c9b324155e27010259a192bfd32bedad5",
+      "sha256_16": "67170b21fc3b0094",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S1",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-build/final-units/SeedTable.h",
+      "role": "seed slots + labels + provenance strings",
+      "sha256": "d183e0c03e4ec7568e2e1416787599f8c9f363f5a940cfc47a2a31ff04ca3cda",
+      "sha256_16": "d183e0c03e4ec756",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S10",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-mod-load-readiness/READINESS.md",
+      "role": "API inventory + mod requirements",
+      "sha256": "4a587ce04f52cc738b9f2570d459535395af28d22725c276d680ab049741312b",
+      "sha256_16": "4a587ce04f52cc73",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S11",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-evidence/run3-sdiag.jsonl",
+      "role": "observed run-3 diagnostics (pid 355)",
+      "sha256": "264ba150325dbe28a1cbbdc528c782fcfbf1436eba8c5e236816e9c835224470",
+      "sha256_16": "264ba150325dbe28",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S12",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-evidence/run4-sdiag.jsonl",
+      "role": "observed run-4 diagnostics (pid 370)",
+      "sha256": "40504e28e0bc15fd0060304842ad2602bf5b279fb406affaedcb17cf51f4ec0f",
+      "sha256_16": "40504e28e0bc15fd",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S2",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-geometry-reference/GEOMETRY.json",
+      "role": "phdrs, slide rule, observed VMMAP classes, seed arithmetic",
+      "sha256": "f8ec987fbbf7e315407ac86f55186b7b18d517c7d15a9cf5b7089038a0764c09",
+      "sha256_16": "f8ec987fbbf7e315",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S3",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-2-layout-facts/profiles/townfall-ps5-ue56.profile.json",
+      "role": "static survey facts (engine version, symbol statuses)",
+      "sha256": "0cfc01f08e4271140e5e3ed9262543be6b3c4fe395819d84e5a9e17216b5beb2",
+      "sha256_16": "0cfc01f08e427114",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S4",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-build/final-units/SeedValidation.hpp",
+      "role": "pool layout, extent, address classes, spanpub cap",
+      "sha256": "f09ec9b319985cf86a5899894a30fc8d20a905072008ac8d4a35efbcaec3a5de",
+      "sha256_16": "f09ec9b319985cf8",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S5",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-build/final-units/runtime_start_bridge_r14_diag_spanpub.cpp",
+      "role": "capture/lease/spanpub runtime constants",
+      "sha256": "d96cfe70a64a53e88c4bbb29408289361c557fb512aa74e9ef7c7866cda6f436",
+      "sha256_16": "d96cfe70a64a53e8",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S6",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-re-fname-pool/FNAME-POOL-RE.md",
+      "role": "FNamePool structure, RE channel (capstone/lief)",
+      "sha256": "c99540688876c6ca3c9a6a0a89d2193b6ca8c72ddadfa01c1ef72891f1f9a1c2",
+      "sha256_16": "c99540688876c6ca",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S7",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-rea-trial/FINDINGS.md",
+      "role": "FNamePool structure, Ghidra corroboration channel",
+      "sha256": "c9c8c0951348653772d251341adfd144ed77190adde986f93508aba43bb65a8f",
+      "sha256_16": "c9c8c09513486537",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S8",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-evidence/loadlist-sizefixed.txt",
+      "role": "mod-tree manifest consumed by verified launch-10 runs",
+      "sha256": "54e3c2a0d3ba94f4d46d2a0489c8560753cd350cace70d54d018e1d72e4139e9",
+      "sha256_16": "54e3c2a0d3ba94f4",
+      "recomputed_at_generation": true
+    },
+    {
+      "id": "S9",
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-controller/launch10-evidence/PS5Pad-sanitized.ini",
+      "role": "pad->keybind map (run3/run4 staged profile)",
+      "sha256": "6ab119b3e8aef1d881d6d1f50662548027061f5bedaf38a0fe859d2797848efe",
+      "sha256_16": "6ab119b3e8aef1d8",
+      "recomputed_at_generation": true
+    }
+  ],
+  "unresolved": [
+    "engine patch/revision and any changelist/build stamp: unknown (survey resolves major.minor only; '5.6.1' is an RE-worker label, not promoted)",
+    "staged-layout build_id: unresolved — the capture sha256 identifies the saved file, not a staged layout identity",
+    "Blocks[0] storage class: not pinned (static chain says OS heap; launch-9 region-class observation says LOAD7 BSS tail) — needs one fresh runtime read of the qword at 0x9765ed0 + region map",
+    "GUObjectArray / UObject member-layout offsets: never supplied/resolved; only singleton labels profiled",
+    "FName storage width: no compiled-accessor entries (E-widths FName has zero records) — must not be defaulted",
+    "exact leaf allocator label (FMallocBinned2-family shape vs Binned3 string): consistent but not symbolically proven",
+    "image-wide instruction-verified FName ctor caller count (byte-level 14,401 is an upper bound; 2 verified in analyzed code)",
+    "role of the 256 aux buffers at pool+0x1004C..0x1404C: mapped, not chased",
+    "whether the thread-forwarder wrapper installs at runtime (conditional on inner vtable+0xC0)",
+    "run1 bridge_vmentry_entries=22761 > kBridgeVmmapEntries=16384 with clean stop (G7): capacity-or-counter reconciliation pending; run3/run4 unaffected",
+    "in-game seed arming (Phase F: pool predicates, GMalloc V1/V2, ctor behavioral probe, SCO bind) never reached in launch-10 runs — slots 1-5 in-game evidence remains pending, NOT claimed"
+  ],
+  "readiness": {
+    "profile_ready": true,
+    "static_survey_ready": false,
+    "runtime_binding_ready": false,
+    "notes": "profile_ready = every emitted fact is source-cross-checked by this generator (see inputs-manifest.json checks). static_survey_ready/runtime_binding_ready stay FALSE exactly as the layout profile records them: build axes/engine_revision unresolved; in-game seed arming (Phase F) not yet observed. The profile claims assembly fidelity, never runtime capability."
+  }
+}

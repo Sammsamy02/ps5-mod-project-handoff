@@ -1,0 +1,52 @@
+{
+  "scope": "read_only_native_free_account_nxm_resume_gap",
+  "result": "grant_resolution_is_callable_but_native_jobs_cannot_supply_or_resume_a_grant",
+  "sources": {
+    "native_grant_abi": {
+      "path": "outputs/ps5-mod-bridge/native-host/nexus_download.h:41-61,97-128",
+      "contract": "Borrowed typed grant: domain, mod_id, file_id, user_id, expires, key. Resolver binds domain/mod/file before profile I/O; checks expiry; fetches the live account profile; binds grant user_id to that profile before mod/link requests; checks expiry again before publishing the provider URI. It is synchronous and stores nothing."
+    },
+    "native_auth_wrapper": {
+      "path": "outputs/ps5-mod-bridge/native-host/auth.cpp:1154-1184",
+      "contract": "The local session wrapper rejects caller credential/trust overrides, injects its active Bearer token and configured trust, and invokes the resolver under cookie/CSRF/Origin, token-expiry and deadline gates. It accepts a grant pointer but does not retain it."
+    },
+    "native_job_gap": {
+      "path": "outputs/ps5-mod-bridge/native-host/jobs.cpp:76-92,210-247,439-454,816-865,906-946; outputs/ps5-mod-bridge/native-host/jobs.h:108-144",
+      "contract": "The strict five-field job intent has no NXM/grant field; Record has no grant storage; run_one constructs the resolver request without request.grant. Free users become needs_nexus_authorization and fail_record erases cookie/CSRF/Origin. There is no job-resume or cancel function in the current V1 API."
+    },
+    "native_http_gap": {
+      "path": "outputs/ps5-mod-bridge/native-host/http.c:591-655,665-689",
+      "contract": "POST /api/jobs submits; /api/jobs/{id} is GET-only. No resume route exists. Host runs one queued job after sending each response (host.c:449-455)."
+    },
+    "local_nxm_reference": {
+      "path": "outputs/ps5-mod-bridge/companion/modbridge_nexus/downloads.py:21-62; outputs/ps5-mod-bridge/companion/modbridge_nexus/client.py:181-199; outputs/ps5-mod-bridge/companion/modbridge_host.py:321-375,377-423",
+      "contract": "The companion parses a bounded nxm://{domain}/mods/{mod}/files/{file}?key=...&expires=...&user_id=... grant, binds its source and expiry, then the client validates it against a fresh user profile. Its job host keeps the authorization only in an in-memory per-job map and pops it once for resolution; disconnect/failure clears it. This is a local implementation precedent, not a native capability."
+    },
+    "coverage": {
+      "path": "outputs/ps5-mod-bridge/native-host/tests/nexus_download_verify.py:395-505; outputs/ps5-mod-bridge/native-host/tests/nexus_jobs_verify.py:223-234; outputs/ps5-mod-bridge/tests/nexus_tests.py:480-515; outputs/ps5-mod-bridge/tests/host_tests.py:500-559",
+      "contract": "Native resolver TLS tests cover a fake valid grant, wrong user/source, expiry and no-grant free user. Native job TLS currently asserts free user reaches needs_nexus_authorization with no archive. Companion tests cover NXM parse/binding, same-record resumption, full-record-limit resume and disconnect revocation."
+    }
+  },
+  "official_source_boundary": {
+    "available_local_reference": "https://github.com/Nexus-Mods/node-nexus-api/blob/master/src/Nexus.ts#L786",
+    "claim": "The checked-in plan cites the official Nexus node client for the fixed download_link route. No pinned official source for the NXM URI handoff/query protocol was found in tracked local files; the precise NXM parsing/binding semantics above are grounded in this repository's companion implementation/tests. Do not present that companion contract as an independently documented Nexus API guarantee."
+  },
+  "smallest_additive_native_seam": {
+    "endpoint": "POST /api/jobs/{lowercase_32_hex_id}/resume",
+    "body": "Exactly one bounded nxm string; no URL, API key, Bearer token, file override, trust override or premium claim.",
+    "native_api": "Add an additive mb_nexus_jobs_resume_v1 ABI rather than changing the frozen V1 submit layout. Inputs: current cookie/CSRF/Origin, job id, bounded NXM bytes and owning job JSON output. Only a same-cookie-owned NeedsAuthorization record with exact domain/mod/file match may be requeued; keep its job id/source/idempotency unchanged.",
+    "lifecycle": "Require existing mutation admission and configured unexpired account. Parse the NXM scheme as data with strict size, exact path/query keys, duplicate rejection and positive signed-63-bit IDs/expiry. Store only a parsed grant transiently in that job record; rebind current local session fields only for the queued attempt. Consume-and-wipe the grant once in run_one. The resolver remains authoritative for fresh live user identity, source visibility, expiry and link issuance. Never persist or serialize key/URI; archive request remains credential-free. Clear unconsumed grant on disconnect, failed/terminal transition and context free; check expiry again in the worker before provider requests. Queue-full refusal must not retain the grant.",
+    "response": "Return the existing job object with queued status and no grant fields. Preserve cookie-fingerprint job scoping and existing queue/run_one ownership."
+  },
+  "focused_fixture_controls": [
+    "Valid nonpremium grant resumes the same job ID; fresh live user matches; one exact link lookup uses only key/expires; archive request carries no API/Bearer/cookie headers; the job completes with no key or signed URI in public output/logs.",
+    "Wrong session, CSRF or Origin cannot resume/read the job. Source-domain/mod/file mismatch and already-expired grant fail before provider I/O; a grant with a different user reaches only fresh profile lookup, then fails before mod/link/archive.",
+    "A grant that expires while queued is rejected by the worker with no mod/link/archive request. Repeated resume/replay is one-shot and does not create a second job or download; terminal-job reuse is refused.",
+    "Disconnect/close and queue-full paths leave no retained key; a stall is bounded by the existing resolver total timeout. Current V1 has no job cancel API and the HTTP loop is serial, so do not claim that an HTTP disconnect can interrupt an active resolver; add a cancellation test only if a bounded cancel ABI is explicitly introduced."
+  ],
+  "not_in_scope_or_supported": [
+    "This is separate from the atomic acquisition-plan-to-queue feature; no recursive prerequisite grants or implicit dependency downloads.",
+    "No raw provider/CDN URL acceptance, arbitrary credentials, alternate download host, grant-as-premium proof, installation, or engine/runtime support.",
+    "No code or tests were changed and no live Nexus/API request, account action, console operation or build was performed."
+  ]
+}

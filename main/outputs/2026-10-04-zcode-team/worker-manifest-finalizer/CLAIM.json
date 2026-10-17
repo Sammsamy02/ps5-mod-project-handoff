@@ -1,0 +1,49 @@
+{
+  "worker": "worker-manifest-finalizer",
+  "date": "2026-10-04",
+  "task": "finalize_manifest.py — automate the fill of the comp6 change manifest's PENDING fields (per-unit sha256s + measured UND import delta) from a completed one-pass composition run's artifacts, fail-closed, host-tested on the dry-build artifacts",
+  "scope": [
+    "finalize_manifest.py — the finalizer tool (self-contained; UND census mirrors gate v2 symtab_und_defined exactly so the gate's I1+ verifies the same measurement)",
+    "host_tests/ — dry-adapted fixture + bogus negative fixture manifests",
+    "receipts/ — positive (run-1/candidate-a and run-2/candidate-b), negative, and pristine-probe finalization receipts + finalized manifests",
+    "REPORT.md with the one-line usage for comp6_one_pass.py"
+  ],
+  "design_sources": [
+    "outputs/2026-10-04-zcode-controller/comp6-integration/change-manifest.json (the PENDING-carrying manifest)",
+    "outputs/2026-10-04-zcode-team/worker-gate-evolution/MANIFEST-SPEC.md + gate_check_composition5_v2.py (I1+ UND-delta semantics; baseline-composition5-r11.json)",
+    "outputs/2026-10-04-zcode-team/worker-comp6-driver/build_runtime_composition6.py (run outputs shape: run receipt.json / selected_runtime_units / runtime_object; candidate build-receipt.json pinned.lineage + build/combined-supplier.o; overlay staged units + overlay-manifest.json)",
+    "outputs/2026-10-04-zcode-team/worker-comp6-drybuild/ (dry1 runs + candidates = host-test artifacts; DRYBUILD-RECEIPT.md §2)"
+  ],
+  "claims": {
+    "tool_sha256": "48654a7b0f88d941a37db80cee33ea958c5aebc44ea2a533caceeccc879ec1b0",
+    "fill_sources": {
+      "changed_units": "run receipt selected_runtime_units[<unit>].source + source_sha256; sha re-measured from the file on disk and cross-checked against the run attestation before filling",
+      "packaging_units": "the staged copy inside the candidate build-receipt pinned.lineage overlay dir (overlay/<rel>), cross-checked against the overlay-manifest.json attested sha and the .sha256 sidecar when present",
+      "import_delta": "UND set of candidate build/combined-supplier.o minus baseline combined_und, computed with gate v2 I1+ census semantics; fill ONLY if measured sets equal the manifest's declared sets (expected-empty fills empty lists and records the measurement: combined sha, UND counts); any undeclared addition/removal or declared-but-absent entry refuses",
+      "defined_symbol_delta": "supplementary report only (never filled into import_delta): external (non-LOCAL, defined) symbol sets of the fresh composed object vs an optional --defined-baseline reference object"
+    },
+    "declared_value_rules": "PENDING-ish markers and truncated 'abcdef12...' prefixes are filled with the measured sha and every replacement is diff-recorded; a declared FULL 64-hex sha that disagrees with the measurement refuses",
+    "post_run_drift_and_override": "if the live file at the run-recorded consumed path drifted/was lost AFTER the run, --consumed-source-override UNIT=PRESERVED_PATH measures the unit from a preserved copy ACCEPTED ONLY if its sha equals the run receipt attestation (never a bypass); the drift + restore are recorded in the diff summary, receipt and finalization block",
+    "refusals": [
+      "changed unit with no artifact source in the run receipt (bogus PENDING) — negative test proves it",
+      "packaging rel missing from the overlay / overlay-manifest sha mismatch / sidecar mismatch",
+      "run status drift, composed-object hash drift, candidate gaps non-empty, candidate pinned composition_dir != given run, baseline_id mismatch",
+      "declared FULL 64-hex sha != measurement; uninterpretable declared sha",
+      "measured UND delta != declared import_delta sets",
+      "any PENDING remaining after processing (final scan; nothing is written on refusal; exit 2 + refusal receipt)"
+    ],
+    "divergence_honesty": "declared-vs-consumed source path/content divergence is never silently accepted: recorded per unit in the finalized manifest's finalization block, the receipt, and the diff summary (the REAL one-pass run must show zero content divergences)",
+    "gate_v2_dialect_note": "the controller manifest carries schema 'MANIFEST-SPEC.md v1' but not gate-v2 M0's literal manifest_version/justification/manifest_id keys, and uses source/sha256 rather than receipt/sha256_after per unit; the finalizer reports this in the finalization block rather than inventing field values (fill-only mandate)"
+  },
+  "host_tests": {
+    "positive": "dry-adapted fixture vs dry1 run-1 + candidate-a (receipts/finalize-dry-positive.json): all 5 sha fills succeed with the dry shas (program dfdd5014..., adapter 0352a615..., loadercontext 2a17b66c... via attested-snapshot override, bridge ebef44bf..., entry 51771ab5...); UND delta measured EMPTY/EMPTY (211 == 211, combined c485cc6a...) and filled with the measurement; defined delta vs run-3 = exactly the 3 rehearsal markers / 0 removals",
+    "positive_b": "same fixture vs dry1 run-2 + candidate-b (receipts/finalize-dry-positive-b.json): identical fills (D1 double-build determinism)",
+    "negative": "fixture + bogus unit 'bogus-no-such-unit' with a placeholder sha and no artifact source (receipts/finalize-dry-negative.json): REFUSED exit 2, 'no artifact source — unit not in the run receipt selected_runtime_units (368 units known)', no finalized manifest written",
+    "pristine_probe": "unmodified controller manifest vs the same dry artifacts (receipts/finalize-dry-pristine.json): REFUSED — the dry runs attest the PRE-LANDING canonical NativeLoaderContext.cpp (2a17b66c...) which was legitimately edited in place afterwards (live now bc982594... == the controller scaffold), so the dry artifacts cannot attest the current file; a real finding, correctly fail-closed"
+  },
+  "console_contact": false,
+  "nested_subagents": false,
+  "writes": "only outputs/2026-10-04-zcode-team/worker-manifest-finalizer/ (host tests pass explicit --out/--json; the tool default writes the finalized manifest alongside the input manifest for the controller's real trigger)",
+  "proposal_only": true,
+  "notes": "The dry-build +3/-0 'markers' are DEFINED-symbol rehearsal markers vs composition-4 run-3 (llvm-nm extern-only semantics), NOT UND imports; the tool therefore reports import_delta EMPTY/EMPTY (as the manifest expects) and, with --defined-baseline run-3, reports the +3/-0 as the supplementary defined-symbol delta."
+}

@@ -1,0 +1,105 @@
+{
+  "worker": "worker-launch10-prebuild",
+  "date": "2026-10-05",
+  "claim": "DELIVERED: the launch-10 armed candidate, pre-built. A full d1fix-lineage composition-6 one-pass (fresh compose + package, twice) with the initializer staging copy's SeedTable.h swapped to the 4/4 armed table (SeedTable.launch10.h, sha 59effe6e...). Launch 10 is now a staging decision, not a build wait.",
+  "scope": [
+    "Host build only. No console contact, no nested subagents, no in-game/runtime claim of any kind.",
+    "The launch-9 candidate dirs and the current worker-initializer-integration/staging SeedTable.h are NOT touched; all writes are under worker-launch10-prebuild/ plus script-owned run/overlay/candidate dirs inside it.",
+    "Driver: worker-d1-determinism-diagnosis/build_runtime_composition6_d1fix.py (sha 27d85da3...) copied to build_runtime_composition6_l10pre.py (sha 007ac4df97fa4269...) with exactly two additional tagged edits: L10PB E1 (MY -> this worker dir, scope isolation for logs/mirror/chain-symbols/overlay-manifest) and L10PB E2 (the initializer --replace-runtime-unit path -> this worker's armed staging copy; the UnrealInitializer.cpp content is byte-identical c85c42f7..., only the adjacent SeedTable.h differs). All D1FIX E1-E7 semantics (py3.9-safe, reuse-fixes) unchanged; diff vs the d1fix driver verified to contain only the docstring + these two edits."
+  ],
+  "claims": [
+    {
+      "id": "L10PB-1",
+      "text": "The armed candidate compiles the FULL armed ScanGame path: the Shape-A refusal string is ABSENT from the initializer object and the armed-path code/strings/constants are PRESENT.",
+      "status": "PASS (measured)",
+      "evidence": {
+        "shape_a_refusal_string 'Required-slot seed table incomplete'": {"armed_object": 0, "launch9_shapeA_object": 1},
+        "armed_banner '[Seeds] Required-slot seed table armed' (UTF-16LE)": {"armed_object": 1, "launch9_shapeA_object": 0},
+        "gmalloc_bind 'slot 3 gmalloc bound at' (UTF-16LE)": {"armed_object": 1, "launch9_shapeA_object": 0},
+        "armed_table_derivation 'FMallocBinned3 UTF-16 literals' + label 0x930add8 (narrow)": {"armed_object": "present (3)", "launch9_shapeA_object": 0},
+        "'[Seeds] REFUTED' refusal path": {"armed_object": 1, "launch9_shapeA_object": 0},
+        "rc_seed probe validators (check_pointer_probe, check_pool_shape, ...) defined": {"armed_object": "present", "launch9_shapeA_object": "absent"},
+        "SeedTable slot constants exported (kGUObjectArray/kFNameCtorWchar/kGMalloc/kStaticConstructObject)": {"armed_object": "all 4 defined", "launch9_shapeA_object": "table constants folded out"},
+        "ScanGame lambdas (mangled ScanGameEvENK3$_*)": {"armed_object": 14, "launch9_shapeA_object": 0},
+        "initializer object": {"armed_bytes": 1925952, "shapeA_bytes": 1676944},
+        "extern symbol surface": {"armed_defined": 2561, "shapeA_defined": 2193, "only_in_armed": 370, "only_in_shapeA": 2}
+      }
+    },
+    {
+      "id": "L10PB-2",
+      "text": "Packaging passes with the frozen static-check set and the import contract stays at 196 with an exactly-empty UND delta vs the frozen r11 baseline.",
+      "status": "PASS (measured, both passes)",
+      "evidence": {
+        "static_checks": "17/17 PASS in each packaging pass (gate lines in logs/run-a.console.log, run-b.console.log); packager status STATIC_CHECKS_PASSED (20 checks, failing=none per gate P1)",
+        "imports": "196 == 196, imports_equal_extended_contract PASS, I1+ actual delta +[]/-[] vs r11 (gate receipt)",
+        "composed_object": {"armed_sha256": "d6214abd88ad167fe9e44cd2d938f4b04b77adacd43f2fe616121b755dee7d83", "armed_bytes": 117831360, "launch9_sha256": "4dd4f309075cdc3e6391947e4111842bb991935144cd8ee97c61ded32a0358b5", "launch9_bytes": 117702184}
+      }
+    },
+    {
+      "id": "L10PB-3",
+      "text": "Determinism: a second full pass (fresh compose + package) is byte-identical at every artifact level.",
+      "status": "PASS (measured)",
+      "evidence": {
+        "bare_original": "5884d88f6cd6b990de6d8fee9b21033134c4507cfba6ab9a185cb166be51e57a (both passes)",
+        "bare_sdk": "b0353bf4cccd062f6ee7dce7b3b758299442355347d19b78a1485d8f89a5c07f (both passes)",
+        "wrapped_fself": "d8cb4a7637b2ac581270fa05b2d9237dbbea3843f775983b4d96186f573f2c83 (both passes)",
+        "combined_supplier_o": "0a2a7c9f7cc4e0aeb1f181b595540b281b4eacbf693b26036e7fd37b93a54cc8 (both passes)",
+        "composed_runtime_object": "d6214abd88ad167f... (both passes; fresh Phase A compose reproduced it bit-identically)",
+        "gate_D1": "PASS: identical sha256 across two builds: 5884d88f... vs 5884d88f..."
+      }
+    },
+    {
+      "id": "L10PB-4",
+      "text": "Gate v2 in manifest mode against the frozen r11 baseline with the armed manifest: GO. M0/M1/I1(retargeted)/I1+/B1/B2/B3/D2 all PASS.",
+      "status": "PASS (measured)",
+      "evidence": {
+        "receipt": "gate-receipt-launch10-armed-a-vs-b.json (sha 84fa09c3880c9377...), verdict GO (offline gate), exit 0",
+        "B2_expectation_note": "The armed path does NOT change the bridge: this candidate's build/runtime_start_bridge.o is BYTE-IDENTICAL to the launch-9 candidate's (sha256 16331ebe299e514f8fa2b59e7a77673d920179c4c820eb53a652d5ee40d6c75a) with set-equal external callee sets (36 callees). Relative to the FROZEN r11 baseline the bridge lacks exactly 4 callees (bad_array_new_length C1/D1, __next_prime, memcpy) - this delta was inherited verbatim from the launch-9 comp6 r12/r13 bridge revision (launch9 - r11baseline shows the identical 4), NOT introduced by arming. The manifest declares this r11-relative removal explicitly; the first gate attempt with bridge_unchanged:true against the r11 baseline honestly FAILed B2 and is preserved as gate-receipt-launch10-armed-a-vs-b.json.b2-firstattempt.json.",
+        "B1": "all 4 configured-roots symbol prefixes defined in combined",
+        "B3": "identity marker present; game_executable_path occurrences 3 == baseline 3",
+        "D2": "both honesty guard strings present in combined"
+      }
+    },
+    {
+      "id": "L10PB-5",
+      "text": "The exact difference from the launch-9 build is the initializer unit recompiled from the same UnrealInitializer.cpp with the armed SeedTable.h: exactly one composed unit differs; 13 of 14 candidate build objects are sha-identical; only combined-supplier.o and lineage-metadata JSONs differ.",
+      "status": "PASS (measured)",
+      "evidence": {
+        "the_swap": "SeedTable.h 2cab0c5213b10257950f8369030dc1cf2733222b3f6c7e349738a5d7a2d9a053 (launch-9, kGMalloc present:false 0x0, kRequiredSetComplete=false) -> 59effe6e4cd34eb0b1138532f1c147b32dc45ffb567e8f8a39eb2ee1d44b0090 (armed, kGMalloc present:true 0x930add8, kRequiredSetComplete=true); 2-line diff in the generated header",
+        "composed_units": "368/368 unit names equal; 367/368 source+object hashes identical; only unreal-unrealinitializer differs (source sha c85c42f7... IDENTICAL, object fe639a85... -> 983b18e2...)",
+        "candidate_build_objects": "13 of 14 sha-identical vs worker-comp6-driver/prx-candidate-composition6-1; only build/combined-supplier.o differs (116f1d70... -> 0a2a7c9f...)",
+        "supplier_contract": "196 import names identical (list-equal); JSON byte-diff is path provenance only (evidence[].source points at each candidate's own combined-supplier.o) + composed_runtime_sha256 lineage field",
+        "final_artifacts": {
+          "bare_original": {"armed": "5884d88f6cd6b990de6d8fee9b21033134c4507cfba6ab9a185cb166be51e57a", "armed_bytes": 30807368, "launch9": "843a94d9600dbe2bef6fb2cd910a26f10b943fa5ad4af47161e9b6be50754a52", "launch9_bytes": 30758168},
+          "bare_sdk": {"armed": "b0353bf4cccd062f6ee7dce7b3b758299442355347d19b78a1485d8f89a5c07f", "launch9": "bce857c5f26b46f3865d3615922970042f79897b3d9af5a152071564c4131af7"},
+          "wrapped_fself": {"armed": "d8cb4a7637b2ac581270fa05b2d9237dbbea3843f775983b4d96186f573f2c83", "armed_bytes": 30818247, "launch9": "76ee6af39b407ab73f78c59a3a3d38979397636bb988d3585cf6dc987098e553", "launch9_bytes": 30773943}
+        }
+      }
+    }
+  ],
+  "receipts": {
+    "replace": "receipts/composition6-replace-receipt.json (sha 5e3371cccaef8ee3..., 99 files: launch-9 lineage file-for-file with identical hashes on all shared paths, plus explicit --file admissions of the 3 armed-staging files and the 4 Resolution-B headers; + the s2-arm initializer carry-forward entry from the current composition-4 receipt)",
+    "extra": "receipts/composition6-extra-receipt.json (sha 0528d3d60085abfb..., files map byte-equal to the launch-9 extra receipt)",
+    "manifest": "composition-change-manifest-launch10-armed.json (sha 68bc30eed3ccc44c..., manifest_id composition6-launch10-armed-prebuild-1, baseline composition5-r11)",
+    "gate": "gate-receipt-launch10-armed-a-vs-b.json (GO, 15/15 checks)",
+    "provenance_of_armed_table": "worker-initializer-integration/staging/SeedTable.launch10.h (generated by gen_seed_table.py; slot 3 gmalloc 0x930add8 per worker-gmalloc-derivation GMALLOC-CANDIDATES.json; SEED-TABLE.json.launch10 in worker-seed-table-derivation)"
+  },
+  "honesty": [
+    "No claim that arming makes launch 10 succeed: the armed path re-opens FLAG-2 (first vtable-walk read of a prot=4 page) and the tick-detour write as launch-10 verdicts (LAUNCH10-MATRIX rows R1/R2); the PLH per-page-transition layer (U-SWAP-4) is a separate, unbuilt design. [Seeds] REFUTED is the new early terminal if a seeded slot fails validation in-game.",
+    "This is a pre-build so launch 10 is a staging decision; the controller owns staging/launch. The receipts here are worker-local regenerations; the comp6-driver receipts remain the launch-9 lineage, untouched.",
+    "No exec-side touch happens in producing this candidate; nothing here verifies kernel behavior or seed validity in-game. All evidence is packaging-level.",
+    "Gate S1 measures size vs the comp-4-era baseline (0.12% delta) and D1 measures byte-identity of two builds; neither is a gameplay-quality statement."
+  ],
+  "inputs": {
+    "initializer_staging_source": "outputs/2026-10-04-zcode-team/worker-initializer-integration/staging (copied verbatim; SeedTable.h swapped to the launch10 table inside MY copy only)",
+    "armed_table": "outputs/2026-10-04-zcode-team/worker-initializer-integration/staging/SeedTable.launch10.h (sha256 59effe6e4cd34eb0b1138532f1c147b32dc45ffb567e8f8a39eb2ee1d44b0090)",
+    "disarmed_table_launch9": "outputs/2026-10-04-zcode-team/worker-initializer-integration/staging/SeedTable.h (sha256 2cab0c5213b10257950f8369030dc1cf2733222b3f6c7e349738a5d7a2d9a053)",
+    "driver_lineage": "outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/build_runtime_composition6_d1fix.py (sha256 27d85da3826fdbf0090869af86f7094f0211b498e820c2d003aa4520a452d550)",
+    "launch9_program_source": "outputs/2026-10-04-zcode-team/worker-comp6-driver/staging/comp6-program/UE4SSProgram.cpp (sha256 75abf2ab77791f4e0aa2c068164d95d7737aefdcf0536a791f40599cd4ffb574, unchanged)",
+    "launch9_baseline_candidate": "outputs/2026-10-04-zcode-team/worker-comp6-driver/prx-candidate-composition6-1 (bare-original 843a94d9600dbe2b..., wrapped fself 76ee6af39b407ab7..., combined-supplier.o 116f1d702434df33...)",
+    "runs": [
+      "ue4ss-native-supplier-composition-6-l10/run-a + staging/lineage-overlay-2-l10-a + prx-candidate-composition6-l10-a",
+      "ue4ss-native-supplier-composition-6-l10/run-b + staging/lineage-overlay-2-l10-b + prx-candidate-composition6-l10-b (byte-identical reproduction)"
+    ]
+  }
+}

@@ -1,0 +1,138 @@
+--- /dev/null
++++ b/loader/src/guest_stack_write.h
+@@ -0,0 +1,63 @@
++// Validate current-thread guest stack outputs during an active guest TEB call.
++#ifndef CAP13_GUEST_STACK_WRITE_H
++#define CAP13_GUEST_STACK_WRITE_H
++
++#include "win32_last_error_state.h"
++
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++#include <pthread.h>
++#if defined(__PROSPERO__)
++#include <pthread_np.h>
++#endif
++
++namespace cap13 {
++
++// Only the current x86-64 thread's caller stack above this function's frame
++// is eligible. An inactive guest binding, another thread's stack, wrapping
++// pointer, or unavailable OS stack bounds refuses without writing.
++inline bool write_current_guest_stack(void* address, const void* source,
++                                      size_t length) noexcept
++{
++    if (!win32_last_error_state().active_teb || !address || !source || !length)
++        return false;
++    uintptr_t low = 0, high = 0;
++#if defined(__APPLE__)
++    const pthread_t self = pthread_self();
++    const uintptr_t top = reinterpret_cast<uintptr_t>(
++        pthread_get_stackaddr_np(self));
++    const size_t size = pthread_get_stacksize_np(self);
++    if (!top || !size || size > top) return false;
++    low = top - size;
++    high = top;
++#elif defined(__PROSPERO__)
++    pthread_attr_t attr{};
++    if (pthread_attr_get_np(pthread_self(), &attr) != 0) return false;
++    void* base = nullptr;
++    size_t size = 0;
++    const int status = pthread_attr_getstack(&attr, &base, &size);
++    (void)pthread_attr_destroy(&attr);
++    const uintptr_t stack_begin = reinterpret_cast<uintptr_t>(base);
++    if (status != 0 || !stack_begin || !size ||
++        size > UINTPTR_MAX - stack_begin)
++        return false;
++    low = stack_begin;
++    high = stack_begin + size;
++#else
++    return false;
++#endif
++    volatile uint8_t frame_marker = 0;
++    const uintptr_t frame = reinterpret_cast<uintptr_t>(&frame_marker);
++    const uintptr_t begin = reinterpret_cast<uintptr_t>(address);
++    // Guest Win64 entry currently uses the same downward-growing x86-64
++    // host stack. The caller's output can only be above this deeper frame.
++    if (frame < low || frame >= high || begin < frame || begin >= high ||
++        length > high - begin)
++        return false;
++    std::memmove(address, source, length);
++    return true;
++}
++
++} // namespace cap13
++#endif
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -14,6 +14,7 @@
+ #include "win_api_shim.h"
+ #include "guest_read_map.h"
+ #include "guest_write_map.h"
++#include "guest_stack_write.h"
+ #include "win32_last_error_state.h"
+ #include "win32_thread_identity.h"
+ #include "win64_bridge.h"
+@@ -291,9 +292,11 @@
+ bool WinApiShim::write_guest_bytes(void* address, const void* source,
+                                    size_t bytes) const
+ {
+-    return m->hooks.write_guest_bytes &&
+-           m->hooks.write_guest_bytes(m->hooks.write_guest_user,
+-                                      address, source, bytes);
++    if (m->hooks.write_guest_bytes &&
++        m->hooks.write_guest_bytes(m->hooks.write_guest_user,
++                                   address, source, bytes))
++        return true;
++    return write_current_guest_stack(address, source, bytes);
+ }
+ void WinApiShim::set_mod_root(std::string utf8_root) { m->mod_root = std::move(utf8_root); }
+ 
+--- a/loader/tests/guest_pe_thread_test.cpp
++++ b/loader/tests/guest_pe_thread_test.cpp
+@@ -4,6 +4,7 @@
+ #include "guest_write_map.h"
+ #include "pe_types.h"
+ #include "win32_thread_identity.h"
++#include "win32_last_error_state.h"
+ #include "win_api_shim.h"
+ 
+ #include <cstdint>
+@@ -151,6 +152,36 @@
+     check(!shim.write_guest_bytes(&stack_output, &supplied, sizeof(supplied)) &&
+           unsafe_write_calls.load() == 0,
+           "configured write map cannot be bypassed by later hook changes");
++    uint8_t local_teb[0x70]{};
++    uint32_t guest_stack_output = 0;
++    std::atomic<uint32_t*> other_stack{nullptr};
++    std::atomic<bool> other_release{false};
++    std::thread other_worker([&] {
++        uint32_t other_local = 0;
++        other_stack.store(&other_local);
++        while (!other_release.load()) std::this_thread::yield();
++    });
++    while (!other_stack.load()) std::this_thread::yield();
++    {
++        cap13::ScopedGuestLastErrorBinding guest_binding(local_teb);
++        check(shim.write_guest_bytes(&guest_stack_output, &supplied,
++                                     sizeof(supplied)) &&
++              guest_stack_output == supplied,
++              "active guest can write an output in its own caller stack");
++        check(!shim.write_guest_bytes(other_stack.load(), &supplied,
++                                      sizeof(supplied)) &&
++              !shim.write_guest_bytes(heap_output.data(), &supplied,
++                                      sizeof(supplied)),
++              "guest stack fallback rejects another thread and unowned heap");
++        check(!shim.write_guest_bytes(reinterpret_cast<void*>(UINTPTR_MAX - 1),
++                                      &supplied, sizeof(supplied)),
++              "guest stack fallback rejects wrapping output range");
++    }
++    other_release.store(true);
++    other_worker.join();
++    check(!shim.write_guest_bytes(&guest_stack_output, &supplied,
++                                  sizeof(supplied)),
++          "guest stack output refuses after guest TEB binding exits");
+     uint8_t split_output[8]{};
+     int split_owner = 0;
+     cap13::GuestWriteMap split_map;

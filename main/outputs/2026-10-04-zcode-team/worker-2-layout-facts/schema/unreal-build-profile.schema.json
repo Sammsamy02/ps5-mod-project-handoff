@@ -1,0 +1,97 @@
+{
+  "schema_id": "unreal-build-profile",
+  "schema_version": 1,
+  "description": "Data-driven contract for per-title Unreal build/layout fact profiles. Rules are generic and live in this schema plus tools/validate_profile.py; per-build VALUES live only in profile files. A profile records only facts traceable to cited evidence artifacts, keeps serialized file-image addresses strictly distinct from any mapped runtime addresses, and never fills gaps with PDB defaults, other-build values or assumptions.",
+
+  "profile_format": 1,
+  "profile_kinds": ["unreal-build-layout"],
+
+  "target_registry": {
+    "prospero-x86_64-sysv": {
+      "image_kind": "elf64-x86_64-little-endian",
+      "pointer_size": 8
+    }
+  },
+
+  "fact_statuses": {
+    "validated-static": "A genuine (non-candidate) resolver endpoint returned status 0 for this fact against the saved serialized image. Still a file-image label only; never a live pointer, callable function or layout proof.",
+    "candidate-only": "Only an endpoint explicitly named/labeled 'candidate' produced a value, or corroboration is incomplete. Cannot be treated as validated by any consumer.",
+    "absent": "An endpoint ran (non-zero no-match status) and found no value in the saved image. Absence is itself recorded evidence.",
+    "not-surveyed": "No endpoint for this fact has been executed against any saved image. No value may be present.",
+    "unresolved": "Survey attempted but outcome is not reducible to validated/candidate/absent (e.g. ambiguous or malformed-image statuses). No value may be present."
+  },
+
+  "family_status_aggregation": "family_status is recomputed by the validator in strict priority order and must match the declared value: 'validated' if any fact is validated-static; else 'candidate-only' if any fact is candidate-only; else 'absent' if any fact is absent; else 'unresolved' if any fact is unresolved; else 'not-surveyed'.",
+
+  "survey_endpoint_status_codes": {
+    "0": "success (value is an operand-derived serialized file-image label)",
+    "1": "invalid arguments",
+    "2": "malformed image",
+    "3": "no candidate / no match",
+    "4": "ambiguous (multiple matches)",
+    "5": "other / incomplete evidence"
+  },
+
+  "address_model": {
+    "elf_image_vaddr": "Link-time virtual address of a symbol/operand within the serialized ELF image (section vaddr / PT_LOAD p_vaddr space). The only address kind the static survey produces.",
+    "file_byte_offset": "Byte offset within the saved file. MAY be non-null ONLY when an evidence artifact records the program-header derivation; otherwise must be null.",
+    "mapped_runtime_address": "Absolute address in the live process. MUST be null unless a provenance_class 'game-runtime' evidence artifact exists and runtime_validation.validated is true.",
+    "load_base": "Live load base of the image. Same gating as mapped_runtime_address.",
+    "rule": "A value that is actually a file-image vaddr MUST NOT be recorded in file_byte_offset or mapped_runtime_address. All four fields are stored separately; copying one into another is a validation error."
+  },
+
+  "provenance_classes": {
+    "allowed": [
+      "game-static-survey",
+      "compiled-port-accessor",
+      "game-runtime"
+    ],
+    "forbidden": [
+      "pdb-default",
+      "other-game-build",
+      "assumed",
+      "guessed",
+      "unattributed"
+    ]
+  },
+
+  "width_rules": {
+    "allowed_width_bytes": [1, 2, 4, 8, 16],
+    "width_16_policy": "width_bytes 16 is admitted only for entries that carry an 'alternatives_compiled_bytes' list with at least two distinct entries where width_bytes == max(alternatives) (conservative-maximum policy from ue4ss-native-layout-widths-2).",
+    "unavailable_encoding": "An unavailable accessor entry must have width_bytes null plus a non-empty reason; width 0 is never valid.",
+    "evidence_scope_statement": "Every compiled-port-accessor width fact is a source/accessor contract compiled with the real target SDK; it is NOT proof of the game build's ABI, storage or callable layout."
+  },
+
+  "identity_rules": {
+    "always_required": ["profile_id", "title", "target", "pointer_size", "engine_major", "engine_minor", "build_id_source"],
+    "required_before_static_layout_ready": ["engine_revision", "build_id", "non_shipping_axis", "stats_axis"],
+    "axes_note": "Build axes (non_shipping, stats) must be resolved booleans backed by evidence before any staged numeric layout may be marked ready; unresolved axes are recorded as null with an explicit status string, never defaulted (mirrors NativeLayoutBinding SetResolvedNativeLayoutAxes/PublishStagedNativeLayoutMaps)."
+  },
+
+  "family_vocabularies": {
+    "EngineVersion": ["engine_version"],
+    "GUObjectArray": ["guobject_original", "guobject_cfg_candidate"],
+    "FName": ["fname_ctor_original", "fname_to_string", "fname_ctor_call_candidate"],
+    "FProperty": ["fproperty_static_survey"],
+    "UFunction": ["ufunction_static_survey"],
+    "UObject": ["static_construct_object", "uobject_layout_offsets"],
+    "GMalloc": ["gmalloc_original", "gmalloc_deletefile_candidate"],
+    "GameEngineTick": ["gameengine_tick"]
+  },
+
+  "readiness_fields": {
+    "static_layout_ready": "bool; true only when every required identity fact and build axis is resolved with evidence.",
+    "runtime_binding_ready": "bool; true only when a live mapped owner with image identity, segment correspondence and lifetime is proven. No current profile may set this true."
+  },
+
+  "evidence_source_roles": [
+    "survey-receipt",
+    "survey-stdout",
+    "capture-record",
+    "compiled-width-coverage",
+    "compiled-width-delta",
+    "layout-contract-source",
+    "handoff-document",
+    "runtime-observation"
+  ]
+}

@@ -1,0 +1,29 @@
+# REBASE ADAPTATION (agent IH, 2026-10-10, /tmp staging) of FX P2/02's CHANGES.json
+# tail hunk (@863). REASON: after FX's authoring the live CHANGES.json tail
+# gained round5_row_sync (GA path shim), kb_tu_note (HM) and round4_setaside
+# (root round-4 set-aside), so round4_row_sync is no longer the final entry and
+# FX's last-entry-append context cannot match. ADAPTATION = pure re-anchoring,
+# zero semantic change: append the byte-identical fx_p2_row_sync entry (opener
+# + all six fields byte-copied from FX's + lines) as the new LAST key; the
+# mechanical comma moves from round4_row_sync's closing brace (FX's anchor) to
+# "round4_setaside": true (the current last key). File keeps no trailing
+# newline. Apply AFTER 02-tree-dead-code.patch (its 4 CHANGES row hunks apply
+# clean at fuzz=0; only the tail hunk rejects). Reverse with -R like the set.
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/CHANGES.json
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/CHANGES.json
+@@ -872,5 +872,13 @@
+   "markers": "[SHIM] family added to manifest by root"
+  },
+  "kb_tu_note": "KernelBridgeProbes.{hpp,cpp} (root, inline for HM): default-OFF TU, NOT registered as a build unit \u2014 compiles into nothing until MODBRIDGE_KB_PROBES is defined in a Claude-reviewed gated build; ABI grounded in pinned kstuff-lite v1.11 source (trampoline + sub constants + CHECK polarity verified from main.c:297-308/:1336 and r0gdb_get_fw_version)",
+- "round4_setaside": true
++ "round4_setaside": true,
++ "fx_p2_row_sync": {
++  "date": "2026-10-10",
++  "by": "agent FX (PARKED patch set; root applies atomically with the whole P2 set - outputs/2026-10-08-l25-prep/parked/P2-variant-b-removal/)",
++  "refreshed": "UnrealInitializer.cpp + LuaMod.cpp candidate_sha256 (changes[] + files[] rows)",
++  "change": "variant-B skip-listener arms REMOVED (4 sites: UnrealInitializer.cpp x3 - G3 cache-block gate, class-delete-listener guard, shutdown-listener guard; LuaMod.cpp x1 - Lua-mod delete-listener guard; production registrations now unconditional; MODBRIDGE_L25_SKIP_DELETE_LISTENER no longer appears in any compiled source). Dead R3 marshal paths REMOVED: R3MarshalQueryHarnessDispatch (decl+def, zero call sites), r3_marshal_carrier_precheck + arm_funcptr_marshal_drain (only caller was the dead-by-construction ranked-natives loop - both ranked names are BlueprintImplementableEvents the FUNC_Native precheck refused by construction; on console the StaticFindObject lookups cannot resolve: GATE-1), and the ranked-natives loop itself in r3_marshal_calibration_consumer (now arms event carriers only). NOT removed (deliberate): the Blueprint-override event-carrier family + funcptr_marshal_hook + r3_marshal_lazy_arm - the designated FALLBACK pump per EU FIX4 (VmtPump is primary; carriers remain fallback). Tombstone markers [L26][P2] at every removal site.",
++  "verification": "host-only static checks during authoring (token census 0 across compiled sources; zero remaining code refs to removed symbols; brace balance preserved). NO build, NO packaging, NO console contact (Mac on battery). Full rebuild + packaging verify REQUIRED when root applies.",
++  "console_contact": false
++ }
+ }
+\ No newline at end of file

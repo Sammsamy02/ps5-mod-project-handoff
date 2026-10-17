@@ -1,0 +1,118 @@
+########## env
+== PHASE 0: environment self-check ==
+_VERSION = Lua 5.4
+PASS  Lua 5.4 VM (port LuaRaw 5.4.7)
+PASS  Key.F7 present
+PASS  Key.RETURN present
+PASS  Key.UP/DOWN/LEFT/RIGHT_ARROW present
+Key table entries = 165
+PASS  Key table has 165 entries (port add_pair count)
+PASS  EngineTickAvailable global
+PASS  ProcessEventAvailable global
+PASS  EGameThreadMethod.EngineTick/ProcessEvent
+PASS  ModRef shared-variable API
+PASS  UE4SS / UnrealVersion / FName / NAME_None / FText / FPackageName
+PASS  package.path has port shared patterns
+== phase env: 11 passed, 0 failed ==
+RC=0
+########## load
+== PHASE 1: main.lua end-to-end load ==
+PASS  global present before load: print
+PASS  global present before load: require
+PASS  global present before load: RegisterKeyBind
+PASS  global present before load: RegisterLoadMapPreHook
+PASS  global present before load: FindFirstOf
+PASS  global present before load: StaticFindObject
+PASS  global present before load: StaticConstructObject
+PASS  global present before load: FName
+PASS  global present before load: FText
+PASS  global present before load: LoadAsset
+PASS  Key.F7 registered
+PASS  Key.UP_ARROW registered
+PASS  Key.DOWN_ARROW registered
+PASS  Key.RETURN registered
+PASS  Key.LEFT_ARROW registered
+PASS  Key.RIGHT_ARROW registered
+PASS  main.lua loaded without error
+PASS  require('UEHelpers') resolves via Mods/shared/?/?.lua pattern
+PASS  exactly 6 keybinds registered
+PASS  keybind set == {F7,UP_ARROW,DOWN_ARROW,RETURN,LEFT_ARROW,RIGHT_ARROW}
+PASS  all 6 binds registered without modifier chords (pad chords come from PS5Pad.ini)
+PASS  RegisterKeyBind returned nil (port returns 0 values)
+PASS  RegisterLoadMapPreHook accepted callback (pcall-guarded call did not decline)
+PASS  load banner printed
+PASS  no runtime errors recorded at load
+== phase load: 25 passed, 0 failed ==
+RC=0
+########## f7-nosave
+== PHASE 2: F7 press, NO SAVE LOADED (EngineTick available) ==
+PASS  load ok
+PASS  F7 keybind dispatched
+PASS  no error inside keybind callback
+PASS  exactly one ExecuteInGameThread queued
+PASS  queued closure ran on drain
+PASS  no Lua error in game-thread closure
+PASS  scanItems hit its own guard: 'Item database not ready. Load a save first.'
+PASS  buildUI declined: menu NOT created
+PASS  no UMG lookups attempted in no-save mode
+PASS  no crash-level error text captured
+== phase f7-nosave: 10 passed, 0 failed ==
+RC=0
+########## f7-gate
+== PHASE 2b: F7 press with EngineTick hook UNAVAILABLE (settings default) ==
+PASS  load ok
+PASS  F7 keybind dispatched
+PASS  ExecuteInGameThread threw the port's exact EngineTick-unavailable error (caught by keybind handler)
+PASS  nothing queued (menu can never open in this state)
+== phase f7-gate: 4 passed, 0 failed ==
+RC=0
+########## f7-save
+== PHASE 3: F7 press, SAVE LOADED (playable pawn-shaped world) ==
+PASS  load ok
+PASS  F7 dispatched
+PASS  queue has 1 closure
+PASS  closure ran
+PASS  no Lua errors in save-mode game thread
+PASS  UEHelpers loaded at first F7 (2x CreateInvalidObject module caches)
+PASS  scan resolved the stub database
+PASS  buildUI created the menu
+PASS  WidgetBlueprintLibrary looked up
+PASS  WidgetBlueprintLibrary:Create reached stub
+PASS  StaticConstructObject used (tree/canvas/border/vbox/textblocks)
+PASS  AddToViewport(9999) reached stub
+PASS  SetVisibility(1) then (0) both recorded
+PASS  root widget property writes (WidgetTree/RootWidget) reached stubs
+PASS  DOWN_ARROW dispatched (#1)
+PASS  DOWN_ARROW dispatched (#2)
+PASS  DOWN_ARROW dispatched (#3)
+PASS  DOWN nav: no errors
+PASS  UP_ARROW dispatched
+PASS  UP nav: no errors
+PASS  UP nav: refreshText SetText calls recorded
+PASS  DOWN_ARROW x4 returns to first pickup row
+PASS  RIGHT_ARROW dispatched
+PASS  RIGHT page nav: no errors
+-- CROSS (RETURN) spawn path --
+PASS  CROSS dispatched
+PASS  spawn path: no Lua errors
+PASS  LineTraceSingle reached stub with out-param fill
+PASS  BeginDeferredActorSpawnFromClass reached stub
+PASS  FinishSpawningActor reached stub
+PASS  spawn succeeded banner
+PASS  pickup property writes (PickupAmount/bAutoDestroyOnPickUp) reached stubs
+PASS  component/actor state calls (SetEnabled/SetActorHiddenInGame/SetActorEnableCollision)
+-- map-change hook + reopen --
+PASS  load-map pre hook fired without error
+PASS  F7 reopens after map change
+PASS  reopen: no errors
+== phase f7-save: 35 passed, 0 failed ==
+RC=0
+########## gt-gate
+== PHASE 4: LoadAsset game-thread gate ==
+PASS  load ok
+PASS  LoadAsset OFF game thread throws port error (LuaMod.cpp:3626)
+PASS  F7 dispatched
+PASS  menu path fine after gate probe
+PASS  LoadAsset ON game thread (drain) does not throw
+== phase gt-gate: 5 passed, 0 failed ==
+RC=0

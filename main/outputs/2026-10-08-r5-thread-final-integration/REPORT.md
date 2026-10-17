@@ -1,0 +1,7 @@
+This isolated admission/retirement compile attempt completed two actual SDK whole-TU compiles under the accepted R5 and FField overlays. The complete 374-unit actual dependency census selected only the initializer and ThreadNameRuntime provider. Config and the public ThreadNameRuntime header remain unchanged. The initial .hpp-only inventory was expanded to include the new C declaration; the preserved executed and complete plans contain byte-identical commands, so no redundant compile was run.
+
+Root then identified a cross-atomic lifetime ordering gap in the provider's phase/counter gate and requested a separately sealed seq_cst revision. No full link was started for this attempt. Its sources, plans, emitted dependency receipts, object files and compile results are preserved here as an unqualified prior attempt. A following integration may retain this initializer object by exact source/header equality and compile only the corrected provider if its complete dependency closure permits that.
+
+The selected initializer checks exact owned shim readiness via `bridge_native_thread_import_ready`. That C function is outer packaging-owned; its definition and final native import identity are not qualified by this compile attempt. The old false-admission full link remains frozen separately in `../2026-10-08-r5-thread-source-integration/`.
+
+No native execution, package admission, teardown acceptance, menu success, console contact, source promotion or full composition pass is claimed for this attempt.

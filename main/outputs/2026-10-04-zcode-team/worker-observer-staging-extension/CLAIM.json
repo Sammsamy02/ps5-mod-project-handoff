@@ -1,0 +1,42 @@
+{
+  "worker": "worker-observer-staging-extension",
+  "date": "2026-10-04",
+  "task": "Fold observer ridealong staging into console_batch.py (STAGE-PLAN-COMBINED was the manual fallback; the master plan + decision brief flag it as absent): (1) new `stage-observer` flow per STAGE-PLAN-COMBINED exactly (observer fself upload 1afa0997…/30152151 B, PRX SHT-strip readback law 30143976 B / body sha 3f89a5b6…, idempotent ini append of ONLY its own line with pre-image checks, rollback); (2) combined `stage-ridealongs` (qdrv1 + observer + combined 6-entry ini end-state per the plan's simulator facts) wired into `all` between e2e and game-evidence, plus `rollback-ridealongs`; (3) extend selftest + fake-console drive for the new flows (ini append idempotency, readback law both ways), keep the prior 162-check selftest and the drive green.",
+  "ownership": {
+    "edited_in_place": [
+      "worker-console-batch-runner/console_batch.py — inherited ownership: original author (worker-console-batch-runner), 8fam patcher (worker-batch-runner-8fam-patch) and freshness fixes (worker-evidence-freshness-fixes, result sha256 92b56889cbfe77ce64271c02db7a02692ef86dc8e52b485929d3196b40895918) all DELIVERED (terminal REPORT.md 22:09). As-found snapshot preserved at diffs/console_batch.py.asfound-92b56889cbfe.py; patched result copied to worker-observer-staging-extension/console_batch.py and applied in place.",
+      "worker-console-batch-runner/tests/fake_console_drive.py — same ownership chain; extended additively (prior sections untouched)",
+      "worker-console-batch-runner/USER-SESSION-GUIDE.md — same ownership chain; updated for the new flows"
+    ],
+    "not_touched": [
+      "worker-game-session-ridealongs/STAGE-PLAN-COMBINED.md — proposal doc of another worker, consumed read-only as the law",
+      "stage-qdrv1 flow semantics — the delivered qdrv1-only staging stays byte-for-byte behaviorally identical (documented fallback single-ridealong path); STAGE-PLAN-COMBINED §8 supersedence is implemented as the NEW stage-ridealongs flow, which replaces stage-qdrv1 inside `all` only"
+    ]
+  },
+  "pinned_inputs": {
+    "law": "worker-game-session-ridealongs/STAGE-PLAN-COMBINED.md §0-§8 (frozen artifacts, SHT-strip channel law, append-only ini law, SC-0..SC-8 step list, rollback §7)",
+    "observer_fself": "worker-observer-packaging/modbridge_runtime_aligned_observer.prx — sha256 1afa0997682cc6ecc14fd9f82961d68755edfacb36b36a4135203e37b1011e30, 30152151 B (re-verified on disk this session)",
+    "observer_bare_sdk": "worker-observer-packaging/build-1/bare-sdk/modbridge_runtime_aligned_observer.prx — sha256 d0a3d6feebae18680962fb976726e86ea1ea397e183185793b75c290c6c0290f, 30145992 B (re-verified on disk)",
+    "qdrv1_fself": "worker-record-sink-addon/modbridge_qh_driver.prx — sha256 52c3221665a423ddd2b22faddd4ac59ea8fd0ab8c1880c61e225d32a43df70a4, 26157 B (re-verified on disk)",
+    "qdrv1_bare_sdk": "worker-record-sink-addon/determinism/run1/bare-sdk/modbridge_qh_driver.prx — sha256 7ae1e4e39c5f312ec5927be6bec82d92c860ab8b3b65ef4a9826fd296c8ce1d9, 88744 B (re-verified on disk)",
+    "readback_law_constants_host_recomputed": "qdrv1 readback 87112 B / body sha 71406d3ccc7c1da0688b68ff35fd35c4a7ef9241b4d02ce427504cd392002cf5; observer readback 30143976 B / body sha 3f89a5b66bba614926f7e7b1273c1d2aadeb505b2797dcd7389b12cebeee6622 — computed from the bare-sdk ELFs this session and byte-identical to the plan's §3 table (max p_offset+p_filesz prefix, body = bytes 64..end)"
+  },
+  "honesty": {
+    "no_console_contact": true,
+    "staging_preparation_only": "All new code is staging logic + host tests. Nothing has executed on the console; on-target readback bytes remain [TARGET].",
+    "readback_law": "The fake console simulates the ftpsrv channel law (readback = segment-covered prefix of the bare-sdk ELF); the legacy stage-qdrv1 drive section keeps the full-identity channel it was delivered with, the new flows drive the SHT-strip channel — both laws exercised in the same drive.",
+    "all_note": "`all` is now dll8 -> e2e -> stage-ridealongs -> game-evidence. The settings+loadlist restage (NEW-SETTINGS §3) was never part of `all` and remains a separate step per the master plan; operators following RETURN-SESSION-MASTER-PLAN Phase 2 can still run subcommands separately (stage-observer alone also exists)."
+  },
+  "verification": {
+    "suites": "console_batch.py selftest: 271 ok / 0 failed (the prior 162 checks all still present and green; +109 new); tests/fake_console_drive.py: 0 failed checks (all prior drive sections still green: dll7, e2e, stage-qdrv1, game-evidence, dll8, stale-7fam halt, dll7-fail halt; +8 new scenario sections); console_batch.py plan: OVERALL GREEN across all nine flows",
+    "readback_law_both_ways": "selftest section G: law accepts a law-shaped readback (synthetic ELF + real pinned artifacts, e_shnum zeroed) and rejects wrong length / truncation / corrupted body / sha mismatch / forbidden header byte / nonzero e_shnum / foreign magic / constants-artifact divergence / non-ELF reference; fake drive: law-shaped readback PASSes end-to-end and a truncated readback FAILs after exactly ONE re-STOR, storing nothing",
+    "ini_idempotency": "selftest sections H+I and drive sections: append-only proof, qdrv1-already-staged coordination (observer appends ONLY its own line), full no-op re-run (no ini STOR, no PRX upload, readback still verified), duplicate/mode-0/mode-1/missing-expected/unknown-contract STOPs, trailing-newline handling, 6-entry end-state gate (exactly 5 registered), rollback single-character flips verified byte-level"
+  },
+  "result_hashes": {
+    "console_batch.py": "fd21d1718d62c32d434168207cc47d2184ad1d92445a07c3abaf727454c9ad9a (applied in place at worker-console-batch-runner/ and copied to this dir)",
+    "tests/fake_console_drive.py": "47896a5e5916273b70e8bc1f15e3a633d2a607b28eaf3eb1ad5351432fe7231f",
+    "USER-SESSION-GUIDE.md": "33ec8a893f7287b2bd15bd527c164fcec1888cf73633bb9d890bf1de0d4cebf6",
+    "as_found_snapshots": "diffs/console_batch.py.asfound-92b56889cbfe.py + diffs/fake_console_drive.py.asfound + diffs/USER-SESSION-GUIDE.md.asfound; unified diffs in diffs/*.patch"
+  },
+  "status": "complete"
+}

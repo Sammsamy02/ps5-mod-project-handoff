@@ -1,0 +1,307 @@
+#include <Helpers/String.hpp>
+#include <IniParser/Ini.hpp>
+#include <SettingsManager.hpp>
+#include <UE4SSProgram.hpp>
+#ifdef __PROSPERO__
+#include <Helpers/Utf16Utf8.hpp>
+#endif
+
+#define REGISTER_STRING_SETTING(member_var, section_name, key)                                                                                                 \
+    try                                                                                                                                                        \
+    {                                                                                                                                                          \
+        (member_var) = parser.get_string(section_name, STR(#key));                                                                                             \
+    }                                                                                                                                                          \
+    catch (std::exception&)                                                                                                                                    \
+    {                                                                                                                                                          \
+    }
+
+#define REGISTER_INT64_SETTING(member_var, section_name, key)                                                                                                  \
+    try                                                                                                                                                        \
+    {                                                                                                                                                          \
+        (member_var) = parser.get_int64(section_name, STR(#key));                                                                                              \
+    }                                                                                                                                                          \
+    catch (std::exception&)                                                                                                                                    \
+    {                                                                                                                                                          \
+    }
+
+#define REGISTER_BOOL_SETTING(member_var, section_name, key)                                                                                                   \
+    try                                                                                                                                                        \
+    {                                                                                                                                                          \
+        (member_var) = parser.get_bool(section_name, STR(#key));                                                                                               \
+    }                                                                                                                                                          \
+    catch (std::exception&)                                                                                                                                    \
+    {                                                                                                                                                          \
+    }
+
+#define REGISTER_FLOAT_SETTING(member_var, section_name, key)                                                                                                  \
+    try                                                                                                                                                        \
+    {                                                                                                                                                          \
+        (member_var) = parser.get_float(section_name, STR(#key));                                                                                              \
+    }                                                                                                                                                          \
+    catch (std::exception&)                                                                                                                                    \
+    {                                                                                                                                                          \
+    }
+
+namespace RC
+{
+#ifdef __PROSPERO__
+    auto SettingsManager::deserialize(std::filesystem::path& file_name) -> void
+    {
+        deserialize(file_name, UE4SSProgram::get_program());
+    }
+
+    auto SettingsManager::deserialize(std::filesystem::path& file_name, UE4SSProgram& receiver) -> void
+#else
+    auto SettingsManager::deserialize(std::filesystem::path& file_name) -> void
+#endif
+    {
+#ifdef __PROSPERO__
+        Ini::Parser parser;
+        if (const auto& source = receiver.native_mod_source())
+        {
+            auto settings = source->read("ue4ss/UE4SS-settings.ini");
+            if (!settings) throw std::runtime_error("Native activation is missing ue4ss/UE4SS-settings.ini");
+            if (settings->bytes.find('\0') != settings->bytes.npos)
+                throw std::runtime_error("Native UE4SS settings contain NUL");
+            auto contents = ensure_str(std::string(settings->bytes));
+            parser.parse(contents);
+        }
+        else
+        {
+            // Reading configuration during validation must not create a missing file.
+            auto file = File::open(file_name, File::OpenFor::Reading, File::OverwriteExistingFile::No, File::CreateIfNonExistent::No);
+            parser.parse(file);
+            file.close();
+        }
+#else
+        auto file = File::open(file_name, File::OpenFor::Reading, File::OverwriteExistingFile::No, File::CreateIfNonExistent::Yes);
+        Ini::Parser parser;
+        parser.parse(file);
+        file.close();
+#endif
+
+        constexpr static File::CharType section_overrides[] = STR("Overrides");
+        REGISTER_STRING_SETTING(Overrides.ModsFolderPath, section_overrides, ModsFolderPath)
+
+        auto mods_paths_list = parser.get_list(section_overrides);
+#ifdef __PROSPERO__
+        mods_paths_list.for_each(STR("ModsFolderPaths"), [&receiver](const StringType& key, const Ini::Value& value) {
+#else
+        mods_paths_list.for_each(STR("ModsFolderPaths"), [](const StringType& key, const Ini::Value& value) {
+#endif
+            if (key.starts_with(STR('+')))
+            {
+#ifdef __PROSPERO__
+                receiver.add_mods_directory(std::filesystem::path{Unicode::EncodeUtf8(value.get_string_value())});
+#else
+                UE4SSProgram::get_program().add_mods_directory(value.get_string_value());
+#endif
+            }
+            else if (key.starts_with(STR('-')))
+            {
+#ifdef __PROSPERO__
+                receiver.remove_mods_directory(std::filesystem::path{Unicode::EncodeUtf8(value.get_string_value())});
+#else
+                UE4SSProgram::get_program().remove_mods_directory(value.get_string_value());
+#endif
+            }
+        });
+
+        REGISTER_STRING_SETTING(Overrides.ControllingModsTxt, section_overrides, ControllingModsTxt)
+#ifdef __PROSPERO__
+        if (receiver.native_mod_source() && (!Overrides.ModsFolderPath.empty() || !Overrides.ControllingModsTxt.empty()))
+            throw std::runtime_error("Native activation does not support filesystem mod path overrides");
+#endif
+
+        constexpr static File::CharType section_general[] = STR("General");
+        REGISTER_BOOL_SETTING(General.EnableHotReloadSystem, section_general, EnableHotReloadSystem)
+        StringType hot_reload_key{};
+        REGISTER_STRING_SETTING(hot_reload_key, section_general, HotReloadKey)
+        if (!hot_reload_key.empty())
+        {
+            try
+            {
+                General.HotReloadKey = Input::string_to_key(hot_reload_key);
+            }
+            catch (...)
+            {
+                // Note that this happens too early to be sent to the log file or the GUI, so it will only appear in the native console on Win32, or the terminal on Linux.
+                throw std::runtime_error{fmt::format("Invalid value for 'General.HotReloadKey': {}\n", to_string(hot_reload_key))};
+            }
+        }
+        REGISTER_BOOL_SETTING(General.EnableAutoReloadingLuaMods, section_general, EnableAutoReloadingLuaMods)
+        REGISTER_BOOL_SETTING(General.UseCache, section_general, UseCache)
+        REGISTER_BOOL_SETTING(General.InvalidateCacheIfDLLDiffers, section_general, InvalidateCacheIfDLLDiffers)
+        REGISTER_BOOL_SETTING(General.EnableDebugKeyBindings, section_general, EnableDebugKeyBindings)
+        REGISTER_INT64_SETTING(General.SecondsToScanBeforeGivingUp, section_general, SecondsToScanBeforeGivingUp)
+        if (General.SecondsToScanBeforeGivingUp == 30)
+        {
+            // We used to have '30' as the default.
+            // Now we use '120' as the default, but because our config file is set up without default overloading,
+            // we'll just check for the old default value here.
+            // It's not great, but we have no other way to forcefully change the default.
+            // Ideally we should've set the config file up to always use empty values for defaults, instead of hard-coding them.
+            General.SecondsToScanBeforeGivingUp = 120;
+        }
+        REGISTER_BOOL_SETTING(General.UseUObjectArrayCache, section_general, bUseUObjectArrayCache)
+        REGISTER_BOOL_SETTING(General.ForceGUObjectArrayForIteration, section_general, bForceGUObjectArrayForIteration)
+        REGISTER_BOOL_SETTING(General.DoEarlyScan, section_general, DoEarlyScan)
+        REGISTER_BOOL_SETTING(General.SearchByAddress, section_general, bEnableSeachByMemoryAddress)
+        StringType default_exec_method_string{};
+        REGISTER_STRING_SETTING(default_exec_method_string, section_general, DefaultExecuteInGameThreadMethod)
+        if (String::iequal(default_exec_method_string, STR("ProcessEvent")))
+        {
+            General.DefaultExecuteInGameThreadMethod = GameThreadExecutionMethod::ProcessEvent;
+        }
+        else if (String::iequal(default_exec_method_string, STR("EngineTick")))
+        {
+            General.DefaultExecuteInGameThreadMethod = GameThreadExecutionMethod::EngineTick;
+        }
+        StringType default_fname_to_string_method{};
+        REGISTER_STRING_SETTING(default_fname_to_string_method, section_general, DefaultFNameToStringMethod)
+        if (String::iequal(default_fname_to_string_method, STR("Scan")))
+        {
+            General.DefaultFNameToStringMethod = Unreal::UnrealInitializer::FNameToStringMethod::Scan;
+        }
+        else if (String::iequal(default_fname_to_string_method, STR("Conv_NameToString")))
+        {
+            General.DefaultFNameToStringMethod = Unreal::UnrealInitializer::FNameToStringMethod::Conv_NameToString;
+        }
+
+        constexpr static File::CharType section_engine_version_override[] = STR("EngineVersionOverride");
+        REGISTER_INT64_SETTING(EngineVersionOverride.MajorVersion, section_engine_version_override, MajorVersion)
+        REGISTER_INT64_SETTING(EngineVersionOverride.MinorVersion, section_engine_version_override, MinorVersion)
+        // Empty means detect from the game, true or false force the debug or shipping layouts
+        StringType debug_build_string{};
+        REGISTER_STRING_SETTING(debug_build_string, section_engine_version_override, DebugBuild)
+        if (String::iequal(debug_build_string, STR("true")) || debug_build_string == STR("1"))
+        {
+            EngineVersionOverride.DebugBuild = Unreal::UnrealInitializer::DebugBuildMode::ForceDebug;
+        }
+        else if (String::iequal(debug_build_string, STR("false")) || debug_build_string == STR("0"))
+        {
+            EngineVersionOverride.DebugBuild = Unreal::UnrealInitializer::DebugBuildMode::ForceShipping;
+        }
+        else if (String::iequal(debug_build_string, STR("test")))
+        {
+            EngineVersionOverride.DebugBuild = Unreal::UnrealInitializer::DebugBuildMode::ForceTest;
+        }
+
+        // Empty means detect from the game, true or false force STATS on or off
+        StringType stats_string{};
+        REGISTER_STRING_SETTING(stats_string, section_engine_version_override, Stats)
+        if (String::iequal(stats_string, STR("true")) || stats_string == STR("1"))
+        {
+            EngineVersionOverride.Stats = Unreal::UnrealInitializer::StatsMode::ForceOn;
+        }
+        else if (String::iequal(stats_string, STR("false")) || stats_string == STR("0"))
+        {
+            EngineVersionOverride.Stats = Unreal::UnrealInitializer::StatsMode::ForceOff;
+        }
+
+        constexpr static File::CharType section_object_dumper[] = STR("ObjectDumper");
+        REGISTER_BOOL_SETTING(ObjectDumper.LoadAllAssetsBeforeDumpingObjects, section_object_dumper, LoadAllAssetsBeforeDumpingObjects)
+        REGISTER_BOOL_SETTING(ObjectDumper.UseModuleOffsets, section_object_dumper, UseModuleOffsets)
+
+        constexpr static File::CharType section_cxx_header_generator[] = STR("CXXHeaderGenerator");
+        REGISTER_BOOL_SETTING(CXXHeaderGenerator.DumpOffsetsAndSizes, section_cxx_header_generator, DumpOffsetsAndSizes)
+        REGISTER_BOOL_SETTING(CXXHeaderGenerator.KeepMemoryLayout, section_cxx_header_generator, KeepMemoryLayout)
+        REGISTER_BOOL_SETTING(CXXHeaderGenerator.LoadAllAssetsBeforeGeneratingCXXHeaders, section_cxx_header_generator, LoadAllAssetsBeforeGeneratingCXXHeaders)
+
+        constexpr static File::CharType section_uht_header_generator[] = STR("UHTHeaderGenerator");
+        REGISTER_BOOL_SETTING(UHTHeaderGenerator.IgnoreAllCoreEngineModules, section_uht_header_generator, IgnoreAllCoreEngineModules)
+        REGISTER_BOOL_SETTING(UHTHeaderGenerator.IgnoreEngineAndCoreUObject, section_uht_header_generator, IgnoreEngineAndCoreUObject)
+        REGISTER_BOOL_SETTING(UHTHeaderGenerator.MakeAllFunctionsBlueprintCallable, section_uht_header_generator, MakeAllFunctionsBlueprintCallable)
+        REGISTER_BOOL_SETTING(UHTHeaderGenerator.MakeAllPropertyBlueprintsReadWrite, section_uht_header_generator, MakeAllPropertyBlueprintsReadWrite)
+        REGISTER_BOOL_SETTING(UHTHeaderGenerator.MakeEnumClassesBlueprintType, section_uht_header_generator, MakeEnumClassesBlueprintType)
+        REGISTER_BOOL_SETTING(UHTHeaderGenerator.MakeAllConfigsEngineConfig, section_uht_header_generator, MakeAllConfigsEngineConfig)
+
+        constexpr static File::CharType section_sdkgenerator[] = STR("SDKGenerator");
+        REGISTER_STRING_SETTING(SDKGenerator.OutputPath, section_sdkgenerator, OutputPath)
+
+        constexpr static File::CharType section_debug[] = STR("Debug");
+        REGISTER_BOOL_SETTING(Debug.SimpleConsoleEnabled, section_debug, ConsoleEnabled)
+        REGISTER_BOOL_SETTING(Debug.DebugConsoleEnabled, section_debug, GuiConsoleEnabled)
+        REGISTER_BOOL_SETTING(Debug.DebugConsoleVisible, section_debug, GuiConsoleVisible)
+        REGISTER_FLOAT_SETTING(Debug.DebugGUIFontScaling, section_debug, GuiConsoleFontScaling)
+        REGISTER_BOOL_SETTING(Debug.DebugGUIUseMonospace, section_debug, GuiConsoleMonospaceTextEditors)
+        StringType graphics_api_string{};
+        REGISTER_STRING_SETTING(graphics_api_string, section_debug, GraphicsAPI)
+        if (String::iequal(graphics_api_string, STR("DX11")) || String::iequal(graphics_api_string, STR("D3D11")))
+        {
+            Debug.GraphicsAPI = GUI::GfxBackend::DX11;
+        }
+        else if (String::iequal(graphics_api_string, STR("OpenGL")))
+        {
+            Debug.GraphicsAPI = GUI::GfxBackend::GLFW3_OpenGL3;
+        }
+        StringType render_mode_string{};
+        REGISTER_STRING_SETTING(render_mode_string, section_debug, RenderMode)
+        if (String::iequal(render_mode_string, STR("ExternalThread")))
+        {
+            Debug.RenderMode = GUI::RenderMode::ExternalThread;
+        }
+        else if (String::iequal(render_mode_string, STR("EngineTick")))
+        {
+            Debug.RenderMode = GUI::RenderMode::EngineTick;
+        }
+        else if (String::iequal(render_mode_string, STR("GameViewportClientTick")))
+        {
+            Debug.RenderMode = GUI::RenderMode::GameViewportClientTick;
+        }
+        StringType toggle_gui_key{};
+        REGISTER_STRING_SETTING(toggle_gui_key, section_debug, ToggleGuiKey)
+        if (!toggle_gui_key.empty())
+        {
+            try
+            {
+                Debug.ToggleGUIKey = Input::string_to_key(toggle_gui_key);
+            }
+            catch (...)
+            {
+                // Note that this happens too early to be sent to the log file or the GUI, so it will only appear in the native console on Win32, or the terminal on Linux.
+                throw std::runtime_error{fmt::format("Invalid value for 'Debug.ToggleGUIKey': {}\n", to_string(toggle_gui_key))};
+            }
+        }
+
+        constexpr static File::CharType section_crash_dump[] = STR("CrashDump");
+        REGISTER_BOOL_SETTING(CrashDump.EnableDumping, section_crash_dump, EnableDumping);
+        REGISTER_BOOL_SETTING(CrashDump.FullMemoryDump, section_crash_dump, FullMemoryDump);
+
+        constexpr static File::CharType section_threads[] = STR("Threads");
+        REGISTER_INT64_SETTING(Threads.SigScannerNumThreads, section_threads, SigScannerNumThreads)
+        REGISTER_INT64_SETTING(Threads.SigScannerMultithreadingModuleSizeThreshold, section_threads, SigScannerMultithreadingModuleSizeThreshold)
+
+        constexpr static File::CharType section_memory[] = STR("Memory");
+        REGISTER_INT64_SETTING(Memory.MaxMemoryUsageDuringAssetLoading, section_memory, MaxMemoryUsageDuringAssetLoading)
+
+        constexpr static File::CharType section_hooks[] = STR("Hooks");
+        REGISTER_BOOL_SETTING(Hooks.HookProcessInternal, section_hooks, HookProcessInternal)
+        REGISTER_BOOL_SETTING(Hooks.HookProcessLocalScriptFunction, section_hooks, HookProcessLocalScriptFunction)
+        REGISTER_BOOL_SETTING(Hooks.HookLoadMap, section_hooks, HookLoadMap)
+        REGISTER_BOOL_SETTING(Hooks.HookInitGameState, section_hooks, HookInitGameState)
+        REGISTER_BOOL_SETTING(Hooks.HookCallFunctionByNameWithArguments, section_hooks, HookCallFunctionByNameWithArguments)
+        REGISTER_BOOL_SETTING(Hooks.HookBeginPlay, section_hooks, HookBeginPlay)
+        REGISTER_BOOL_SETTING(Hooks.HookEndPlay, section_hooks, HookEndPlay)
+        REGISTER_BOOL_SETTING(Hooks.HookLocalPlayerExec, section_hooks, HookLocalPlayerExec)
+        REGISTER_BOOL_SETTING(Hooks.HookAActorTick, section_hooks, HookAActorTick)
+        REGISTER_BOOL_SETTING(Hooks.HookEngineTick, section_hooks, HookEngineTick)
+        StringType engine_tick_resolve_method_string{};
+        REGISTER_STRING_SETTING(engine_tick_resolve_method_string, section_hooks, EngineTickResolveMethod)
+        if (String::iequal(engine_tick_resolve_method_string, STR("VTable")))
+        {
+            Hooks.EngineTickResolveMethod = Unreal::UnrealInitializer::FunctionResolveMethod::VTable;
+        }
+        else if (String::iequal(engine_tick_resolve_method_string, STR("Scan")))
+        {
+            Hooks.EngineTickResolveMethod = Unreal::UnrealInitializer::FunctionResolveMethod::Scan;
+        }
+        REGISTER_BOOL_SETTING(Hooks.HookGameViewportClientTick, section_hooks, HookGameViewportClientTick)
+        REGISTER_BOOL_SETTING(Hooks.HookUObjectProcessEvent, section_hooks, HookUObjectProcessEvent)
+        REGISTER_BOOL_SETTING(Hooks.HookProcessConsoleExec, section_hooks, HookProcessConsoleExec)
+        REGISTER_BOOL_SETTING(Hooks.HookUStructLink, section_hooks, HookUStructLink)
+        REGISTER_INT64_SETTING(Hooks.FExecVTableOffsetInLocalPlayer, section_hooks, FExecVTableOffsetInLocalPlayer)
+
+        constexpr static File::CharType section_experimental_features[] = STR("ExperimentalFeatures");
+    }
+} // namespace RC

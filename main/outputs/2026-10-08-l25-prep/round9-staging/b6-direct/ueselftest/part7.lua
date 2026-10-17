@@ -1,0 +1,18 @@
+-- ueselftest generated part (gen_selftest.py 1.0). Loaded by main.lua via
+-- require("partN") / dofile fallback; returns the entry list. Do not run
+-- standalone (needs the [ST2] chassis state passed as S by the runner).
+return {
+{"prop.ContainerPtrToValuePtr", function(S) local pc = S.g("PlayerController") if not pc then return "SKIP", "no-valid-pc" end local pr = pc:Reflection() local ph = pr and pr:GetProperty("bShowMouseCursor") if not ph then return "SKIP", "no-prop" end local p = ph:ContainerPtrToValuePtr(pc) if p == nil then return false, "nil" end return "type=" .. type(p) end},
+{"UStruct.GetSuperStruct", function(S) local pc = S.g("PlayerController") if not pc then return "SKIP", "no-valid-pc" end local c = pc:GetClass() local n = 0 while c ~= nil and S.v(c) and n < 10 do local ok, s = pcall(function() return c:GetSuperStruct() end) if not ok then return false, "walk-err" end c = s n = n + 1 end return "depth=" .. n end},
+{"UStruct.ForEachProperty", function(S) local pc = S.g("PlayerController") if not pc then return "SKIP", "no-valid-pc" end local c = pc:GetClass() local n = 0 local ok = pcall(c.ForEachProperty, c, function(p) n = n + 1 end) if ok then return "n=" .. n end return false, "iterate-err" end},
+{"UEnum.ForEachName", function(S) local e = StaticFindObject("/Script/Engine.ENetRole") if e == nil or not S.v(e) then return "SKIP", "no-enum" end local n = 0 local ok = pcall(e.ForEachName, e, function(nm, v) n = n + 1 end) if not ok then return false, "iterate-err" end local s local ok2 = pcall(function() s = e:GetNameByValue(0):ToString() end) return "n=" .. n .. " v0=" .. tostring(s) end},
+{"TArray-acquire-ConsoleKeys", function(S) local is = StaticFindObject("/Script/Engine.Default__InputSettings") if is == nil or not S.v(is) then return "SKIP", "no-inputsettings" end local a = is.ConsoleKeys if a == nil then return "SKIP", "no-array-prop" end S.h.ck = a return "got-array" end},
+{"TArray-len", function(S) local a = S.h.ck if not a then return "SKIP", "no-array" end local n = #a if type(n) == "number" then return "n=" .. n end return false, "type=" .. type(n) end},
+{"TArray-index-read", function(S) local a = S.h.ck if not a then return "SKIP", "no-array" end local e = a[1] if e == nil then return "empty-or-nil[1]" end return "got-elem" end},
+{"TArray.GetArrayNum", function(S) local a = S.h.ck if not a then return "SKIP", "no-array" end local v = a:GetArrayNum() if type(v) == "number" then return "n=" .. v end return false, "type=" .. type(v) end},
+{"TArray.GetArrayMax", function(S) local a = S.h.ck if not a then return "SKIP", "no-array" end local v = a:GetArrayMax() if type(v) == "number" then return "n=" .. v end return false, "type=" .. type(v) end},
+{"TArray.GetArrayAddress", function(S) local a = S.h.ck if not a then return "SKIP", "no-array" end local v = a:GetArrayAddress() if type(v) == "number" or type(v) == "userdata" then return type(v) end return false, "type=" .. type(v) end},
+{"TArray.GetArrayDataAddress", function(S) local a = S.h.ck if not a then return "SKIP", "no-array" end local v = a:GetArrayDataAddress() if type(v) == "number" or type(v) == "userdata" then return type(v) end return false, "type=" .. type(v) end},
+{"TArray.IsValid", function(S) local a = S.h.ck if not a then return "SKIP", "no-array" end local v = a:IsValid() if type(v) == "boolean" then return tostring(v) end return false, "type=" .. type(v) end},
+{"TArray.ForEach", function(S) local a = S.h.ck if not a then return "SKIP", "no-array" end local n = 0 local ok = pcall(a.ForEach, a, function(el) n = n + 1 end) if ok then return "n=" .. n end return false, "iterate-err" end},
+}

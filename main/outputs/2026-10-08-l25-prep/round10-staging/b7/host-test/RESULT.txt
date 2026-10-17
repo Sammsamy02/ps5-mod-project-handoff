@@ -1,0 +1,267 @@
+b7 host test -- 2026-10-12T20:47:50Z -- Mac-only (Darwin arm64; Apple clang version 17.0.0 (clang-1700.6.4.2))
+memcheck_strict: fields=2 free=2.71GB min=2GB -> OK
+[c] compiled 33 Lua objects, 0 warnings
+[c] b7_host_test built, 0 warnings
+[c] b7_host_test: rc=0 checks=66
+B7 host test -- Lua as C (today) (HOST_LUA_IS_CPP not defined)
+
+[LUA-CPP probe] the staged startup probe, compiled from the staged file
+       out[]: mode=0 pcall_status=2 err_dtor=0 resume_status=1 yield_dtor=0 ran=1 void_catch=0 swallowed=0 void_status=2
+T: probe mode=0 pcall=2 err_dtor=0 resume=1 yield_dtor=0 void_catch=0 swallowed=0 void_status=2
+  PASS  probe ran: pcall status LUA_ERRRUN, void-catch pcall LUA_ERRRUN, resume status LUA_YIELD
+  PASS  probe reports mode=longjmp (destructors skipped in both frames)
+  PASS  Lua as C: the handlers are never reached (longjmp), so the pass-through edits are dead code
+  PASS  the probe leaves Lua's global lock balanced
+
+[B2 wrapper end to end, cur code] real TRY + real throw_error_impl; lock_guard alive when the error is raised
+       OLD      status=2 app-mutex-free=0 lua-lock-depth=0->0 lua-lock-free=1 sentinel dtors=0/1 leaked C++ blocks=5
+T: b2.cur.OLD status=2 text=24ae76879c34a47d
+  PASS  cur OLD: pcall status is LUA_ERRRUN
+  PASS  cur OLD: error text = message + traceback
+  PASS  cur OLD: Lua's own global lock is balanced
+  PASS  cur OLD, Lua as C: the app mutex is LEAKED (the B4 launch-1 bug, reproduced with the real wrapper)
+  PASS  cur OLD, Lua as C: frame destructors skipped (longjmp)
+       NEW      status=2 app-mutex-free=1 lua-lock-depth=0->0 lua-lock-free=1 sentinel dtors=1/1 leaked C++ blocks=1
+T: b2.cur.NEW status=2 text=24ae76879c34a47d
+  PASS  cur NEW: pcall status is LUA_ERRRUN
+  PASS  cur NEW: error text = message + traceback
+  PASS  cur NEW: Lua's own global lock is balanced
+  PASS  cur NEW: the app mutex is free (both builds)
+  PASS  cur NEW: frame destructors ran (both builds; the throw is a plain C++ exception caught by the real TRY)
+       CONTROL  status=2 app-mutex-free=1 lua-lock-depth=0->0 lua-lock-free=1 sentinel dtors=0/1 leaked C++ blocks=2
+T: b2.cur.CONTROL status=2 text=24ae76879c34a47d
+  PASS  cur CONTROL: pcall status is LUA_ERRRUN
+  PASS  cur CONTROL: error text = message + traceback
+  PASS  cur CONTROL: Lua's own global lock is balanced
+  PASS  cur CONTROL: the app mutex is free (both builds)
+  PASS  cur CONTROL, Lua as C: only the lock is saved; the frame's other locals are still skipped by the longjmp
+  PASS  cur: Lua-visible error text identical for OLD, NEW and CONTROL
+
+[B2 wrapper end to end, fixed code] real TRY + real throw_error_impl; lock_guard alive when the error is raised
+       OLD      status=2 app-mutex-free=0 lua-lock-depth=0->0 lua-lock-free=1 sentinel dtors=0/1 leaked C++ blocks=5
+T: b2.fixed.OLD status=2 text=24ae76879c34a47d
+  PASS  fixed OLD: pcall status is LUA_ERRRUN
+  PASS  fixed OLD: error text = message + traceback
+  PASS  fixed OLD: Lua's own global lock is balanced
+  PASS  fixed OLD, Lua as C: the app mutex is LEAKED (the B4 launch-1 bug, reproduced with the real wrapper)
+  PASS  fixed OLD, Lua as C: frame destructors skipped (longjmp)
+       NEW      status=2 app-mutex-free=1 lua-lock-depth=0->0 lua-lock-free=1 sentinel dtors=1/1 leaked C++ blocks=1
+T: b2.fixed.NEW status=2 text=24ae76879c34a47d
+  PASS  fixed NEW: pcall status is LUA_ERRRUN
+  PASS  fixed NEW: error text = message + traceback
+  PASS  fixed NEW: Lua's own global lock is balanced
+  PASS  fixed NEW: the app mutex is free (both builds)
+  PASS  fixed NEW: frame destructors ran (both builds; the throw is a plain C++ exception caught by the real TRY)
+       CONTROL  status=2 app-mutex-free=1 lua-lock-depth=0->0 lua-lock-free=1 sentinel dtors=0/1 leaked C++ blocks=2
+T: b2.fixed.CONTROL status=2 text=24ae76879c34a47d
+  PASS  fixed CONTROL: pcall status is LUA_ERRRUN
+  PASS  fixed CONTROL: error text = message + traceback
+  PASS  fixed CONTROL: Lua's own global lock is balanced
+  PASS  fixed CONTROL: the app mutex is free (both builds)
+  PASS  fixed CONTROL, Lua as C: only the lock is saved; the frame's other locals are still skipped by the longjmp
+  PASS  fixed: Lua-visible error text identical for OLD, NEW and CONTROL
+
+[destructors across frames] 1000 Lua errors, each crossing 3 C++ frames (std::string, std::vector, lock_guard, sentinel)
+       errors=1000 sentinel dtors=0/3000 leaked C++ blocks=3000 app-mutex-free=0  1.25 us per error (host -O1)
+T: destructors errors=1000
+  PASS  1000 of 1000 errors reach lua_pcall as LUA_ERRRUN
+  PASS  Lua as C (today): 0 of 3000 frame destructors ran
+  PASS  Lua as C (today): 3000 C++ heap blocks leaked (3 per error: the three frames' string, vector, string)
+  PASS  Lua as C (today): the app mutex is leaked
+
+[out-of-memory sweep] allocator fails (twice in a row) at point k while the real throw_error_impl builds the error text
+       cur   over allocator-failure points 1..40: status ERRMEM=6 ERRRUN=34 OK=0 other=0; lock left held in 0 case(s) (first at k=-1)
+T: oom.cur errmem=6 errrun=34 ok=0 other=0 leaked=0
+  PASS  cur: every sweep point ends in a normal pcall status (no abort, no -1)
+  PASS  cur, Lua as C (today): lock balanced at every point
+       fixed over allocator-failure points 1..40: status ERRMEM=6 ERRRUN=34 OK=0 other=0; lock left held in 0 case(s) (first at k=-1)
+T: oom.fixed errmem=6 errrun=34 ok=0 other=0 leaked=0
+  PASS  fixed: every sweep point ends in a normal pcall status (no abort, no -1)
+  PASS  fixed: Lua's lock balanced at every sweep point (both builds)
+
+[UFunction call wrapper, cur code] real protected_ufunction_call + call_ufunction_from_lua
+       LUA-ERROR of 200: status ok-or-ERRRUN=200 message kept=200 wrong status=0 owner dtors=200 alive=0 lock-free=1
+T: uf.cur.LUA-ERROR kept=200 wrong=0 dtors=200
+  PASS  cur LUA-ERROR: status and message correct 200 of 200 (Lua as C)
+  PASS  cur LUA-ERROR: the call owner was destroyed every time (200)
+  PASS  cur LUA-ERROR: Lua's lock balanced
+       STD-ERROR of 200: status ok-or-ERRRUN=200 message kept=200 wrong status=0 owner dtors=200 alive=0 lock-free=1
+T: uf.cur.STD-ERROR kept=200 wrong=0 dtors=200
+  PASS  cur STD-ERROR: status and message correct 200 of 200 (Lua as C)
+  PASS  cur STD-ERROR: the call owner was destroyed every time (200)
+  PASS  cur STD-ERROR: Lua's lock balanced
+       OK        of 200: status ok-or-ERRRUN=200 message kept=200 wrong status=0 owner dtors=200 alive=0 lock-free=1
+T: uf.cur.OK kept=200 wrong=0 dtors=200
+  PASS  cur OK: status and message correct 200 of 200 (Lua as C)
+  PASS  cur OK: the call owner was destroyed every time (200)
+  PASS  cur OK: Lua's lock balanced
+
+[UFunction call wrapper, fixed code] real protected_ufunction_call + call_ufunction_from_lua
+       LUA-ERROR of 200: status ok-or-ERRRUN=200 message kept=200 wrong status=0 owner dtors=200 alive=0 lock-free=1
+T: uf.fixed.LUA-ERROR kept=200 wrong=0 dtors=200
+  PASS  fixed LUA-ERROR: status and message correct 200 of 200 (Lua as C)
+  PASS  fixed LUA-ERROR: the call owner was destroyed every time (200)
+  PASS  fixed LUA-ERROR: Lua's lock balanced
+       STD-ERROR of 200: status ok-or-ERRRUN=200 message kept=200 wrong status=0 owner dtors=200 alive=0 lock-free=1
+T: uf.fixed.STD-ERROR kept=200 wrong=0 dtors=200
+  PASS  fixed STD-ERROR: status and message correct 200 of 200 (Lua as C)
+  PASS  fixed STD-ERROR: the call owner was destroyed every time (200)
+  PASS  fixed STD-ERROR: Lua's lock balanced
+       OK        of 200: status ok-or-ERRRUN=200 message kept=200 wrong status=0 owner dtors=200 alive=0 lock-free=1
+T: uf.fixed.OK kept=200 wrong=0 dtors=200
+  PASS  fixed OK: status and message correct 200 of 200 (Lua as C)
+  PASS  fixed OK: the call owner was destroyed every time (200)
+  PASS  fixed OK: Lua's lock balanced
+
+[engine boundary and raw callbacks] child processes (terminate/abort cannot be asserted in-process)
+       nested-unprotected   exited=1 code=0 signal=0 | CHILD nested-unprotected: survived, outer pcall status=4
+       nested-protected     exited=1 code=0 signal=0 | CHILD protected hook: inner pcall status=4
+       raw-std-exception    exited=1 code=0 signal=0 | CHILD raw-std-exception: exception escaped lua_pcall to the C++ caller: escaped binding
+       raw-wrapped          exited=1 code=0 signal=0 | CHILD raw-wrapped: survived, pcall status=2
+T: child.nested-protected exited=1 code=0
+T: child.raw-wrapped exited=1 code=0
+  PASS  H4, Lua as C (today): the same error is a longjmp over the game frame and lua_pcall returns LUA_ERRMEM (survives, but the game frame was skipped)
+  PASS  H3, Lua as C (today): the std::exception flies out of lua_pcall to the C++ caller (Lua state is then suspect)
+  PASS  H4 mitigation, BOTH builds: the hook body does its pushes inside one protected call -> inner pcall returns LUA_ERRMEM, no exception crosses the game frame, the outer pcall finishes normally
+  PASS  H3 mitigation, BOTH builds: a raw Lua C function that wraps its body in the real TRY turns a std::exception into a normal Lua error (status 2)
+
+checks run: 66, failed: 0
+PASS b7 host test, Lua as C (0 failures)
+[cppcabi] compiled 33 Lua objects, 0 warnings
+[cppcabi] b7_host_test built, 0 warnings
+[cppcabi] b7_host_test: rc=0 checks=68
+B7 host test -- Lua as C++ with C names (staged B7) (HOST_LUA_IS_CPP defined)
+
+[LUA-CPP probe] the staged startup probe, compiled from the staged file
+       out[]: mode=1 pcall_status=2 err_dtor=1 resume_status=1 yield_dtor=1 ran=1 void_catch=1 swallowed=0 void_status=2
+T: probe mode=1 pcall=2 err_dtor=1 resume=1 yield_dtor=1 void_catch=1 swallowed=0 void_status=2
+  PASS  probe ran: pcall status LUA_ERRRUN, void-catch pcall LUA_ERRRUN, resume status LUA_YIELD
+  PASS  probe reports mode=cxx-throw (destructors ran in both frames)
+  PASS  Lua as C++: catch (void*) matches the Lua throw (a lua_longjmp* pointer) and the catch (...) behind it is NOT reached: the E1/E2 pass-through works with this libc++abi
+  PASS  the probe leaves Lua's global lock balanced
+
+[B2 wrapper end to end, cur code] real TRY + real throw_error_impl; lock_guard alive when the error is raised
+       OLD      status=2 app-mutex-free=1 lua-lock-depth=0->0 lua-lock-free=1 sentinel dtors=1/1 leaked C++ blocks=4
+T: b2.cur.OLD status=2 text=24ae76879c34a47d
+  PASS  cur OLD: pcall status is LUA_ERRRUN
+  PASS  cur OLD: error text = message + traceback
+  PASS  cur OLD: Lua's own global lock is balanced
+  PASS  cur OLD, Lua as C++: the app mutex is RELEASED by unwinding (B7 alone cures the lock-then-raise class)
+  PASS  cur OLD, Lua as C++: frame destructors ran
+       NEW      status=2 app-mutex-free=1 lua-lock-depth=0->0 lua-lock-free=1 sentinel dtors=1/1 leaked C++ blocks=1
+T: b2.cur.NEW status=2 text=24ae76879c34a47d
+  PASS  cur NEW: pcall status is LUA_ERRRUN
+  PASS  cur NEW: error text = message + traceback
+  PASS  cur NEW: Lua's own global lock is balanced
+  PASS  cur NEW: the app mutex is free (both builds)
+  PASS  cur NEW: frame destructors ran (both builds; the throw is a plain C++ exception caught by the real TRY)
+       CONTROL  status=2 app-mutex-free=1 lua-lock-depth=0->0 lua-lock-free=1 sentinel dtors=1/1 leaked C++ blocks=1
+T: b2.cur.CONTROL status=2 text=24ae76879c34a47d
+  PASS  cur CONTROL: pcall status is LUA_ERRRUN
+  PASS  cur CONTROL: error text = message + traceback
+  PASS  cur CONTROL: Lua's own global lock is balanced
+  PASS  cur CONTROL: the app mutex is free (both builds)
+  PASS  cur CONTROL, Lua as C++: the frame's other locals are destroyed too
+  PASS  cur: Lua-visible error text identical for OLD, NEW and CONTROL
+
+[B2 wrapper end to end, fixed code] real TRY + real throw_error_impl; lock_guard alive when the error is raised
+       OLD      status=2 app-mutex-free=1 lua-lock-depth=0->0 lua-lock-free=1 sentinel dtors=1/1 leaked C++ blocks=4
+T: b2.fixed.OLD status=2 text=24ae76879c34a47d
+  PASS  fixed OLD: pcall status is LUA_ERRRUN
+  PASS  fixed OLD: error text = message + traceback
+  PASS  fixed OLD: Lua's own global lock is balanced
+  PASS  fixed OLD, Lua as C++: the app mutex is RELEASED by unwinding (B7 alone cures the lock-then-raise class)
+  PASS  fixed OLD, Lua as C++: frame destructors ran
+       NEW      status=2 app-mutex-free=1 lua-lock-depth=0->0 lua-lock-free=1 sentinel dtors=1/1 leaked C++ blocks=1
+T: b2.fixed.NEW status=2 text=24ae76879c34a47d
+  PASS  fixed NEW: pcall status is LUA_ERRRUN
+  PASS  fixed NEW: error text = message + traceback
+  PASS  fixed NEW: Lua's own global lock is balanced
+  PASS  fixed NEW: the app mutex is free (both builds)
+  PASS  fixed NEW: frame destructors ran (both builds; the throw is a plain C++ exception caught by the real TRY)
+       CONTROL  status=2 app-mutex-free=1 lua-lock-depth=0->0 lua-lock-free=1 sentinel dtors=1/1 leaked C++ blocks=1
+T: b2.fixed.CONTROL status=2 text=24ae76879c34a47d
+  PASS  fixed CONTROL: pcall status is LUA_ERRRUN
+  PASS  fixed CONTROL: error text = message + traceback
+  PASS  fixed CONTROL: Lua's own global lock is balanced
+  PASS  fixed CONTROL: the app mutex is free (both builds)
+  PASS  fixed CONTROL, Lua as C++: the frame's other locals are destroyed too
+  PASS  fixed: Lua-visible error text identical for OLD, NEW and CONTROL
+
+[destructors across frames] 1000 Lua errors, each crossing 3 C++ frames (std::string, std::vector, lock_guard, sentinel)
+       errors=1000 sentinel dtors=3000/3000 leaked C++ blocks=0 app-mutex-free=1  9.38 us per error (host -O1)
+T: destructors errors=1000
+  PASS  1000 of 1000 errors reach lua_pcall as LUA_ERRRUN
+  PASS  Lua as C++: every frame destructor ran (3000/3000)
+  PASS  Lua as C++: 0 C++ heap blocks left behind
+  PASS  Lua as C++: the app mutex is free after 1000 errors
+
+[out-of-memory sweep] allocator fails (twice in a row) at point k while the real throw_error_impl builds the error text
+       cur   over allocator-failure points 1..40: status ERRMEM=1 ERRRUN=39 OK=0 other=0; lock left held in 5 case(s) (first at k=1)
+T: oom.cur errmem=1 errrun=39 ok=0 other=0 leaked=5
+  PASS  cur: every sweep point ends in a normal pcall status (no abort, no -1)
+  PASS  cur, Lua as C++: BUG reproduced with the real code: an out-of-memory error while the text is built is swallowed and Lua's lock stays held
+       fixed over allocator-failure points 1..40: status ERRMEM=6 ERRRUN=34 OK=0 other=0; lock left held in 0 case(s) (first at k=-1)
+T: oom.fixed errmem=6 errrun=34 ok=0 other=0 leaked=0
+  PASS  fixed: every sweep point ends in a normal pcall status (no abort, no -1)
+  PASS  fixed: Lua's lock balanced at every sweep point (both builds)
+  PASS  fixed, Lua as C++: the out-of-memory error reaches lua_pcall as LUA_ERRMEM
+
+[UFunction call wrapper, cur code] real protected_ufunction_call + call_ufunction_from_lua
+       LUA-ERROR of 200: status ok-or-ERRRUN=0 message kept=0 wrong status=200 owner dtors=200 alive=0 lock-free=1
+T: uf.cur.LUA-ERROR kept=0 wrong=200 dtors=200
+  PASS  cur LUA-ERROR, Lua as C++: BUG reproduced with the real code: status -1, message lost, 200 of 200
+  PASS  cur LUA-ERROR: the call owner was destroyed every time (200)
+  PASS  cur LUA-ERROR: Lua's lock balanced
+       STD-ERROR of 200: status ok-or-ERRRUN=200 message kept=200 wrong status=0 owner dtors=200 alive=0 lock-free=1
+T: uf.cur.STD-ERROR kept=200 wrong=0 dtors=200
+  PASS  cur STD-ERROR: status and message correct 200 of 200 (Lua as C++)
+  PASS  cur STD-ERROR: the call owner was destroyed every time (200)
+  PASS  cur STD-ERROR: Lua's lock balanced
+       OK        of 200: status ok-or-ERRRUN=200 message kept=200 wrong status=0 owner dtors=200 alive=0 lock-free=1
+T: uf.cur.OK kept=200 wrong=0 dtors=200
+  PASS  cur OK: status and message correct 200 of 200 (Lua as C++)
+  PASS  cur OK: the call owner was destroyed every time (200)
+  PASS  cur OK: Lua's lock balanced
+
+[UFunction call wrapper, fixed code] real protected_ufunction_call + call_ufunction_from_lua
+       LUA-ERROR of 200: status ok-or-ERRRUN=200 message kept=200 wrong status=0 owner dtors=200 alive=0 lock-free=1
+T: uf.fixed.LUA-ERROR kept=200 wrong=0 dtors=200
+  PASS  fixed LUA-ERROR: status and message correct 200 of 200 (Lua as C++)
+  PASS  fixed LUA-ERROR: the call owner was destroyed every time (200)
+  PASS  fixed LUA-ERROR: Lua's lock balanced
+       STD-ERROR of 200: status ok-or-ERRRUN=200 message kept=200 wrong status=0 owner dtors=200 alive=0 lock-free=1
+T: uf.fixed.STD-ERROR kept=200 wrong=0 dtors=200
+  PASS  fixed STD-ERROR: status and message correct 200 of 200 (Lua as C++)
+  PASS  fixed STD-ERROR: the call owner was destroyed every time (200)
+  PASS  fixed STD-ERROR: Lua's lock balanced
+       OK        of 200: status ok-or-ERRRUN=200 message kept=200 wrong status=0 owner dtors=200 alive=0 lock-free=1
+T: uf.fixed.OK kept=200 wrong=0 dtors=200
+  PASS  fixed OK: status and message correct 200 of 200 (Lua as C++)
+  PASS  fixed OK: the call owner was destroyed every time (200)
+  PASS  fixed OK: Lua's lock balanced
+
+[engine boundary and raw callbacks] child processes (terminate/abort cannot be asserted in-process)
+       nested-unprotected   exited=0 code=-1 signal=6 | libc++abi: terminating due to uncaught exception of type lua_longjmp*
+       nested-protected     exited=1 code=0 signal=0 | CHILD protected hook: inner pcall status=4
+       raw-std-exception    exited=0 code=-1 signal=6 | luauser stub: lua_unlock of a lock this thread does not hold -> abort()
+       raw-wrapped          exited=1 code=0 signal=0 | CHILD raw-wrapped: survived, pcall status=2
+T: child.nested-protected exited=1 code=0
+T: child.raw-wrapped exited=1 code=0
+  PASS  H4, Lua as C++: a Lua error raised in a hook body that game code called crosses the game frame -> std::terminate (SIGABRT). This is why every engine-to-Lua entry needs ONE protected call before B7 flips
+  PASS  H4: the death message names the Lua error itself (uncaught exception of type lua_longjmp*)
+  PASS  H3, Lua as C++: a std::exception escaping a raw Lua C function without TRY ends in abort (Lua's catch(...) turns it into status -1 and the lock count goes wrong) or an escaped exception
+  PASS  H4 mitigation, BOTH builds: the hook body does its pushes inside one protected call -> inner pcall returns LUA_ERRMEM, no exception crosses the game frame, the outer pcall finishes normally
+  PASS  H3 mitigation, BOTH builds: a raw Lua C function that wraps its body in the real TRY turns a std::exception into a normal Lua error (status 2)
+
+checks run: 68, failed: 0
+PASS b7 host test, Lua as C++ (0 failures)
+
+  PASS  cross-build transcript 'b2.cur.' identical (3 lines)
+  PASS  cross-build transcript 'b2.fixed.' identical (3 lines)
+  PASS  cross-build transcript 'destructors' identical (1 lines)
+  PASS  cross-build transcript 'uf.fixed.' identical (3 lines)
+  PASS  cross-build transcript 'child.nested-protected' identical (1 lines)
+  PASS  cross-build transcript 'child.raw-wrapped' identical (1 lines)
+TOTAL checks=140 failed_programs_or_checks=0
+PASS run.sh (Lua as C and Lua as C++)

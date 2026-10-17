@@ -1,0 +1,32 @@
+{%- comment -%}
+Adds a light/dark toggle to the top header. The choice is stored so it survives page loads. The
+default scheme comes from color_scheme in _config.yml; this only lets a reader override it.
+{%- endcomment -%}
+<button type="button" class="theme-toggle" aria-label="Toggle light and dark theme" title="Toggle theme">
+  <span class="theme-toggle-label">Theme</span>
+</button>
+<script>
+  (function () {
+    function apply(scheme, button) {
+      if (window.jtd && typeof jtd.setTheme === 'function') { jtd.setTheme(scheme); }
+      if (button) {
+        button.querySelector('.theme-toggle-label').textContent = scheme === 'dark' ? 'Light' : 'Dark';
+      }
+    }
+    document.addEventListener('DOMContentLoaded', function () {
+      var button = document.querySelector('.theme-toggle');
+      var stored = null;
+      try { stored = localStorage.getItem('color-scheme'); } catch (e) {}
+      var current = stored || (window.jtd && jtd.getTheme ? jtd.getTheme() : 'dark');
+      apply(current, button);
+      if (!button) { return; }
+      button.addEventListener('click', function () {
+        var now = (window.jtd && jtd.getTheme ? jtd.getTheme() : current);
+        var next = now === 'dark' ? 'light' : 'dark';
+        apply(next, button);
+        current = next;
+        try { localStorage.setItem('color-scheme', next); } catch (e) {}
+      });
+    });
+  })();
+</script>

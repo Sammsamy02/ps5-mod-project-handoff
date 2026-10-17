@@ -1,0 +1,1 @@
+Frozen experimental combined build: six fresh SDK TUs and 374-unit / 391-input relocatable link pass. UND delta only scePthreadGetthreadid. False import control and missing outer retirement integration remain explicit; root follow-up sources pending.

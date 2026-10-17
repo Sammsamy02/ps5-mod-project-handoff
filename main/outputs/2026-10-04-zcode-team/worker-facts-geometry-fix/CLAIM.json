@@ -1,0 +1,65 @@
+{
+  "worker": "worker-facts-geometry-fix",
+  "utc": "2026-10-05",
+  "priority": "CRITICAL_PATH (controller upgrade, user-confirmed): the geometry defect blocks BOTH launch-9 PRXs",
+  "scope": "Root-cause the launch-9 conversion refusal 'runtime_start_failed code=1 detail=no observed mapping interval intersects the module image extent with valid geometry' (COMPOSITION-CONFIRMED: it is the terminal state of the composition-6 chain, session 273 / pid 273, and the entry's aligned start hits the same site); explain the bridge-side-6-spans vs conversion-side-0-intervals contradiction; deliver a bounded staged source patch + controller-required diagnostics + host fixture proof. Analysis + staged patch only: no console contact, no network, no target builds, no canonical file edits.",
+  "reads": {
+    "adapter_intersection_throw": {
+      "file": "outputs/2026-10-04-zcode-controller/comp6-integration/lmf_to_native_loader_facts.cpp",
+      "derive_readable_ranges": "lines 77-109",
+      "protection_filter_D2_DiffA": "line 90 ((mapping.protection & 1u) == 0 -> skip)",
+      "intersection_clamp": "lines 91-93",
+      "empty_set_refusal": "lines 96 and 227-232 (InvalidReadableMappings + exact launch-9 message)",
+      "extent_resolution": "lines 174-225 (module_info span | vm_scan chosen_base+chosen_extent | observed_base opt-in)",
+      "configured_roots_absent_from_adapter": "grep of the whole TU: zero references to configured_game_directory/configured_working_directory — conversion consumes only the hpp:139 opt-in flag"
+    },
+    "supplier_core_anchor_rule": {
+      "file": ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/src/live_module_facts.cpp (canonical, sha256 5eff2ad9d6b8fb1a58340f31e02eebb5126236f3249f87a83e7c045c7d6b075f)",
+      "anchor_collection": "lines 443-459 — mappings CONTAINING observed_base only, cap kMaxAnchorMappings=8 (include/live_module_facts.hpp:88)",
+      "observed_base_on_vmscan": "lines 295-311 (facts_.observed_base = scan.chosen_base)",
+      "note": "compiled UNCHANGED into both launch-9 PRXs (comp6 driver --extra-unit lmf-live-module-facts; comp6 change manifest lists no core change)"
+    },
+    "entry_call_path": {
+      "entry_source": "outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_module_entry_r4.c",
+      "start_call": "lines 311-313 modbridge_runtime_start_with_activation(...)",
+      "mirror_line_emission": "lines 184-222 write_ue4ss_log_line (r4 [t=..ms pid=..] format); code=1 = MRS_ERR_CONVERSION (runtime_start_bridge.h:37)"
+    },
+    "bridge_r13": {
+      "file": "outputs/2026-10-04-zcode-team/worker-module-start-wiring/runtime_start_bridge_r13.cpp",
+      "stage1_order": "line 584 lease registration BEFORE capture; 627-629 capture; 634-643 both opt-ins; 645-660 conversion + lmf_* refusal diagnostics; 668-671 configured-roots attach AFTER successful conversion (by design, Resolution B 2.5/2.7)",
+      "window_anchor": "lines 135-157 kCandidateBase=0x400000 kImageExtentVaddr=0xbc602c8; 355-397 B&&D&&E&&(C||C2) verify",
+      "full_vmmap_registration": "lines 483-523 bridge_register_readable_ranges walks the FULL fresh VMMAP vs the extent (the 6-span counter's source)"
+    },
+    "launch9_evidence": {
+      "result_doc": "outputs/2026-10-04-zcode-controller/launch9-evidence/LAUNCH9-RESULT.md",
+      "entry_log_diag_block": "outputs/2026-10-04-zcode-controller/launch9-evidence/aligned-entry-log-snapshot.log lines 18654-18707: bridge_lease_reg_spans=6 bridge_lease_reg=6; anchor_cov/anchor_match 0..4 covered+matched, c_either=1; lmf_vmentry_cap=2 lmf_vm_scan_cap=2 lmf_linkmap_cap=1 lmf_provider_code=0xfffff05f(-4001 g1) lmf_identity_source=2(VmScan); runtime_start_failed value=0x00000001",
+      "ue4ss_mirror_line": "outputs/2026-10-04-zcode-controller/launch9-evidence/UE4SS-log-final.txt line 45",
+      "runtime_status": "outputs/2026-10-04-zcode-controller/launch9-evidence/runtime-status-final.txt (session 273 failed 1)"
+    },
+    "controller_supplied_geometry": "phdr truth for retained eboot sha 3b6cfad4 (5 PT_LOADs; LOAD0 --X [0x0,0x7479b1c), LOAD1 R-- [0x747c000,0x7eba918), LOAD3 RW- [0x7ebc000,0x913c000), LOAD7 RW- [0x913c000,0x9633418), LOAD8 --- [0x9633420,0xbc602c8); runtime=file+0x400000 for LOAD0/LOAD1 ONLY; LOAD7 live RW fragment [0x970c000,0x9a34000) contains GUA 0x97ba110) — fixture shapes follow live VMMAP semantics, not phdr arithmetic"
+  },
+  "root_cause_claim": "The launch-9 identity route is the r13 data-window anchor (chosen_base=0x400000, chosen_extent=0xbc602c8; VmScan, proven by the anchor_diag block + lmf_vm_scan_cap=2). The core collected anchor_mappings as the mappings CONTAINING 0x400000 — exactly the ONE exec-only LOAD0 text span [0x400000,0x787c000) prot=4 (trusted record; corroborated by the IGW far-page row 0x7878000 prot=4). The D2 protection filter correctly excluded it, leaving zero intervals -> the exact refusal. The bridge-side registration saw 6 readable spans because it walks the FULL fresh VMMAP against the same extent; those readable spans were observed by the same capture but never entered anchor_mappings. Same attempt, two different span sets: the complete resolution of the bridge-6/conversion-0 contradiction.",
+  "non_causes_checked": [
+    "Configured roots and their attach ordering: NOT the bug — the adapter TU never reads the configured_* fields; conversion consumes only the opt-in flag; ValidateNativeProgramContext (Stage 2) consumes the attached fields; attach-before-conversion is impossible by construction (facts do not exist until conversion succeeds). bridge_cfg_gamedir/workdir absence is a downstream symptom.",
+    "Empty/zero extent: NOT the bug — the vm_scan extent [0x400000,0xc0602c8) passed the span sanity check (line 221), which is why the failure is the interval refusal, not InvalidModuleImageSpan.",
+    "D2 filter: NOT wrong — re-admitting the exec-only span rebuilds launch-8's lease failure class; the filter needs the readable spans supplied, not weakened."
+  ],
+  "fix_claim": "Two staged copies, canonical files untouched: (1) staging/live_module_facts.geometryfix.cpp — one block changed: on the VmScan route collect anchor_mappings as the mappings INTERSECTING [chosen_base, chosen_base+chosen_extent) (overflow-checked, still capped at 8); every other route byte-identical. (2) staging/runtime_start_bridge_r13.geometrydiag.cpp — conversion behavior byte-identical + the controller-required events lmf_extent_base_low/high, lmf_extent_end_low/high, lmf_anchor_count, lmf_intervals_found on BOTH the refusal and success paths through the EXISTING diagnostic channel (the per-refusal predicate itself is already durable via each refusal's unique static error_message in the UE4SS mirror + runtime-status detail).",
+  "fixture_claim": "Host harness (host-test/test_geometry_fix_host.cpp) drives the REAL core + REAL unmodified canonical adapter with fake OS ops: BEFORE (canonical core) 16/16 — exact InvalidReadableMappings refusal reproduced on both the observed shape and the bridge-parity six-readable-span shape, with the single exec-only anchor span documented; AFTER (staged core) 26/26 — conversion succeeds, intervals = 3/6 readable spans matching the bridge side, exec-only excluded (D2 intact), past-extent clamped, path stays empty (unfabricated), configured-roots attach reachable, readable-anchor contrast + LinkMap regression guards pass. Staged copies cross-compile clean with the pinned prospero SDK (-Werror, rc=0).",
+  "artifacts": {
+    "analysis": "ANALYSIS.md (root cause + unified diff + non-causes)",
+    "staged_core_patch": "staging/live_module_facts.geometryfix.cpp sha256 2527b309a82acc46dc8a348625ff1a4144bfee4204e885b1fbec370618b6fb5c (+ .diff vs canonical)",
+    "staged_bridge_diag": "staging/runtime_start_bridge_r13.geometrydiag.cpp sha256 c3d6c4dec31d592917107325abb80b1416043d49237a34187de85e5652c3c4d3 (+ .diff vs canonical r13)",
+    "fixture": "host-test/test_geometry_fix_host.cpp sha256 4d80e70da295e34b33a2337d1daf10f597feac2740e743629f54dbf135902ec8",
+    "receipts": ["receipts/fixture-before.txt (16/16)", "receipts/fixture-after.txt (26/26)", "receipts/fixture-test-pass.txt", "receipts/runtime_start_bridge_r13.geometrydiag.o", "receipts/live_module_facts.geometryfix.o"],
+    "report": "REPORT.md"
+  },
+  "limits": [
+    "Fixture proves the CONVERSION BOUNDARY only (where launch-9 died); MakeNativeProgramContext/ReadLease/PS-scan/UE4SS init remain downstream and unexercised here.",
+    "The launch-9 composition PRX's own diagnostic log was never fetched; per-attempt PRX attribution (composition 235-ctor vs entry 232-ctor blocks) relies on the controller's delta analysis — both blocks show the same refusal site, so the root cause is attribution-independent.",
+    "kMaxAnchorMappings=8 is tight (launch-9 shape needs 7-8 intersecting spans); >8 intersecting spans would silently drop the highest (pre-existing cap semantics). If lmf_anchor_count ever pins at 8 with a truncated top interval, raise the cap in the same header.",
+    "lmf_intervals_found counts COALESCED ranges (the adapter merges overlap AND adjacency); bridge_lease_reg_spans counts raw spans — equal only when readable spans are non-adjacent (true on the live layout with page gaps).",
+    "Both PRX builds must take the staged core (redirect the driver's lmf-live-module-facts extra-unit) and the diag bridge (packaging lifecycle unit); the ENTRY build's exact launch-9 recipe is controller-side packaging knowledge."
+  ],
+  "next_worker_handoff": "worker-lease-coverage-fix: with this patch the adapter's readable_ranges become exactly the D2-filtered readable spans of the anchored extent — the same span set (6 at launch-9 shape) the r13 registration page-quantizes; remaining page-boundary/gap questions stay in the lease worker's scope."
+}

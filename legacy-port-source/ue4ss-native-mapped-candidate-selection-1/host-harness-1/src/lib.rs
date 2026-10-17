@@ -1,0 +1,2 @@
+unsafe extern "C" {fn owned_selection_controls(root:*const core::ffi::c_char)->i32;}
+#[test]fn genuine_cpp_selection(){let f=patternsleuth_native_engine_version::mapped_candidates::ps_guobject_array_cfg_mapped_v1;std::hint::black_box(f);let p=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().join("tests/fixtures");let p=std::ffi::CString::new(p.to_str().unwrap()).unwrap();assert_eq!(unsafe{owned_selection_controls(p.as_ptr())},0);}

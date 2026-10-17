@@ -1,0 +1,266 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/TypeChecker.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l23-runtime/typescan-r2/candidate/src/TypeChecker.cpp
+@@ -1,4 +1,9 @@
+ #include <algorithm>
++#include "NativeTypeScanPolicy.hpp"
++#ifdef __PROSPERO__
++#include "NativePropertyPointerGuard.hpp"
++#include <atomic>
++#endif
+ 
+ #include <DynamicOutput/Output.hpp>
+ #include <Helpers/Casting.hpp>
+@@ -29,6 +34,9 @@
+ 
+ namespace RC::Unreal
+ {
++#ifdef __PROSPERO__
++#include "NativePropertyPointerGuard.inl"
++#endif
+     FName GWorldName{};
+     FName GLevelName{};
+     FName GPackageName{};
+@@ -69,6 +77,7 @@
+ 
+     auto TypeChecker::store_all_object_types() -> bool
+     {
++        NativeTypeScan::MissingKeys missing_keys;
+        //StaticFindObject_InternalSlow is used for compatability reasons.
+         UObject::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Object")));
+         UField::StaticClassStorage = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, STR("/Script/CoreUObject.Field")));
+@@ -159,12 +168,12 @@
+         // FField / FProperty Types
+         if (Version::IsAtLeast(4, 25))
+         {
+-            auto find_all_property_types = [](const StringType& obj_string) -> void {
++            auto find_all_property_types = [&](const StringType& obj_string) -> void {
+ #ifdef __PROSPERO__
+                 // TypeChecker is a friend of FField; keep bootstrap access in this context.
+                 // The existing accessor uses the published map and checks the version.
+                 auto NativeBootstrapFieldClass = [](FField* field) -> FFieldClass* {
+-                    return field->GetFFieldClassUnsafe();
++                    return NativePropertyGuard::ReadClass(field);
+                 };
+ #endif
+                 UStruct* actor_obj = static_cast<UClass*>(UObjectGlobals::StaticFindObject_InternalSlow(nullptr, nullptr, obj_string.c_str()));
+@@ -172,8 +181,23 @@
+ 
+                 // Manually iterating fields here because 'ForEachProperty' isn't ready until after this function is done
+                 FField* field = actor_obj->GetChildProperties();
++                std::vector<FField*> visited;
+                 while (field)
+                 {
++                    if (std::find(visited.begin(), visited.end(), field) != visited.end())
++                        throw std::runtime_error("[TypeScan] cyclic field chain refused");
++                    visited.push_back(field);
++                    // Obtain next independently; a missing traversal key ends this
++                    // object's chain, but the other object scans still proceed.
++                    FField* next = nullptr;
++                    missing_keys.attempt([&] {
++#ifdef __PROSPERO__
++                        next = NativePropertyGuard::ReadNext(field);
++#else
++                        next = field->GetNextFFieldUnsafe();
++#endif
++                    });
++                    missing_keys.attempt([&] {
+                     // The native bootstrap uses the already published member map; the legacy branch
+                     // retains its original offset because FField::GetClass is not ready here.
+ #ifdef __PROSPERO__
+@@ -183,8 +207,7 @@
+ #endif
+                     if (!ffield_class)
+                     {
+-                        field = field->GetNextFFieldUnsafe();
+-                        continue;
++                        return;
+                     }
+ 
+                     FName type_name = ffield_class->GetFName();
+@@ -364,6 +387,7 @@
+                             FArrayProperty* array_prop = static_cast<FArrayProperty*>(field);
+                             if (array_prop)
+                             {
++                                missing_keys.attempt([&] {
+                                 FProperty* inner_prop = array_prop->GetInner();
+                                 if (inner_prop)
+                                 {
+@@ -387,6 +411,7 @@
+                                         }
+                                     }
+                                 }
++                                });
+                             }
+                         }
+                     }
+@@ -401,6 +426,7 @@
+                             FSetProperty* set_prop = static_cast<FSetProperty*>(field);
+                             if (set_prop)
+                             {
++                                missing_keys.attempt([&] {
+                                 FProperty* element_prop = set_prop->GetElementProp();
+                                 if (element_prop)
+                                 {
+@@ -424,6 +450,7 @@
+                                         }
+                                     }
+                                 }
++                                });
+                             }
+                         }
+                     }
+@@ -439,6 +466,7 @@
+                             if (map_prop)
+                             {
+                                 // Check key property type
++                                missing_keys.attempt([&] {
+                                 FProperty* key_prop = map_prop->GetKeyProp();
+                                 if (key_prop)
+                                 {
+@@ -462,8 +490,10 @@
+                                         }
+                                     }
+                                 }
++                                });
+ 
+                                 // Check value property type
++                                missing_keys.attempt([&] {
+                                 FProperty* value_prop = map_prop->GetValueProp();
+                                 if (value_prop)
+                                 {
+@@ -487,6 +517,7 @@
+                                         }
+                                     }
+                                 }
++                                });
+                             }
+                         }
+                     }
+@@ -619,7 +650,8 @@
+                         }
+                     }
+ 
+-                    field = field->GetNextFFieldUnsafe();
++                    });
++                    field = next;
+                 }
+             };
+ 
+@@ -627,47 +659,47 @@
+ 
+             // Bool, Enum, Byte, Struct, Float, Object, Name, Int, Array
+             // WeakObject, MulticastSparseDelegate
+-            find_all_property_types(STR("/Script/Engine.Actor"));
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/Engine.Actor")); });
+             // Class
+-            find_all_property_types(STR("/Script/Engine.Pawn"));
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/Engine.Pawn")); });
+             // Str, Map
+-            find_all_property_types(STR("/Script/Engine.NetDriver"));
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/Engine.NetDriver")); });
+             // Double
+-            find_all_property_types(STR("/Script/Engine.NetConnection"));
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/Engine.NetConnection")); });
+             // Text
+-            find_all_property_types(STR("/Script/Engine.GameModeBase"));
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/Engine.GameModeBase")); });
+             // Int8, LazyObject
+-            find_all_property_types(STR("/Script/Landscape.LandscapeComponent"));
+-            find_all_property_types(STR("/Script/VariantManagerContent.VariantObjectBinding"));
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/Landscape.LandscapeComponent")); });
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/VariantManagerContent.VariantObjectBinding")); });
+             // UInt16, UInt32, UInt64, Int8, Int16, Int64
+-            find_all_property_types(STR("/Script/Engine.IntSerialization"));
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/Engine.IntSerialization")); });
+             // Set, MulticastInlineDelegate, Delegate
+-            find_all_property_types(STR("/Script/Engine.AudioComponent"));
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/Engine.AudioComponent")); });
+             // MulticastInlineDelegate, Interface
+-            find_all_property_types(STR("/Script/MovieScene.MovieSceneSequencePlayer"));
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/MovieScene.MovieSceneSequencePlayer")); });
+             // Delegate
+-            find_all_property_types(STR("/Script/UMG.Widget"));
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/UMG.Widget")); });
+             // SoftObject
+-            find_all_property_types(STR("/Script/Engine.LevelStreaming"));
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/Engine.LevelStreaming")); });
+             // SoftClass
+-            find_all_property_types(STR("/Script/Engine.PrimaryAssetTypeInfo"));
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/Engine.PrimaryAssetTypeInfo")); });
+             // FieldPath
+-            find_all_property_types(STR("/Script/Engine.InterpTrackInstProperty"));
+-            find_all_property_types(STR("/Script/MovieSceneTracks.MovieSceneEventPtrs"));
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/Engine.InterpTrackInstProperty")); });
++            missing_keys.attempt([&] { find_all_property_types(STR("/Script/MovieSceneTracks.MovieSceneEventPtrs")); });
+             // TOptional
+             if (Version::IsAtLeast(5, 4))
+             {
+-                find_all_property_types(STR("/Script/Engine.WorldPartitionRuntimeCellData"));
++                missing_keys.attempt([&] { find_all_property_types(STR("/Script/Engine.WorldPartitionRuntimeCellData")); });
+             }
+             // FUtf8StrProperty
+             if (Version::IsAtLeast(5, 6))
+             {
+-                find_all_property_types(STR("/Script/CoreUObject.VerseEnum"));
++                missing_keys.attempt([&] { find_all_property_types(STR("/Script/CoreUObject.VerseEnum")); });
+             }
+             // FAnsiStrProperty
+             if (Version::IsAtLeast(5, 7))
+             {
+-                find_all_property_types(STR("/Script/CoreUObject.VerseClass"));
++                missing_keys.attempt([&] { find_all_property_types(STR("/Script/CoreUObject.VerseClass")); });
+             }
+         }
+         else
+@@ -787,6 +819,51 @@
+             add_property(STR("/Script/CoreUObject.Property"), FProperty{});
+         }
+ 
++        for (const auto& key : missing_keys.values)
++            Output::send<LogLevel::Warning>(STR("[TypeScan] missing-layout-key={}\n"), StringType(key.begin(),key.end()));
++#ifdef __PROSPERO__
++        // Core list is justified in REPORT.md against selected runtime and mod.
++        bool core_ready = true;
++        auto require_type = [&](const char* name, bool found) {
++            if (!found) { core_ready = false;
++                Output::send<LogLevel::Error>(STR("[TypeScan] missing-core-type={}\n"), StringType(name,name+std::char_traits<char>::length(name)));
++            }
++        };
++        require_type("UObject", UObject::StaticClassStorage && UObject::StaticClassStorage != STATIC_CLASS_INVALID);
++        require_type("UField", UField::StaticClassStorage && UField::StaticClassStorage != STATIC_CLASS_INVALID);
++        require_type("UStruct", UStruct::StaticClassStorage && UStruct::StaticClassStorage != STATIC_CLASS_INVALID);
++        require_type("UClass", UClass::StaticClassStorage && UClass::StaticClassStorage != STATIC_CLASS_INVALID);
++        require_type("UEnum", UEnum::StaticClassStorage && UEnum::StaticClassStorage != STATIC_CLASS_INVALID);
++        require_type("UFunction", UFunction::StaticClassStorage && UFunction::StaticClassStorage != STATIC_CLASS_INVALID);
++        require_type("UScriptStruct", UScriptStruct::StaticClassStorage && UScriptStruct::StaticClassStorage != STATIC_CLASS_INVALID);
++        require_type("AActor", AActor::StaticClassStorage && AActor::StaticClassStorage != STATIC_CLASS_INVALID);
++        require_type("UWorld", UWorld::StaticClassStorage && UWorld::StaticClassStorage != STATIC_CLASS_INVALID);
++        require_type("UPackage", UPackage::StaticClassStorage && UPackage::StaticClassStorage != STATIC_CLASS_INVALID);
++        require_type("FField", FField::StaticClassStorage.IsValid() && FField::StaticClassStorage != STATIC_CLASS_INVALID);
++        require_type("FProperty", FProperty::StaticClassStorage.IsValid() && FProperty::StaticClassStorage != STATIC_CLASS_INVALID);
++        const auto object_property_ready = [](const auto& storage, int size) {
++            return storage.IsValid() && storage != STATIC_CLASS_INVALID && size > 0;
++        };
++        require_type("FObjectProperty|FObjectPtrProperty",
++            object_property_ready(FObjectProperty::StaticClassStorage,FObjectProperty::StaticValueSizeStorage) ||
++            object_property_ready(FObjectPtrProperty::StaticClassStorage,FObjectPtrProperty::StaticValueSizeStorage));
++        require_type("FObjectPropertyBase", FObjectPropertyBase::StaticClassStorage.IsValid() && FObjectPropertyBase::StaticClassStorage != STATIC_CLASS_INVALID);
++        require_type("FClassProperty", FClassProperty::StaticClassStorage.IsValid() && FClassProperty::StaticClassStorage != STATIC_CLASS_INVALID && FClassProperty::StaticValueSizeStorage > 0);
++        require_type("FStructProperty", FStructProperty::StaticClassStorage.IsValid() && FStructProperty::StaticClassStorage != STATIC_CLASS_INVALID && FStructProperty::StaticValueSizeStorage > 0);
++        require_type("FArrayProperty", FArrayProperty::StaticClassStorage.IsValid() && FArrayProperty::StaticClassStorage != STATIC_CLASS_INVALID && FArrayProperty::StaticValueSizeStorage > 0);
++        require_type("FBoolProperty", FBoolProperty::StaticClassStorage.IsValid() && FBoolProperty::StaticClassStorage != STATIC_CLASS_INVALID && FBoolProperty::StaticValueSizeStorage > 0);
++        require_type("FIntProperty", FIntProperty::StaticClassStorage.IsValid() && FIntProperty::StaticClassStorage != STATIC_CLASS_INVALID && FIntProperty::StaticValueSizeStorage > 0);
++        require_type("FByteProperty", FByteProperty::StaticClassStorage.IsValid() && FByteProperty::StaticClassStorage != STATIC_CLASS_INVALID && FByteProperty::StaticValueSizeStorage > 0);
++        require_type("FFloatProperty", FFloatProperty::StaticClassStorage.IsValid() && FFloatProperty::StaticClassStorage != STATIC_CLASS_INVALID && FFloatProperty::StaticValueSizeStorage > 0);
++        require_type("FDoubleProperty", FDoubleProperty::StaticClassStorage.IsValid() && FDoubleProperty::StaticClassStorage != STATIC_CLASS_INVALID && FDoubleProperty::StaticValueSizeStorage > 0);
++        require_type("FNameProperty", FNameProperty::StaticClassStorage.IsValid() && FNameProperty::StaticClassStorage != STATIC_CLASS_INVALID && FNameProperty::StaticValueSizeStorage > 0);
++        require_type("FStrProperty", FStrProperty::StaticClassStorage.IsValid() && FStrProperty::StaticClassStorage != STATIC_CLASS_INVALID && FStrProperty::StaticValueSizeStorage > 0);
++        require_type("FTextProperty", FTextProperty::StaticClassStorage.IsValid() && FTextProperty::StaticClassStorage != STATIC_CLASS_INVALID && FTextProperty::StaticValueSizeStorage > 0);
++        require_type("FEnumProperty", FEnumProperty::StaticClassStorage.IsValid() && FEnumProperty::StaticClassStorage != STATIC_CLASS_INVALID && FEnumProperty::StaticValueSizeStorage > 0);
++        Output::send(STR("[TypeScan] scan-complete missing-keys={} core-ready={}\n"), missing_keys.values.size(),core_ready);
++        if (!core_ready) return false;
++#endif
++
+         if (FText::StaticSize() == 0)
+         {
+             FText::StaticSize_Private = sizeof(FText);

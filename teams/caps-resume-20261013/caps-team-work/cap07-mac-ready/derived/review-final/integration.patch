@@ -1,0 +1,685 @@
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp
+@@ -83,6 +83,11 @@
+ #include "NativeFNameAdapter.hpp"
+ #include "NativeFNameChecks.hpp"
+ #include "CodeImageCache.hpp"
++#include "RuntimePakMount.hpp"
++#include "PakRequestProducer.hpp"
++#include "pak_mount_pins.inc"
++#include <Unreal/FString.hpp>
++#include "LuaFNameBridge.hpp"
+ #include "CopyinStartup.hpp"
+ #include "FNameAbiProfile.hpp"
+ #include "RuntimeBuildProfile.hpp"
+@@ -885,6 +890,7 @@
+ 
+         extern "C" int bridge_image_range(uint64_t,size_t,rc::imagecoverage::Hit*);
+         #include "NativePropertyReadBackend.inl"
++        #include "NativePakMountAdapter.inl"
+ 
+         static const char* l14_verdict(admission::Verdict v) {
+             switch(v) {
+@@ -3223,6 +3229,15 @@
+ #endif
+     }
+ 
++    auto RunNativePakMountOnce(const std::filesystem::path& mods_directory) noexcept -> void
++    {
++#ifdef __PROSPERO__
++        UnrealInitializer::SeedArming::RunNativePakMountOnceImpl(mods_directory);
++#else
++        (void)mods_directory;
++#endif
++    }
++
+     auto IsInGameThreadRaw() noexcept -> bool
+     {
+ #ifdef __PROSPERO__
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
+@@ -1,4 +1,5 @@
+ #if defined(__PROSPERO__)
++#include "NativePakMountEntry.hpp"
+ #include "L23GameThreadProbe.hpp"
+ #endif
+ #include <L22Diagnostics/Logging.hpp>
+@@ -7278,6 +7279,7 @@
+                     // [EARLY-4] first game-thread pump (the deferred LoadMap detour arm
+                     // that ran here is removed: no detours on PS5).
+                     early4::note_first_pump(true);
++                    RunNativePakMountOnce(UE4SSProgram::get_program().get_mods_directory());
+                     {
+                         std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+                         LuaMod::m_is_processing_actions = true;
+--- a/outputs/2026-10-08-l26-runtime/profile/units/CodeSignatureProfile.hpp
++++ b/outputs/2026-10-08-l26-runtime/profile/units/CodeSignatureProfile.hpp
+@@ -1,5 +1,6 @@
+ #pragma once
+ #include "CodeImageCache.hpp"
++#include "PakMountCodeProfile.hpp"
+ #include "ThreadNameProfile.hpp"
+ #include "FNameAbiProfile.hpp"
+ #include "SeedTable.h"
+@@ -26,6 +27,13 @@
+ // L26/L27 profile headers (same sha-pinned image 3b6cfad4...; both headers
+ // byte-verified against the pinned eboot at file offsets label+0x4000).
+ inline constexpr codecache::Pin kPins[]={
++ rc::pakmountprofile::kPins[0],
++ rc::pakmountprofile::kPins[1],
++ rc::pakmountprofile::kPins[2],
++ rc::pakmountprofile::kPins[3],
++ rc::pakmountprofile::kPins[4],
++ rc::pakmountprofile::kPins[5],
++
+  {1,"fname_ctor_wchar",seeds::kFNameCtorWchar.label,fnameprofile::kPrefix,sizeof(fnameprofile::kPrefix)},
+  {2,"static_construct_object_internal",seeds::kStaticConstructObject.label,kScoPrefix,sizeof(kScoPrefix)},
+  NativeNameThread::kNamePin,
+@@ -35,6 +43,6 @@
+ };
+ inline constexpr codecache::Profile kProfile{
+  "/data/homebrew/Silent Hill Townfall PPSA33286/decrypted/eboot.bin",
+- seeds::kImageSha256.data(),194241424ull,0xbc602c8ull,seeds::kBaseObserved,kPins,6
++ seeds::kImageSha256.data(),194241424ull,0xbc602c8ull,seeds::kBaseObserved,kPins,12
+ };
+ }
+--- a/outputs/2026-10-08-l26-runtime/profile/units/CodeImageCache.hpp
++++ b/outputs/2026-10-08-l26-runtime/profile/units/CodeImageCache.hpp
+@@ -18,7 +18,7 @@
+ // 11:36 L27/Phase-6 refusals. Keep BOTH compiled copies of this header
+ // byte-identical (lineage overlay + l19-local-profile-r4/units): Metadata
+ // layout must agree in every TU that calls named_entry on the bridge's cache.
+-constexpr size_t kMaxPins=8,kMaxLoads=16,kMaxPhdrs=32,kChunk=16384;
++constexpr size_t kMaxPins=16,kMaxLoads=16,kMaxPhdrs=32,kChunk=16384;
+ constexpr uint64_t kBudgetMs=60000;
+ struct Pin { uint32_t id;const char* name;uint64_t linked;const uint8_t* bytes;size_t size; };
+ struct Profile { const char* path;const char* sha256;uint64_t size,extent,base;const Pin* pins;size_t count; };
+--- a/outputs/2026-10-08-l26-runtime/profile/CHANGES.json
++++ b/outputs/2026-10-08-l26-runtime/profile/CHANGES.json
+@@ -29,13 +29,13 @@
+       "original": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l19-local-profile-r4/units/CodeImageCache.hpp",
+       "candidate": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/profile/units/CodeImageCache.hpp",
+       "original_sha256": "b9006941471915881f9b9ba62d3e17edca7ce270f77c7c15805b44b92308fc9b",
+-      "candidate_sha256": "22803051e5406e1c2494d461d6adec9e880a860fea3f4f73a71c98b933eade9f"
++      "candidate_sha256": "3fa64af86ea25543d1197b683b8ddc86a910e3b83500679395aa12bdcc8b00c1"
+     },
+     {
+       "original": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-r5-thread-final-integration/thread/CodeSignatureProfile.hpp",
+       "candidate": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/profile/units/CodeSignatureProfile.hpp",
+       "original_sha256": "5737e2632040747d174d0245252ef2d8a89163430a0df2c0d0068eb1f5a8b850",
+-      "candidate_sha256": "a4cd6c04eb2f9af0a033ca447ca4807b953c5b405b6ae0919bb5675475861016"
++      "candidate_sha256": "6d073dc60d4fa53419324b94ed3f51d0679ef888d710da6d73ce3e12b70314c6"
+     },
+     {
+       "original": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-07-l19-local-profile-r4/units/NativeLayoutActiveWidths.hpp",
+@@ -44,8 +44,12 @@
+       "candidate_sha256": "a18b196ce0023002557d6090d76446d893fb08f5fefce34056fe3b79bcceadf3"
+     }
+   ],
+-  "added_headers": [],
+-  "added_header_hashes": {},
++  "added_headers": [
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/profile/units/PakMountCodeProfile.hpp"
++  ],
++  "added_header_hashes": {
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/profile/units/PakMountCodeProfile.hpp": "78d137e47d16f6c2be21abe33920db0433452465ef342f45f42ca2c29ce44aee"
++  },
+   "include_directories": [
+     "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/profile/units"
+   ],
+--- /dev/null
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/RuntimePakMount.cpp
+@@ -0,0 +1,92 @@
++#include "RuntimePakMount.hpp"
++#include <algorithm>
++#include <climits>
++#include <cstdio>
++#include <limits>
++namespace ModBridge::PakMount {
++bool EnginePins::valid() const {
++ if(!pak_vtable||!platform_mgr_get||!platform_mgr_getpf||!slot_get_lower_level||!slot_delegate_execute||!mountpak_delegate||!handle_mount_pak||!delegate_vtable||!execute||!lower_impl||!snapshot_delegate||!snapshot_vtable||!snapshot_execute||pak_count_offset!=0x18)return false;
++ for(size_t i=0;i<64;++i)if(!((image_sha256[i]>='0'&&image_sha256[i]<='9')||(image_sha256[i]>='a'&&image_sha256[i]<='f')))return false;
++ if(image_sha256[64]||delegate_inst_off!=0||delegate_size_off!=8||slot_delegate_execute!=0x60||slot_get_lower_level!=0x68)return false;
++ const uint64_t data[]={pak_vtable,mountpak_delegate,delegate_vtable,snapshot_delegate,snapshot_vtable};
++ for(auto address:data)if(address>0xbc602c8-128)return false;
++ const uint64_t targets[]={platform_mgr_get,platform_mgr_getpf,execute,handle_mount_pak,snapshot_execute,lower_impl};
++ for(size_t i=0;i<6;++i)if(proofs[i].linked!=targets[i]||!proofs[i].size||proofs[i].size>64||proofs[i].linked>0xbc602c8-proofs[i].size)return false;
++ return true;
++}
++bool is_pak_layer(uint64_t a,uint64_t b){return a&&a==b;}
++bool valid_absolute_path(const std::string& p){
++ if(p.size()<2||p.size()>1024||p[0]!='/'||p.back()=='/')return false;
++ size_t start=1;
++ for(size_t i=1;i<=p.size();++i){
++  if(i<p.size()&&(static_cast<unsigned char>(p[i])<32||p[i]=='\\'))return false;
++  if(i==p.size()||p[i]=='/'){auto s=p.substr(start,i-start);if(s.empty()||s=="."||s=="..")return false;start=i+1;}
++ }
++ return true;
++}
++bool choose_order(const std::string& path,const std::vector<PakInfo>& before,int32_t& arg,uint32_t& effective){
++ if(before.size()>4096)return false;
++ uint64_t highest=0;
++ for(size_t i=0;i<before.size();++i){const auto& p=before[i];if(!p.identity)return false;for(size_t j=0;j<i;++j)if(before[j].identity==p.identity)return false;highest=std::max(highest,uint64_t(p.order));}
++ uint64_t bonus=0;
++ std::string tail=path.size()>=6?path.substr(path.size()-6):"";for(char& c:tail)if(c>='A'&&c<='Z')c=static_cast<char>(c-'A'+'a');
++ if(tail=="_p.pak"){
++  uint64_t version=1;auto end=path.rfind('_');auto start=end?path.rfind('_',end-1):std::string::npos;
++  if(start!=std::string::npos){auto part=path.substr(start+1,end-start-1);bool digits=!part.empty();for(char c:part)digits=digits&&(c>='0'&&c<='9');
++   if(digits){uint64_t n=0;for(char c:part){n=n*10+unsigned(c-'0');if(n>INT_MAX)return false;}if(n>=1)version=n+1;}
++   else if(part.find_first_of("+-.")!=std::string::npos)return false; // ambiguous engine numeric/Atoi spelling
++  }
++  bonus=100*version;
++ }
++ if(highest>=INT_MAX||bonus>uint64_t(INT_MAX)-highest-1)return false;
++ arg=static_cast<int32_t>(highest+1);effective=static_cast<uint32_t>(highest+1+bonus);return true;
++}
++static uint64_t find_pak(const EnginePins&p,IEngineBridge&e,uint64_t b){
++ uint64_t layer=e.platform_chain_head();uint64_t seen[16]{};
++ for(unsigned depth=0;depth<16&&layer;++depth){
++  for(unsigned j=0;j<depth;++j)if(seen[j]==layer)return 0;seen[depth]=layer;
++  uint64_t vt=0;if(!e.read_ptr(layer,vt))return 0;
++  if(vt==b+p.pak_vtable)return layer;
++  if(vt>UINT64_MAX-p.slot_get_lower_level||layer>UINT64_MAX-8)return 0;
++  uint64_t lower_fn=0,next=0;
++  if(!e.read_ptr(vt+p.slot_get_lower_level,lower_fn)||lower_fn!=b+p.lower_impl||!e.read_ptr(layer+8,next))return 0;
++  layer=next;
++ }
++ return 0;
++}
++MountOutcome mount(const EnginePins&p,const MountRequest&r,IEngineBridge&e){
++ MountOutcome o;
++ if(!p.valid()){o.verdict=Verdict::RefusedPins;o.why="profile incomplete";return o;}
++ if(!valid_absolute_path(r.pak_path_abs)){o.verdict=Verdict::RefusedBadRequest;o.why="invalid absolute path";return o;}
++ if(!e.is_game_thread()){o.verdict=Verdict::RefusedNotGameThread;o.why="not game thread";return o;}
++ auto b=e.module_view_base();
++ if(!b||b>UINT64_MAX-0xbc602c8||e.image_sha256()!=p.image_sha256){o.verdict=Verdict::RefusedPins;o.why="image identity/base mismatch";return o;}
++ for(const auto& f:p.proofs)if(!e.verify_code(b+f.linked,f.bytes,f.size)){o.verdict=Verdict::RefusedPins;o.why="authenticated function prefix unavailable";return o;}
++ o.pak_layer=find_pak(p,e,b);
++ if(!o.pak_layer){o.verdict=Verdict::RefusedNoPakLayer;o.why="pak layer/chain semantics unavailable";return o;}
++ uint64_t inst=0,vt=0,fn=0,receiver=0,target=0,adjust=1;uint32_t size=0;
++ if(!e.read_ptr(b+p.mountpak_delegate+p.delegate_inst_off,inst)||!e.read_u32(b+p.mountpak_delegate+p.delegate_size_off,size)){o.verdict=Verdict::RefusedPins;o.why="delegate unreadable";return o;}
++ if(!inst||!size){o.verdict=Verdict::RefusedUnbound;o.why="delegate unbound";return o;}
++ if(size>64||inst>UINT64_MAX-0x30||!e.read_ptr(inst,vt)||vt!=b+p.delegate_vtable||!e.read_ptr(vt+p.slot_delegate_execute,fn)||fn!=b+p.execute||!e.read_ptr(inst+0x18,receiver)||receiver!=o.pak_layer||!e.read_ptr(inst+0x20,target)||target!=b+p.handle_mount_pak||!e.read_ptr(inst+0x28,adjust)||adjust!=0){o.verdict=Verdict::RefusedPins;o.why="delegate instance/target identity mismatch";return o;}
++ std::vector<PakInfo> before;
++ if(!e.snapshot_paks(o.pak_layer,before)||before.size()>4096){o.verdict=Verdict::RefusedSnapshot;o.why="synchronized snapshot unavailable";return o;}
++ o.count_before=static_cast<uint32_t>(before.size());
++ int32_t order=0;uint32_t effective=0;
++ if(!choose_order(r.pak_path_abs,before,order,effective)){o.verdict=Verdict::RefusedPriority;o.why="priority/patch bonus overflow or unknown spelling";return o;}
++ o.order_argument=order;
++ void* f=e.make_fstring(r.pak_path_abs);
++ if(!f){o.verdict=Verdict::RefusedBadRequest;o.why="FString allocation/conversion refused";return o;}
++ struct StringOwner{IEngineBridge& e;void* f;~StringOwner() noexcept{try{e.free_fstring(f);}catch(...){}}} owner{e,f};
++ o.call_made=true;
++ try{o.returned_pak=e.call_execute(fn,inst,f,order);}catch(...){o.verdict=Verdict::MountedUnverified;o.why="engine call threw; side effect unknown";return o;}
++ std::vector<PakInfo> after;
++ o.verdict=Verdict::MountedUnverified;o.why="engine call completed; mount/precedence unverified";
++ if(!e.snapshot_paks(o.pak_layer,after)||after.size()>4096)return o;
++ o.count_after=static_cast<uint32_t>(after.size());
++ size_t hits=0;bool outranks=true;
++ for(const auto& x:after){if(x.identity==o.returned_pak){++hits;if(x.order!=effective)outranks=false;}else if(x.order>=effective)outranks=false;}
++ if(o.returned_pak&&hits==1&&outranks&&after.size()>before.size()){o.verdict=Verdict::Mounted;o.why="returned identity present; highest at post-mount snapshot";}
++ char line[256];std::snprintf(line,sizeof line,"[PAKMOUNT] call=%u ret=0x%llx before=%u after=%u order=%d verdict=%u",unsigned(o.call_made),static_cast<unsigned long long>(o.returned_pak),o.count_before,o.count_after,order,unsigned(o.verdict));e.log(line);
++ return o;
++}
++}
+--- /dev/null
++++ b/outputs/2026-10-08-l26-runtime/profile/units/PakMountCodeProfile.hpp
+@@ -0,0 +1,18 @@
++#pragma once
++#include "CodeImageCache.hpp"
++namespace rc::pakmountprofile {
++inline constexpr uint8_t kPrefix0[]={0x0f,0xb6,0x05,0x61,0x15,0x27,0x09,0x84,0xc0,0x74,0x08,0x48,0x8d,0x05,0x46,0x15,0x27,0x09,0xc3,0x55,0x48,0x89,0xe5,0x48,0x8d,0x3d,0x4a,0x15,0x27,0x09,0xe8,0xbd};
++inline constexpr uint8_t kPrefix1[]={0x48,0x8b,0x07,0x48,0x85,0xc0,0x74,0x01,0xc3};
++inline constexpr uint8_t kPrefix2[]={0x48,0x89,0xf8,0x48,0x8b,0x7f,0x18,0x48,0x03,0x78,0x28,0x48,0x8b,0x48,0x20,0xf6,0xc1,0x01,0x74,0x08,0x48,0x8b,0x07,0x48,0x8b,0x4c,0x08,0xff,0x55,0x48,0x89,0xe5,0xff,0xd1,0x5d,0xc3};
++inline constexpr uint8_t kPrefix3[]={0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x38,0x4c,0x8b,0x25,0xf0,0x65,0x9c,0x07};
++inline constexpr uint8_t kPrefix4[]={0x55,0x48,0x89,0xe5,0x53,0x50,0x48,0x8b,0x76,0x18,0x48,0x89,0xfb,0xe8,0x5e,0x00,0x00,0x00,0x48,0x89,0xd8,0x48,0x83,0xc4,0x08,0x5b,0x5d,0xc3};
++inline constexpr uint8_t kPrefix5[]={0x55,0x48,0x89,0xe5,0x48,0x8b,0x47,0x08,0x5d,0xc3};
++inline constexpr codecache::Pin kPins[]={
++ {20,"pak_mount_0",0xb8ed0,kPrefix0,sizeof(kPrefix0)},
++ {21,"pak_mount_1",0xb8a70,kPrefix1,sizeof(kPrefix1)},
++ {22,"pak_mount_2",0x34400,kPrefix2,sizeof(kPrefix2)},
++ {23,"pak_mount_3",0x176b900,kPrefix3,sizeof(kPrefix3)},
++ {24,"pak_mount_4",0x17831e0,kPrefix4,sizeof(kPrefix4)},
++ {25,"pak_mount_5",0xb3500,kPrefix5,sizeof(kPrefix5)},
++};
++}
+--- /dev/null
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/include/RuntimePakMount.hpp
+@@ -0,0 +1,140 @@
++// Generic source-staged native mount: no file writes or code-page changes.
++// Pre-call refusals mean no mount call. After any call, side effects are unknown
++// until synchronized identity/order evidence is checked. Engine fatal errors are
++// outside this helper's exception contract. See current-profile.json and APPLY.
++#pragma once
++#include <cstdint>
++#include <string>
++#include <vector>
++#include <cstddef>
++
++namespace ModBridge::PakMount
++{
++// Image-relative vaddrs + fail-closed signatures for one engine build.
++// Filled from the per-version pin table; NOT hand-written in a .cpp.
++struct EnginePins
++{
++    // Identity / admission
++    char     image_sha256[65] = {0};   // expected main-exe image sha (hex)
++    uint64_t pak_vtable = 0;            // P5: FPakPlatformFile vtable (image-rel)
++    uint64_t platform_mgr_get = 0;      // P3: FPlatformFileManager::Get()
++    uint64_t platform_mgr_getpf = 0;    // P4: GetPlatformFile()
++    uint32_t slot_get_lower_level = 0;  // P6: IPlatformFile::GetLowerLevel (vtable off)
++    uint32_t slot_delegate_execute = 0; // P2: TDelegateInstance::Execute (vtable off)
++    // Mount entry (delegate route; preferred)
++    uint64_t mountpak_delegate = 0;     // P1: FCoreDelegates::MountPak object (image-rel)
++    uint32_t delegate_inst_off = 0;     // FDelegateBase instance-ptr offset (0)
++    uint32_t delegate_size_off = 8;     // FDelegateBase DelegateSize offset
++    // Bound member target identity; there is no fallback direct call.
++    uint64_t handle_mount_pak = 0;      // P7: HandleMountPakDelegate(this, FString&, int32)
++    uint64_t delegate_vtable = 0, execute = 0, lower_impl = 0;
++    uint64_t snapshot_delegate = 0, snapshot_vtable = 0, snapshot_execute = 0;
++    uint32_t pak_count_offset = 0;
++    struct Proof { uint64_t linked=0; uint8_t bytes[64]{}; size_t size=0; };
++    Proof proofs[6]{};
++    bool     valid() const;             // all required fields present
++};
++
++// Per-attempt data (produced automatically from the game's own files + the mod).
++struct MountRequest
++{
++    // Absolute on-device path to the mod container (<modroot>/<name>_P.pak) whose
++    // sibling .utoc/.ucas the engine will discover. No name is interpreted here.
++    std::string pak_path_abs;
++    int32_t     order = -1;             // historical field; core derives a safe explicit order
++};
++
++enum class Verdict
++{
++    Mounted,            // returned identity highest at the post-call synchronized snapshot
++    RefusedPins,        // a pin failed re-verification (fail-closed)
++    RefusedUnbound,     // MountPak delegate size == 0 (engine not ready / no pak support)
++    RefusedNoPakLayer,  // chain census found no FPakPlatformFile
++    RefusedBadRequest,  // empty/ill-formed request
++    RefusedCallFailed,  // retained legacy enum value; no vanilla inference
++    RefusedNotGameThread,
++    RefusedSnapshot,
++    RefusedPriority,
++    MountedUnverified
++};
++
++struct PakInfo { uint64_t identity=0; uint32_t order=0; };
++// Snapshot is copied under the engine lock; pointers are opaque identity only.
++// The integrator implements this over the live process; the host test implements
++// it over an in-memory fake image. The unit asks the bridge for everything so it
++// never touches raw platform memory itself.
++class IEngineBridge
++{
++public:
++    virtual ~IEngineBridge() = default;
++
++    // Live base of the main executable image, or 0 if unavailable.
++    virtual uint64_t module_view_base() = 0;
++    // Live address of the platform-file chain head (the manager's TopPlatformFile).
++    // The integrator resolves it via the verified Get()/GetPlatformFile() pins
++    // (P3/P4); 0 if unavailable.
++    virtual uint64_t platform_chain_head() = 0;
++    // The running main-exe image sha256 (hex, lowercase), "" if unknown.
++    virtual std::string image_sha256() = 0;
++
++    // Read a pointer-sized word at a LIVE address (already base-relocated by caller).
++    virtual bool read_ptr(uint64_t live_addr, uint64_t& out) = 0;
++    // Read a 32-bit word at a LIVE address.
++    virtual bool read_u32(uint64_t live_addr, uint32_t& out) = 0;
++
++    // Fail-closed signature gate for a LIVE code address against the pinned
++    // prologue bytes; false => refuse. Mirrors the runtime's admission gate.
++    virtual bool verify_code(uint64_t live_addr, const uint8_t* sig, size_t n) = 0;
++
++    // Is the current thread the engine game thread? (mount must run there).
++    virtual bool is_game_thread() = 0;
++
++    // Marshal a narrow path into an engine-allocator FString and hand back an
++    // opaque pointer usable as the delegate's const FString& argument. Returns
++    // nullptr on failure. The bridge owns/frees it after the call returns.
++    virtual void* make_fstring(const std::string& path) = 0;
++    virtual void free_fstring(void* fstr) = 0;
++
++    // Invoke a resolved delegate-instance Execute thunk:
++    //   IPakFile* (*)(void* inst, const FString* path, int32 order)
++    // Returns the raw IPakFile* (nullptr on engine-side failure). Only called
++    // after the unit has resolved `exec_fn` and `inst` from verified pins.
++    virtual uint64_t call_execute(uint64_t exec_fn, uint64_t inst,
++                                  void* fstr, int32_t order) = 0;
++
++    // Count of currently mounted paks (read via the engine's own mounted-paks
++    // accessor the integrator wires up); used only for the before/after verify.
++    virtual bool mounted_pak_count(uint64_t pak_layer_live, uint32_t& out) = 0;
++
++    virtual bool snapshot_paks(uint64_t, std::vector<PakInfo>&) { return false; }
++    // Optional logging (no-op acceptable).
++    virtual void log(const char* /*line*/) {}
++};
++
++// Result detail for logging / self-test.
++struct MountOutcome
++{
++    Verdict verdict = Verdict::RefusedBadRequest;
++    uint64_t pak_layer = 0;     // live FPakPlatformFile* found by census (0 if none)
++    uint32_t count_before = 0;
++    uint32_t count_after = 0;
++    uint64_t returned_pak = 0;
++    int32_t order_argument = 0;
++    bool call_made = false;
++    const char* why = "";       // short static reason
++};
++
++// The one entry point. Pure, generic, fail-closed. Performs NO file or code-page
++// write and installs NO detour; it only re-verifies pins and invokes the engine's
++// own bound MountPak delegate from the game thread.
++MountOutcome mount(const EnginePins& pins, const MountRequest& req, IEngineBridge& eng);
++
++// Pure helper (exposed for tests): does this chain layer's vptr identify the
++// FPakPlatformFile? live_vtable is the vptr read from the instance; expect_live
++// is pins.pak_vtable rebased to the live image.
++bool is_pak_layer(uint64_t live_vtable, uint64_t expect_live);
++bool valid_absolute_path(const std::string& path);
++bool choose_order(const std::string& path, const std::vector<PakInfo>& before,
++                  int32_t& argument, uint32_t& effective);
++
++} // namespace ModBridge::PakMount
+--- /dev/null
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/include/PakRequestProducer.hpp
+@@ -0,0 +1,44 @@
++#pragma once
++#include "RuntimePakMount.hpp"
++#include <filesystem>
++#include <algorithm>
++#include <stdexcept>
++namespace ModBridge::PakMount {
++inline std::filesystem::file_status checked_status(const std::filesystem::path& p,bool missing=false){
++ std::error_code ec;auto s=std::filesystem::symlink_status(p,ec);
++ if(ec&&!(missing&&ec==std::errc::no_such_file_or_directory))throw std::runtime_error("filesystem status unavailable");
++ return s;
++}
++inline uintmax_t checked_size(const std::filesystem::path& p){
++ std::error_code ec;auto n=std::filesystem::file_size(p,ec);
++ if(ec||!n)throw std::runtime_error("container size unavailable/empty");return n;
++}
++// All-or-nothing bounded directory discovery; never reads or rewrites containers.
++inline std::vector<MountRequest> discover_requests(const std::filesystem::path& directory) {
++ const auto root=directory.lexically_normal();
++ if(!valid_absolute_path(directory.string())||root!=directory)throw std::runtime_error("request root must be normalized and absolute");
++ std::filesystem::path prefix;
++ for(const auto& part:directory){prefix/=part;if(checked_status(prefix).type()==std::filesystem::file_type::symlink)throw std::runtime_error("symlink root refused");}
++ if(checked_status(directory).type()!=std::filesystem::file_type::directory)throw std::runtime_error("request directory unavailable");
++ std::vector<MountRequest> out;size_t entries=0;std::error_code ec;
++ std::filesystem::directory_iterator it(directory,ec),end;
++ if(ec)throw std::runtime_error("directory census unavailable");
++ for(;it!=end;it.increment(ec)){
++  if(ec)throw std::runtime_error("directory census failed");
++  const auto& item=*it;
++  if(++entries>128)throw std::runtime_error("directory census limit");
++  const auto status=checked_status(item.path());
++  if(status.type()==std::filesystem::file_type::symlink)throw std::runtime_error("symlink entry refused");
++  if(item.path().extension()!=".pak")continue;
++  if(status.type()!=std::filesystem::file_type::regular||!checked_size(item.path())||item.path().filename().string().size()>255)throw std::runtime_error("invalid container entry");
++  auto toc=item.path();toc.replace_extension(".utoc");auto data=item.path();data.replace_extension(".ucas");
++  const auto ts=checked_status(toc,true),ds=checked_status(data,true);
++  const bool t=ts.type()!=std::filesystem::file_type::not_found,d=ds.type()!=std::filesystem::file_type::not_found;
++  if(t!=d||(t&&(ts.type()!=std::filesystem::file_type::regular||ds.type()!=std::filesystem::file_type::regular||!checked_size(toc)||!checked_size(data))))throw std::runtime_error("incomplete or nonregular sidecars");
++  if(out.size()==16)throw std::runtime_error("selection limit");
++  MountRequest r;r.pak_path_abs=item.path().string();out.push_back(r);
++ }
++ if(ec)throw std::runtime_error("directory census failed");
++ std::sort(out.begin(),out.end(),[](const auto&a,const auto&b){return a.pak_path_abs<b.pak_path_abs;});return out;
++}
++}
+--- /dev/null
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/include/NativePakMountAdapter.inl
+@@ -0,0 +1,100 @@
++// Included inside RC::Unreal::SeedArming AFTER NativePropertyReadBackend.inl.
++// Standard and Unreal headers must be included at file scope by current-source.patch.
++class NativePakMountBridge final : public ::ModBridge::PakMount::IEngineBridge {
++    using Pins=::ModBridge::PakMount::EnginePins;
++    Pins pins_;
++    bool admitted(uint64_t address,const Pins::Proof& proof) {
++        const auto base=module_view_base();
++        return base&&proof.linked<=UINT64_MAX-base&&address==base+proof.linked&&
++            verify_code(address,proof.bytes,proof.size);
++    }
++public:
++    explicit NativePakMountBridge(Pins pins):pins_(pins){}
++    uint64_t module_view_base() override {return SeedArming::module_view_base();}
++    std::string image_sha256() override {
++        const rc::codecache::Metadata* m=nullptr;
++        if(bridge_code_cache_context(module_view_base(),&m)!=1||!m||!m->ready)return {};
++        return std::string(m->sha256,64);
++    }
++    bool read_ptr(uint64_t address,uint64_t& out) override {return PropertyReadBytes(address,sizeof out,&out);}
++    bool read_u32(uint64_t address,uint32_t& out) override {return PropertyReadBytes(address,sizeof out,&out);}
++    bool verify_code(uint64_t address,const uint8_t* bytes,size_t n) override {
++        return n&&n<=64&&bridge_code_cache_signature(module_view_base(),address,bytes,n)==1;
++    }
++    bool is_game_thread() override {return IsInGameThreadRaw();}
++    uint64_t platform_chain_head() override {
++        const auto b=module_view_base();
++        if(!is_game_thread()||!admitted(b+pins_.platform_mgr_get,pins_.proofs[0])||!admitted(b+pins_.platform_mgr_getpf,pins_.proofs[1]))return 0;
++        using Get=void*(*)();using Current=void*(*)(void*);
++        auto* manager=reinterpret_cast<Get>(b+pins_.platform_mgr_get)();
++        if(!manager)return 0;
++        return reinterpret_cast<uint64_t>(reinterpret_cast<Current>(b+pins_.platform_mgr_getpf)(manager));
++    }
++    void* make_fstring(const std::string& path) override {
++        if(!is_game_thread()||!GMalloc||!*GMalloc)return nullptr;
++        RC::LuaType::LuaFNameBridge::Bridge bridge(path.data(),path.size());
++        if(!bridge.ok())return nullptr;
++        return new FString(bridge.to_fstring());
++    }
++    void free_fstring(void* value) override {delete static_cast<FString*>(value);}
++    uint64_t call_execute(uint64_t fn,uint64_t inst,void* string,int32_t order) override {
++        if(!is_game_thread()||!admitted(fn,pins_.proofs[2])||!string||order<0)return 0;
++        using Execute=void*(*)(void*,const FString*,int32_t);
++        return reinterpret_cast<uint64_t>(reinterpret_cast<Execute>(fn)(reinterpret_cast<void*>(inst),static_cast<const FString*>(string),order));
++    }
++    // Keep legacy interface implementation synchronized; core uses snapshots only.
++    bool mounted_pak_count(uint64_t layer,uint32_t& out) override {
++        std::vector<::ModBridge::PakMount::PakInfo> rows;
++        if(!snapshot_paks(layer,rows))return false;
++        out=static_cast<uint32_t>(rows.size());return true;
++    }
++    bool snapshot_paks(uint64_t layer,std::vector<::ModBridge::PakMount::PakInfo>& out) override {
++        out.clear();const auto base=module_view_base();
++        if(!is_game_thread()||!GMalloc||!*GMalloc||!admitted(base+pins_.snapshot_execute,pins_.proofs[4]))return false;
++        uint64_t inst=0,vt=0,fn=0,receiver=0,member=0,adjust=1;uint32_t size=0;
++        // Same bound-target identity standard as the mount delegate: receiver,
++        // non-null member target and zero this-adjustor. The exact member
++        // address is not separately pinned; row validation stays fail-closed.
++        if(!read_ptr(base+pins_.snapshot_delegate,inst)||!read_u32(base+pins_.snapshot_delegate+8,size)||!inst||!size||size>64||inst>UINT64_MAX-0x30||!read_ptr(inst,vt)||vt!=base+pins_.snapshot_vtable||!read_ptr(vt+pins_.slot_delegate_execute,fn)||fn!=base+pins_.snapshot_execute||!read_ptr(inst+0x18,receiver)||receiver!=layer||!read_ptr(inst+0x20,member)||!member||!read_ptr(inst+0x28,adjust)||adjust!=0)return false;
++        // Exact captured SysV aggregate-return contract: RDI output16, RSI instance.
++        // Output elements are non-owning POD records; no pak pointer is dereferenced.
++        struct alignas(8) Result {void* data=nullptr;int32_t count=0,capacity=0;};
++        static_assert(sizeof(Result)==16);
++        Result result;
++        struct Owner {Result& value;~Owner() noexcept {if(value.data){try{(*GMalloc)->Free(value.data);}catch(...){}}}} owner{result};
++        using Snapshot=void*(*)(void*,void*);
++        reinterpret_cast<Snapshot>(fn)(&result,reinterpret_cast<void*>(inst));
++        if(result.count<0||result.capacity<result.count||result.count>4096||result.capacity>65536||(result.count&&!result.data))return false;
++        struct Row {uint64_t identity;uint32_t order,padding;};static_assert(sizeof(Row)==16);
++        const auto start=reinterpret_cast<uint64_t>(result.data);
++        if(start>UINT64_MAX-static_cast<uint64_t>(result.count)*sizeof(Row))return false;
++        std::vector<::ModBridge::PakMount::PakInfo> owned;owned.reserve(result.count);
++        for(int32_t i=0;i<result.count;++i){Row row{};if(!PropertyReadBytes(start+static_cast<uint64_t>(i)*sizeof(Row),sizeof row,&row)||!row.identity)return false;owned.push_back({row.identity,row.order});}
++        out=std::move(owned);return true;
++    }
++    void log(const char* line) override {std::printf("%s\n",line);}
++};
++
++static void RunNativePakMountOnceImpl(const std::filesystem::path& mods_directory) noexcept {
++    if(!IsInGameThreadRaw())return;
++    static std::atomic_bool attempted{false};
++    if(attempted.exchange(true,std::memory_order_acq_rel))return;
++    try {
++        // Native setup_mod_directory_path supplies <configured root>/ue4ss/Mods.
++        if(mods_directory.filename()!="Mods"||mods_directory.parent_path().filename()!="ue4ss"){
++            std::printf("[PAKMOUNT] pre-call refuse: configured native root shape unavailable\n");return;
++        }
++        const auto directory=mods_directory.parent_path().parent_path()/"pakmods";
++        // No directory means opt-out; game files are never searched or installed.
++        if(::ModBridge::PakMount::checked_status(directory,true).type()==std::filesystem::file_type::not_found){std::printf("[PAKMOUNT] disabled: no pakmods directory\n");return;}
++        const auto requests=::ModBridge::PakMount::discover_requests(directory);
++        if(requests.empty()){std::printf("[PAKMOUNT] pre-call refuse: zero selected containers\n");return;}
++        auto pins=modbridge_pak_pins_ue561();NativePakMountBridge bridge(pins);
++        for(const auto& request:requests){
++            const auto result=::ModBridge::PakMount::mount(pins,request,bridge);
++            std::printf("[PAKMOUNT] status=%u call=%u ret=0x%llx before=%u after=%u order=%d reason=%s\n",unsigned(result.verdict),unsigned(result.call_made),static_cast<unsigned long long>(result.returned_pak),result.count_before,result.count_after,result.order_argument,result.why);
++            if(result.verdict!=::ModBridge::PakMount::Verdict::Mounted)break;
++        }
++    }catch(const std::exception& e){std::printf("[PAKMOUNT] stopped: %s (prior mount side effects possible)\n",e.what());}
++    catch(...){std::printf("[PAKMOUNT] stopped: native exception (prior mount side effects possible)\n");}
++}
+--- /dev/null
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/include/NativePakMountEntry.hpp
+@@ -0,0 +1,3 @@
++#pragma once
++#include <filesystem>
++namespace RC::Unreal { void RunNativePakMountOnce(const std::filesystem::path&) noexcept; }
+--- /dev/null
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/include/pak_mount_pins.inc
+@@ -0,0 +1,31 @@
++#pragma once
++// GENERATED from evidence/current-profile.json; image-bound data only.
++#include <cstdio>
++inline ModBridge::PakMount::EnginePins modbridge_pak_pins_ue561()
++{
++    ModBridge::PakMount::EnginePins p;
++    std::snprintf(p.image_sha256,sizeof p.image_sha256,"%s","3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc");
++    p.pak_vtable = 0x7fee8c0;
++    p.platform_mgr_get = 0xb8ed0;
++    p.platform_mgr_getpf = 0xb8a70;
++    p.slot_get_lower_level = 0x68;
++    p.slot_delegate_execute = 0x60;
++    p.mountpak_delegate = 0x934faa8;
++    p.delegate_inst_off = 0;
++    p.delegate_size_off = 8;
++    p.handle_mount_pak = 0x176b900;
++    p.delegate_vtable = 0x7fef570;
++    p.execute = 0x34400;
++    p.lower_impl = 0xb3500;
++    p.snapshot_delegate = 0x934fc00;
++    p.snapshot_vtable = 0x7fef9f0;
++    p.snapshot_execute = 0x17831e0;
++    p.pak_count_offset = 0x18;
++    p.proofs[0] = {0xb8ed0,{0x0f,0xb6,0x05,0x61,0x15,0x27,0x09,0x84,0xc0,0x74,0x08,0x48,0x8d,0x05,0x46,0x15,0x27,0x09,0xc3,0x55,0x48,0x89,0xe5,0x48,0x8d,0x3d,0x4a,0x15,0x27,0x09,0xe8,0xbd},32};
++    p.proofs[1] = {0xb8a70,{0x48,0x8b,0x07,0x48,0x85,0xc0,0x74,0x01,0xc3},9};
++    p.proofs[2] = {0x34400,{0x48,0x89,0xf8,0x48,0x8b,0x7f,0x18,0x48,0x03,0x78,0x28,0x48,0x8b,0x48,0x20,0xf6,0xc1,0x01,0x74,0x08,0x48,0x8b,0x07,0x48,0x8b,0x4c,0x08,0xff,0x55,0x48,0x89,0xe5,0xff,0xd1,0x5d,0xc3},36};
++    p.proofs[3] = {0x176b900,{0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x38,0x4c,0x8b,0x25,0xf0,0x65,0x9c,0x07},24};
++    p.proofs[4] = {0x17831e0,{0x55,0x48,0x89,0xe5,0x53,0x50,0x48,0x8b,0x76,0x18,0x48,0x89,0xfb,0xe8,0x5e,0x00,0x00,0x00,0x48,0x89,0xd8,0x48,0x83,0xc4,0x08,0x5b,0x5d,0xc3},28};
++    p.proofs[5] = {0xb3500,{0x55,0x48,0x89,0xe5,0x48,0x8b,0x47,0x08,0x5d,0xc3},10};
++    return p;
++}
+--- a/outputs/2026-10-08-l26-runtime/build_variants.py
++++ b/outputs/2026-10-08-l26-runtime/build_variants.py
+@@ -118,6 +118,7 @@
+ # is preserved), census expected 391+len(NEW_UNITS). Always fresh (never
+ # retained by --incremental; no previous receipts exist for them).
+ NEW_UNITS={
++    'pakmount':{'source':HERE/'typescan-r4/candidate/src/RuntimePakMount.cpp','template':'unreal-unrealinitializer','note':'cap07 synchronized native pak mount (always fresh)','source_sha256':'a8894176856f67ad13eacafb910bfcbd214658f02bb55a6709db9785a5747945'},
+     'lua-lfb':{'source':HERE/'typescan-r4/candidate/src/LuaFNameBridge.cpp','template':'luamod','note':'agent FD bridge definitions (to_fstring/to_ftext/push_*_to_lua/fname_to_narrow)'},
+     'buildstamp':{'source':HERE/'typescan-r4/candidate/src/BuildStamp.cpp','template':'unreal-unrealinitializer','note':'agent FF [BUILD] stamp TU (__has_include GeneratedBuildStamp.hpp)'},
+     'tcselftest':{'source':HERE/'typescan-r4/candidate/src/ToolchainSelfTest.cpp','template':'unreal-unrealinitializer','note':'agent FF wcslen/wstring-rt toolchain probes'},
+@@ -129,6 +130,7 @@
+     by_name={u['name']:u for u in units}
+     made=[]
+     for name,spec in NEW_UNITS.items():
++        if spec.get('source_sha256') and sha(spec['source'])!=spec['source_sha256']:raise RuntimeError('registered NEW_UNIT source pin drift: '+name)
+         tpl=by_name[spec['template']]
+         u=copy.deepcopy(tpl)
+         argv=list(u['argv'])
+@@ -274,6 +276,7 @@
+     checks still run per compiled unit) but they no longer cascade consumers
+     into the fresh set — consumers keep retained objects from the previous
+     build (see prepare_incremental)."""
++    if incremental:raise RuntimeError('cap07 CodeImageCache ABI change requires full header-consumer rebuild; incremental prohibited')
+     oldsel=json.loads((BASE/'SOURCE-SELECTION.json').read_text())
+     approved_header_identities={(Path(p['path']).name,p['sha256']) for p in oldsel['source_pins'] if Path(p['path']).suffix in ['.h','.hpp','.inc','.inl']}
+     allpins=sum((oldsel[k] for k in ('source_pins','receipt_pins','artifact_pins')),[])
+--- a/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py
++++ b/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py
+@@ -88,6 +88,13 @@
+ def l26_profile_candidates():
+     d=json.loads((L26RUN/'profile/CHANGES.json').read_text())
+     return {Path(r['candidate']).name:r for r in d['files']},d
++
++def pakmount_profile_overlay(changes):
++    path=L26RUN/'profile/units/PakMountCodeProfile.hpp'
++    expected=(changes.get('added_header_hashes') or {}).get(str(path))
++    if not expected or str(path) not in changes.get('added_headers',[]):raise RuntimeError('PakMountCodeProfile missing required profile header admission')
++    if not path.is_file() or sha(path)!=expected:raise RuntimeError('PakMountCodeProfile header pin drift')
++    return {'path':str(path),'sha256':expected,'bytes':path.stat().st_size,'destination':'lifecycle/PakMountCodeProfile.hpp'}
+ 
+ def derive_manifest(variant,record,steps,execute):
+     m=json.loads((L24PKG/'BUILD-INPUTS.json').read_text())
+@@ -131,6 +138,9 @@
+             c=cand[name]
+             assert sha(c['candidate'])==c['candidate_sha256']
+             overlays.append({'path':c['candidate'],'sha256':c['candidate_sha256'],'bytes':Path(c['candidate']).stat().st_size,'destination':dest})
++    required_pak_profile=pakmount_profile_overlay(prof_changes)
++    if any(o['destination']==required_pak_profile['destination'] for o in overlays):raise RuntimeError('duplicate PakMountCodeProfile overlay')
++    overlays.append(required_pak_profile)
+     m['lineage_overlays']=overlays
+     m.pop('l24_profile_digest',None);m.pop('l24_profile_changes',None)
+     m['l26_profile_digest']=prof_changes.get('profile_digest')
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/CHANGES.json
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/CHANGES.json
+@@ -403,7 +403,7 @@
+       "copied_original": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/original/src/UnrealInitializer.cpp",
+       "candidate": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp",
+       "original_sha256": "44b05cc6d8d054d334603a723f70deb3241e3be6cc2d129473ff6f1a4a21e4c4",
+-      "candidate_sha256": "04f02bc23bdd1701cff5bc3ae5a5aaa9c9ae7b608b5f3663b411cf9809aafc23",
++      "candidate_sha256": "83df4c894cda5948e6ac1e0889841a49cd8f6b45bbf6474b7d14d14a0d71cde5",
+       "copied_original_sha256": "78c16fb7c06a457e0b179e8564cc96baf1c86313fb6007e2fdb8735e76146321"
+     },
+     {
+@@ -427,7 +427,7 @@
+       "copied_original": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/original/src/LuaMod.cpp",
+       "candidate": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp",
+       "original_sha256": "cef8d02f74b66e2cdd944d176ae3c0d2ec79439e1573ae51fff7fd1a11fd8e98",
+-      "candidate_sha256": "fbc2b00ebf29d00d11cf3f88fbf3725f9e6f854a1eb6933ee6bed0dc0ab6baea",
++      "candidate_sha256": "b0ce0550f1e4ed27c6f769f06d4fd0992a972e47621ca1623bad560295344fd2",
+       "copied_original_sha256": "fc9589dbb81ee7128d5f54b46061a01f3faf54b4b038e6bdfc5ac2626348119f"
+     },
+     {
+@@ -688,7 +688,12 @@
+     "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/imgui_internal.h",
+     "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/imstb_rectpack.h",
+     "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/imstb_textedit.h",
+-    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/imstb_truetype.h"
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/imstb_truetype.h",
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/RuntimePakMount.hpp",
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/PakRequestProducer.hpp",
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/NativePakMountAdapter.inl",
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/NativePakMountEntry.hpp",
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/pak_mount_pins.inc"
+   ],
+   "added_header_hashes": {
+     "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/NativePropertyPointerGuard.hpp": "a249ec41c0dcd8efd030a964d083dbd75806ffadc653e5a82f53fe0bcbadc696",
+@@ -727,7 +732,12 @@
+     "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/imgui_internal.h": "438c4d9a11879f70d23f26f8ef307d22b5cfe0e08ac53d859ae0990a7bae3474",
+     "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/imstb_rectpack.h": "2efa3d5f7d003c19743b15155dad9f46d9f9fc783a18893d703b431d3c990972",
+     "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/imstb_textedit.h": "10777411bf758908aadaf7d73d4710d6ba0464f332f0015db9d1444c19456e6a",
+-    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/imstb_truetype.h": "88f0a25e27f5eefd6ec50c42fc5fe3026aa8170603efa08aa18d622db8660923"
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/imstb_truetype.h": "88f0a25e27f5eefd6ec50c42fc5fe3026aa8170603efa08aa18d622db8660923",
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/RuntimePakMount.hpp": "2e725f38da43185f8b6fdb4f04ca66b4a68f8982dcba00814e9bf54ff5ac2d69",
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/PakRequestProducer.hpp": "21b52963c6c346e4f41a8d6989eab70bde7a3743dfb02cb88505bf9fdb8cbe6c",
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/NativePakMountAdapter.inl": "610ed90e2577446aecbf3cd2bf086cd599cb040bbf3520d06bfc632e3aa07add",
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/NativePakMountEntry.hpp": "feb7a8bc77ffd1afb9e2b88b03f7a7ead7d9eef3122b1143adea0564beb7c697",
++    "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/include/pak_mount_pins.inc": "e302e6e676e06631b11dd1ccd845818ef7baba09c6301d19d0bc5cb956af4fa1"
+   },
+   "scope": "l25 source stage (Claude l25 items 1-4 + 7), Mac-only, no console contact: TypeChecker scan loop wired to the Checked (noexcept, recording) guard reads with missing_keys.attempt no longer wrapping guard calls; per-object catch records thrown [PropertyPointer] refusals (reason/field/class parsed from the new detail trailer, scan-object name stamped on every record) and ends only that object's chain; ScanCollectionScope RAII ends scan mode on any unwind; KnownPropertyClassBootstrap compares pre-computed known-name FName indices first (no lookup, no ToString) and bounds the FName index by the verified pool (SeedArming-published address, live CurrentBlock/CurrentByteOffset reads) before the ToString suffix test; throwing wrappers embed reason/object/field/class detail; UnrealInitializer.cpp gained the single PublishVerifiedPoolAddress call after pool admission. The profile/ sibling overlay (item 5) and tests/ host suites (item 6) are parallel workers' products and are not modified here. NOT YET DONE, never claim otherwise: host suites not re-run (tests/actual_scan.cpp still extracts the l24 scan body; the binaries under typescan-r4/tests are l24-era artifacts), no target compile, no twin build, no packaging, no console proof. candidate_sha256 values reflect these edited sources and MUST be recomputed after every further candidate edit.",
+   "new_os_imports": [],
+@@ -1258,4 +1268,4 @@
+     "integrator_change_include_trim": "NativeModHostCore.hpp 7428151e -> 6b521ddb: removed the unused `#include <exception>` (no std::exception/exception_ptr/terminate use in the header; CppMod.cpp gets std::exception from its own <stdexcept>, as upstream does). Reason: the include-graph gate refused <exception> as a new system dependency of the cppmod unit (R15b). Standalone -fsyntax-only of the header: OK. Backup: typescan-r4/NativeModHostCore.hpp.pre-include-trim-20261013.",
+     "integrator_change_name_case": "Console-proven (cap11 launch G2, zzguinames): Townfall reflects CreateCanvasRenderTarget2D params as \"width\"/\"height\". FNames compare case-insensitively in the engine, but the GUI backend compared GetName() strings exactly -> \"[GUI] refused: parameter not found: Width\". Fix: engine_name_eq (ASCII case fold, else exact) at all 5 engine-name comparisons (GUI param(), write_struct_members, world_of, member_of; services object_is_a). NativeGuiEngineBackend.inc 2d5ee7e7 -> 35fa01e8; NativeModEngineServices.inc e0fef6f7 -> ca928339. Host test 7/7. Backups: *.pre-nameeq-20261013."
+   }
+-}
+\ No newline at end of file
++}

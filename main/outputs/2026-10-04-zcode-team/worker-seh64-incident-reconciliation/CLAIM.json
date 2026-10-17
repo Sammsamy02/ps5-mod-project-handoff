@@ -1,0 +1,43 @@
+{
+  "worker": "worker-seh64-incident-reconciliation",
+  "date": "2026-10-04",
+  "lineage": "Controller-ordered follow-up to worker-stray-root-audit (outputs/2026-10-04-zcode-team/worker-stray-root-audit/AUDIT.md). The audit attributed the stray outputs/2026-10-04-zcode-team/.superpowers tree (quarantined by the controller) to worker-seh64-trampoline-fix's unreported failed vendor spike at 2026-10-05T05:42:47 local (10:42:47Z; build b33f79f5a88b40e6bdfd1aff15816f99). Open question answered here: did the wrong-root condition (a directory named .superpowers at TEAM from 05:42:47 local until the controller quarantine) affect ANY DELIVERED artifact of worker-seh64-trampoline-fix?",
+  "task": "Inventory every file under outputs/2026-10-04-zcode-team/worker-seh64-trampoline-fix/ (mtime + sha256); classify each artifact as BEFORE / DURING (05:41:36-05:46:12 local bracket) / AFTER the misrun; grep all receipts, claims, reports and logs for wrong-root path evidence (outputs/2026-10-04-zcode-team/.superpowers, stray build id b33f79f5, mis-joined lld-link form); map downstream consumers; check launch-10 EDITION.json overlap; propose ledger addendum text.",
+  "bounds": {
+    "console_contact": false,
+    "target_execution": false,
+    "nested_subagents": false,
+    "network": false,
+    "reads": "workspace-wide read-only (worker dirs, controller dir, shared ledger, quarantined stray)",
+    "writes": "only under outputs/2026-10-04-zcode-team/worker-seh64-incident-reconciliation/ (plus /tmp scratch for manifests)",
+    "ledger_edits": "none - LEDGER-ADDENDUM.md is proposed text only; the ledger is controller-owned",
+    "no_reexecution": "no builds re-run, no receipts rewritten, no quarantined bytes moved",
+    "budget_tool_calls": "under 40"
+  },
+  "claims": {
+    "inventory": "All 2651 files under worker-seh64-trampoline-fix/ hashed (sha256) with mtimes in local (CDT, UTC-5) and UTC; full per-file table in MANIFEST.tsv, per-artifact-group table in RECONCILIATION.md.",
+    "wrong_root_paths": "Zero occurrences anywhere in the worker dir of: (a) the wrong-root absolute path prefix 'outputs/2026-10-04-zcode-team/.superpowers', (b) the stray build id b33f79f5, (c) the mis-joined lld-link form '.../toolchains/1.90.0-aarch64-apple-darwin/bin/gcc-ld/lld-link' (without lib/rustlib). All 13 in-worker receipts record only true-root ('what/') tool paths (lld-link, LLVM-21.1.8 clang/readobj, ps5-payload-sdk) and worker-dir output paths.",
+    "mechanism": "The vendored harness vendor/windows-candidate/build.py resolves ROOT = HERE.parents[2] = TEAM statically (build.py line 14) - a marker-INDEPENDENT misroot, wrong before, during and after the stray existed. It contains no marker walk; link_layout.py (vendor/native-host/archive/link_layout.py) resolves no root at all. The only marker-walk root resolver in the tree remains worker-prx-link-gaps/package_prx.py (_find_root), which appears nowhere in the seh64 worker dir. Therefore the stray marker could not have changed any path the seh64 worker's runs used.",
+    "bracket_window": "out-e1b (last write 05:41:36 local) completed 71 seconds BEFORE the stray was created (05:42:47) - its entire run predates the marker. out-e2 (05:46:12-14) executed while the marker existed and is CLEAN by mechanism plus recorded true-root paths. All delivered runs (06:11-06:30) also ran while the marker existed and are CLEAN by the same mechanism.",
+    "delivered_artifacts": "All delivered artifacts CLEAN: out-family-baseline (05:28, pre-window), out-family-fixed + out-family-fixed2 (06:13), negative-control tree + out-negative-control/probeonly/probeonly2 (06:13-06:24), vendor-8fam + out-host-8fam + out-host-8fam2 (06:26), out-sdk-family + out-sdk-8fam + out-sdk-elf-delta.json (06:27-06:28), diffs/, CLAIM.json / OWNING-LINEAGE.md / REPORT.md. Debug runs out-e1/e1b/e2/e3 CLEAN (and are not deliverables; REPORT names them as debugging provenance).",
+    "receipt_key_property": "Every receipt from this vendored harness records source_files keys relative to TEAM (e.g. 'worker-seh64-trampoline-fix/vendor/...') because keys are str(path.relative_to(ROOT)) with the static ROOT=TEAM. This property is present in the PRE-stray 05:28 baseline receipt identically, so it is NOT a misrun-window artifact; it is the same vendored-harness property that created the stray when a run omitted --output. The run-time hash gate (build.py lines 349-350) re-hashed every source under TEAM/<key> and passed.",
+    "consumers": "No consumer of any seh64 artifact exists outside the worker's own dir: workspace-wide grep finds zero references to the 14 build ids, zero references to the new symbols call_at_frame2 / svc_raise_body, and zero references to the worker dir outside TEAM except the incident-response dirs worker-stray-root-audit and worker-stray-root-hardening. The F1-F4 fixes are UNINTEGRATED anywhere.",
+    "launch10_overlap": "outputs/2026-10-04-zcode-controller/launch10-build/EDITION.json (read in full) contains no seh64-trampoline-fix content: its edits reference worker-facts-geometry-fix, worker-launch10-readpath-guard, worker-diagnostic-sink staging and a controller-staged header only. The launch-10 drivers build_runtime_composition6_l10.py / launch10_one_pass.py contain no 'seh64' reference. Overlap with this worker's artifacts: NONE.",
+    "independent_spot_checks": "Three modulo-build-id byte-identity claims independently re-verified by this worker: out-family-fixed vs out-family-fixed2 host-normal.jsonl IDENTICAL; out-host-8fam vs out-host-8fam2 IDENTICAL; out-family-baseline evidence byte-equal to the ORIGINAL worker-seh64-family receipts (out-host-validation/133de5d3..., out-sdk-composition/5f7e67b3...) modulo build id and worker-dir prefix.",
+    "misrun_disclosure": "The 05:42:47 misrun itself is confirmed from the quarantined receipt (status FAILED, commands [], error = mis-joined true-root-prefixed lld-link path, all 73 source_files keys TEAM-relative) and was additionally a violation of worker-seh64-trampoline-fix's own CLAIM.json writes bound ('only under .../worker-seh64-trampoline-fix/')."
+  },
+  "non_claims": [
+    "No claim that worker-seh64-trampoline-fix's F1-F4 technical conclusions are re-proven; only their artifacts' root-taint status and internal consistency were checked.",
+    "No re-execution of any build; no new target, host or console evidence.",
+    "No quality scores anywhere; no claim about launch-10 composition validity beyond 'no seh64-trampoline-fix artifact is referenced by it'.",
+    "No claim about the exact misrun argv (commands:[] means the fatal first command's argv was never recorded - the mis-joined lld-link form is known only from the error string, matching worker-stray-root-audit's inference).",
+    "No ledger mutation; LEDGER-ADDENDUM.md is a proposal."
+  ],
+  "deliverables_ordered": [
+    "MANIFEST.tsv (all 2651 files: sha256, mtime local, mtime UTC, bytes, path)",
+    "CLAIM.json (this file)",
+    "RECONCILIATION.md (timeline, per-artifact table, receipt path audit, consumer map, verdicts)",
+    "LEDGER-ADDENDUM.md (proposed controller-owned ledger text, UTC placeholder)",
+    "REPORT.md (honest limits, last)"
+  ]
+}

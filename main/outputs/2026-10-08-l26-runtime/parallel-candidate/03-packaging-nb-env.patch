@@ -1,0 +1,32 @@
+# PROPOSAL PATCH — l26_packaging_driver.py env-gated NB packaging entry.
+# DO NOT APPLY while agent EM is live-editing; apply with 01/02 AFTER EM
+# lands. Authored against l26_packaging_driver.py sha256 68146c3f... (CM/EE
+# state per NEXT-BUILD.md §3).
+#
+# Env-gated exactly like 02: L26_PACK_NB=1 appends the NB entry so the
+# default A/B packaging (and EM's fixed-build packaging) is untouched. The
+# per-variant machinery (derive_manifest / FINAL-RECEIPT-VARIANT-<key> /
+# controller passes) is key-parametric; the A/B pair packaging receipt is
+# written from the first two VARIANTS entries and is unaffected by an
+# appended third. Verify with --plan (9/9 gates) after applying.
+#
+# The NB PRX must be fake-signed and decrypt-off verified exactly like A/B
+# (package_prx_l19 path handles this); never upload before the
+# magic+sha256 readback discipline (PS5 rules, AGENTS.md).
+
+--- a/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py
++++ b/outputs/2026-10-08-l26-runtime/l26_packaging_driver.py
+@@ -54,6 +54,15 @@
+  {'key':'B','build':PAIR_ROOT/'l26-B','pkg':ROOT/'outputs/2026-10-08-l26-package-B','artifact':'runtime-l26-B.o',
+   'note':'l26 variant B UNSAFE DIAGNOSTIC (delete-listener registration compiled out via -D'+TOKEN+'; stale object pointers not cleared); profile lineage carries the l25 container promotion; l23-admitted 207 import identities; local packaging only; no console contact.',
+   'unsafe':True},
+ )
++# agent-EO parallel candidate: NB no-bind diagnostic control packaging.
++# Appended ONLY under L26_PACK_NB=1 (mirrors the build driver's L26_BUILD_NB).
++if os.environ.get('L26_PACK_NB')=='1':
++    VARIANTS=VARIANTS+(
++     {'key':'NB','build':PAIR_ROOT/'l26-NB','pkg':ROOT/'outputs/2026-10-08-l26-package-NB','artifact':'runtime-l26-NB.o',
++      'note':'l26 variant NB DIAGNOSTIC CONTROL, A-shaped (engine-side delete-listener registration via variant C admission; EI Phase 4c engine ToStringInternal bind compiled out via -DMODBRIDGE_L27_NO_TOSTRING_BIND, legacy Kismet route owns FName::ToString; carries EC StaticFindObject fix + DA/EB verified-query markers); profile lineage carries the l25 container promotion; l23-admitted 207 import identities; local packaging only; no console contact.',
++      'unsafe':True},
++    )
+ FROZEN_NOTE_LINE="    b.note('l24 retained93 profile (unchanged from l23); typescan-r3 refusal-rework change; l23-admitted 207 import identities; local packaging only.')"

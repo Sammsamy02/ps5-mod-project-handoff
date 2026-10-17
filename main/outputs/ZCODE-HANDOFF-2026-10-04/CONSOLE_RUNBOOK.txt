@@ -1,0 +1,89 @@
+CONSOLE RUNBOOK AND FROZEN ARTIFACTS
+
+User-owned console:ps5-host-not-configured.invalid
+Firmware:13.60 (the user sometimes wrote13.6)
+HEN:OnionHEN13.60. Earlier etaHEN statements were corrected by the user.
+Payload Manager:0.5.2
+WebKit Autoloader:0.5.0
+FTP:port2121; previous local reads used anonymous FTP with bounded timeouts.
+Payload Manager HTTP:port8084
+Townfall title:PPSA33286
+Stellar Blade earlier update01.014.001 is historical, not the current game scope.
+Current physical console availability must be checked; an old online message
+does not prove it is still online many hours later. Avoid waking/rest-mode churn
+solely to repeat an old completed diagnostic.
+
+The user authorized the receiving team to deploy and test its payloads/modules
+and write project mod files on the PS5. Use one coordinated console owner. Do
+not change files under a game while it is actively reading them unless the
+particular live-update operation has an actual supported lifecycle. Original
+assets and existing unrelated mods must remain recoverable. Prefer owned overlay
+transactions and the existing journal/rollback behavior.
+
+KNOWN MANAGER INTERFACE
+GET /manage:check?filename=TEST_THIS_DLL.elf
+POST /manage:upload?filename=TEST_THIS_DLL.elf with binary octet-stream body
+GET /list_payloads returns payload path strings, not object records
+The historical dispatcher route is /loadpayload:<path>. Verify its actual current
+interface and accepted path before invoking it; only the console owner dispatches.
+Uploading does not run a payload. Never infer execution from an HTTP upload reply.
+FTP readback and exact log records already gave reliable diagnostics. NLST was
+not supported by this FTP server; LIST worked. Bounded exact-path RETR is enough
+for the known log; there is no need to crawl the whole console.
+
+CURRENT CONSOLE ALIAS
+/data/pldmgr/payloads/TEST_THIS_DLL/TEST_THIS_DLL.elf
+This is still f72faea594794fd28bc7571177411817, the PASSED entry/clock profile.
+Local alias:outputs/CURRENT-PS5-TEST/TEST_THIS_DLL.elf
+bytes202680; SHA588d6e6ddf476fe764153df9a3235a3558f0e98e2a3b4b6070a6fb645c47bff4
+It has not been replaced with the newer thread/lock candidate during handoff.
+The handoff's NEXT_DLL_THREADS.elf is the prepared successor. Preserve history
+when staging it and update the documented current build ID before asking the
+user to run a test. No Townfall launch is needed for this standalone diagnostic.
+
+RESULT FILE
+/data/modbridge-owned-dll-candidate.jsonl
+Read a bounded file, preserve its original bytes and select the exact build ID.
+Several historical builds can coexist in the same JSONL. Match marker/schema,
+sequences/phases, first failure, actual call counts/results, owners and cleanup.
+The successful f72 file log has four records and full retirement; stdout reports
+EPIPE32 separately. Do not turn stdout delivery failure into a runtime failure.
+
+NEW THREAD/LOCK DIAGNOSTIC
+Build6d295f566d084f578836b245a7748391
+bytes240960; SHA0dc08b3766c6d8d690745562462ced538030c9be11883f9318b2e3f53473b724
+Sourceartifact:
+.superpowers/native-dependency-spike/windows-sync-candidate-1/native-integration/6d295f566d084f578836b245a7748391/owned-dll-candidate.elf
+It is an SDK ELF ET_DYN with genuine crt1 _start. It is not a PRX, not a fake-signed
+game module and not an Item Spawner test. Its native imports and Win64 bridges
+are locally checked; target worker/synchronization execution is not yet proven.
+Use its existing stage diagnostics before extending the profile if it fails.
+
+PROVEN GAME-PROCESS MODULE
+.superpowers/native-dependency-spike/native-full-runtime-aligned-entry-1/build-1/modbridge_runtime_aligned_entry.prx
+bytes30151623; SHA3b998f098de7e1adba29c129c51586554590b3eadc257749e15223983c4ab654
+Keep this exact file unchanged. It proved constructor startup and buffered plain
+Lua, not actual UE4SS engine calls. Repack a separate new candidate rather than
+overwriting it. SDK0x11000000 and the stack realignment correction are meaningful
+prior fixes. Use the actual wrapper/import/export facts rather than renaming files.
+
+PLOADER
+The user downloaded ploader from the dekazeta link recorded in the chat. Its
+original FAIL notification hid the rc. A diagnostic variant printed rc, which
+exposed ESDKVERSION0x80020063; the SDK stamp fix led to real OK and log evidence.
+ploader configuration path:/data/plugins/ploader.ini
+Townfall section:[PPSA33286]
+Entry syntax:/data/plugins/your_module.prx = 2
+Mode2 is late. Re-send the payload for each game launch according to its lifecycle.
+Do not extrapolate the loader's firmware-specific kernel offsets or every native
+title from one successful module. The exact public source/licensing/provenance
+must be respected when deciding whether to embed, rebuild or merely configure it.
+
+GAME TESTS
+Townfall asset replacement Leon2K and third-person camera were reported working
+by the user. Camera input was initially ambiguous; the user later said IT WORKS.
+INI modifications were installed and the game continued running, but the user
+explicitly could not reliably notice the visual change. Do not promote that to
+independently proven fog/shadow/lighting behavior. UE4SS Item Spawner remains
+unplayed/unproved. If a test needs a loaded 3D scene, arrange or wait for that real
+scene; do not count a title-screen process or a plain Lua log as the visible effect.

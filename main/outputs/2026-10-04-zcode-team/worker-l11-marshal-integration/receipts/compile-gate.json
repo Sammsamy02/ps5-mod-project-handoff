@@ -1,0 +1,89 @@
+{
+  "worker": "worker-l11-marshal-integration",
+  "date": "2026-10-05",
+  "scope": "host-side single-unit compile gate + symbol/relocation proof for the launch-11 marshal consumer. LOCAL ONLY: no composition run, no packaging, no console contact, nothing in-game.",
+  "toolchain": {
+    "compiler_wrapper": "outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/bin/prospero-clang++",
+    "clang_version": "clang version 21.1.8 (2078da43e25a4623cab2d0d60decddf709aaea28), Target: x86_64-sie-ps5",
+    "llvm_config": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin/llvm-config",
+    "env_required": "LLVM_CONFIG=<llvm-config path above> (resolved by the wrapper's prospero-llvm-config; recorded in the argv receipt)",
+    "argv_source": "worker-luamod-l11-dryrun/scratch/staging/luamod-argv.json (172 tokens, verbatim)",
+    "argv_drift_policy": "source / -o / -MF tokens only, per dry-run VERDICT.md GO; zero other edits (token count stays 172)",
+    "__PROSPERO__": "defined implicitly by the target (probe receipts/prospero-macro-probe: prosp_yes emitted)"
+  },
+  "inputs": {
+    "base_variant_B_LuaMod_cpp": {
+      "path": "worker-luamod-rebase/staging/luamod-l10rebase/LuaMod.cpp",
+      "sha256": "4540593ac9e66cdc0a62e56736f05c05a23ca897881a902cae55e1d51bb79b25",
+      "verified_before_edit": true
+    },
+    "staged_consumer_LuaMod_cpp": {
+      "path": "worker-l11-marshal-integration/staging/luamod-l11-marshal-consumer/LuaMod.cpp",
+      "sha256": "04c9d91664dd82c7831cfc7eff79b6c20c62df9e6fd6eced60d419310966ad9f"
+    },
+    "consumer_diff": {
+      "path": "worker-l11-marshal-integration/diffs/l11-marshal-consumer.diff",
+      "sha256": "f595c57fb8f3ca10458d4581974fa79532167c7449d3da5cbc5fa2a45117b44f",
+      "hunks": 2,
+      "patch_roundtrip": "patch -p1 on a fresh byte-verified base copy reproduces the staged consumer source BYTE-IDENTICALLY (receipts/patch-roundtrip: cmp clean; result sha 04c9d916...)"
+    }
+  },
+  "objects": {
+    "control_base": {
+      "path": "work/control-luamod.o",
+      "sha256": "5595feb785206c0057eb29af0ccdcd53a8898d86629db0b10debc4a17aa08dea",
+      "bytes": 6903984,
+      "EXPECTED_AND_MATCHED": "byte-identical to the dry-run's verified variant-B gate object 5595feb785206c0057eb29af0ccdcd53a8898d86629db0b10debc4a17aa08dea (worker-luamod-l11-dryrun/VERDICT.md step 3 comparator)"
+    },
+    "consumer": {
+      "path": "work/consumer-luamod.o",
+      "sha256": "854a476bdd4f998581f206af9faaa10b64eba8814fc590350c9565dce47f9565",
+      "bytes": 7034504,
+      "size_delta_vs_control_bytes": 130520
+    }
+  },
+  "compile_results": {
+    "control_exit": 0,
+    "consumer_exit": 0,
+    "stderr_kind_parity": "zero new / zero lost diagnostic kinds (receipts/gate-*.warn-kinds.txt); 23 warnings on both sides, all pre-existing baseline diagnostics; 0 errors on both",
+    "stdout": "empty on both"
+  },
+  "symbol_proof": {
+    "control_shape": "drain cluster ABSENT (reproduces dryrunB-all-symbols.txt exactly): only _ZN2RCL23m_funcptr_marshal_armedE and _ZN2RCL24is_funcptr_marshal_armedEv present; arm_funcptr_marshal_drain / funcptr_marshal_hook / r3_marshal_carrier_precheck eliminated (unused static DCE even at -O0 on this toolchain)",
+    "consumer_shape": {
+      "present": [
+        "_ZN2RCL25arm_funcptr_marshal_drainEPNS_6Unreal9UFunctionERKNS0_5FNameE (t, .text)",
+        "_ZN2RCL20funcptr_marshal_hookERNS_6Unreal35UnrealScriptFunctionCallableContextEPv (t, .text)",
+        "_ZN2RCL27r3_marshal_carrier_precheckEPNS_6Unreal9UFunctionE (t, .text)",
+        "_ZN2RCL31r3_marshal_calibration_consumerEv (t, .text) — THE CALLER",
+        "_ZZN2RCL31r3_marshal_calibration_consumerEvE31k_r3_marshal_carrier_candidates (d, .data.rel.ro — the ranked candidate table)"
+      ],
+      "reachability_relocations": [
+        "_ZN2RC6LuaMod16on_program_startEv +0x1b callq -> R_X86_64_PLT32 .text._ZN2RCL31r3_marshal_calibration_consumerEv-0x4 (receipts/disasm-on-program-start.txt)",
+        "r3_marshal_calibration_consumer -> R_X86_64_GOTPCRELX _ZN2RC6Unreal20R3MarshalPumpPendingEv-0x4 (the pump_pending gate)",
+        "r3_marshal_calibration_consumer -> R_X86_64_PLT32 RC::Unreal::UObjectGlobals::StaticFindObject<UFunction*>(UClass*, UObject*, const std::wstring&, bool)-0x4 (data-side carrier resolution)",
+        "r3_marshal_calibration_consumer +0x1ae -> R_X86_64_PLT32 .text._ZN2RCL25arm_funcptr_marshal_drainE...-0x4 (THE ARM CALL)",
+        "arm_funcptr_marshal_drain -> R_X86_64_PLT32 .text.r3_marshal_carrier_precheck-0x4, R_X86_64_PC32 .text.funcptr_marshal_hook-0x4 (the &hook argument), R_X86_64_REX_GOTPCRELX UFunction::RegisterPostHook(...)"
+      ]
+    },
+    "undefined_delta_consumer_vs_control": {
+      "added": [
+        "_ZN2RC6Unreal20R3MarshalPumpPendingEv",
+        "_ZN2RC6Unreal34R3MarshalPublishGameThreadIdentityEv",
+        "_ZN2RC6Unreal9UFunction10GetFuncPtrEv"
+      ],
+      "removed": [],
+      "changed": [],
+      "resolution_contract": [
+        "R3MarshalPumpPending + R3MarshalPublishGameThreadIdentity: defined by the DIFF-2'd replaced initializer unit ONLY in the ARMED fold (initializer rev-B fold contract #if defined(__PROSPERO__) && UE4SS_R3_MARSHAL_MODE, initializer-l10-r3/UnrealInitializer.cpp lines 2125-2190; the staged launch-11 initializer has the in-file flip UE4SS_R3_MARSHAL_MODE=1 at line 179 — the L10LM world resolves both; the r3fallback0 staging flips =0 and compiles the bridges OUT, so a mismatched-fold link fails loudly by the rev-B pairing law); declared at LuaMod.cpp:91-93 since DIFF-1; references fire only under __PROSPERO__",
+        "UFunction::GetFuncPtr: defined by the untouched unreal-ufunction unit (port UFunction.cpp:28 — R3D 5.1 'NO DIFF' unit)"
+      ],
+      "note": "the first two were already legal undefined references in DIFF-1's design; they only MATERIALIZED once funcptr_marshal_hook + the consumer stopped being eliminated"
+    }
+  },
+  "honest_limits": [
+    "No composition run (controller owns serialized builds): the composed-object sha of a consumer-integrated launch-11 candidate is NOT 633a8c82... — that comparator applies only to the as-authored variant-B. The unit-level shas above + the documented link-resolution contract are the comparators to carry into the compose.",
+    "No packaging, no gate v2, no determinism double-pass, no console, no in-game behavior claim.",
+    "Carrier resolution depends on in-game object state (UFunction existence/flags/FuncPtr): arm success is NOT host-provable — F-1 stays OPEN; refusals are loud by construction."
+  ]
+}

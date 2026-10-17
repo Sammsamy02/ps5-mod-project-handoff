@@ -1,0 +1,176 @@
+--- a/src/DetourPlan.cpp
++++ b/src/DetourPlan.cpp
+@@ -220,9 +220,39 @@
+             if (!write_relative(draft.trampoline.data() + offset,
+                                 instruction.length, field_offset, field_bits,
+                                 destination, relocated_next))
+-                return DetourPlanResult::RelativeOutOfRange;
++            {
++                // A rel8 conditional/unconditional branch can reach a
++                // nearby island after the jump-back without changing the
++                // copied instruction's length or fallthrough behavior.
++                if (!relative_imm || field_bits != 8 ||
++                    (instruction.meta.category != ZYDIS_CATEGORY_COND_BR &&
++                     instruction.meta.category != ZYDIS_CATEGORY_UNCOND_BR) ||
++                    draft.trampoline_length >
++                        draft.trampoline.size() - kAbsoluteJumpBytes)
++                    return DetourPlanResult::RelativeOutOfRange;
++                uint64_t island_address = 0;
++                if (!add_address(trampoline_address, draft.trampoline_length,
++                                 &island_address))
++                    return DetourPlanResult::AddressOverflow;
++                if (!write_relative(draft.trampoline.data() + offset,
++                                    instruction.length, field_offset, field_bits,
++                                    island_address, relocated_next))
++                    return DetourPlanResult::RelativeOutOfRange;
++                absolute_jump(draft.trampoline.data() + draft.trampoline_length,
++                              destination);
++                draft.trampoline_length += kAbsoluteJumpBytes;
++            }
+         }
+     }
++    if (!add_address(trampoline_address, draft.trampoline_length,
++                     &trampoline_end))
++        return DetourPlanResult::AddressOverflow;
++    if (spans_overlap(target_address, target_end,
++                      trampoline_address, trampoline_end))
++        return DetourPlanResult::Overlap;
++    if (handler_address >= trampoline_address &&
++        handler_address < trampoline_end)
++        return DetourPlanResult::Overlap;
+     *out = draft;
+     return DetourPlanResult::Ok;
+ }
+--- a/src/DetourPlan.hpp
++++ b/src/DetourPlan.hpp
+@@ -10,6 +10,11 @@
+ namespace cap03 {
+ 
+ constexpr size_t kAbsoluteJumpBytes = 14;
++// At most seven two-byte short branches can begin before the 14-byte
++// overwrite threshold is reached.
++constexpr size_t kMaxShortBranchIslands = kAbsoluteJumpBytes / 2;
++constexpr size_t kMaxTrampolineBytes = kMaxPatchBytes + kAbsoluteJumpBytes +
++                                        kMaxShortBranchIslands * kAbsoluteJumpBytes;
+ 
+ enum class DetourPlanResult {
+     Ok,
+@@ -25,13 +30,15 @@
+     size_t stolen_length = 0;
+     std::array<uint8_t, kMaxPatchBytes> target_patch{};
+     size_t trampoline_length = 0;
+-    std::array<uint8_t, kMaxPatchBytes + kAbsoluteJumpBytes> trampoline{};
++    std::array<uint8_t, kMaxTrampolineBytes> trampoline{};
+ };
+ 
+ // Read-only preparation. The caller supplies an already-readable snapshot,
+ // a caller-owned trampoline address, and a handler address. No allocation,
+-// memory permission change, or code write occurs here. The resulting bytes
+-// still require quiescence, executable-memory preparation, and the existing
++// memory permission change, or code write occurs here. Short external
++// branches may use absolute-jump islands after the jump-back, within the
++// bounded trampoline array. The resulting bytes still require quiescence,
++// executable-memory preparation, and the existing
+ // compare-before-write patch/restore protocol before use.
+ DetourPlanResult plan_detour(const uint8_t* original, size_t available,
+                              uint64_t target_address,
+--- a/tests/detour_plan_test.cpp
++++ b/tests/detour_plan_test.cpp
+@@ -134,9 +134,31 @@
+         0x75, 0x7f, 0x90, 0x90, 0x90, 0x90,
+         0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+     expect(plan_detour(external_short.data(), external_short.size(), target,
+-                       trampoline, handler, &plan) ==
+-               DetourPlanResult::RelativeOutOfRange,
+-           "unwidened short branch outside span refuses when out of range");
++                       trampoline, handler, &plan) == DetourPlanResult::Ok &&
++           plan.trampoline_length == 42 && plan.trampoline[1] == 26 &&
++           plan.trampoline[28] == 0xff && plan.trampoline[29] == 0x25 &&
++           unsigned64(plan.trampoline.data() + 34) == target + 129,
++           "out-of-range external short branch uses a bounded jump island");
++    expect(plan_detour(external_short.data(), external_short.size(), target,
++                       trampoline, trampoline + 30, &plan) ==
++               DetourPlanResult::Overlap,
++           "handler overlapping appended branch island refuses");
++    const std::array<uint8_t, 16> seven_branches = {
++        0x75, 0x7f, 0x75, 0x7f, 0x75, 0x7f, 0x75, 0x7f,
++        0x75, 0x7f, 0x75, 0x7f, 0x75, 0x7f, 0x90, 0x90};
++    expect(plan_detour(seven_branches.data(), seven_branches.size(), target,
++                       trampoline, handler, &plan) == DetourPlanResult::Ok &&
++           plan.trampoline_length == 126 &&
++           unsigned64(plan.trampoline.data() + 28 + 6) == target + 129 &&
++           unsigned64(plan.trampoline.data() + 112 + 6) == target + 141,
++           "seven short branches fit bounded islands");
++    const std::array<uint8_t, 16> loop_branch = {
++        0xe2, 0x7f, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90,
++        0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
++    expect(plan_detour(loop_branch.data(), loop_branch.size(), target,
++                       trampoline, handler, &plan) == DetourPlanResult::Ok &&
++           plan.trampoline_length == 42 && plan.trampoline[1] == 26,
++           "out-of-range LOOP reaches an absolute branch island");
+     expect(plan_detour(rip_load.data(), rip_load.size(), target,
+                        0x7000000000ULL, handler, &plan) ==
+                DetourPlanResult::RelativeOutOfRange,
+@@ -166,6 +188,7 @@
+         mmap(nullptr, static_cast<size_t>(page_size) * 4,
+              PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0) : MAP_FAILED;
+     bool execution_ok = false;
++    bool branch_execution_ok = false;
+     if (region != MAP_FAILED)
+     {
+         auto* target_code = static_cast<uint8_t*>(region);
+@@ -182,6 +205,27 @@
+         std::memcpy(target_code + 23, &data, sizeof(data));
+         const uint8_t handler_code_bytes[] = {0xb8, 0x63, 0x00, 0x00, 0x00, 0xc3};
+         std::memcpy(handler_code, handler_code_bytes, sizeof(handler_code_bytes));
++        auto* branch_code = target_code + 256;
++        auto* branch_trampoline = trampoline_code + 256;
++        std::memset(branch_code, 0x90, 160);
++        const uint8_t branch_prefix[] = {
++            0x85, 0xff, 0x75, 0x7f, // test edi,edi; jne +127
++            0xb8, 0x2a, 0x00, 0x00, 0x00, // mov eax,42
++            0x90, 0x90, 0x90, 0x90, 0x90, 0xc3};
++        const uint8_t branch_destination[] = {0xb8, 0x4d, 0x00, 0x00, 0x00, 0xc3};
++        std::memcpy(branch_code, branch_prefix, sizeof(branch_prefix));
++        std::memcpy(branch_code + 131, branch_destination,
++                    sizeof(branch_destination));
++        DetourPlan branch_plan{};
++        const bool branch_planned =
++            plan_detour(branch_code, 160,
++                        reinterpret_cast<uint64_t>(branch_code),
++                        reinterpret_cast<uint64_t>(branch_trampoline),
++                        reinterpret_cast<uint64_t>(handler_code),
++                        &branch_plan) == DetourPlanResult::Ok;
++        if (branch_planned)
++            std::memcpy(branch_trampoline, branch_plan.trampoline.data(),
++                        branch_plan.trampoline_length);
+         DetourPlan executable_plan{};
+         if (plan_detour(target_code, 64,
+                         reinterpret_cast<uint64_t>(target_code),
+@@ -199,6 +243,17 @@
+                 const auto trampoline_function = reinterpret_cast<Function>(trampoline_code);
+                 const bool before_patch = original_function() == 42 &&
+                                           trampoline_function() == 42;
++                if (branch_planned)
++                {
++                    using BranchFunction = uint64_t (*)(int);
++                    const auto original_branch = reinterpret_cast<BranchFunction>(branch_code);
++                    const auto relocated_branch =
++                        reinterpret_cast<BranchFunction>(branch_trampoline);
++                    branch_execution_ok = original_branch(0) == 42 &&
++                                          original_branch(1) == 77 &&
++                                          relocated_branch(0) == 42 &&
++                                          relocated_branch(1) == 77;
++                }
+                 if (mprotect(target_code, static_cast<size_t>(page_size),
+                              PROT_READ | PROT_WRITE) == 0)
+                 {
+@@ -216,6 +271,8 @@
+     }
+     expect(execution_ok,
+            "private executable memory runs relocated prologue and detour jump");
++    expect(branch_execution_ok,
++           "private executable memory runs taken and untaken short-branch island");
+ 
+     std::printf("TOTAL: checks=%d failures=%d\n", checks, failures);
+     return failures ? 1 : 0;

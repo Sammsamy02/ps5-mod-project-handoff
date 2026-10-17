@@ -1,0 +1,44 @@
+{
+  "worker": "worker-diagnostic-sink",
+  "date": "2026-10-04/05",
+  "task": "Durable in-process sink for the composition-6 diagnostic_event values (launch-10 verification of the lease-coverage fix)",
+  "scope": "LOCAL ONLY: no web, no console, no nested subagents; staged patch only (controller builds/composes/stages)",
+  "deliverables": {
+    "staged_source": "staging/diagnostic.c",
+    "staged_sha256": "f5e96c41c4a96d6032269aee671d8fe12c695db749cdd75792fc2ca3e2d62818",
+    "baseline_source": ".superpowers/native-dependency-spike/native-full-runtime-aligned-entry-1/diagnostic.c",
+    "baseline_sha256": "931d79691b6363f046731182720ef7bec13a51c4a99e778943b199a97fb7d8b3",
+    "diff": ["DIFF.md (embedded + annotated)", "staging/diagnostic.supplier-sink.diff (raw unified diff)"],
+    "analysis": "ANALYSIS.md",
+    "fixtures": "fixtures/ (run_host_tests.sh, test_supplier_sink_host.c, test_readonly_dir_host.c, host_shims.c, include/)",
+    "pass_receipt": "fixtures/receipts/host-test-pass.txt",
+    "failed_attempt_provenance": [
+      "fixtures/receipts/host-test-fail-harness-path.txt (attempt 1: harness $HERE path bug)",
+      "fixtures/receipts/host-test-fail-scenario-order.txt (attempt 2: open-failure scenario ran after the fd was already open)",
+      "fixtures/receipts/host-test-fail-cap-lockout.txt (attempt 3: 8-attempt cap permanently locked the sink after transient failure -> raised to 64, fixture-driven design change)",
+      "fixtures/receipts/host-test-fail-seq-gap-expectation.txt (attempt 4: validator expected no seq gap; the by-design gap at a dropped write is now asserted exactly)"
+    ],
+    "console_compile_gate_rehearsal": {
+      "receipt_object": "fixtures/receipts/diagnostic-console-gate.o",
+      "object_sha256": "d14d0ac238f7713c41b3e1c0668cf904b19b2618e7c370f9f9fb11bbbe9eb32a",
+      "argv_class": "exact package_prx.py link_pipeline compile: prospero-clang + frozen CLANG_FLAGS + lineage include set, -c only",
+      "result": "PASS (-Werror clean)"
+    },
+    "report": "REPORT.md"
+  },
+  "source_level_claims": [
+    "diagnostic_event is defined by exactly ONE linked TU in comp6: the packaging bootstrap unit diagnostic.c (package_prx.py BOOTSTRAP_UNITS line 138), resolved via the overlay symlink to the lineage file",
+    "the current sink writes ONLY the shared entry log /data/townfall_runtime_aligned_entry.log with the pinned aligned-entry marker build=f6530c79..., silently dropping every event while channel_fd < 0 (no retry), and carries no pid/timestamp/session attribution",
+    "launch-9 produced no attributable durable artifact of the bridge registration counts: the 92 bridge_ lines in the 2.34 MB append-only shared snapshot cannot be assigned to launch-9 (marker collision + no timestamps + mixed sessions), and no supplier jsonl exists",
+    "the staged sink appends one JSON line per diagnostic_event to /data/modbridge-supplier-diag.jsonl (NEW path, no existing writer), xwp tolerant-IO pattern, additive-only (entry channel byte-unchanged, host-proven 205/205 legacy lines)",
+    "zero new imports: symbol delta vs shipped diagnostic.o is exactly {__error, clock_gettime, getpid}, all present in the frozen 191-import contract AND already undefined in prx-candidate-composition6-2/build/combined-supplier.o, so the packaging unresolved-set pre-check expectation is unchanged"
+  ],
+  "not_claimed": [
+    "NO console behavior: nothing in this delivery has executed on console",
+    "no full-run/visual/audio/motion acceptance of any kind",
+    "the compile gate must still be run by the controller in the real launch-10 packaging pass (rehearsal proves the TU compiles under the exact flags/includes today; the pass re-proves it in-composition)",
+    "if /data/modbridge-supplier-diag.jsonl cannot be opened at all on console, the values are still lost (tolerated, never fatal); no UE4SS.log mirror is included by design (task scoped the sink additive-only)"
+  ],
+  "integration_unit": "packaging bootstrap unit 'diagnostic.c' of the pinned worker-prx-link-gaps/package_prx.py, substituted in-memory by a bounded revision of worker-comp6-driver/build_runtime_composition6.py (--diagnostic-source/--diagnostic-sha256, same injection class as the entry swap); NOT --replace-runtime-unit (allow-list {program}), NOT --extra-unit, NOT --stage-unit (refused: overlay path shadowing)",
+  "shared_channel_policy": "strictly additive: entry log, UE4SS.log, runtime-status.txt untouched; one extra process-lifetime fd"
+}

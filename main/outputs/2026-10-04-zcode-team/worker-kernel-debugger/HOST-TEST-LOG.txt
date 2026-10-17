@@ -1,0 +1,180 @@
+===================================================================
+HOST TEST LOG - worker-kernel-debugger GDB remote stub prototype
+Date: 2026-10-06 18:19 UTC  Host: darwin 24.6.0 arm64
+Toolchain: Apple clang version 17.0.0 (clang-1700.6.4.2)
+Note: gdb is not shipped on macOS; lldb-1703.0.236.103 speaks the
+      identical GDB Remote Serial Protocol via 'gdb-remote', and a
+      byte-level RSP conformance client covers the raw wire layer.
+===================================================================
+
+=== 1. BUILD ======================================================
+$ make
+make: Nothing to be done for `all'.
+
+=== 2. RSP CONFORMANCE CLIENT (raw protocol, byte level) =========
+$ ./gdbstub -p 2345 & ; python3 test_rsp_client.py 2345
+connected to 127.0.0.1:2345
+  ok   qSupported advertises PacketSize=4000
+  ok   qSupported advertises target.xml xfer
+  ok   qSupported no-ack support
+  ok   qSupported declines multiprocess
+  ok   bad checksum in ack mode -> '-'
+  ok   retransmit after '-' accepted
+  ok   QStartNoAckMode -> OK
+  ok   qHostInfo triple=x86_64-unknown-freebsd12
+  ok   qAttached -> 1 (never kill on quit)
+  ok   ? -> T05 stop reply
+  ok   target.xml architecture i386:x86-64
+  ok   target.xml self-contained (no xi:include)
+  ok   target.xml defines rip regnum 16
+  ok   target.xml defines xmm15 regnum 55
+  ok   target.xml defines mxcsr regnum 56
+  ok   qRegisterInfo0 -> name:rax (LLDB fallback)
+  ok   qRegisterInfo10 -> name:rip
+  ok   g packet length = 1072 hex chars
+  ok   g layout ends exactly at 536 bytes
+  ok   g rax = 0x1122334455667788
+  ok   g rbx = 0xdeadbeefcafe0000
+  ok   g rip = 0x400104
+  ok   g rsp = 0x7ffffffe00
+  ok   g eflags = 0x246 (ZF|PF|IF)
+  ok   g cs = 0x33
+  ok   g xmm0 = 0x5a5a...5a
+  ok   p0 -> rax little-endian
+  ok   p10 -> rip
+  ok   p27 (fop, last fp reg) -> 00000000
+  ok   p38 (mxcsr) -> 0x1f80 LE
+  ok   p39 -> E01 (out of range)
+  ok   P rbx -> OK
+  ok   p1 reflects P write (rbx=0x1111...)
+  ok   G -> OK
+  ok   p2 reflects G write (rcx=0x2222...)
+  ok   m ELF header (18 bytes)
+  ok   m u64 magic LE
+  ok   m banner 'PS5 UE4S'
+  ok   m 4 bytes
+  ok   x binary read returns raw bytes
+  ok   m unmapped -> E01
+  ok   m zero length -> empty
+  ok   M write -> OK
+  ok   M readback
+  ok   M with RLE zero-run -> OK
+  ok   RLE write decoded to 32 zero bytes
+  ok   X binary write -> OK
+  ok   X readback incl. escaped chars
+  ok   Z0 set -> OK
+  ok   Z0 patches int3 0xCC
+  ok   z0 remove -> OK
+  ok   z0 restores original 0x55
+  ok   Z1 hardware bp -> unsupported (empty)
+  ok   c -> immediate stop reply T05
+  ok   s -> immediate stop reply T05
+  ok   vCont? -> vCont;c;s
+  ok   vCont;c -> T05
+  ok   Hg0 -> OK
+  ok   qfThreadInfo -> m1
+  ok   qsThreadInfo -> l
+  ok   qC default -> QC1
+  ok   vAttach;3039 -> stop reply
+  ok   qC after attach -> QC3039
+  ok   monitor info -> OK
+  ok   monitor info reports pid 3039
+  ok   monitor help lists pid command
+  ok   bad checksum in no-ack mode dropped silently
+  ok   next packet after drop works
+  ok   stray '+' ignored
+  ok   raw 0x03 interrupt -> T02
+  ok   unknown q packet -> empty (unsupported)
+  ok   D detach -> OK
+
+72 passed, 0 failed
+
+=== 3. REAL DEBUGGER FRONTEND (lldb gdb-remote) ===================
+$ ./lldb_test.sh 2345    (gdb equivalent: gdb -ex "target remote :2345")
+(lldb) gdb-remote 127.0.0.1:2345
+Process 1 stopped
+* thread #1, stop reason = signal SIGTRAP
+    frame #0: 0x0000000000400104
+->  0x400104: subq   $0x20, %rsp
+    0x400108: movq   %rdi, -0x8(%rbp)
+    0x40010c: xorl   %eax, %eax
+    0x40010e: retq   
+Target 0: (No executable module.) stopped.
+(lldb) version
+lldb-1703.0.236.103
+Apple Swift version 6.2.4 (swiftlang-6.2.4.1.4 clang-1700.6.4.2)
+(lldb) target list
+Current targets:
+* target #0: <none> ( arch=x86_64-unknown-freebsd12, platform=remote-freebsd, pid=1, state=stopped )
+(lldb) register read rip rax rbx rsp
+     rip = 0x0000000000400104
+     rax = 0x1122334455667788
+     rbx = 0xdeadbeefcafe0000
+     rsp = 0x0000007ffffffe00
+(lldb) memory read --size 1 --format x --count 16 0x400000
+0x00400000: 0x7f 0x45 0x4c 0x46 0x02 0x01 0x01 0x00
+0x00400008: 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+(lldb) memory read --format s 0x400040
+0x00400040: "PS5 UE4SS GDB MOCK v1"
+(lldb) memory write -s 8 0x401000 0x1122334455667788
+(lldb) memory read --size 8 --format x --count 1 0x401000
+0x00401000: 0x1122334455667788
+(lldb) disassemble -s 0x400100 -c 4
+    0x400100: pushq  %rbp
+    0x400101: movq   %rsp, %rbp
+->  0x400104: subq   $0x20, %rsp
+    0x400108: movq   %rdi, -0x8(%rbp)
+(lldb) detach
+Process 1 detached
+(lldb) quit
+--- stub log tail ---
+gdbstub: >> p7
+gdbstub: >> M401000,8:8877665544332211
+gdbstub: >> m401000,200
+gdbstub: >> D
+gdbstub: client disconnected
+
+=== 4. STUB-SIDE PACKET TRACE (lldb session, stub stderr) =========
+gdbstub: >> QStartNoAckMode
+gdbstub: >> qSupported:xmlRegisters=i386,arm,mips,arc;multiprocess+;fork-events+;vfork-events+
+gdbstub: >> QThreadSuffixSupported
+gdbstub: >> QListThreadsInStopReply
+gdbstub: >> vCont?
+gdbstub: >> qVAttachOrWaitSupported
+gdbstub: >> QEnableErrorStrings
+gdbstub: >> qHostInfo
+gdbstub: >> qProcessInfo
+gdbstub: >> qC
+gdbstub: >> ?
+gdbstub: >> qXfer:features:read:target.xml:0,3fff
+gdbstub: >> qXfer:features:read:target.xml:400,3fff
+gdbstub: >> qXfer:features:read:target.xml:800,3fff
+gdbstub: >> qXfer:features:read:target.xml:c00,3fff
+gdbstub: >> qXfer:features:read:target.xml:1000,3fff
+gdbstub: >> qXfer:features:read:target.xml:12a3,3fff
+gdbstub: >> Hg1
+gdbstub: >> p0
+gdbstub: >> qStructuredDataPlugins
+gdbstub: >> qShlibInfoAddr
+gdbstub: >> qfThreadInfo
+gdbstub: >> qsThreadInfo
+gdbstub: >> p10
+gdbstub: >> jThreadsInfo
+gdbstub: >> p6
+gdbstub: >> qMemoryRegionInfo:400104
+gdbstub: >> x0,0
+gdbstub: >> m7ffffffe00,200
+gdbstub: >> m7ffffffe00,200
+gdbstub: >> jThreadExtendedInfo:
+gdbstub: >> m400000,200
+gdbstub: >> p0
+gdbstub: >> p1
+gdbstub: >> p7
+gdbstub: >> M401000,8:8877665544332211
+gdbstub: >> m401000,200
+gdbstub: >> D
+
+=== RESULT ========================================================
+PASS: 72/72 conformance checks; lldb attach + register read +
+      memory read/write + disassembly + detach all working.
+===================================================================

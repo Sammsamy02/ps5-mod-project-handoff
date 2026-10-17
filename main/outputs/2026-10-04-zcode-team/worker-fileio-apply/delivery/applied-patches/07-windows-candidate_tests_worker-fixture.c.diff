@@ -1,0 +1,32 @@
+--- a/windows-candidate/tests/worker-fixture.c
++++ b/windows-candidate/tests/worker-fixture.c
+@@ -14,6 +14,9 @@
+ #ifndef MB_OWNED_MUTEX
+ #define MB_OWNED_MUTEX 0
+ #endif
++#ifndef MB_OWNED_FILEIO
++#define MB_OWNED_FILEIO 0
++#endif
+ typedef __UINT32_TYPE__ mb_worker_u32;
+ typedef __UINT64_TYPE__ mb_worker_u64;
+ typedef __INT32_TYPE__ mb_worker_i32;
+@@ -36,6 +39,9 @@
+ #if MB_OWNED_MUTEX
+ #include "worker-mutex.h"
+ #endif
++#if MB_OWNED_FILEIO
++#include "worker-fileio.h"
++#endif
+ struct mb_worker_fixture_state {
+  void *handle;
+  mb_worker_u64 cookie;
+@@ -176,3 +182,9 @@
+ #endif
+  return 1;
+ }
++#if MB_OWNED_FILEIO
++/* Dedicated export: the full KERNEL32 file I/O exercise runs outside the
++ * worker thread flow, so the gate, the wait chain and every other family's
++ * fixtures stay untouched (composition independence). */
++__declspec(dllexport) mb_worker_i32 WorkerFileIo(mb_worker_u64 *out){return mb_worker_fileio_call(out);}
++#endif

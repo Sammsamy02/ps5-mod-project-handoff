@@ -1,0 +1,217 @@
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -53,8 +53,10 @@
+         // Fail-closed exit: stop THIS mod per NativeModAbi.h law 3.
+         void (*stop_mod)(void* user, const char* why_utf8) = nullptr;
+         void* stop_user = nullptr;
+-        // Optional recursive entry for LoadLibrary of additional PEs.
+-        // Null => LoadLibrary of unknown DLLs is refused at call time.
++        // Optional recursive entry for LoadLibraryA of additional PEs.
++        // Receives a normalized DLL basename and must register a module
++        // under that name before returning its matching handle. Configure
++        // before guest entry; null refuses unknown DLLs at call time.
+         WinModule (*load_pe)(void* user, const char* path) = nullptr;
+         void* load_user = nullptr;
+         // Required before publishing guest string-taking dynamic lookup APIs.
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -72,7 +72,8 @@
+ {
+     return dll == "kernel32.dll" && symbol &&
+            (!std::strcmp(symbol, "GetModuleHandleA") ||
+-            !std::strcmp(symbol, "GetProcAddress"));
++            !std::strcmp(symbol, "GetProcAddress") ||
++            !std::strcmp(symbol, "LoadLibraryA"));
+ }
+ 
+ } // namespace
+@@ -862,6 +863,65 @@
+     auto builtin = m->builtin_handles.find(key);
+     if (builtin != m->builtin_handles.end())
+         return static_cast<WinModule>(builtin->second.get());
++    win32_set_last_error(ERROR_MOD_NOT_FOUND);
++    return nullptr;
++}
++
++static WinModule impl_LoadLibraryA(WinApiShim::Impl* m, const char* guest_name)
++{
++    std::string name;
++    if (!copy_guest_name(m, guest_name, &name) ||
++        name.find_first_of("/\\:") != std::string::npos)
++    {
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return nullptr;
++    }
++    std::string key;
++    try
++    {
++        key = ascii_module_key(name.c_str());
++        if (key.find('.') == std::string::npos) key += ".dll";
++    }
++    catch (const std::bad_alloc&)
++    {
++        win32_set_last_error(8); // ERROR_NOT_ENOUGH_MEMORY
++        return nullptr;
++    }
++    if (key.size() <= 4 || key.compare(key.size() - 4, 4, ".dll") != 0)
++    {
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return nullptr;
++    }
++    WinModule (*load)(void*, const char*) = nullptr;
++    void* load_user = nullptr;
++    {
++        std::lock_guard guard(m->mu);
++        auto module = m->modules.find(key);
++        if (module != m->modules.end() && module->second.handle)
++            return module->second.handle;
++        auto builtin = m->builtin_handles.find(key);
++        if (builtin != m->builtin_handles.end())
++            return static_cast<WinModule>(builtin->second.get());
++        load = m->hooks.load_pe;
++        load_user = m->hooks.load_user;
++    }
++    if (!load)
++    {
++        win32_set_last_error(ERROR_MOD_NOT_FOUND);
++        return nullptr;
++    }
++    WinModule loaded = nullptr;
++    try { loaded = load(load_user, key.c_str()); }
++    catch (...)
++    {
++        win32_set_last_error(ERROR_MOD_NOT_FOUND);
++        return nullptr;
++    }
++    std::lock_guard guard(m->mu);
++    auto module = m->modules.find(key);
++    if (loaded && module != m->modules.end() &&
++        module->second.handle == loaded)
++        return loaded;
+     win32_set_last_error(ERROR_MOD_NOT_FOUND);
+     return nullptr;
+ }
+@@ -973,6 +1033,7 @@
+         {"kernel32.dll", "CreateFileW", (void*)&impl_CreateFileW, 7, false},
+         {"kernel32.dll", "GetModuleHandleA", (void*)&impl_GetModuleHandleA, 1, true},
+         {"kernel32.dll", "GetProcAddress", (void*)&impl_GetProcAddress, 2, true},
++        {"kernel32.dll", "LoadLibraryA", (void*)&impl_LoadLibraryA, 1, true},
+         // T4 fail-closed (the important policy rows):
+         {"vcruntime140.dll", "__CxxFrameHandler4", (void*)&impl_fail_closed_cxx_frame, UINT8_MAX, false},
+         {"kernel32.dll", "RaiseException", (void*)&impl_fail_closed_raise, UINT8_MAX, false},
+--- a/loader/tests/dynamic_module_lookup_test.cpp
++++ b/loader/tests/dynamic_module_lookup_test.cpp
+@@ -79,6 +79,27 @@
+     }
+     return false;
+ }
++struct LoadState
++{
++    cap13::WinApiShim* shim = nullptr;
++    int owner = 0;
++    int calls = 0;
++    std::string last_name;
++};
++cap13::WinModule load_pe(void* user, const char* name)
++{
++    auto& state = *static_cast<LoadState*>(user);
++    ++state.calls;
++    state.last_name = name;
++    if (state.last_name == "late.dll")
++    {
++        if (state.shim->register_mapped_module("/mods/late.dll",
++                reinterpret_cast<void*>(0x600), mapped_lookup, &state.owner))
++            return reinterpret_cast<void*>(0x600);
++    }
++    // A callback returning a different registered module must not substitute it.
++    return reinterpret_cast<void*>(0x500);
++}
+ } // namespace
+ 
+ int main()
+@@ -91,7 +112,8 @@
+     backend.release = release_mapping;
+     check(shim.set_executable_backend(backend), "executable wrapper backend configured");
+     check(shim.resolve("kernel32.dll", "GetModuleHandleA", 0) == nullptr &&
+-          shim.resolve("kernel32.dll", "GetProcAddress", 0) == nullptr,
++          shim.resolve("kernel32.dll", "GetProcAddress", 0) == nullptr &&
++          shim.resolve("kernel32.dll", "LoadLibraryA", 0) == nullptr,
+           "dynamic lookup imports stay hidden without validated guest reads");
+ 
+     char ue4ss_name[] = "UE4SS.DLL";
+@@ -104,6 +126,9 @@
+     char builtin_export[] = "GetCurrentProcessId";
+     char missing_module[] = "absent.dll";
+     char missing_export[] = "absent_export";
++    char late_stem[] = "late";
++    char wrong_load[] = "wrong.dll";
++    char path_load[] = "../late.dll";
+     char unterminated[] = {'U', 'E', '4', 'S', 'S'};
+     ReadState reads;
+     for (auto range : {std::pair<const char*, size_t>{ue4ss_name, sizeof(ue4ss_name)},
+@@ -116,6 +141,9 @@
+                        {builtin_export, sizeof(builtin_export)},
+                        {missing_module, sizeof(missing_module)},
+                        {missing_export, sizeof(missing_export)},
++                       {late_stem, sizeof(late_stem)},
++                       {wrong_load, sizeof(wrong_load)},
++                       {path_load, sizeof(path_load)},
+                        {unterminated, sizeof(unterminated)}})
+         reads.ranges.push_back(range);
+     cap13::WinApiShim::Hooks hooks{};
+@@ -136,8 +164,10 @@
+ 
+     void* get_module = shim.resolve("kernel32.dll", "GetModuleHandleA", 0);
+     void* get_proc = shim.resolve("kernel32.dll", "GetProcAddress", 0);
++    void* load_library = shim.resolve("kernel32.dll", "LoadLibraryA", 0);
+     check(get_module && get_proc, "validated lookup rows publish sealed Win64 wrappers");
+-    if (!get_module || !get_proc) return 1;
++    check(load_library != nullptr, "validated LoadLibraryA row publishes a sealed Win64 wrapper");
++    if (!get_module || !get_proc || !load_library) return 1;
+     const uint64_t ue4ss = cap13_win64_call1(get_module,
+                                               reinterpret_cast<uint64_t>(ue4ss_name));
+     const uint64_t provider = cap13_win64_call1(get_module,
+@@ -198,6 +228,43 @@
+           cap13_win64_call2(get_proc, provider, 0xdead0000) == 0 &&
+           cap13_win64_call2(get_proc, 0xbad, 7) == 0,
+           "invalid guest strings and unknown handles refuse without host dereference");
++    check(cap13_win64_call1(load_library,
++              reinterpret_cast<uint64_t>(provider_stem)) == provider &&
++          cap13_win64_call1(load_library,
++              reinterpret_cast<uint64_t>(kernel_name)) == kernel,
++          "LoadLibraryA reuses attached and reviewed built-in DLL handles");
++    if (get_error)
++        check(cap13_win64_call1(load_library,
++                  reinterpret_cast<uint64_t>(missing_module)) == 0 &&
++              cap13_win64_call0(get_error) == 126,
++              "unknown DLL refuses when no dynamic loader is configured");
++    LoadState load_state{&shim, 0, 0, {}};
++    hooks.load_pe = load_pe;
++    hooks.load_user = &load_state;
++    shim.set_hooks(hooks);
++    const uint64_t late = cap13_win64_call1(
++        load_library, reinterpret_cast<uint64_t>(late_stem));
++    check(late == 0x600 && load_state.calls == 1 &&
++          load_state.last_name == "late.dll",
++          "LoadLibraryA accepts a newly registered DLL under its requested basename");
++    check(cap13_win64_call1(load_library,
++              reinterpret_cast<uint64_t>(late_stem)) == late &&
++          load_state.calls == 1 &&
++          cap13_win64_call2(get_proc, late,
++              reinterpret_cast<uint64_t>(provider_export)) ==
++              reinterpret_cast<uint64_t>(&fake_export),
++          "repeated LoadLibraryA reuses the module and its callable export");
++    if (get_error)
++        check(cap13_win64_call1(load_library,
++                  reinterpret_cast<uint64_t>(wrong_load)) == 0 &&
++              cap13_win64_call0(get_error) == 126 &&
++              load_state.calls == 2,
++              "callback cannot substitute a different registered module");
++    check(cap13_win64_call1(load_library,
++              reinterpret_cast<uint64_t>(path_load)) == 0 &&
++          cap13_win64_call1(load_library, 0xdead0000) == 0 &&
++          load_state.calls == 2,
++          "path traversal and invalid guest pointers refuse before the loader callback");
+     std::printf("cases=%d failed=%d\n", checks, failures);
+     return failures ? 1 : 0;
+ }

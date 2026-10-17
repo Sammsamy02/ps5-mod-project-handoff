@@ -1,0 +1,91 @@
+	
+== S1 3-window demo (create-once/settext-on-change) ==
+  ok   frame1 StaticConstructObject == 31 (3 shells 6 each + 13/9/9 items) [31]
+  ok   frame1 SetText == 12 (3 titles + 4 labels + 5 texts) [12]
+  ok   frame1 AddChild/SetContent/AddToViewport == 15/7/3 [15/7/3]
+  ok   tree assembly: WidgetTree= / RootWidget= writes x3/x3 [3/3]
+  ok   frame1 highlight: exactly 1 SetBrushColor (focus b1) [1]
+  ok   input lock engaged (look+move) [2]
+  ok   class resolution: 6 StaticFindObject + 1 FindFirstOf [6/1]
+  ok   5 identical frames emit ZERO engine calls (total unchanged) [149 -> 149]
+  ok   label change: creates still 31 [31]
+  ok   label change: exactly ONE new SetText [13]
+  ok   S1: no draw error
+  ok   S1: zero async/EIT errors [0]
+  ok   S1: zero missing globals [0]
+== S1 3-window demo (create-once/settext-on-change): PASS ==
+	
+== S2 list-nav focus model ==
+  ok   default focus = first alive button of first window [winA/b1]
+  ok   DOWN moves focus to winA/b2 [winA/b2]
+  ok   highlight move = 2 SetBrushColor (old row + new row) [2]
+  ok   queued events keep ORDER (2x DOWN in one frame -> b3) [winA/b3]
+  ok   DOWN clamps at last row [winA/b3]
+  ok   UP moves back to b2 [winA/b2]
+  ok   RETURN activates the focused row (b2 round-trip) [b2/spawn:shield]
+  ok   activation -> status SetText round-trip = 1 call [1]
+  ok   RIGHT cycles focus window (winB skipped: no buttons) [winC/go]
+  ok   LEFT cycles back, index resets to 1 [winA/b1]
+  ok   Tick returns false (LoopAsync erase law) [false expected]
+  ok   S2: no draw error
+  ok   S2: zero async/EIT errors [0]
+  ok   S2: zero missing globals [0]
+== S2 list-nav focus model: PASS ==
+	
+== S3 virtual cursor (deadzone/motion/hit-test/clamp) ==
+  ok   cursor widget = 4 creates (UserWidget/WidgetTree/Canvas/Border) [4]
+  ok   cursor AddToViewport (Z above windows) [1]
+  ok   sub-deadzone deflection (x=138) = ZERO motion [960.0,540.0]
+  ok   right deflection moves cursor right (curve applied) [1128.4,541.2]
+  ok   one SetPosition per MOVING frame (30/30) [30]
+  ok   hover hit-test lands on winA/b1 (toolkit rect math) [winA/b1]
+  ok   click activates the hovered button [b1/spawn:axe]
+  ok   click in empty space activates nothing []
+  ok   cursor clamped at viewport corner (1920x1080 - 2px margin) [1918,1078]
+  ok   pinned at the wall = ZERO SetPosition while deflected [0]
+  ok   S3: no draw error
+  ok   S3: zero async/EIT errors [0]
+  ok   S3: zero missing globals [0]
+== S3 virtual cursor (deadzone/motion/hit-test/clamp): PASS ==
+	
+== S4 100-frame soak (retained-tree proof) ==
+  ok   100 frames ran [100]
+  ok   SOAK: StaticConstructObject CONSTANT after frame 1 [31 -> 31]
+  ok   SOAK: SetText CONSTANT [12 -> 12]
+  ok   SOAK: TOTAL recorded engine calls constant across frames 2..100 [149 -> 149]
+  ok   SOAK: brush/addvp/remove/addchild all constant [brush=0 addvp=0 remove=0 addchild=0]
+  ok   S4: no draw error
+  ok   S4: zero async/EIT errors [0]
+  ok   S4: zero missing globals [0]
+  [proof numbers] frame1 create=31 settext=12 addchild=15 addvp=3 remove=0 brush=1 setpos=3 setcontent=7 lock=2 dispatch=1 | frame100 create=31 settext=12 addchild=15 addvp=3 remove=0 brush=1 setpos=3 setcontent=7 lock=2 dispatch=1
+== S4 100-frame soak (retained-tree proof): PASS ==
+	
+== S5 close/reopen reuse ==
+  ok   close winA = 1 RemoveFromParent [1]
+  ok   input lock HELD while winB/winC stay open [2]
+  ok   closing winB+winC = 2 more removes [2]
+  ok   last window closed releases input lock [2]
+  ok   30 all-closed frames emit ZERO calls [0]
+  ok   REOPEN: zero new StaticConstructObject [31 -> 31]
+  ok   reopen = 1 AddToViewport (same root) [1]
+  ok   reopen: zero re-SetText (labels retained) [12]
+  ok   reopen re-engages input lock [2]
+  ok   SAME UserWidget object identity across close/reopen []
+  ok   dropping b3 removes only its row Border [1]
+  ok   b3 re-add: zero new creates [31 -> 31]
+  ok   b3 re-add = 1 AddChild (re-parent SAME widgets) [1]
+  ok   b3 re-add: no SetText [12]
+  ok   focus reaches the re-added row [winA/b3]
+  ok   re-added row still activates [b3]
+  ok   S5: no draw error
+  ok   S5: zero async/EIT errors [0]
+  ok   S5: zero missing globals [0]
+== S5 close/reopen reuse: PASS ==
+	
+assertions: 67 ok, 0 failed
+S1 PASS
+S2 PASS
+S3 PASS
+S4 PASS
+S5 PASS
+ALL SCENARIOS PASS

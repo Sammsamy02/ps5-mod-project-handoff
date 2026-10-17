@@ -1,0 +1,10 @@
+#pragma once
+#include "CodeImageCache.hpp"
+namespace NativeNameThread {
+inline constexpr std::uint64_t kAccessor=0xa262e0,kGameNameStorage=0x9402ac8;
+inline constexpr std::uint64_t kRenderNameStorage=0x9402ae0,kEmptyNameStorage=0x932a5a0;
+inline constexpr std::uint8_t kPrefix[]={0x55,0x48,0x89,0xe5,0x41,0x56,0x53,0xf,0xb6,0x5,0xea,0xc7,0x9d,0x8,0x84,0xc0,0x74,0x53,0xf,0xb6,0x5,0xf7,0xc7,0x9d,0x8,0x84,0xc0,0xf,0x84,0x9d,0x0,0x0,0x0};
+inline constexpr rc::codecache::Pin kNamePin{3,"engine_thread_name_by_id32",kAccessor,kPrefix,sizeof(kPrefix)};
+inline constexpr const char kImageSha[]="3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc";
+inline constexpr std::uint64_t kImageSize=194241424,kImageExtent=197526216;
+}

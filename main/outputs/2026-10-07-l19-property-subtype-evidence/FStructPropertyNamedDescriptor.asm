@@ -1,0 +1,7 @@
+0x4367f8 (file 0x43a7f8) 488d3589314c07 lea rsi, [rip + 0x74c3189]
+0x4367ff (file 0x43a7ff) 4c8d0ddafeffff lea r9, [rip - 0x126]
+0x436806 (file 0x43a806) ba00001000 mov edx, 0x100000
+0x43680b (file 0x43a80b) b901801000 mov ecx, 0x108001
+0x436810 (file 0x43a810) 4989c0 mov r8, rax
+0x436813 (file 0x43a813) 4c89f7 mov rdi, r14
+0x436816 (file 0x43a816) e875d1f2ff call 0x363990

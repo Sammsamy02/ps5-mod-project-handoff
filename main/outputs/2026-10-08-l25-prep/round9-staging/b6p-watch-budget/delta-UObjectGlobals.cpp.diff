@@ -1,0 +1,143 @@
+--- /LOCAL_SCRATCH	2026-10-12 14:54:42
++++ outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UObjectGlobals.cpp	2026-10-12 15:06:59
+@@ -1214,6 +1214,7 @@
+     // =====================================================================================
+     static uint64_t g_r9_sync_calls_fwd{0}, g_r9_sync_ticks_fwd{0}; // [R9-PERF] Sync() cost (see r9_take_index_stats)
+     static uint64_t g_r9_watch_fwd{0}; // [R9-PERF] freed/empty slots re-checked per sync (last sync)
++    static uint64_t g_r9_watch_cut_fwd{0}; // [R9-PERF] budgeted syncs that stopped before re-checking every watched slot
+     namespace r9idx
+     {
+         template <typename T>
+@@ -1258,6 +1259,7 @@
+             Vec<UClass*> ListedUnder{}; // per index: class list it is currently pushed to
+             Vec<int32_t> Dirty{};      // freed indices reported since the last sync
+             Vec<int32_t> FreeWatch{};  // empty / unreachable slots, re-checked every sync until filled
++            Vec<uint8_t> InWatch{};    // per index: 1 while the index is listed in FreeWatch (at most once)
+             Vec<UClass*> Classes{};
+             Vec<int32_t> ClassSelfIndex{}; // the class object's own array index (liveness check)
+             Vec<uint64_t> ClassNameKey{};  // the class's own FName (comparison + number) at insert
+@@ -1417,6 +1419,7 @@
+             S.ClassAt.resize(NewSize, nullptr);
+             S.SeenStamp.resize(NewSize, 0);
+             S.ListedUnder.resize(NewSize, nullptr);
++            S.InWatch.resize(NewSize, 0);
+         }
+         // Record the slot's live object, or watch it when empty/unreachable.
+         static auto Observe(State& S, int32_t Index) -> void
+@@ -1426,7 +1429,7 @@
+             {
+                 S.ObjAt[Index] = nullptr;
+                 S.ClassAt[Index] = nullptr;
+-                S.FreeWatch.push_back(Index);
++                if (!S.InWatch[Index]) { S.InWatch[Index] = 1; S.FreeWatch.push_back(Index); }
+                 return;
+             }
+             UClass* Class = Object->GetClassPrivate();
+@@ -1448,7 +1451,10 @@
+                 ClassSlot(S, Class); // refresh liveness bookkeeping (dead flag, self index)
+             }
+         }
+-        static auto Sync(State& S) -> bool
++        // BudgetExpired == nullptr: exact (every watched slot re-checked). Otherwise the watched-slot
++        // re-check stops once it returns true (checked every 256 slots); the rest stays watched, first in
++        // line for the next sync. Appended indices are always observed.
++        static auto Sync(State& S, bool (*BudgetExpired)() = nullptr) -> bool
+         {
+             const uint64_t r9_t0 = __builtin_readcyclecounter();
+             struct R9SyncTimer
+@@ -1468,6 +1474,7 @@
+             if (!S.Built)
+             {
+                 S.FreeWatch.clear();
++                S.InWatch.assign(S.InWatch.size(), 0);
+                 for (int32_t i = 0; i < Num; ++i) { Observe(S, i); }
+                 S.SyncedNum = Num;
+                 S.Built = true;
+@@ -1489,19 +1496,43 @@
+                 __atomic_store_n(&g_r9_watch_fwd, static_cast<uint64_t>(S.FreeWatch.size()), __ATOMIC_RELAXED);
+                 return true;
+             }
+-            // re-check watched slots first (they are re-added by Observe if still empty)
++            // re-check watched slots first (they are re-added by Observe if still empty). Newly freed
++            // indices lead (the engine reuses the most recently freed index first), then the watch list
++            // in order (unvisited ones from a budgeted pass first). A freed slot's entry is cleared at
++            // once: a new object reusing the same address and class is then still seen as new, however
++            // long the slot waits for its re-check.
+             Vec<int32_t> Watch{};
+-            Watch.swap(S.FreeWatch);
++            Watch.reserve(S.Dirty.size() + S.FreeWatch.size());
+             for (int32_t i : S.Dirty)
+             {
+-                if (i >= 0 && i < Num) { Watch.push_back(i); }
++                if (i >= 0 && i < Num)
++                {
++                    S.ObjAt[i] = nullptr;
++                    S.ClassAt[i] = nullptr;
++                    if (!S.InWatch[i]) { S.InWatch[i] = 1; Watch.push_back(i); }
++                }
+             }
+             S.Dirty.clear();
+-            for (int32_t i : Watch)
+-            {
+-                if (i < Num) { Observe(S, i); }
++            Watch.insert(Watch.end(), S.FreeWatch.begin(), S.FreeWatch.end());
++            S.FreeWatch.clear(); // keeps its capacity: no per-frame regrowth
++            size_t k = 0;
++            for (; k < Watch.size(); ++k)
++            {
++                if (BudgetExpired != nullptr && k > 0 && (k & 255) == 0 && BudgetExpired()) { break; }
++                const int32_t i = Watch[k];
++                if (i < Num) { S.InWatch[i] = 0; Observe(S, i); }
+                 else { S.FreeWatch.push_back(i); }
+             }
++            if (k < Watch.size())
++            {
++                // budget reached: unvisited slots (still flagged InWatch) go first next time
++                Vec<int32_t> Rest{};
++                Rest.reserve(Watch.size() - k + S.FreeWatch.size());
++                Rest.insert(Rest.end(), Watch.begin() + static_cast<std::ptrdiff_t>(k), Watch.end());
++                Rest.insert(Rest.end(), S.FreeWatch.begin(), S.FreeWatch.end());
++                S.FreeWatch.swap(Rest);
++                __atomic_fetch_add(&g_r9_watch_cut_fwd, uint64_t{1}, __ATOMIC_RELAXED);
++            }
+             for (int32_t i = S.SyncedNum; i < Num; ++i) { Observe(S, i); }
+             S.SyncedNum = Num;
+             __atomic_store_n(&g_r9_watch_fwd, static_cast<uint64_t>(S.FreeWatch.size()), __ATOMIC_RELAXED);
+@@ -1653,14 +1684,15 @@
+     // [R9-NOTIFY] game thread, once per pump: indices of objects that appeared since the last call.
+     // false = index unusable (no notifications this frame). Objects alive at the first build are
+     // never reported (upstream notifies constructions only).
+-    auto r9_index_collect_new(std::vector<int32_t>& Out, std::vector<void*>& OutObj) -> bool
++    // BudgetExpired: the per-frame time budget for re-checking freed slots (see r9idx::Sync).
++    auto r9_index_collect_new(std::vector<int32_t>& Out, std::vector<void*>& OutObj, bool (*BudgetExpired)()) -> bool
+     {
+         r9idx::State& S = *r9idx::g_state;
+         std::lock_guard Lock{S.Mutex};
+         if (S.Disabled || !S.NotifyWanted) { return false; } // armed only by a registration
+         try
+         {
+-            if (!r9idx::Sync(S)) { return false; }
++            if (!r9idx::Sync(S, BudgetExpired)) { return false; }
+             if (S.DeletesSeen == 0) { S.NewIdx.clear(); S.NewObj.clear(); return false; } // delete listener not proven live yet
+             Out.clear();
+             OutObj.clear();
+@@ -1722,8 +1754,9 @@
+     // Called by the engine-registered delete listener for every freed object index.
+     // [R9-PERF] listener / index maintenance cost (cycle ticks; read and reset by the [PERF] line)
+     static uint64_t g_r9_del_calls{0}, g_r9_del_ticks{0};
+-    auto r9_take_index_stats(uint64_t& del_calls, uint64_t& del_ticks, uint64_t& sync_calls, uint64_t& sync_ticks, uint64_t& watch) -> void
++    auto r9_take_index_stats(uint64_t& del_calls, uint64_t& del_ticks, uint64_t& sync_calls, uint64_t& sync_ticks, uint64_t& watch, uint64_t& cuts) -> void
+     {
++        cuts = __atomic_exchange_n(&g_r9_watch_cut_fwd, uint64_t{0}, __ATOMIC_RELAXED);
+         watch = __atomic_load_n(&g_r9_watch_fwd, __ATOMIC_RELAXED);
+         del_calls = __atomic_exchange_n(&g_r9_del_calls, uint64_t{0}, __ATOMIC_RELAXED);
+         del_ticks = __atomic_exchange_n(&g_r9_del_ticks, uint64_t{0}, __ATOMIC_RELAXED);
+@@ -1748,7 +1781,7 @@
+         if (!S.Built || S.Disabled) { return; }
+         try
+         {
+-            if (S.Dirty.size() > 4 * 1024 * 1024) { S.Built = false; S.Dirty.clear(); S.FreeWatch.clear(); return; } // rebuild
++            if (S.Dirty.size() > 4 * 1024 * 1024) { S.Built = false; S.Dirty.clear(); S.FreeWatch.clear(); return; } // rebuild (InWatch reset by the build)
+             S.Dirty.push_back(Index);
+         }
+         catch (...)

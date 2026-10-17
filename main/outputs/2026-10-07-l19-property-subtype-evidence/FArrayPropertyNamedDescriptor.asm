@@ -1,0 +1,7 @@
+0x3e51e6 (file 0x3e91e6) 488d3529874e07 lea rsi, [rip + 0x74e8729]
+0x3e51ed (file 0x3e91ed) 4c8d053c23fc08 lea r8, [rip + 0x8fc233c]
+0x3e51f4 (file 0x3e91f4) 4c8d0d35070000 lea r9, [rip + 0x735]
+0x3e51fb (file 0x3e91fb) ba00002000 mov edx, 0x200000
+0x3e5200 (file 0x3e9200) b901802000 mov ecx, 0x208001
+0x3e5205 (file 0x3e9205) 4c89f7 mov rdi, r14
+0x3e5208 (file 0x3e9208) e883e7f7ff call 0x363990

@@ -1,0 +1,27 @@
+    // igcar_sys_mprotect pattern (sys_mprotect_shim.h:40-51), unmodified semantics:
+    // inline x86-64 syscall, NO import identity (sceKernelMprotect is forbidden-
+    // symbol-gated; libc mprotect() weak-resolves to 0 in the composed PRX,
+    // AUDIT-RESULTS section 2.4). Number is the build-stamped SDK constant.
+#if RC_ASM_WALK_RX_GUARD
+    static auto sys_mprotect(uint64_t page, uint64_t len, int prot) -> long
+    {
+        uint64_t ret;
+        uint8_t cf;
+        __asm__ volatile("syscall\n\t"
+                         "setc %b1\n\t"
+                         : "=a"(ret), "=q"(cf)
+                         : "a"((uint64_t)RC_ASM_WALK_SYS_MPROTECT), "D"(page), "S"(len),
+                           "d"((uint64_t)prot)
+                         : "rcx", "r11", "memory");
+        return cf ? -(long)ret : (long)ret;
+    }
+#else
+    // Unreachable under the folded-off guard: enter() refuses before any
+    // transition. The inline syscall above is preprocessor-dead (R9 property:
+    // zero mprotect text in the folded-off unit).
+    static auto sys_mprotect(uint64_t /*page*/, uint64_t /*len*/, int /*prot*/) -> long
+    {
+        return -1;
+    }
+#endif
+

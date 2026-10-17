@@ -1,0 +1,79 @@
+{
+  "worker": "worker-required-slots-feasibility",
+  "date": "2026-10-04",
+  "status": "PROPOSALS-ONLY",
+  "scope_note": "Static source reading + one local read-only measurement of the already-retained decrypted-eboot.bin (sha256 3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc). No console contact, no text-read probes, no nested subagents, no frozen/wiring file modified. All diffs are proposals for the controller. W: = /WORKSPACE/.codex/worktrees/translation-core/what.",
+  "question": "On a target where the game text [0x400000,0x787c000) live is exec-only/hardware-unreadable (igf6-proven), can the REQUIRED ps_scan slots {0,2,3,4,6} (MappedRequiredSlots=0x5d) ever resolve, or is the ps_scan stage structurally dead?",
+  "verdict": {
+    "ps_scan_structurally_dead": true,
+    "depth": "five stacked gates, any one fatal; G3 (evidence) is additionally dead even with full offline code access for 4 of 5 required slots",
+    "gates": [
+      "G0 facts: mapped.text_base never supplied, stays 0 (tick-file-owner-1/src/lmf_to_native_loader_facts.cpp:226-227; header contract :46-50)",
+      "G1 construction: eager OwnedMappedImageCaller ctor demands permits_code(text_base) (ps-scan-provider-1/include/OwnedMappedImageCaller.hpp:57, permits !address->false :33) but the bridge registers readable spans PLH::R only (worker-module-start-wiring/runtime_start_bridge_r11.cpp:483) and no readable+executable span exists on this target -> std::invalid_argument -> MRS_ERR_CONTEXT at bridge Stage 2 (r11:658-661) BEFORE any scan in the consumed composition",
+      "G2 Rust view gate: MappedImage::new requires an EXECUTE-flagged view segment containing text_base (mapped-candidates-1/src/mapped_image.rs:48-52); same impossibility",
+      "G3 evidence (measured): required-slot anchors are absent from the pinned image or unreadable. GUObjectArray 9/9 code patterns ZERO matches image-wide; GMalloc 14/14 patterns ZERO matches + both UTF-8 string anchors absent; StaticConstructObject 4/4 patterns ZERO matches; FName ctor needs root-group intersection across all 5 module strings of which 3 are in the unreadable span; engine_version: 1 raw code match (unreadable text), 0 plausible version strings, 0 branch names anywhere; all xref/CFG steps read code bytes (xrefs.rs:12-23)",
+      "G4 admission: code-result slots 2 (fname_ctor) and 4 (static_construct) require permits_code(result) (mapped-candidate-selection-1/src/OwnedMappedResolverCollector.cpp:51) - impossible on this target even for a correct constant"
+    ]
+  },
+  "slot_table": {
+    "slot_0_guobjectarray": {
+      "resolver": "id2 resolve_guobject_array_patterns (guobject_array.rs:8-100); fallback object_cfg serialized-file CFG (guobject_array.rs:107-122; mapped endpoint ps_guobject_array_cfg_mapped_v1 mapped_candidates.rs:22-27)",
+      "anchor_location": "CODE only: 6 rip-relative idiom patterns + 2 mov-imm32 patterns + 1 stat-update triple (guobject_array.rs:10-16,32,47,52); consumer reads code via rip4 (guobject_array.rs:96); object_cfg fallback additionally requires an X-flagged view span + code decode (object_cfg.rs from_mapped) and both diagnostic strings (ALLOC readable live 0x7e16c9a, FREE unreadable live 0x7bd3d0c - measured)",
+      "measurement": "0/9 patterns occur anywhere in the pinned 185.2 MiB image (offline_anchor_scan.py, anchor-measurement.json)",
+      "consumer": "UObjectArray::SetupGUObjectArrayAddress (staged UnrealInitializer.cpp:895; upstream UObjectArray.cpp:344) - whole UObject iteration/GC plumbing",
+      "resolvable_without_code_reads": "constant-only: YES (result is a DATA address; mapped admission permits_pointer_slot is a code-read-free permission check, collector cpp:51); via ps_scan: NO"
+    },
+    "slot_2_fname_ctor_wchar": {
+      "resolver": "id3 resolve_ctor_elf (fname.rs:13-96); candidate endpoint ps_fname_ctor_call_mapped_v1 (mapped_candidates.rs:28-37; fname_call.rs)",
+      "anchor_location": "DATA head (5 UTF-16 module-name strings, fname.rs:16-22) + CODE body (scan_xrefs xrefs.rs:12-23, root functions, code pattern 'ba 01 00 00 00 e8 |' fname.rs:54). Measured: Engine/AnimGraphRuntime/Landscape strings unreadable (live 0x7c2706c / 0x79eefbe / 0x7a3151c), only Renderer/RenderCore readable -> five-group intersection impossible; 8 raw code-pattern matches all in unreadable text",
+      "consumer": "FName::ConstructorInternal.assign_address (staged UnrealInitializer.cpp:887) - FName creation hooks",
+      "resolvable_without_code_reads": "NO - no data-only evidence class exists for a non-virtual function address; constant must bypass the mapped admission (permits_code, collector cpp:51) or flow through the override/seed path"
+    },
+    "slot_3_gmalloc": {
+      "resolver": "id5 resolve_gmalloc = patterns + string route (gmalloc.rs:13-20,21-44,152-213); candidate endpoint ps_gmalloc_deletefile_candidate_mapped_v1 (mapped_candidates.rs:38-49; deletefile_candidate.rs:61-85)",
+      "anchor_location": "CODE: 14 idiom patterns -> rip4 (gmalloc.rs:22-37,42); ELF string route needs UTF-8 '/proc/meminfo' + 'Refusing to run with the root privileges.' (gmalloc.rs:157-177) - BOTH ABSENT from the image (measured); deletefile route: UTF-16 'DeleteFile %s' IS readable (live 0x7d202d6) but its xref step reads code (xrefs.rs:12-23) and decodes instruction windows (deletefile_candidate.rs:66-85)",
+      "measurement": "0/14 patterns occur anywhere in the pinned image; both ELF string anchors absent",
+      "consumer": "GMalloc = bit_cast<FMalloc**>(results.gmalloc) (staged UnrealInitializer.cpp:891; consumed at upstream UnrealInitializer.cpp:268-273)",
+      "resolvable_without_code_reads": "constant-only: YES (result is a DATA pointer slot; permits_pointer_slot admission is code-read-free); via ps_scan: NO"
+    },
+    "slot_4_static_construct_object_internal": {
+      "resolver": "id6 resolve_static_construct = patterns + string route (static_construct_object.rs:11-22,23-48,49-95)",
+      "anchor_location": "CODE: 4 call-site patterns (static_construct_object.rs:24-41) - 0/4 occur in the image; string route head is UTF-16 'NewObject with empty name...' which IS readable (live 0x7d99084, measured) but then scan_xrefs + disassembly read code (static_construct_object.rs:55-74) - impossible",
+      "consumer": "UObjectGlobals::SetupStaticConstructObjectInternalAddress (staged UnrealInitializer.cpp:814; upstream UObjectGlobals.cpp:23)",
+      "resolvable_without_code_reads": "NO - code function address; same bypass requirement as slot 2"
+    },
+    "slot_6_engine_version": {
+      "resolver": "id1 resolve_engine_version (engine_version.rs:268-284): 37 code patterns + mov-imm32 store scan with disassembly + UTF-16 version strings + UTF-16 branch names",
+      "anchor_location": "measured: 1 raw VERSION_PATTERN match in unreadable text (live 0x5ef884); 42 UTF-16 'd.d.' regex hits of which the only 2 readable ones are false positives (character tables at live 0x9514d98/0x96467fc) and none of the unreadable ones parse as a plausible FEngineVersion string; '++UE4/UE5+Release-' branch names 0 hits image-wide; store scan needs iced-x86 disassembly of unreadable text",
+      "consumer": "Version::Major/Minor (staged UnrealInitializer.cpp:720-721) -> InitializeVersionedContainer (:857) -> PublishStagedNativeLayoutMaps (:863-876)",
+      "resolvable_without_code_reads": "YES - settings route exists: UE4SS-settings.ini [EngineVersionOverride] Major/Minor sets Version::Major/Minor directly and installs a no-op version_finder override (UE4SSProgram.cpp:857-879; SettingsManager.cpp:157-159), removing slot 6 from requested_mask so it is not required (collector cpp:23,85); validated profile pins 5.6 (worker-2-layout-facts/profiles/townfall-ps5-ue56.profile.json:13-14,31-37)"
+    }
+  },
+  "resolution_space_ranking": [
+    {
+      "rank": 1,
+      "option": "settings + staged seed table (offline-resolved constants + data-side guards), i.e. staged address tables plus composition-level slot policy",
+      "why": "only route that can complete ScanGame on this target; touches settings ini + the already-staged UnrealInitializer.cpp; zero runtime code-byte reads; tick then resolves via the existing vtable fallback (staged UnrealInitializer.cpp:1352-1364)",
+      "evidence_standard": "constants derived offline against the sha-pinned decrypted-eboot.bin (3b6cfad4..., profile build_id_source); live base 0x400000 proven by the in-game anchor (worker-mapping-recovery); slots 0/3 seeds guarded by the existing code-read-free pointer-slot permission semantics; all four labeled identity-unverified exactly like the existing candidate provenance strings (tick-file-owner-1/src/OwnedMappedScanSource.cpp:57-60)"
+    },
+    {
+      "rank": 2,
+      "option": "composition-level slot policy change alone (ScanOverrides for the four slots or MappedRequiredSlots 0x5d -> smaller)",
+      "why": "necessary companion of rank 1 but NOT sufficient alone: unrequested-but-null fields flow into consumers (null GUObjectArray etc.) and the collector still runs all 7 endpoints unconditionally (collector cpp:41-46) so image_error persists while the view lacks an X segment (mapped_image.rs:48-52); the Lua-override DoScan arms (staged UnrealInitializer.cpp:823-829,906-915) would also run AOB scans that fatal",
+      "evidence_standard": "n/a standalone - rejected as a standalone fix"
+    },
+    {
+      "rank": 3,
+      "option": "pattern re-derivation against the retained eboot offline",
+      "why": "DEAD for the shipped resolver set: 27 of the required-slot instruction patterns have ZERO occurrences in the pinned image (not an unreadability problem - the idioms do not exist in this clang/PS5 build), and every string-anchored route needs runtime code reads even when its data anchor is readable. Deeper offline RE can derive the four constants, but that IS rank 1's seed work, not a runtime pattern fix",
+      "evidence_standard": "offline_anchor_scan.py + anchor-measurement.json in this directory"
+    }
+  ],
+  "key_correction": "The retained eboot's static PT_LOAD flags are LOAD0=--X (116.48 MiB, live [0x400000,0x7879b1c), the exec-only text) and LOAD1=R-- (10.24 MiB, live [0x787c000,0x82ba918), readable rodata) - measured; the trusted live kve records match these exactly. worker-tick-witness-design/TICK-WITNESS-DESIGN.md section 2's table lists these two flags swapped; its conclusions are unaffected (it fails under both readings), but the readable window IS static-LOAD1 and the unreadable span IS the whole 116 MiB code segment.",
+  "non_claims": [
+    "No claim that the seed constants are correct - none are derived yet; deriving them is the proposed next bounded task",
+    "No console contact, no text-read probes; the eboot parse is a local read-only measurement of an already-retained artifact",
+    "No claim about the actual runtime failure shape beyond the consumed sources: G1 predicts Stage-2 MRS_ERR_CONTEXT in the consumed composition; the 'PS scan timed out' shape (staged UnrealInitializer.cpp:630) applies to a hypothetical composition that passes G0-G2",
+    "Diffs are proposals only; no frozen file, ABI, OwnedMemory unit or Rust crate was modified"
+  ]
+}

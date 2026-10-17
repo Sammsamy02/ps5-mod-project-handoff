@@ -1,0 +1,11 @@
+# Native UEngine Tick slot
+
+`UEngine.Tick` is statically located at vtable byte offset `0x310` in both the named Engine root table and its named GameEngine derived table. This receipt is pending independent review and does not mutate a profile or source.
+
+The named GameEngine registration at `2faadd0` supplies UTF16 `GameEngine` (`78b59b4`), constructor callback `2faad80`, and parent getter `2a6d130` to common helper `30d860`. The helper moves the constructor stack argument into Class `+B0` and invokes the parent getter. Constructor `2faad80` takes the object from its initializer, calls same-object Engine constructor `2fa6f20`, then installs vptr `8477708` at object `+0`. Actual DT_RELA entry file `9f56e98`, target `8477a18`, info `8`, addend `2fac8c0` gives `8477a18 - 8477708 = 310`.
+
+The independent Engine registration at `2a6d130` supplies UTF16 `Engine` (`782706e`) and callback `2a6d110`. That wrapper loads the same object from its initializer and calls `2fa6f20`. The base constructor computes `82315b0+10` and installs vptr `82315c0` at object `+0`. Actual DT_RELA entry file `9aaed58`, target `82318d0`, info `8`, addend `2a6e4c0` gives the same byte offset `310`. Base method `2a6e4c0` passes UTF16 `UEngine::Tick` (`75f062e`) and `Pure virtual not implemented (%s)` (`7685d94`) to the native assertion helper through exact call `2a6e4e0`. This names the slot's method directly in the target image; it does not rely on a generic ABI layout or an unverified survey label.
+
+The GameEngine implementation at `2fac8c0` preserves its SysV self receiver from RDI, Boolean from ESI, and scalar float from XMM0. This corroborates the Tick signature. Both constructors install the root vptr at unchanged object address; no secondary-vtable adjustment is used.
+
+`ENGINE-TICK-FACTS.json` contains exact instruction/UTF16 bytes, actual PT_LOAD offsets, direct rel32 targets, RIP-relative targets, four native relative relocation records, image/source hashes, and the inference chain. Every selected instruction decodes individually, all bytes match the saved authenticated image, and each relocation target has exactly one actual DT_RELA record. Additional dispatcher pattern candidates are preserved as diagnostics and are excluded from the fact. No console contact, network access, game execution, native probe, or runtime proof occurred.

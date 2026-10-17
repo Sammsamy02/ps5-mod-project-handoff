@@ -1,0 +1,11 @@
+# Review and evidence scope
+
+Independent receipt review matched 85 current source files, 140 native dependencies, 28 native objects, the 240,960-byte ELF, and all generated fixtures/profiles/results. Every saved command exited zero: 73 in the native composition and 18 in the bad-parameter control. Direct PE parsing confirms 44 consumer imports, 10 helper imports and all 21 new synchronization names. Native IR has 7/3/11 Win64 definitions; both TryAcquireSRW adapters return i8. Direct ELF parsing and current SDK export tables agree on all 42 unresolved names and their declared providers.
+
+Normal host execution retired all owners and completed three base DLL calls and two worker exports. Admission-leave controls retained stage25/status4 through retry without repeated worker exports. The bad-parameter control detected worker completion before readiness, retained stage24/status0xffffffd8 (-40), and retired cleanly despite a later release fault. A fresh no-sync regression preserves both earlier worker DLL fixtures byte-for-byte and omits synchronization from every result.
+
+Review found and corrected one real diagnostic hang: waiting forever for readiness would hide a callback that had already rejected its parameter. Readiness now uses finite status-aware waits and preserves caller LastError on success. Early negative controls exposed two test-only assumptions about which clock session had retired during a release failure; their discarded runs are not passing evidence. The final control tests the corrected lifetime expectations.
+
+Two existing PE /align linker warnings remain recorded. No new compiler warnings are hidden. Scheduling can let the PE worker skip its blocking address wait; standalone service tests supply deterministic lost-wake/FIFO/one-all evidence. Native provider declarations do not prove target availability. No new target run, game binding, arbitrary DLL support, static TLS callbacks, unwind/SEH or asynchronous DllMain is claimed.
+
+The saved f72 console result is a separate exact-build proof of DllMain startup/shutdown, clock calls, 86/93 and cleanup. Its file records succeed; stdout EPIPE32 is retained as a delivery limitation. It is not evidence for this new synchronization payload.

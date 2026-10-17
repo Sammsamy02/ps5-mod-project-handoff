@@ -1,0 +1,31 @@
+{
+  "worker": "worker-fname-runtime-probe",
+  "task": "Build the FC-1 runtime verification probe add-on module (mprotect-first) validating the FName ctor candidate at runtime 0x63d590 (vaddr 0x23d590) for the NEXT probe iteration (igf6 or combined igf5 build)",
+  "date": "2026-10-04",
+  "kind": "preparation_module_not_natively_executed",
+  "deliverables": [
+    "src/fc1_pages.h + src/fc1_pages.c — pure page-range/match/hex helpers (host-testable, no syscalls)",
+    "src/fc1_windows.h + src/fc1_windows.c — pure FC1-B bounded x86-64 window decoder (branch-free walk, LEA RSI disp32 anchor check, single LEA RDI store, single MOV EDX,1, E8 rel32 terminator; fail-closed on unsupported encodings)",
+    "src/fc1_probe.cpp — standalone ig_run_fc1_probe(IgSink*) add-on: FC1-A 64-byte prologue read at 0x63d590, FC1-B all 9 call-site windows, FC1-C fail-closed summary, FC1-D gated UTF-16 anchor strings; mprotect-FIRST on every exec-span read (add READ keep EXEC on exactly the covering 16 KiB page(s), read only after mprotect success, restore original protection, record anomaly on restore failure)",
+    "tests/host_main.c + tests/fc1_host_*.c — host tests with SYNTHETIC bytes (posix mprotect shim, fake span map): all-pass, prologue mismatch, site-disagree fail-closed, mprotect refusal no-read, restore anomaly, FC1-D gated off, unsupported-encoding fail-closed",
+    "tests/run_host_checks.py — runs the host binary, JSON-parses every emitted record line, asserts per-scenario verdicts",
+    "build_fc1_module.py — parses SYS_mprotect/PROT_*/PAGE_SHIFT from the PINNED SDK headers at build time, generates fc1_config.h, cross-checks the expected-bytes table against the frozen capture AND the two independent worker bundles, compiles the module for the TARGET with the pinned prospero clang (-Werror), builds+runs host tests, emits build-receipt.json",
+    "fixtures/fc1_windows_captured.json — the 9 window byte sequences + target 64 bytes re-extracted from the frozen capture this session (sha256-verified), cross-checked against worker-fname-fc1-materialize/calls_by_anchor.materialized.json and worker-expected-bytes/bytes_fname.bin",
+    "INTEGRATION.md — exact igf6 / combined-igf5 integration notes"
+  ],
+  "bounds_respected": {
+    "mprotect_first": "every exec-span read is preceded by a successful mprotect(page, PAGES, PROT_READ|PROT_EXEC) and followed by restore of the original protection; NO raw read of an exec-only page (igf5 corrected design, code_anchor_probe.cpp STEP1-4 pattern)",
+    "no_nested_subagents": true,
+    "write_scope": "only outputs/2026-10-04-zcode-team/worker-fname-runtime-probe/ written; all other files read-only",
+    "no_network_no_console": true,
+    "preparation_only": "this module is NOT built into the current igf5 PRX and has NOT executed on a console; no in-game results are claimed"
+  },
+  "constant_provenance": {
+    "target": "vaddr 0x23d590, runtime 0x400000+0x23d590 = 0x63d590, file offset 0x241590 (worker-fname-fc1-materialize/FC1-CHECKS.md; worker-expected-bytes/EXPECTED-BYTES.json; re-verified this session against the frozen capture)",
+    "capture": ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin, 194241424 B, sha256 3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc (re-verified this session before extraction)",
+    "call_sites": "9 sites from calls_by_anchor.materialized.json; each re-validated this session: byte[site]==0xE8 and site+5+rel32==0x23d590 in the frozen capture",
+    "anchor_strings": "UTF-16LE content vaddrs Engine 0x782706e, Renderer 0x799db12, AnimGraphRuntime 0x75eefc0, Landscape 0x763151e, RenderCore 0x79f02e2 (runtime +0x400000) — data region, FC1-D gated behind a readable-span map check, never dereferenced blindly",
+    "exec_span": "[0x400000, 0x787c000) checkpoint fact; page size 0x4000 (16 KiB, PAGE_SHIFT 14)"
+  },
+  "acceptance_of_this_delivery": "host checks green + target-toolchain compile clean; runtime verdicts remain UNCLAIMED until igf6/combined-igf5 runs in-game under its own build_id"
+}

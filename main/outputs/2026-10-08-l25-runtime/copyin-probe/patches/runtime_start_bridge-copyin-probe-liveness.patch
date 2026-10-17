@@ -1,0 +1,102 @@
+--- a/lifecycle/runtime_start_bridge.cpp
++++ b/lifecycle/runtime_start_bridge.cpp
+@@ -908,6 +908,15 @@
+ static uint64_t g_copyin_generation = 0;
+ static uint32_t g_copyin_pid = 0;
+ static l13_sink::FaultLedger g_copyin_faults;
++// [L25 item 7] copyin probe liveness counters (agent-Q). The l24 diagnostic
++// vocabulary was init-only, so nothing recorded the probe's post-admission
++// behavior (l25-prep/agent-F-crash-forensics.md). These counters are pure
++// observation: they never gate, refuse or delay any probe operation.
++static uint32_t g_copyin_probe_attempts = 0;          // probe_until dispatches, any phase
++static uint32_t g_copyin_probe_attempts_late = 0;     // dispatches attempted after bank retirement
++static uint64_t g_copyin_probe_last_note_ms = 0;      // throttle clock for late-fire notes
++static bool g_copyin_retirement_logged = false;       // one-shot state note guard
++static constexpr uint64_t kCopyinProbeNoteIntervalMs = 10000; // late-fire note throttle
+ static constexpr uint32_t kCopyinHandleLimit = 64u; // existing attempt cap
+ static constexpr uint64_t kCopyinStartupBudgetMs = 5000u;
+ static constexpr int kCopyinSinkFlags = O_RDWR | O_CREAT | O_TRUNC | O_NOFOLLOW | O_EXCL;
+@@ -1073,6 +1082,41 @@
+ {
+     if (!g_copyin_initializer_owner.allows()) return;
+     bridge_copyin_directory_release();
++    // [L25 item 7] ONE-TIME observed probe state, emitted AFTER the release so
++    // every field is the true post-retirement state. Semantics:
++    //   copyin_probe_state        bit0 = initializer owner gate still armed on
++    //                             this init thread (stays armed until
++    //                             bridge_copyin_initializer_leave at shutdown),
++    //                             bit1 = bank_retired (this function ran),
++    //                             bit2 = parent fd STILL open (retirement failed
++    //                             to close it - abnormal, investigate),
++    //                             bit3 = any sink fd STILL open (abnormal)
++    //   copyin_probe_sinks_open   number of single-use sink descriptors still
++    //                             open after retirement (0 expected)
++    //   copyin_probe_nonce_used   sinks already consumed by probe dispatches
++    //                             during this initialization
++    //   copyin_probe_attempts_total  probe_until dispatches so far (any phase)
++    // A normal successful admission logs state=3 (armed gate, retired bank,
++    // 0 sinks): kernel-write dispatch is structurally stopped - a later call
++    // returns at the parent-fd check in bridge_kernel_write_copyin_probe_until
++    // BEFORE any kernel write. Anything else is visible evidence, not silence.
++    if (!g_copyin_retirement_logged) {
++        g_copyin_retirement_logged = true;
++        uint32_t sinks_open = 0;
++        for (const auto &handle : g_copyin_handles)
++            if (handle.fd >= 0) ++sinks_open;
++        const uint32_t state = (g_copyin_initializer_owner.allows() ? 1u : 0u)
++                             | 2u /* retirement reached */
++                             | (g_copyin_parent_fd >= 0 ? 4u : 0u)
++                             | (sinks_open != 0 ? 8u : 0u);
++        ::diagnostic_event("copyin_probe_state", state);
++        ::diagnostic_event("copyin_probe_gate_armed", g_copyin_initializer_owner.allows() ? 1u : 0u);
++        ::diagnostic_event("copyin_probe_bank_retired", 1u);
++        ::diagnostic_event("copyin_probe_parent_fd_open", g_copyin_parent_fd >= 0 ? 1u : 0u);
++        ::diagnostic_event("copyin_probe_sinks_open", sinks_open);
++        ::diagnostic_event("copyin_probe_nonce_used", g_copyin_probe_nonce);
++        ::diagnostic_event("copyin_probe_attempts_total", g_copyin_probe_attempts);
++    }
+     // Keep both owned captures and fault evidence for the rest of initialization.
+ }
+ extern "C" void bridge_copyin_initializer_leave(void)
+@@ -1081,6 +1125,11 @@
+     // Also covers exceptions before seed-check entry. Completion and close
+     // sentinels make this an idempotent fallback on the initializer itself.
+     bridge_copyin_directory_release();
++    // [L25 item 7] shutdown-time stop proof: the owner gate is the last armed
++    // piece of the copyin machinery; after this event the probe refuses every
++    // caller (allows() == false for every thread, including the init thread).
++    ::diagnostic_event("copyin_probe_gate_released", 1u);
++    ::diagnostic_event("copyin_probe_attempts_late_total", g_copyin_probe_attempts_late);
+     g_copyin_initializer_owner.leave();
+ }
+ static uint64_t bridge_copyin_now_ms()
+@@ -1246,6 +1295,29 @@
+     // A foreign refusal must not write telemetry or touch any bank/ring/ledger
+     // state. Only the synchronized owner gate is consulted on this path.
+     if (!g_copyin_initializer_owner.allows()) return -1;
++    // [L25 item 7] liveness accounting for every owner-thread dispatch. Init-
++    // phase dispatches are already fully covered by pool_copyin_probe_* below;
++    // this adds: (a) a one-event census of the first dispatch, and (b) a
++    // THROTTLED loud note for any dispatch attempted AFTER bank retirement -
++    // post-retirement the parent-fd check below refuses before any kernel
++    // write, so a late attempt means unexpected live code still calling the
++    // probe, which the crash forensics could not see (init-only vocabulary).
++    ++g_copyin_probe_attempts;
++    if (g_copyin_retirement_logged) {
++        ++g_copyin_probe_attempts_late;
++        const uint64_t now_ms = bridge_copyin_now_ms();
++        if (g_copyin_probe_attempts_late == 1u ||
++            now_ms - g_copyin_probe_last_note_ms >= kCopyinProbeNoteIntervalMs) {
++            g_copyin_probe_last_note_ms = now_ms;
++            ::diagnostic_event("copyin_probe_fire_post_admission", g_copyin_probe_attempts_late);
++            ::diagnostic_event("copyin_probe_fire_addr_lo", static_cast<uint32_t>(addr));
++            ::diagnostic_event("copyin_probe_fire_addr_hi", static_cast<uint32_t>(addr >> 32));
++            ::diagnostic_event("copyin_probe_fire_len", static_cast<uint32_t>(len));
++            ::diagnostic_event("copyin_probe_fire_parent_fd", static_cast<uint32_t>(g_copyin_parent_fd));
++        }
++    } else if (g_copyin_probe_attempts == 1u) {
++        ::diagnostic_event("copyin_probe_fire_init_phase", 1u);
++    }
+     if (!l13_sink::valid_range(addr, len)) return bridge_copyin_result(3, 0, EINVAL, 0);
+     if (bridge_copyin_range_faulted(addr, len)) return bridge_copyin_result(0, 0, EFAULT, 0);
+     for (uint32_t i = 0; i < 3; ++i) {

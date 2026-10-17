@@ -1,0 +1,1174 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/console_batch.py.asfound-92b56889cbfe.py	2026-10-04 22:24:28
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py	2026-10-04 22:40:30
+@@ -5,7 +5,10 @@
+ 
+ Built by worker-console-batch-runner, 2026-10-04; extended the same day by
+ worker-batch-runner-8fam-patch (ownership transferred in-place) with the
+-8-family stage. This tool executes, step by step with gates, the plans frozen by:
++8-family stage, then by worker-evidence-freshness-fixes (freshness gate +
++CP0 fallback label), then by worker-observer-staging-extension with the
++combined ridealong staging. This tool executes, step by step with gates,
++the plans frozen by:
+   * worker-8fam-console-prep/CONSOLE-STAGE-PLAN-8FAM.md (PREFERRED single DLL
+     run) + worker-dll-8fam-combined/EXPECTED-DELTA-8FAM.md
+   * worker-dll-7fam-stage-prep/CONSOLE-STAGE-PLAN-7FAM.md (+ EXPECTED-LEDGER-7FAM.md)
+@@ -13,6 +16,8 @@
+   * worker-e2e-console-stage-prep/CONSOLE-STAGE-PLAN.md (+ EXPECTED-LEDGER.md)
+     via worker-e2e-staging-final/STAGED-E2E-COMMANDS.md (the 13 cmd files)
+   * worker-record-sink-addon/STAGE-PLAN-QDRV1.md (ploader.ini =2 stage, BEFORE launch)
++  * worker-game-session-ridealongs/STAGE-PLAN-COMBINED.md (§0-§9: qdrv1 + observer
++    in ONE ploader.ini, SHT-strip readback law, append-only ini law, rollback)
+   * worker-menu-visibility-runbook/MASTER-VERIFICATION-RUNBOOK.md (CP0-CP7)
+     + worker-post-launch-tools/post_launch_check.py
+     + worker-rung-evidence-reader/rung_check.py
+@@ -22,9 +27,17 @@
+   dll8             8-family DLL payload-only stage (upload/check/readback/dispatch/ledger) — PREFERRED
+   dll7             7-family DLL payload-only stage — FALLBACK attribution path only
+   e2e              E2E installer 15-dispatch stage 0..6 cycle with records baselines
+-  stage-qdrv1      qdrv1 PRX stage + ploader.ini append + readback (game CLOSED, pre-launch)
++  stage-ridealongs COMBINED ridealong staging (SC-0..SC-7): qdrv1 + observer PRXs with
++                   the SHT-strip readback law + combined 6-entry ploader.ini end-state
++                   (game CLOSED, pre-launch) — supersedes stage-qdrv1 inside `all`
++  stage-observer   observer ridealong ONLY: PRX upload + SHT-strip readback law +
++                   idempotent ini append of ONLY the observer line (coordinates with a
++                   qdrv1 line already staged by stage-qdrv1/stage-ridealongs)
++  stage-qdrv1      qdrv1-only stage (legacy single-ridealong path, unchanged) + readback
++  rollback-ridealongs rollback per STAGE-PLAN-COMBINED §7: flip BOTH ridealong lines
++                   to = 0 (single-character edits) with .bak + byte-verified readback
+   game-evidence    post-launch evidence: post_launch_check + rung_check + CP0-CP7 checks
+-  all              recommended session order: dll8 -> e2e -> stage-qdrv1 -> game-evidence
++  all              recommended session order: dll8 -> e2e -> stage-ridealongs -> game-evidence
+                    (`--dll 7` runs the dll7 fallback attribution path instead; EXACTLY ONE
+                    DLL stage per session — never both by default)
+   selftest         host/fixture tests of the tool logic (no console contact)
+@@ -44,10 +57,12 @@
+ 
+ import argparse
+ import datetime as _dt
++import hashlib
+ import json
+ import os
+ import re
+ import shlex
++import struct
+ import subprocess
+ import sys
+ 
+@@ -125,12 +140,53 @@
+     "prx": f"{T}/worker-record-sink-addon/modbridge_qh_driver.prx",
+     "sha": "52c3221665a423ddd2b22faddd4ac59ea8fd0ab8c1880c61e225d32a43df70a4",
+     "bytes": 26157,
++    # SHT-strip readback law constants (STAGE-PLAN-COMBINED §3; recomputed on host
++    # 2026-10-04 from the bare-sdk ELF and byte-identical to the plan's table)
++    "bare": f"{T}/worker-record-sink-addon/determinism/run1/bare-sdk/modbridge_qh_driver.prx",
++    "bare_sha": "7ae1e4e39c5f312ec5927be6bec82d92c860ab8b3b65ef4a9826fd296c8ce1d9",
++    "bare_bytes": 88744,
++    "readback_bytes": 87112,
++    "readback_body_sha": "71406d3ccc7c1da0688b68ff35fd35c4a7ef9241b4d02ce427504cd392002cf5",
+     "target_prx": "/data/plugins/modbridge_qh_driver.prx",
+     "ini": "/data/plugins/ploader.ini",
+     "module_line": "/data/plugins/modbridge_qh_driver.prx",
+     "composition_line": "/data/plugins/modbridge_supplier_composition.prx",
+ }
+ 
++# Observer ridealong (worker-game-session-ridealongs/STAGE-PLAN-COMBINED §0/§3;
++# worker-observer-packaging build-1; all four identities re-verified on disk
++# 2026-10-04 by worker-observer-staging-extension before pinning).
++OBS = {
++    "prx": f"{T}/worker-observer-packaging/modbridge_runtime_aligned_observer.prx",
++    "sha": "1afa0997682cc6ecc14fd9f82961d68755edfacb36b36a4135203e37b1011e30",
++    "bytes": 30152151,
++    "bare": f"{T}/worker-observer-packaging/build-1/bare-sdk/modbridge_runtime_aligned_observer.prx",
++    "bare_sha": "d0a3d6feebae18680962fb976726e86ea1ea397e183185793b75c290c6c0290f",
++    "bare_bytes": 30145992,
++    "readback_bytes": 30143976,
++    "readback_body_sha": "3f89a5b66bba614926f7e7b1273c1d2aadeb505b2797dcd7389b12cebeee6622",
++    "target_prx": "/data/plugins/modbridge_runtime_aligned_observer.prx",
++    "module_line": "/data/plugins/modbridge_runtime_aligned_observer.prx",
++    "log": "/data/townfall_runtime_aligned_observer.log",
++}
++
++# Combined ploader.ini end-state (STAGE-PLAN-COMBINED §1 — reconciled 6-entry
++# layout; pinned parser facts: MAX_PLUGINS=10, modes 0/1/2 only, mode 0 SKIPPED
++# at parse (no slot), register order == file order, NO path dedupe).
++COMBINED_INI = {
++    "ini": "/data/plugins/ploader.ini",
++    "header": "[PPSA33286]",
++    "expected_existing": {
++        "/data/plugins/modbridge_runtime_aligned_entry.prx": 2,
++        "/data/plugins/modbridge_path_test.prx": 2,
++        "/data/plugins/modbridge_ingame_facts.prx": 0,
++        "/data/plugins/modbridge_supplier_composition.prx": 2,
++    },
++    "anchor": "/data/plugins/modbridge_supplier_composition.prx",
++    "registered_expected_combined": 5,   # 6 entries, mode-0 igf line consumes no slot
++    "registered_expected_observer_only": 4,  # qdrv1 line absent (observer-only staging)
++}
++
+ GAME = {
+     "post_launch_check": f"{T}/worker-post-launch-tools/post_launch_check.py",
+     "rung_check": f"{T}/worker-rung-evidence-reader/rung_check.py",
+@@ -138,7 +194,7 @@
+     "L": "/data/plugins/UE4SS.log",
+     "D1": "/data/townfall_runtime_aligned_entry.log",
+     "C2": "/data/modbridge-ingame-facts.jsonl",
+-    "tick_line": "GameEngine::Tick address (vtable: 0x37ac8c0; scan: 0x37ac8c0)",
++    "tick_line": "GameEngine::Tick address (vtable: 0x33ac8c0; scan: 0x33ac8c0)",
+     "mod_banner": "[Lua] [TownfallItemSpawner] Loaded v1.0. Clean pickup-only release. F7 opens the menu.",
+ }
+ 
+@@ -746,9 +802,280 @@
+         problems.append("composition entry %s no longer present in edited ini" % QDRV1["composition_line"])
+     if new_text.count(QDRV1["module_line"]) != 1:
+         problems.append("qdrv1 entry count in new ini = %d, expected exactly 1" % new_text.count(QDRV1["module_line"]))
++    return problems
++
++
++# --- combined ridealong staging (STAGE-PLAN-COMBINED) -------------------------
++# Channel law (§3): the ftpsrv decryption readback of a staged fself is the
++# segment-covered prefix of the inner (bare-sdk) ELF — make_fself embeds
++# per-phdr filesz slices only; the SHT tail is not embedded and e_shnum is
++# zeroed. Full-file hash equality through this channel is IMPOSSIBLE by
++# construction; verification is exact-length + body-hash + Ehdr-exception.
++
++# Ehdr bytes allowed to differ between readback and bare ELF: e_shoff (40-47),
++# e_shentsize/e_shnum/e_shstrndx (58-63). e_shnum (offset 60, u16) must be 0.
++SHT_HDR_ALLOWED = set(range(40, 48)) | set(range(58, 64))
++
++
++def sht_prefix_end(bare):
++    """max(p_offset + p_filesz) over the bare-sdk ELF's program headers."""
++    phoff = struct.unpack_from("<Q", bare, 32)[0]
++    n = struct.unpack_from("<H", bare, 56)[0]
++    end = 0
++    for i in range(n):
++        o = phoff + i * 56
++        off, _vaddr, _paddr, filesz = struct.unpack_from("<QQQQ", bare, o + 8)
++        if filesz and off + filesz > end:
++            end = off + filesz
++    return end
++
++
++def sht_strip_readback_law(rb, bare, expect_bytes, expect_body_sha):
++    """STAGE-PLAN-COMBINED §3 verification, exact snippet semantics.
++
++    Returns (ok, detail). ok requires: len(rb) == expect_bytes (which itself
++    must equal the bare ELF's computed segment-covered prefix), ELF magic,
++    body bytes 64..end byte-identical to the bare ELF with body sha256 ==
++    expect_body_sha, every differing header byte inside SHT_HDR_ALLOWED, and
++    e_shnum zeroed in the readback header."""
++    if expect_bytes < 64 or len(rb) < 64:
++        return False, "READBACK-FAIL len=%d (need >= 64)" % len(rb)
++    if len(rb) != expect_bytes:
++        return False, "READBACK-FAIL len=%d/%d" % (len(rb), expect_bytes)
++    if rb[:4] != b"\x7fELF":
++        return False, "READBACK-FAIL not an ELF (magic %r)" % rb[:4]
++    if len(bare) < 64 or bare[:4] != b"\x7fELF":
++        return False, "READBACK-FAIL bare-sdk reference is not an ELF"
++    try:
++        end = sht_prefix_end(bare)
++    except struct.error:
++        return False, "READBACK-FAIL bare-sdk ELF header unparseable"
++    if end != expect_bytes:
++        return False, ("READBACK-FAIL bare-sdk computed prefix %d != pinned readback %d "
++                       "(constants/artifact divergence — STOP, never widen the law)" % (end, expect_bytes))
++    if end > len(bare):
++        return False, "READBACK-FAIL computed prefix %d exceeds bare ELF size %d" % (end, len(bare))
++    if rb[64:end] != bare[64:end]:
++        return False, "READBACK-FAIL body bytes 64..%d diverge from the bare-sdk ELF" % end
++    body_sha = hashlib.sha256(rb[64:end]).hexdigest()
++    if body_sha != expect_body_sha:
++        return False, "READBACK-FAIL body sha %s != pinned %s" % (body_sha, expect_body_sha)
++    hdr_diff = [i for i in range(64) if rb[i] != bare[i]]
++    outside = [hex(i) for i in hdr_diff if i not in SHT_HDR_ALLOWED]
++    if outside:
++        return False, "READBACK-FAIL header bytes outside the allowed set %s: %s" % (
++            sorted(hex(i) for i in SHT_HDR_ALLOWED), outside)
++    if struct.unpack_from("<H", rb, 60)[0] != 0:
++        return False, "READBACK-FAIL e_shnum not zeroed in the readback header"
++    return True, ("READBACK-OK len=%d body-sha=%s hdr-diff-bytes=%s (e_shoff/e_shentsize/"
++                  "e_shnum/e_shstrndx exception; e_shnum=0)" % (len(rb), body_sha[:12],
++                  [hex(i) for i in hdr_diff] or "none"))
++
++
++def prx_law_verify_file(readback_path, d):
++    """Run the SHT-strip law against a fetched readback file + the local bare-sdk
++    reference (which is itself hash-pinned by preflight). Returns (ok, detail)."""
++    rb = open(readback_path, "rb").read()
++    bare = open(d["bare"], "rb").read()
++    return sht_strip_readback_law(rb, bare, d["readback_bytes"], d["readback_body_sha"])
++
++
++_COMBINED_ENTRY_RE = re.compile(r"^(\s*)(\S+)(\s*=\s*)([0-9]+)(\s*)$")
++
++
++def _parse_combined_ini(pre_text):
++    """Parse the combined ploader.ini format ([PPSA33286] + `path = mode` lines).
++
++    Returns (entries, header_count, fatal) where entries is an ordered list of
++    (path, mode_int, raw_line). fatal is None or a reason string (per the plan:
++    only modes 0/1/2 are valid — anything else is dropped by the parser, so it
++    must never be written or silently accepted)."""
++    header_count = 0
++    entries = []
++    for raw in pre_text.splitlines():
++        s = raw.strip()
++        if s.startswith("[") and s.endswith("]"):
++            header_count += 1
++            continue
++        if s == "" or s[0] in ";#":
++            continue
++        m = _COMBINED_ENTRY_RE.match(raw)
++        if m:
++            mode = int(m.group(4))
++            if mode > 2:
++                return entries, header_count, ("ini line %r has mode %d — only 0/1/2 are valid "
++                                               "(parse_mode drops anything else); never write or "
++                                               "build on one" % (raw.strip(), mode))
++            entries.append((m.group(2), mode, raw))
++        else:
++            return entries, header_count, "unparseable ini line: %r" % raw
++    return entries, header_count, None
++
++
++def ridealong_ini_plan(pre_text, wanted):
++    """STAGE-PLAN-COMBINED §4/§8 SC-0+SC-5 append-only law, idempotent.
++
++    wanted: module paths to ensure present EXACTLY once with mode 2 (the
++    observer flow passes only its own line; the combined flow passes both).
++
++    Returns (status, new_text_or_reason, appended) —
++      "append": new_text = pre-image + ONLY the missing `path = 2` lines
++                (trailing newline added first if the pre-image lacks one);
++                appended lists the added lines
++      "noop":   every wanted line already present exactly once at mode 2
++                (pre-text returned unchanged — stage nothing, store nothing)
++      "stop":   ambiguous/duplicate/unexpected contract — reason string;
++                NEVER blind-edit (show the pre-image, reconcile first)."""
++    if pre_text is None or pre_text.strip() == "":
++        return "stop", ("no ploader.ini pre-image retrievable — the combined law stages "
++                        "only from the ACTUAL console pre-image (STAGE-PLAN-COMBINED §2 "
++                        "honesty caveat: the exact bytes were never recorded host-side); "
++                        "reconcile first"), []
++    entries, header_count, fatal = _parse_combined_ini(pre_text)
++    if header_count != 1:
++        return "stop", ("expected exactly one %s header, found %d — reconcile against the "
++                        "live pre-image" % (COMBINED_INI["header"], header_count)), []
++    if fatal:
++        return "stop", fatal + " — reconcile (parser drops such lines; never write one)", []
++    paths = [p for p, _m, _r in entries]
++    for p in set(paths):
++        if paths.count(p) > 1:
++            return "stop", ("duplicate plugin line %s — ploader does NOT dedupe paths and "
++                            "would inject it twice (plan §1); reconcile first" % p), []
++    present = dict((p, m) for p, m, _r in entries)
++    for p, m in COMBINED_INI["expected_existing"].items():
++        if p not in present:
++            return "stop", ("expected existing line %s is missing — reconcile per the "
++                            "rollback-runbook §4.3 variant rules first" % p), []
++        if present[p] != m:
++            return "stop", ("expected existing line %s has mode %d, pinned %d — never rewrite "
++                            "an existing line; reconcile" % (p, present[p], m)), []
++    for w in wanted:
++        if w in present and present[w] != 2:
++            return "stop", ("%s is present at mode %d — only exactly-once mode 2 (staged) or absent "
++                            "(appendable) is unambiguous; a mode-0 line means a ROLLED-BACK staging "
++                            "and a mode-1 line an early-load staging — reconcile per the "
++                            "rollback-runbook first, never blind-flip" % (w, present[w])), []
++    missing = [w for w in wanted if w not in present]
++    if not missing:
++        return "noop", pre_text, []
++    new_text = pre_text if pre_text.endswith("\n") else pre_text + "\n"
++    for w in missing:
++        new_text += "%s = 2\n" % w
++    return "append", new_text, ["%s = 2" % w for w in missing]
++
++
++def ridealong_ini_append_only(pre_text, new_text, appended):
++    """Prove the edit was append-only: new must be the pre-image (plus a single
++    added newline iff the pre-image lacked one) followed by EXACTLY the
++    appended lines. Returns a list of problems (empty == proven)."""
++    problems = []
++    if pre_text is None:
++        return ["no pre-image to compare against"]
++    base = pre_text if pre_text.endswith("\n") else pre_text + "\n"
++    if not new_text.startswith(base):
++        problems.append("edited ini does not start with the pre-image bytes (append-only law)")
++        return problems
++    tail = new_text[len(base):]
++    expect_tail = "".join(ln + "\n" for ln in appended)
++    if tail != expect_tail:
++        problems.append("appended tail %r != expected exactly %r" % (tail, expect_tail))
++    return problems
++
++
++def ridealong_verify_endstate(new_text, required, optional=()):
++    """Combined end-state per STAGE-PLAN-COMBINED §1/§4 (SC-5 gate, simulator facts).
++
++    required: ridealong paths that MUST be present exactly once at mode 2.
++    optional: ridealong paths that may be present exactly once at mode 2 or
++              absent (idempotent coordination with a sibling staging flow).
++    Verifies: header exactly once; the 4 expected existing lines with their
++    pinned modes; no unknown plugin lines; no duplicates; registered count
++    (mode != 0 — a mode-0 line is SKIPPED at parse and consumes no slot) equals
++    the combined 5, or 4 when an optional ridealong is absent."""
++    problems = []
++    entries, header_count, fatal = _parse_combined_ini(new_text)
++    if header_count != 1:
++        problems.append("header %s count = %d, expected exactly 1" % (COMBINED_INI["header"], header_count))
++    if fatal:
++        problems.append(fatal)
++        return problems
++    paths = [p for p, _m, _r in entries]
++    for p in set(paths):
++        if paths.count(p) > 1:
++            problems.append("duplicate plugin line %s (ploader would inject it twice)" % p)
++    present = dict((p, m) for p, m, _r in entries)
++    for p, m in COMBINED_INI["expected_existing"].items():
++        if present.get(p) != m:
++            problems.append("expected line %s mode %s, pinned %d" % (p, present.get(p), m))
++    required_seen = []
++    for w in required:
++        if w in present and present[w] == 2:
++            required_seen.append(w)
++        else:
++            problems.append("required ridealong %s must be present exactly once at mode 2 (found %s)"
++                            % (w, present.get(w)))
++    n_registered_expected = COMBINED_INI["registered_expected_combined"]
++    for w in optional:
++        if w in present and present[w] == 2:
++            pass  # sibling already staged — combined 5 still holds
++        elif w in present:
++            problems.append("optional ridealong %s present at mode %d (only mode 2 or absent is "
++                            "unambiguous)" % (w, present[w]))
++        else:
++            n_registered_expected = COMBINED_INI["registered_expected_observer_only"]
++    known = set(COMBINED_INI["expected_existing"]) | set(required) | set(optional)
++    extras = [p for p in paths if p not in known]
++    if extras:
++        problems.append("unknown plugin line(s) %s — combined layout is exactly the 6 pinned "
++                        "entries; reconcile" % extras)
++    n_registered = sum(1 for _p, m, _r in entries if m != 0)
++    if n_registered != n_registered_expected:
++        problems.append("registered plugin count = %d, expected exactly %d (mode-0 lines consume "
++                        "no slot)" % (n_registered, n_registered_expected))
+     return problems
+ 
+ 
++def ridealong_rollback_edit(pre_text, wanted):
++    """STAGE-PLAN-COMBINED §7 rollback: flip each wanted ridealong line from
++    ` = 2` to ` = 0` — a single-character edit per line, nothing else changes
++    (mode 0 is SKIPPED at parse: no attach, no FAIL notify, no timeout).
++
++    Returns (status, new_text_or_reason, flipped):
++      "flip":  new_text with exactly the wanted staged lines flipped (flipped
++               lists them); a wanted line at mode 0 or absent is already rolled
++               back and is left untouched
++      "noop":  no wanted line is present at mode 2 (nothing to roll back)
++      "stop":  ambiguous state (duplicate / mode 1 / unparseable line)."""
++    if pre_text is None or pre_text.strip() == "":
++        return "stop", "no ploader.ini pre-image retrievable — nothing to roll back safely", []
++    entries, header_count, fatal = _parse_combined_ini(pre_text)
++    if header_count != 1 or fatal:
++        return "stop", "unexpected ini contract (headers=%d, fatal=%s) — reconcile" % (header_count, fatal), []
++    paths = [p for p, _m, _r in entries]
++    for w in wanted:
++        if paths.count(w) > 1:
++            return "stop", "duplicate line %s — reconcile before rollback" % w, []
++    present = dict((p, m) for p, m, _r in entries)
++    for w in wanted:
++        if present.get(w) == 1:
++            return "stop", "%s at mode 1 — not the staged = 2 shape; reconcile" % w, []
++    to_flip = [w for w in wanted if present.get(w) == 2]
++    if not to_flip:
++        return "noop", pre_text, []
++    out_lines = []
++    for raw in pre_text.splitlines():
++        m = _COMBINED_ENTRY_RE.match(raw)
++        if m and m.group(2) in to_flip and m.group(4) == "2":
++            out_lines.append(m.group(1) + m.group(2) + m.group(3) + "0" + m.group(5))
++        else:
++            out_lines.append(raw)
++    new_text = "\n".join(out_lines)
++    if pre_text.endswith("\n"):
++        new_text += "\n"
++    return "flip", new_text, ["%s = 2 -> = 0" % w for w in to_flip]
++
++
+ # --- Runbook CP classifier (game-evidence) -----------------------------------
+ 
+ def cp_parse_status_s(s_text):
+@@ -1835,10 +2162,468 @@
+             ["ONE game-launch window total: composition-5 + qdrv1 in the same ploader.ini",
+              "USER: arm ploader.elf (Payload Manager UI or loadpayload) with the game fully CLOSED",
+              "USER: launch Townfall; ploader surface reports injection (~1 min)",
++             "then run: console_batch.py game-evidence"],
++            ["USER arms ploader.elf (game closed)",
++             "USER launches Townfall",
++             "controller: python3 console_batch.py game-evidence"],
++            None)
++    return fl
++
++
++# --- combined ridealong staging (STAGE-PLAN-COMBINED §3-§8) --------------------
++
++def ini_preimage_fn(label):
++    """SC-0: RETR the live ini pre-image + console .bak backup (rollback artifact
++    FIRST); the pre-image is authoritative — the plan's shape block is a
++    reference, never a replacement file."""
++    def fn(ctx):
++        p = os.path.join(ctx.run_dir, "ploader.ini.pre")
++        rc, out, err = run_cmd(ctx, ["curl", "-sS"] + CURL_TIMEOUT + [FTP + COMBINED_INI["ini"], "-o", p],
++                               "RETR pre-image ploader.ini")
++        if ctx.dry:
++            return "PASS", "dry"
++        if rc != 0 or not os.path.exists(p) or os.path.getsize(p) == 0:
++            return "FAIL", ("no ploader.ini pre-image retrievable (curl rc=%s) — the combined law "
++                            "stages ONLY from the actual console pre-image; reconcile first" % rc)
++        pre = open(p).read()
++        sha, n = local_sha(p)
++        ctx.save("ploader.ini.pre.sha256", "%s  %d\n" % (sha, n))
++        ctx.state["pre"] = pre
++        tag = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
++        rc2, _, _ = run_cmd(ctx, ["curl", "-sS", "-T", p, FTP + COMBINED_INI["ini"] + "." + tag + ".bak"],
++                            "console backup ploader.ini.$TAG.bak")
++        if rc2 != 0:
++            return "FAIL", "could not write console .bak backup — STOP (never edit without a rollback artifact)"
++        return "PASS", "%s pre-image secured (%d bytes, sha %s) + .bak written" % (label, n, sha[:12])
++    return fn
++
++
++def ini_edit_fn(label, wanted, optional=()):
++    """SC-5 local edit: append ONLY the missing wanted `= 2` lines (idempotent),
++    prove append-only, verify the combined end-state."""
++    def fn(ctx):
++        pre = ctx.state.get("pre")
++        status, new_text, appended = ridealong_ini_plan(pre, wanted)
++        ctx.save("ploader.ini.new", new_text if status != "stop" else "")
++        ctx.save("ploader-edit-decision.json", json.dumps(
++            {"flow": label, "status": status, "appended": appended}, indent=2))
++        if status == "stop":
++            return "FAIL", "AMBIGUOUS ini state — %s | pre-image preserved in the run dir; reconcile, never blind-edit" % new_text
++        if status == "noop":
++            return "PASS", ("%s line(s) already staged exactly-once at = 2 — no-op (change nothing, "
++                            "store nothing)" % label)
++        problems = ridealong_ini_append_only(pre, new_text, appended)
++        problems += ridealong_verify_endstate(new_text, required=wanted, optional=optional)
++        if problems:
++            return "FAIL", "; ".join(problems)
++        return "PASS", "append-only edit ready: +%d line(s) %s; combined end-state verified" % (
++            len(appended), appended)
++    return fn
++
++
++def ini_stor_fn(label):
++    """SC-5 STOR + fresh RETR readback, byte-exact law (plain file: full equality)."""
++    def fn(ctx):
++        new_local = os.path.join(ctx.run_dir, "ploader.ini.new")
++        decision = {}
++        try:
++            decision = json.load(open(os.path.join(ctx.run_dir, "ploader-edit-decision.json")))
++        except Exception:
++            pass
++        if decision.get("status") == "noop":
++            return "PASS", "edit was a no-op — ini untouched on console (no STOR)"
++        if not os.path.exists(new_local) or os.path.getsize(new_local) == 0:
++            return "FAIL", "edited ini missing (%s edit step must run first)" % label
++        rc, _, _ = run_cmd(ctx, ["curl", "-sS", "-T", new_local, FTP + COMBINED_INI["ini"]],
++                           "STOR edited ploader.ini")
++        if rc != 0:
++            return "FAIL", "ini STOR failed rc=%d" % rc
++        p = os.path.join(ctx.run_dir, "ploader.ini.readback")
++        rc2, _, _ = run_cmd(ctx, ["curl", "-sS"] + CURL_TIMEOUT + [FTP + COMBINED_INI["ini"], "-o", p],
++                            "ini readback")
++        if ctx.dry:
++            return "PASS", "dry"
++        if rc2 != 0 or not os.path.exists(p) or os.path.getsize(p) == 0:
++            return "FAIL", "ini readback failed rc=%d — do not launch on an unverified ini" % rc2
++        rb = open(p).read()
++        new = open(new_local).read()
++        if rb != new:
++            return "FAIL", "ini readback != edited bytes — nothing else may change; STOP and reconcile"
++        return "PASS", "ini STOR + readback byte-identical to the append-only edit"
++    return fn
++
++
++def prx_law_upload_fn(d, label):
++    """§3 upload pattern: STOR the locally hash-pinned fself ONCE to its FINAL
++    name, RETR the readback, verify the SHT-strip law. On a law FAIL: re-STOR
++    from the verified local fself EXACTLY ONCE and re-verify; a second failure
++    aborts the staging (nothing else runs; reconcile). When the ini edit step
++    already declared a no-op (fully staged), the STOR is skipped and the
++    readback law still verifies the on-console artifact."""
++    url = FTP + d["target_prx"]
++    def fn(ctx):
++        skip_stor = False
++        try:
++            with open(os.path.join(ctx.run_dir, "ploader-edit-decision.json")) as f:
++                skip_stor = json.load(f).get("status") == "noop"
++        except Exception:
++            pass
++        if ctx.dry:
++            return "PASS", "dry"
++        rc = 0
++        if not skip_stor:
++            rc, _, _ = run_cmd(ctx, ["curl", "-sS", "-T", d["prx"], url], "STOR %s fself" % label)
++            if rc != 0:
++                return "FAIL", "%s STOR failed rc=%d" % (label, rc)
++        p = os.path.join(ctx.run_dir, "%s.readback.prx" % label)
++        rc2, _, _ = run_cmd(ctx, ["curl", "-sS"] + CURL_TIMEOUT + [url, "-o", p], "%s readback" % label)
++        if rc2 != 0 or not os.path.exists(p) or os.path.getsize(p) == 0:
++            return "FAIL", "%s readback fetch failed rc=%d%s" % (
++                label, rc2, " (no-op path: the on-console artifact must still verify)" if skip_stor else "")
++        ok, detail = prx_law_verify_file(p, d)
++        attempt = 1 if not skip_stor else 0
++        if not ok and not skip_stor:
++            # the ONE permitted re-STOR from the verified local fself, then re-verify
++            ctx.log("RETRY  %s readback failed the law (%s) — re-STOR once from the verified "
++                    "local fself" % (label, detail[:120]))
++            rc3, _, _ = run_cmd(ctx, ["curl", "-sS", "-T", d["prx"], url], "re-STOR %s fself" % label)
++            if rc3 != 0:
++                return "FAIL", "%s re-STOR failed rc=%d — abort staging, leave the console as-is" % (label, rc3)
++            rc4, _, _ = run_cmd(ctx, ["curl", "-sS"] + CURL_TIMEOUT + [url, "-o", p],
++                                "%s readback (attempt 2)" % label)
++            if rc4 != 0 or not os.path.exists(p) or os.path.getsize(p) == 0:
++                return "FAIL", "%s readback (attempt 2) fetch failed rc=%d — abort staging" % (label, rc4)
++            ok, detail = prx_law_verify_file(p, d)
++            attempt = 2
++        ctx.save("%s-readback-verdict.json" % label, json.dumps(
++            {"prx": d["target_prx"], "law": "STAGE-PLAN-COMBINED §3 SHT-strip",
++             "ok": ok, "stor_skipped_noop": skip_stor, "attempts": attempt,
++             "detail": detail}, indent=2))
++        if not ok:
++            return "FAIL", ("%s readback failed the SHT-strip law (attempts %d): %s — "
++                            "abort the staging (leave the console as-is, reconcile)" % (label, attempt, detail))
++        return "PASS", "%s %s%s" % (label, detail, " (STOR skipped: already staged no-op)" if skip_stor else "")
++    return fn
++
++
++def freshness_baseline_fn():
++    """SC-0 pre-launch baselines: UE4SS.log stat (size baseline; absence is a
++    valid fresh-console baseline), observer log must be ABSENT (it must be
++    created fresh by the module), igf jsonl baseline IF PRESENT (never delete
++    owned evidence)."""
++    def fn(ctx):
++        ok_l, l_text = fetch_console_file(ctx, "data/plugins/UE4SS.log", "baseline-UE4SS.log")
++        if ctx.dry:
++            return "PASS", "dry"
++        l_note = "absent (fresh baseline)" if not ok_l or l_text == "" else \
++            "%d bytes (size baseline recorded)" % len(l_text.encode("utf-8", "replace"))
++        ok_o, o_text = fetch_console_file(ctx, OBS["log"].lstrip("/"), "baseline-observer-log.txt")
++        if ok_o and o_text != "":
++            return "FAIL", ("%s already exists (%d bytes) — observer precondition: it must be "
++                            "created FRESH by the module this launch; reconcile/rotate first"
++                            % (OBS["log"], len(o_text)))
++        ok_c, c_text = fetch_console_file(ctx, GAME["C2"].lstrip("/"), "baseline-ingame-facts.jsonl")
++        c_note = "absent" if not ok_c or c_text == "" else \
++            "%d bytes baseline recorded (qdrv1 lines distinguishable by build_id qdrv1- prefix; never delete owned evidence)" % len(c_text)
++        return "PASS", "baselines: UE4SS.log %s; observer log absent OK; igf jsonl %s" % (l_note, c_note)
++    return fn
++
++
++RIDEALONG_HANDOFF = (
++    "1. With the game fully CLOSED, ARM ploader.elf (Payload Manager UI or loadpayload entry).\n"
++    "2. LAUNCH Townfall manually — NEVER automated.\n"
++    "3. Read the ploader notification lines (SC-5b): expect EXACTLY 5 `OK (<ms>): <file>` lines,\n"
++    "   ZERO FAIL lines. Any FAIL -> STOP and run: console_batch.py rollback-ridealongs\n"
++    "4. Then run: console_batch.py game-evidence (observer log/jsonl may take ~2-3 min post-launch).")
++
++
++def build_stage_ridealongs():
++    """STAGE-PLAN-COMBINED §8 SC-0..SC-7 — the combined staging supersedes the
++    qdrv1-only stage inside `all` (same upload/readback pattern, both PRXs,
++    explicit combined ini end-state)."""
++    fl = Flow("stage-ridealongs")
++    fl.notes = ("STAGE-PLAN-COMBINED §8 SC-0..SC-7: both ridealong PRXs + the combined 6-entry "
++                "ploader.ini in ONE game-closed window; exactly 5 registered plugins.")
++
++    def prefix_gate_fn(ctx):
++        # host-side cross-check: the computed prefix of each pinned bare ELF must
++        # equal the pinned readback length, else the constants/artifact pair diverged
++        for d, name in ((QDRV1, "qdrv1"), (OBS, "observer")):
++            bare = open(d["bare"], "rb").read()
++            end = sht_prefix_end(bare)
++            if end != d["readback_bytes"]:
++                return "FAIL", ("%s bare-sdk computed prefix %d != pinned readback %d — STOP, "
++                                "never widen the law" % (name, end, d["readback_bytes"]))
++            if hashlib.sha256(bare[64:end]).hexdigest() != d["readback_body_sha"]:
++                return "FAIL", "%s body-sha constant diverges from the artifact — STOP" % name
++        return "PASS", "SHT-strip law constants cross-checked against both bare-sdk artifacts"
++
++    fl.step("ride.0", "SC-PREFLIGHT — local identities: BOTH fself PRXs + BOTH bare-sdk ELFs "
++                      "(verify hashes before replacing any owned file)", "preflight",
++            [gate_sha(QDRV1["prx"], QDRV1["sha"], QDRV1["bytes"]),
++             gate_sha(OBS["prx"], OBS["sha"], OBS["bytes"]),
++             "bare-sdk refs pinned by sha + bytes (determinism/run1 and build-1)",
++             "game CLOSED — staging happens BEFORE the game session; no ploader arm yet"],
++            ["shasum -a 256 %s %s" % (QDRV1["prx"], OBS["prx"]),
++             "shasum -a 256 %s %s" % (QDRV1["bare"], OBS["bare"])],
++            preflight_fn([(QDRV1["prx"], QDRV1["sha"], QDRV1["bytes"]),
++                          (OBS["prx"], OBS["sha"], OBS["bytes"]),
++                          (QDRV1["bare"], QDRV1["bare_sha"], QDRV1["bare_bytes"]),
++                          (OBS["bare"], OBS["bare_sha"], OBS["bare_bytes"])], "ridealongs"))
++
++    fl.step("ride.1", "SC-PREFLIGHT b — recompute the §3 readback constants from the bare-sdk "
++                      "ELFs (readback 87112 / body 71406d3c… qdrv1; 30143976 / 3f89a5b6… observer)",
++            "preflight",
++            ["qdrv1: readback bytes == 87112, body sha == 71406d3c…",
++             "observer: readback bytes == 30143976, body sha == 3f89a5b6…",
++             "any divergence = artifact/constants mismatch = STOP, never widen the law"],
++            ["python3 - <bare-sdk>  # max(p_offset+p_filesz) + body sha (§3 snippet semantics)"],
++            prefix_gate_fn)
++
++    fl.step("ride.2", "SC-0 — RETR live ploader.ini pre-image + console .bak backup (rollback "
++                      "artifact FIRST; header exactly once; NO duplicate ridealong lines; all 4 "
++                      "expected existing lines present)", "ini",
++            ["pre-image RETR + hash recorded BEFORE any edit (Gate A0 pattern)",
++             "FAIL on: no [PPSA33286], duplicate qdrv1/observer lines (ploader does NOT dedupe), "
++             "missing/unexpected-mode expected lines — reconcile, never blind-edit",
++             "expected existing lines (pinned modes): %s = 2; %s = 2; %s = 0; %s = 2"
++             % ("/data/plugins/modbridge_runtime_aligned_entry.prx",
++                "/data/plugins/modbridge_path_test.prx",
++                "/data/plugins/modbridge_ingame_facts.prx",
++                "/data/plugins/modbridge_supplier_composition.prx"),
++             "console .bak backup written before any STOR"],
++            ["curl -sS %s%s -o <run-dir>/ploader.ini.pre" % (FTP, COMBINED_INI["ini"]),
++             "shasum -a 256 <run-dir>/ploader.ini.pre",
++             "curl -sS -T <run-dir>/ploader.ini.pre %s%s.$TAG.bak" % (FTP, COMBINED_INI["ini"])],
++            ini_preimage_fn("combined"))
++
++    fl.step("ride.3", "SC-0 b — freshness baselines: UE4SS.log stat; observer log ABSENT; igf "
++                      "jsonl baseline IF PRESENT (never delete owned evidence)", "baseline",
++            ["UE4SS.log size baseline (absent = valid fresh baseline)",
++             "%s must be ABSENT — created fresh by the module this launch" % OBS["log"],
++             "igf jsonl: record size+sha if present; qdrv1 lines carry the qdrv1- build_id prefix"],
++            ["curl -sS %s/data/plugins/UE4SS.log          # size baseline" % FTP,
++             "curl -sS %s%s   # must be absent" % (FTP, OBS["log"]),
++             "curl -sS %s%s   # baseline if present" % (FTP, GAME["C2"])],
++            freshness_baseline_fn())
++
++    fl.step("ride.4", "SC-1/SC-2 — STOR modbridge_qh_driver.prx (52c32216… / 26157 B) + SHT-strip "
++                      "readback law (87112 B / body 71406d3c…; ONE re-STOR on failure, then abort)",
++            "upload",
++            ["local sha == 52c32216… BEFORE upload (BUILD-ID law)",
++             "readback: exact-length 87112 + body-hash 71406d3c… + Ehdr exception (e_shnum zeroed)",
++             "full-file hash equality through this channel is IMPOSSIBLE by construction (§3)"],
++            ["curl -sS -T %s %s%s" % (QDRV1["prx"], FTP, QDRV1["target_prx"]),
++             "curl -sS %s%s -o <run-dir>/qdrv1.readback.prx" % (FTP, QDRV1["target_prx"]),
++             "python3 - §3 snippet vs determinism/run1/bare-sdk/modbridge_qh_driver.prx"],
++            prx_law_upload_fn(QDRV1, "qdrv1"))
++
++    fl.step("ride.5", "SC-3/SC-4 — STOR modbridge_runtime_aligned_observer.prx (1afa0997… / "
++                      "30152151 B) + SHT-strip readback law (30143976 B / body 3f89a5b6…; ONE "
++                      "re-STOR on failure, then abort)", "upload",
++            ["local sha == 1afa0997… BEFORE upload (BUILD-ID law)",
++             "readback: exact-length 30143976 + body-hash 3f89a5b6… + Ehdr exception",
++             "distinct files under their OWN names — nothing is replaced"],
++            ["curl -sS -T %s %s%s" % (OBS["prx"], FTP, OBS["target_prx"]),
++             "curl -sS %s%s -o <run-dir>/observer.readback.prx" % (FTP, OBS["target_prx"]),
++             "python3 - §3 snippet vs build-1/bare-sdk/modbridge_runtime_aligned_observer.prx"],
++            prx_law_upload_fn(OBS, "observer"))
++
++    fl.step("ride.6", "SC-5 — append-only ini edit from the pre-image (BOTH missing `= 2` lines, "
++                      "each idempotent) + combined end-state check (6 entries, exactly 5 "
++                      "registered)", "ini",
++            ["appends AFTER the composition line; never rewrite/reorder existing lines",
++             "each ridealong line idempotent: already present exactly-once at = 2 -> no-op for it",
++             "end-state: header once; 4 expected lines pinned modes; qdrv1 + observer = 2; "
++             "registered count == exactly 5 (mode-0 igf line consumes no slot)"],
++            ["diff <run-dir>/ploader.ini.pre <run-dir>/ploader.ini.new  # exactly the appended line(s)"],
++            ini_edit_fn("ridealongs", [QDRV1["module_line"], OBS["module_line"]]))
++
++    fl.step("ride.7", "SC-5 — STOR edited ploader.ini + fresh readback byte-exact (skipped when "
++                      "the edit was a no-op)", "ini",
++            ["readback must be byte-identical to the local append-only edit (plain file law)",
++             "no-op edit -> nothing is stored (idempotent re-run)"],
++            ["curl -sS -T <run-dir>/ploader.ini.new %s%s" % (FTP, COMBINED_INI["ini"]),
++             "curl -sS %s%s -o <run-dir>/ploader.ini.readback" % (FTP, COMBINED_INI["ini"])],
++            ini_stor_fn("ridealongs"))
++
++    fl.step("ride.8", "SC-6/SC-7 HANDOFF — arm ploader + USER launches Townfall (single launch "
++                      "window; composition + qdrv1 + observer all ride =2)", "handoff",
++            ["ONE game-launch window total: 5 registered plugins in the same ploader.ini",
++             "SC-5b after launch: EXACTLY 5 `OK (<ms>): <file>` notification lines, ZERO FAIL "
++             "lines; any FAIL -> STOP + rollback-ridealongs",
+              "then run: console_batch.py game-evidence"],
+             ["USER arms ploader.elf (game closed)",
+              "USER launches Townfall",
+              "controller: python3 console_batch.py game-evidence"],
++            handoff(RIDEALONG_HANDOFF), prompt=RIDEALONG_HANDOFF)
++    return fl
++
++
++def build_stage_observer():
++    """Observer ridealong ONLY (STAGE-PLAN-COMBINED §3-§5, observer rows):
++    PRX upload + SHT-strip readback law + idempotent ini append of ONLY the
++    observer line — coordinates with a qdrv1 line already present (staged by
++    stage-qdrv1 or a prior stage-ridealongs) without touching it."""
++    fl = Flow("stage-observer")
++    fl.notes = ("STAGE-PLAN-COMBINED observer ridealong ONLY: appends ONLY the observer line to "
++                "the CURRENT ini state; a qdrv1 line already staged by stage-qdrv1/"
++                "stage-ridealongs is left untouched (idempotent coordination).")
++
++    fl.step("obs.0", "SC-PREFLIGHT — local identities: observer fself (1afa0997… / 30152151 B) + "
++                     "bare-sdk reference (d0a3d6fe… / 30145992 B); computed SHT prefix == 30143976",
++            "preflight",
++            [gate_sha(OBS["prx"], OBS["sha"], OBS["bytes"]),
++             gate_sha(OBS["bare"], OBS["bare_sha"], OBS["bare_bytes"]),
++             "game CLOSED — staging happens BEFORE the game session; no ploader arm yet"],
++            ["shasum -a 256 %s" % OBS["prx"], "stat -f %%z %s" % OBS["prx"],
++             "shasum -a 256 %s" % OBS["bare"]],
++            preflight_fn([(OBS["prx"], OBS["sha"], OBS["bytes"]),
++                          (OBS["bare"], OBS["bare_sha"], OBS["bare_bytes"])], "observer"))
++
++    fl.step("obs.1", "SC-0 — RETR live ploader.ini pre-image + console .bak backup (rollback "
++                     "artifact FIRST)", "ini",
++            ["pre-image RETR + hash recorded BEFORE any edit",
++             "no pre-image retrievable -> STOP (the combined law never writes a ploader.ini from scratch)",
++             "console .bak backup written before any STOR"],
++            ["curl -sS %s%s -o <run-dir>/ploader.ini.pre" % (FTP, COMBINED_INI["ini"]),
++             "shasum -a 256 <run-dir>/ploader.ini.pre",
++             "curl -sS -T <run-dir>/ploader.ini.pre %s%s.$TAG.bak" % (FTP, COMBINED_INI["ini"])],
++            ini_preimage_fn("observer"))
++
++    fl.step("obs.2", "SC-5 (observer) — idempotent local edit: append ONLY the observer `= 2` "
++                     "line if absent; a qdrv1 line already present is left untouched; no-op when "
++                     "the observer line is already staged", "ini",
++            ["COORDINATION: if stage-qdrv1/stage-ridealongs already appended its line, this flow "
++             "appends ONLY its own line to the current state",
++             "append-only law proven against the pre-image (+single leading NL iff it lacked one)",
++             "STOP on: duplicate observer line, unexpected modes, missing expected lines, "
++             "unknown contract — reconcile, never blind-edit"],
++            ["diff <run-dir>/ploader.ini.pre <run-dir>/ploader.ini.new  # exactly the observer line"],
++            ini_edit_fn("observer", [OBS["module_line"]], optional=(QDRV1["module_line"],)))
++
++    fl.step("obs.3", "SC-3/SC-4 — STOR modbridge_runtime_aligned_observer.prx to its FINAL name + "
++                     "SHT-strip readback law (30143976 B / body 3f89a5b6…; ONE re-STOR on failure, "
++                     "then abort)", "upload",
++            ["local sha == 1afa0997… BEFORE upload (BUILD-ID law)",
++             "readback: exact-length 30143976 + body-hash 3f89a5b6… + Ehdr exception (e_shnum zeroed)",
++             "full-file hash equality through this channel is IMPOSSIBLE by construction (§3)"],
++            ["curl -sS -T %s %s%s" % (OBS["prx"], FTP, OBS["target_prx"]),
++             "curl -sS %s%s -o <run-dir>/observer.readback.prx" % (FTP, OBS["target_prx"]),
++             "python3 - §3 snippet vs build-1/bare-sdk/modbridge_runtime_aligned_observer.prx"],
++            prx_law_upload_fn(OBS, "observer"))
++
++    fl.step("obs.4", "SC-5 — STOR edited ploader.ini + fresh readback byte-exact (skipped when "
++                     "the edit was a no-op)", "ini",
++            ["readback must be byte-identical to the local append-only edit (plain file law)",
++             "no-op edit -> nothing is stored (idempotent re-run)"],
++            ["curl -sS -T <run-dir>/ploader.ini.new %s%s" % (FTP, COMBINED_INI["ini"]),
++             "curl -sS %s%s -o <run-dir>/ploader.ini.readback" % (FTP, COMBINED_INI["ini"])],
++            ini_stor_fn("observer"))
++
++    fl.step("obs.5", "HANDOFF — the game session (single launch window; observer rides =2) + "
++                     "rollback pointer", "handoff",
++            ["ONE game-launch window total; observer log %s is created fresh by the module" % OBS["log"],
++             "rollback (plan §7): python3 console_batch.py rollback-ridealongs (flips ridealong "
++             "lines to = 0 — parse-skipped, no attach), then byte-verify",
++             "then run: console_batch.py game-evidence"],
++            ["USER arms ploader.elf (game closed)",
++             "USER launches Townfall",
++             "controller: python3 console_batch.py game-evidence"],
++            handoff(RIDEALONG_HANDOFF), prompt=RIDEALONG_HANDOFF)
++    return fl
++
++
++def build_rollback_ridealongs():
++    """STAGE-PLAN-COMBINED §7: flip BOTH ridealong lines to ` = 0` (single-character
++    edits; mode 0 is SKIPPED at parse — no attach, no FAIL notify, no timeout),
++    with a fresh .bak + byte-verified readback. Never replay a failed activation
++    without a fresh preflight and a distinct TAG."""
++    fl = Flow("rollback-ridealongs")
++    fl.notes = ("STAGE-PLAN-COMBINED §7 rollback: BOTH ridealong lines -> = 0. Game must be "
++                "CLOSED and the ploader NOT armed. Ridealong LOGS are owned evidence — keep them.")
++
++    fl.step("rb.0", "§7.1 — game CLOSED, ploader NOT armed; RETR current ini pre-image + fresh "
++                    "console .bak (distinct TAG)", "ini",
++            ["game fully closed; ploader not armed — mode flips take effect at the next arm",
++             "never replay a failed activation without a fresh preflight + distinct TAG"],
++            ["curl -sS %s%s -o <run-dir>/ploader.ini.pre" % (FTP, COMBINED_INI["ini"]),
++             "curl -sS -T <run-dir>/ploader.ini.pre %s%s.$TAG.bak" % (FTP, COMBINED_INI["ini"])],
++            ini_preimage_fn("rollback"))
++
++    def rollback_edit_fn(ctx):
++        pre = ctx.state.get("pre")
++        status, new_text, flipped = ridealong_rollback_edit(
++            pre, [QDRV1["module_line"], OBS["module_line"]])
++        ctx.save("ploader.ini.rolledback", new_text if status != "stop" else "")
++        ctx.save("ploader-rollback-decision.json", json.dumps(
++            {"status": status, "flipped": flipped}, indent=2))
++        if status == "stop":
++            return "FAIL", "AMBIGUOUS ini state — %s | pre-image preserved; reconcile" % new_text
++        if status == "noop":
++            return "PASS", "no ridealong line is staged at = 2 — nothing to roll back"
++        problems = []
++        if pre is not None:
++            if len(new_text) != len(pre):
++                problems.append("rollback changed file length (must be single-character mode flips)")
++            else:
++                diffs = [(i, a, b) for i, (a, b) in enumerate(zip(pre, new_text)) if a != b]
++                if len(diffs) != len(flipped) or any(b != "0" or a != "2" for _i, a, b in diffs):
++                    problems.append("rollback diff is not exactly one 2->0 flip per staged line: %s"
++                                    % diffs[:6])
++        if problems:
++            return "FAIL", "; ".join(problems)
++        return "PASS", "mode flips ready: %s" % flipped
++
++    fl.step("rb.1", "§7.1 — flip BOTH ridealong lines to ` = 0` (single-character edits, verified "
++                    "byte-level)", "ini",
++            ["mode 0 = SKIPPED at parse (rollback-runbook §4.2): no attach, no FAIL notify, no timeout",
++             "every OTHER byte must be identical to the pre-image (verified)",
++             "lines absent / already = 0 -> honest no-op"],
++            ["diff <run-dir>/ploader.ini.pre <run-dir>/ploader.ini.rolledback  # exactly the two mode digits"],
++            rollback_edit_fn)
++
++    def rollback_stor_fn(ctx):
++        new_local = os.path.join(ctx.run_dir, "ploader.ini.rolledback")
++        decision = {}
++        try:
++            decision = json.load(open(os.path.join(ctx.run_dir, "ploader-rollback-decision.json")))
++        except Exception:
++            pass
++        if decision.get("status") == "noop":
++            return "PASS", "nothing was flipped — ini untouched (no STOR)"
++        if not os.path.exists(new_local) or os.path.getsize(new_local) == 0:
++            return "FAIL", "rolled-back ini missing (rb.1 must run first)"
++        rc, _, _ = run_cmd(ctx, ["curl", "-sS", "-T", new_local, FTP + COMBINED_INI["ini"]],
++                           "STOR rolled-back ploader.ini")
++        if rc != 0:
++            return "FAIL", "ini STOR failed rc=%d" % rc
++        p = os.path.join(ctx.run_dir, "ploader.ini.readback")
++        rc2, _, _ = run_cmd(ctx, ["curl", "-sS"] + CURL_TIMEOUT + [FTP + COMBINED_INI["ini"], "-o", p],
++                            "ini readback")
++        if ctx.dry:
++            return "PASS", "dry"
++        if rc2 != 0 or not os.path.exists(p) or os.path.getsize(p) == 0:
++            return "FAIL", "ini readback failed rc=%d — reconcile before any next staging" % rc2
++        if open(p).read() != open(new_local).read():
++            return "FAIL", "ini readback != rolled-back bytes — STOP and reconcile"
++        return "PASS", "rolled-back ini stored + readback byte-verified"
++
++    fl.step("rb.2", "§7.1 — STOR rolled-back ini + RETR + byte-verify readback", "ini",
++            ["RETR + byte-verify readback after the flip (plan §7.1)",
++             "optional §7.2 DELE of the two PRXs is NOT automatic — decide per recovery"],
++            ["curl -sS -T <run-dir>/ploader.ini.rolledback %s%s" % (FTP, COMBINED_INI["ini"]),
++             "curl -sS %s%s -o <run-dir>/ploader.ini.readback" % (FTP, COMBINED_INI["ini"])],
++            rollback_stor_fn)
++
++    fl.step("rb.3", "§7.2-§7.4 — post-rollback receipts (doc-only)", "doc",
++            ["§7.2 optionally DELE the two PRXs if discarding; KEEP the observer/qdrv1 logs "
++             "(owned evidence)",
++             "§7.3 confirm aligned_entry/path_test/composition lines + logs/PRXs byte-identical "
++             "to the Step-0 preflight captures",
++             "§7.4 never replay a failed activation without a fresh preflight and a distinct TAG; "
++             "never relaunch an identical rejected binary"],
++            ["curl -sS %s%s   # eyeball: both lines = 0, everything else unchanged" % (FTP, COMBINED_INI["ini"])],
+             None)
+     return fl
+ 
+@@ -1966,10 +2751,10 @@
+             return "FAIL", "CP gate not green: %s | %s" % (per, hint)
+         return "PASS", "CP0-CP4 green — %s" % hint
+ 
+-    fl.step("ge.3", "CP0-CP4 checks (composed PRX ran; activation; engine-ready+Tick 0x37ac8c0; mods-started; mod banner)", "classify",
++    fl.step("ge.3", "CP0-CP4 checks (composed PRX ran; activation; engine-ready+Tick 0x33ac8c0; mods-started; mod banner)", "classify",
+             ["CP0: one new module_start_entered…module_start_return 0x0 pair + probe_lifecycle_result 0x0",
+              "CP1: fresh S session reaches activated; banner + 'Setting up mods...'; no module_start failed line",
+-             "CP2: engine-ready AND 'GameEngine::Tick address (vtable: 0x37ac8c0; scan: 0x37ac8c0)'",
++             "CP2: engine-ready AND 'GameEngine::Tick address (vtable: 0x33ac8c0; scan: 0x33ac8c0)'",
+              "CP3: fresh mods-started (rung-1 liveness delegated to rung_check; UNVERIFIED_DRIVER is honest, gap G2)",
+              "CP4: exactly one fresh '[TownfallItemSpawner] Loaded v1.0…' banner; S ends mods-started"],
+             ["python3 console_batch.py cp0-cp4 classifier over S/L/D1 in the run dir"],
+@@ -2128,11 +2913,15 @@
+                          "EXACTLY ONE DLL stage runs; the preferred single DLL run remains dll8 "
+                          "(CONSOLE-STAGE-PLAN-8FAM). Never both by default.")
+     fl = Flow("all")
+-    fl.notes = ("Recommended single-session order (CONSOLE-STAGE-PLAN-8FAM Sequencing): "
+-                "payload-only stages first in ONE game-closed window (%s, then e2e), "
+-                "then stage-qdrv1, then the single UE4SS game session with evidence collection LAST. "
+-                "%s" % (dll_tag, fallback_note))
+-    for sub in (DLL_BUILDERS[dll_tag], build_e2e, build_stage_qdrv1, build_game_evidence):
++    fl.notes = ("Recommended single-session order (CONSOLE-STAGE-PLAN-8FAM Sequencing + "
++                "STAGE-PLAN-COMBINED §8): payload-only stages first in ONE game-closed window "
++                "(%s, then e2e), then the COMBINED ridealong staging (qdrv1 + observer, "
++                "stage-ridealongs — supersedes the qdrv1-only stage here), then the single "
++                "UE4SS game session with evidence collection LAST. The settings+loadlist "
++                "restage (NEW-SETTINGS §3) is NOT part of this flow — per the master plan, "
++                "land it separately between staging and launch when the session needs it. %s"
++                % (dll_tag, fallback_note))
++    for sub in (DLL_BUILDERS[dll_tag], build_e2e, build_stage_ridealongs, build_game_evidence):
+         f = sub()
+         for st in f.steps:
+             st2 = dict(st)
+@@ -2141,7 +2930,9 @@
+     return fl
+ 
+ 
+-FLOWS = {"dll8": build_dll8, "dll7": build_dll7, "e2e": build_e2e, "stage-qdrv1": build_stage_qdrv1,
++FLOWS = {"dll8": build_dll8, "dll7": build_dll7, "e2e": build_e2e,
++         "stage-ridealongs": build_stage_ridealongs, "stage-observer": build_stage_observer,
++         "stage-qdrv1": build_stage_qdrv1, "rollback-ridealongs": build_rollback_ridealongs,
+          "game-evidence": build_game_evidence, "all": build_all}
+ 
+ 
+@@ -2200,6 +2991,17 @@
+           any(i.startswith("dll8/") for i in ids) and not any(i.startswith("dll7/") for i in ids))
+     check("all default order dll8 FIRST", ids[0].startswith("dll8/"), ids[0])
+     check("all notes name the fallback attribution path", "fallback attribution" in (fa.notes or ""))
++    # ridealong extension: `all` stages BOTH ridealongs between e2e and game-evidence
++    def idx_of(prefix):
++        return min(i for i, sid in enumerate(ids) if sid.startswith(prefix))
++    check("all contains the combined stage-ridealongs (never the qdrv1-only stage)",
++          any(i.startswith("stage-ridealongs/") for i in ids)
++          and not any(i.startswith("stage-qdrv1/") for i in ids)
++          and not any(i.startswith("stage-observer/") for i in ids), str(ids))
++    check("all order: e2e < stage-ridealongs < game-evidence",
++          idx_of("e2e/") < idx_of("stage-ridealongs/") < idx_of("game-evidence/"), str(ids))
++    check("all ridealongs handoff is the launch gate (last ridealongs step)",
++          [s for s in fa.steps if s["id"].startswith("stage-ridealongs/")][-1]["group"] == "handoff")
+     globals()["SELECTED_DLL"] = "dll7"
+     fa = build_all()
+     ctx = Ctx(None, dry=True); fa.run(ctx)
+@@ -2227,10 +3029,28 @@
+                    "/data/plugins/modbridge_qh_driver.prx", "USER ACTION REQUIRED" if False else "arm ploader"]:
+         check("qdrv1 anchor %r" % anchor[:40], anchor in qd)
+ 
++    ctx = Ctx(None, dry=True); FLOWS["stage-observer"]().run(ctx); ob = "\n".join(ctx.events)
++    for anchor in ["modbridge_runtime_aligned_observer.prx", "1afa0997682c", "30152151",
++                   "d0a3d6feebae", "30145992", "30143976", "3f89a5b6", "SHT-strip", "ploader.ini",
++                   ".bak", "ONLY its own line", "ARM ploader", "rollback-ridealongs"]:
++        check("stage-observer anchor %r" % anchor[:40], anchor in ob)
++
++    ctx = Ctx(None, dry=True); FLOWS["stage-ridealongs"]().run(ctx); rd = "\n".join(ctx.events)
++    for anchor in ["52c3221665a4", "1afa0997682c", "87112", "71406d3c", "30143976", "3f89a5b6",
++                   "SHT-strip", "[PPSA33286]", "exactly 5", "modbridge_qh_driver.prx",
++                   "modbridge_runtime_aligned_observer.prx", "modbridge_supplier_composition.prx",
++                   ".bak", "rollback-ridealongs", "ARM ploader", "UE4SS.log",
++                   "townfall_runtime_aligned_observer.log"]:
++        check("stage-ridealongs anchor %r" % anchor[:40], anchor in rd)
++
++    ctx = Ctx(None, dry=True); FLOWS["rollback-ridealongs"]().run(ctx); rbc = "\n".join(ctx.events)
++    for anchor in ["= 0", "single-character", "ploader.ini", ".bak", "readback", "owned evidence"]:
++        check("rollback-ridealongs anchor %r" % anchor[:40], anchor in rbc)
++
+     ctx = Ctx(None, dry=True); FLOWS["game-evidence"]().run(ctx); ge = "\n".join(ctx.events)
+     for anchor in ["post_launch_check.py", "rung_check.py", "runtime-status.txt", "UE4SS.log",
+                    "townfall_runtime_aligned_entry.log", "modbridge-ingame-facts.jsonl",
+-                   "CP0-CP4", "OPTIONS", "CROSS", "0x37ac8c0", "USER ACTION REQUIRED",
++                   "CP0-CP4", "OPTIONS", "CROSS", "0x33ac8c0", "USER ACTION REQUIRED",
+                    "LOAD A SAVE", "ARM ploader.elf"]:
+         check("game-evidence anchor %r" % anchor[:40], anchor in ge)
+ 
+@@ -2472,6 +3292,179 @@
+     problems = ploader_verify_new("[modules]\n2=%s\n" % QDRV1["module_line"], "append")
+     check("verify flags lost composition line", problems != [])
+ 
++    print("== selftest G: SHT-strip readback law (STAGE-PLAN-COMBINED §3, both ways) ==")
++    def make_elf(body_n):
++        # minimal ELF64: 64-byte Ehdr + 2 phdrs (56 B each) + body.
++        # ph1: offset 176 filesz body_n -> end 176+body_n; ph2: offset 176 filesz 100.
++        ehdr = bytearray(64)
++        ehdr[0:4] = b"\x7fELF"
++        struct.pack_into("<Q", ehdr, 32, 64)         # e_phoff
++        struct.pack_into("<H", ehdr, 56, 2)          # e_phnum
++        ph1 = bytearray(56)
++        struct.pack_into("<Q", ph1, 8, 176)          # p_offset
++        struct.pack_into("<Q", ph1, 32, body_n)      # p_filesz
++        ph2 = bytearray(56)
++        struct.pack_into("<Q", ph2, 8, 176)
++        struct.pack_into("<Q", ph2, 32, 100)
++        body = bytes((i * 7) % 251 + 1 for i in range(body_n))
++        return bytes(ehdr) + bytes(ph1) + bytes(ph2) + body
++    BARE = make_elf(124)
++    END = sht_prefix_end(BARE)
++    check("synthetic ELF prefix end computed", END == 300 and len(BARE) == 300, (END, len(BARE)))
++    BODY_SHA = hashlib.sha256(BARE[64:END]).hexdigest()
++    rb_ok = bytearray(BARE[:END])
++    struct.pack_into("<Q", rb_ok, 40, 0xDEADBEEF)     # e_shoff junked by make_fself
++    struct.pack_into("<H", rb_ok, 58, 0x40)           # e_shentsize junked
++    struct.pack_into("<H", rb_ok, 60, 0)              # e_shnum zeroed (law)
++    struct.pack_into("<H", rb_ok, 62, 0)              # e_shstrndx junked
++    ok, detail = sht_strip_readback_law(bytes(rb_ok), BARE, END, BODY_SHA)
++    check("law accepts a law-shaped readback", ok, detail)
++    check("law detail is READBACK-OK", detail.startswith("READBACK-OK"), detail[:60])
++    def law_fail(name, rb, bare=BARE, expect=END, sha=BODY_SHA):
++        ok, detail = sht_strip_readback_law(rb, bare, expect, sha)
++        check("law rejects %s" % name, not ok, detail[:80])
++        return detail
++    d = law_fail("SHT tail leaked back into the readback", BARE + b"SHT-TAIL")
++    check("length rejection names both sizes", "len=308/300" in d, d[:60])
++    law_fail("truncated readback", BARE[:END - 1])
++    corrupt = bytearray(BARE[:END]); corrupt[100] ^= 0xFF
++    law_fail("corrupted body byte", bytes(corrupt))
++    wrong_body_sha = hashlib.sha256(b"x").hexdigest()
++    d = law_fail("pinned body sha mismatch", bytes(rb_ok), sha=wrong_body_sha)
++    check("body-sha rejection names the sha", wrong_body_sha[:12] in d, d[:80])
++    forbidden = bytearray(bytes(rb_ok)); forbidden[7] ^= 0x01   # e_ident byte outside allowed set
++    d = law_fail("forbidden header byte diff", bytes(forbidden))
++    check("header rejection names the outside byte", "outside the allowed set" in d, d[:80])
++    shnum = bytearray(bytes(rb_ok)); struct.pack_into("<H", shnum, 60, 3)
++    law_fail("e_shnum not zeroed", bytes(shnum))
++    foreign = bytearray(bytes(rb_ok)); foreign[0:4] = b"\x7fELx"
++    law_fail("foreign magic", bytes(foreign))
++    d = law_fail("constants/artifact divergence (pinned 301)", bytes(rb_ok) + b"x", expect=END + 1)
++    check("divergence refusal says never widen the law", "never widen the law" in d, d[:80])
++    not_elf = bytearray(64)
++    law_fail("bare reference not an ELF", bytes(rb_ok), bare=bytes(not_elf))
++    # real pinned artifacts: the law constants must reproduce from the bare-sdk ELFs
++    for d_ref, name in ((QDRV1, "qdrv1"), (OBS, "observer")):
++        bare = open(d_ref["bare"], "rb").read()
++        end = sht_prefix_end(bare)
++        check("%s artifact prefix == pinned readback length" % name, end == d_ref["readback_bytes"],
++              "%d vs %d" % (end, d_ref["readback_bytes"]))
++        check("%s artifact body sha == pinned" % name,
++              hashlib.sha256(bare[64:end]).hexdigest() == d_ref["readback_body_sha"])
++        rb = bytearray(bare[:end])
++        struct.pack_into("<H", rb, 60, 0)
++        ok, detail = sht_strip_readback_law(bytes(rb), bare, d_ref["readback_bytes"], d_ref["readback_body_sha"])
++        check("%s artifact law round-trip (fself channel shape)" % name, ok, detail[:80])
++        ok2, _ = sht_strip_readback_law(bare, bare, d_ref["readback_bytes"], d_ref["readback_body_sha"])
++        check("%s full bare file rejected (SHT tail not embedded)" % name, not ok2)
++
++    print("== selftest H: combined ridealong ini law (append-only + idempotent + end-state) ==")
++    E_LINE = "/data/plugins/modbridge_runtime_aligned_entry.prx"
++    P_LINE = "/data/plugins/modbridge_path_test.prx"
++    I_LINE = "/data/plugins/modbridge_ingame_facts.prx"
++    C_LINE = COMBINED_INI["anchor"]
++    Q_LINE = QDRV1["module_line"]
++    O_LINE = OBS["module_line"]
++    pre4 = "[PPSA33286]\n%s = 2\n%s = 2\n%s = 0\n%s = 2\n" % (E_LINE, P_LINE, I_LINE, C_LINE)
++    pre5q = pre4 + "%s = 2\n" % Q_LINE
++    pre6 = pre5q + "%s = 2\n" % O_LINE
++
++    st, nt, ap = ridealong_ini_plan(pre4, [Q_LINE, O_LINE])
++    check("combined append adds exactly BOTH lines in order",
++          st == "append" and ap == ["%s = 2" % Q_LINE, "%s = 2" % O_LINE], str(ap))
++    check("combined edit is append-only from the pre-image",
++          ridealong_ini_append_only(pre4, nt, ap) == [])
++    check("combined end-state clean (6 entries, 5 registered)",
++          ridealong_verify_endstate(nt, required=[Q_LINE, O_LINE]) == [],
++          str(ridealong_verify_endstate(nt, required=[Q_LINE, O_LINE])))
++
++    st, nt2, ap2 = ridealong_ini_plan(pre5q, [Q_LINE, O_LINE])
++    check("COORDINATION: qdrv1 already staged -> observer appends ONLY its own line",
++          st == "append" and ap2 == ["%s = 2" % O_LINE], str(ap2))
++    check("qdrv1 line untouched byte-identical", nt2.startswith(pre5q))
++    check("observer-only end-state clean", ridealong_verify_endstate(nt2, required=[O_LINE],
++          optional=(Q_LINE,)) == [])
++
++    st, nt3, ap3 = ridealong_ini_plan(pre6, [Q_LINE, O_LINE])
++    check("idempotent: fully-staged ini is a no-op (change nothing)", st == "noop" and nt3 == pre6)
++
++    dup_pre = pre4.replace(C_LINE + " = 2", C_LINE + " = 2\n" + O_LINE + " = 2", 1) \
++        + "%s = 2\n" % O_LINE
++    st, nt4, _ap = ridealong_ini_plan(dup_pre, [O_LINE])
++    check("STOP on duplicate ridealong line (ploader injects twice)", st == "stop", str((st, nt4)))
++
++    st, _nt, _ap = ridealong_ini_plan(None, [O_LINE])
++    check("STOP: combined law never writes an ini from scratch", st == "stop")
++    st, _nt, _ap = ridealong_ini_plan("[modules]\n1=%s\n2=%s\n" % (C_LINE, Q_LINE), [O_LINE])
++    check("STOP on legacy numbered shape (no [PPSA33286] header) — reconcile", st == "stop")
++    st, _nt, _ap = ridealong_ini_plan(pre4 + "[PPSA33286]\n", [O_LINE])
++    check("STOP on duplicate header", st == "stop")
++    missing_path = pre4.replace("%s = 2\n" % P_LINE, "")
++    st, _nt, _ap = ridealong_ini_plan(missing_path, [O_LINE])
++    check("STOP when an expected existing line is missing", st == "stop")
++    st, _nt, _ap = ridealong_ini_plan(pre4.replace(C_LINE + " = 2", C_LINE + " = 1"), [O_LINE])
++    check("STOP when an expected line's mode diverges (composition = 1)", st == "stop")
++    st, _nt, _ap = ridealong_ini_plan(pre5q.replace(Q_LINE + " = 2", Q_LINE + " = 0"), [Q_LINE, O_LINE])
++    check("STOP on a rolled-back mode-0 ridealong line (never blind-flip)", st == "stop")
++    st, _nt, _ap = ridealong_ini_plan(pre5q.replace(Q_LINE + " = 2", Q_LINE + " = 1"), [Q_LINE, O_LINE])
++    check("STOP on a mode-1 ridealong line", st == "stop")
++    st, _nt, _ap = ridealong_ini_plan(pre4 + "junk without = sign\n", [O_LINE])
++    check("STOP on an unparseable ini line", st == "stop")
++    st, _nt, _ap = ridealong_ini_plan(pre4 + "%s = 3\n" % P_LINE.replace(".prx", "2.prx"), [O_LINE])
++    check("STOP on an out-of-range mode (parser would drop it)", st == "stop")
++
++    pre4_nonl = pre4.rstrip("\n")
++    st, nt5, ap5 = ridealong_ini_plan(pre4_nonl, [O_LINE])
++    check("missing trailing newline handled (single added NL + the line)",
++          st == "append" and nt5.startswith(pre4_nonl + "\n") and nt5.endswith("%s = 2\n" % O_LINE))
++    check("append-only proof passes for the NL-added case",
++          ridealong_ini_append_only(pre4_nonl, nt5, ap5) == [])
++    tampered = nt5.replace(I_LINE + " = 0", I_LINE + " = 2")
++    check("append-only proof catches a rewritten existing line",
++          ridealong_ini_append_only(pre4_nonl, tampered, ap5) != [])
++    reordered = pre4.replace(E_LINE + " = 2", "x" + E_LINE + " = 2", 1)
++    check("append-only proof catches any non-tail change",
++          ridealong_ini_append_only(pre4, reordered + "%s = 2\n" % O_LINE, ["%s = 2" % O_LINE]) != [])
++
++    extra = nt + "%s = 2\n" % "/data/plugins/some_other.prx"
++    check("end-state flags an unknown plugin line",
++          any("unknown plugin line" in p for p in ridealong_verify_endstate(extra, required=[Q_LINE, O_LINE])))
++    dup = nt + "%s = 2\n" % O_LINE
++    check("end-state flags a duplicated ridealong line",
++          any("duplicate" in p for p in ridealong_verify_endstate(dup, required=[O_LINE])))
++    missing_req = pre4 + "%s = 2\n" % O_LINE
++    check("end-state flags a missing required ridealong",
++          any("required ridealong" in p for p in ridealong_verify_endstate(missing_req, required=[Q_LINE, O_LINE])))
++    mode0_optional = pre4 + "%s = 2\n" % O_LINE + "%s = 0\n" % Q_LINE
++    check("end-state flags an optional ridealong at mode 0",
++          any("mode 0" in p for p in ridealong_verify_endstate(mode0_optional, required=[O_LINE], optional=(Q_LINE,))))
++    check("end-state registered count gate (4 != 5 combined)",
++          any("registered plugin count" in p for p in
++              ridealong_verify_endstate(missing_req, required=[Q_LINE, O_LINE])))
++
++    print("== selftest I: §7 rollback edit (single-character mode flips) ==")
++    st, nt6, fl6 = ridealong_rollback_edit(pre6, [Q_LINE, O_LINE])
++    check("rollback flips BOTH staged lines", st == "flip" and len(fl6) == 2, str(fl6))
++    diffs = [(i, a, b) for i, (a, b) in enumerate(zip(pre6, nt6)) if a != b]
++    check("rollback is exactly two single-character 2->0 edits",
++          len(nt6) == len(pre6) and len(diffs) == 2 and all(a == "2" and b == "0" for _i, a, b in diffs),
++          str(diffs))
++    check("end-state gate rightly refuses a rolled-back (mode-0) ini as a staging state",
++          ridealong_verify_endstate(nt6, required=[], optional=(Q_LINE, O_LINE)) != [])
++    st, nt7, fl7 = ridealong_rollback_edit(pre4, [Q_LINE, O_LINE])
++    check("rollback noop when no ridealong line is staged", st == "noop" and nt7 == pre4)
++    st, nt8, fl8 = ridealong_rollback_edit(pre5q, [Q_LINE, O_LINE])
++    check("rollback flips only the staged line (observer absent)",
++          st == "flip" and len(fl8) == 1 and nt8 == pre5q.replace(Q_LINE + " = 2", Q_LINE + " = 0"))
++    st, _nt, _fl = ridealong_rollback_edit(pre5q.replace(Q_LINE + " = 2", Q_LINE + " = 1"), [Q_LINE, O_LINE])
++    check("rollback STOP on a mode-1 line", st == "stop")
++    st, _nt, _fl = ridealong_rollback_edit(pre6 + "%s = 2\n" % O_LINE, [O_LINE])
++    check("rollback STOP on a duplicate line", st == "stop")
++    odd = "[PPSA33286]\n  %s   =  2  \n" % O_LINE
++    st, nt9, fl9 = ridealong_rollback_edit(odd, [O_LINE])
++    check("rollback preserves whitespace (single-char edit on odd spacing)",
++          st == "flip" and nt9 == odd.replace("=  2", "=  0"), repr(nt9))
++
+     print("== selftest F: CP0-CP7 classifier fixtures ==")
+     s_green = "modforge-runtime-status\t1\nsession\t4242\t9876543\nstate\t0\tactivated\t0\t\nstate\t1\tengine-ready\t0\t\nstate\t2\tmods-started\t0\t\n"
+     d1_green = ("[PPSA33286] modbridge-runtime-aligned-observer/v1 build=e9a58a9a8740438ebcb59136252a0556 "
+@@ -2551,16 +3544,27 @@
+         return p
+ 
+     p = sub.add_parser("plan", help="dry-run: print every step, gate and exact command; NO execution")
+-    p.add_argument("--only", default="all", help="comma list: dll8,dll7,e2e,stage-qdrv1,game-evidence,all")
++    p.add_argument("--only", default="all",
++                   help="comma list: dll8,dll7,e2e,stage-ridealongs,stage-observer,stage-qdrv1,"
++                        "rollback-ridealongs,game-evidence,all")
+     p.add_argument("--dll", choices=("7", "8"), default=None,
+                    help="DLL stage 'plan --only all' previews: 8 (preferred, default) or 7 (fallback)")
+     add_flow("dll8", "8-family DLL payload-only stage (game closed) — PREFERRED single DLL run")
+     add_flow("dll7", "7-family DLL payload-only stage — FALLBACK attribution path only (see CONSOLE-STAGE-PLAN-8FAM)")
+     add_flow("e2e", "E2E installer 15-dispatch stage 0..6 cycle (game closed)")
+-    add_flow("stage-qdrv1", "stage qdrv1 PRX + ploader.ini =2 entry (BEFORE the game session)")
++    add_flow("stage-ridealongs", "COMBINED ridealong staging: qdrv1 + observer PRXs (SHT-strip "
++                                 "readback law) + combined 6-entry ploader.ini (game closed, "
++                                 "BEFORE the session) — supersedes stage-qdrv1 inside `all`")
++    add_flow("stage-observer", "observer ridealong ONLY: PRX + SHT-strip readback law + idempotent "
++                               "ini append of ONLY the observer line (game closed)")
++    add_flow("stage-qdrv1", "qdrv1-only stage (legacy single-ridealong path) + ploader.ini entry "
++                            "(BEFORE the game session)")
++    add_flow("rollback-ridealongs", "STAGE-PLAN-COMBINED §7 rollback: flip BOTH ridealong lines to "
++                                    "= 0 + byte-verified readback (game closed, ploader not armed)")
+     add_flow("game-evidence", "post-launch evidence + CP0-CP7 (interactive user handoffs)")
+-    add_flow("all", "full recommended session: dll8 -> e2e -> stage-qdrv1 -> game-evidence "
+-                    "(--dll 7 swaps in the dll7 fallback attribution path; exactly one DLL stage either way)")
++    add_flow("all", "full recommended session: dll8 -> e2e -> stage-ridealongs -> game-evidence "
++                    "(--dll 7 swaps in the dll7 fallback attribution path; exactly one DLL stage "
++                    "either way)")
+     sub.add_parser("selftest", help="host + fixture tests of the tool logic (no console contact)")
+ 
+     args = ap.parse_args(argv)

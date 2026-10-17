@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "worker": "worker-minimal-path-test",
+  "date": "2026-10-04",
+  "team": "2026-10-04-zcode-team",
+  "mission": "Smallest possible ploader PRX probe that decides, by its staged launch, whether /data/plugins/UE4SS.log is writable from a ploader-loaded module and whether /data/modbridge/roots/PPSA33286/loadlist.txt is readable from the game process. Rules the output path in/out as a blocker for the composed runtime.",
+  "deliverable": {
+    "module": "modbridge_path_test",
+    "staged_path_planned": "/data/plugins/modbridge_path_test.prx",
+    "runtime_log_target": "/data/plugins/UE4SS.log",
+    "activation_probe_target": "/data/modbridge/roots/PPSA33286/loadlist.txt",
+    "build_id_prefix": "mpt1-",
+    "source_dir": "src/",
+    "build_script": "build_path_test.py",
+    "stage_plan": "STAGE-PLAN.md",
+    "report": "REPORT.md"
+  },
+  "recipe": {
+    "base": "worker-v3-startup-diag diag igd1 minimal variant (build_ingame.py pipeline reused exactly: import_references-first ld -r combine, SharpProspero Packager.dll, frozen finalize_sdk.py SDK 0x11000000 stamp, pinned make_fself, two-run determinism, artifact checker gates)",
+    "import_table": {
+      "console_proven_7_untouched": [
+        "__error", "sceKernelOpen", "sceKernelWrite", "sceKernelClose",
+        "sysctl", "getpid", "clock_gettime"
+      ],
+      "added_for_this_mission": [
+        "read"
+      ],
+      "added_row_source": "verbatim frozen-191-contract row, copied byte-identical from .superpowers/native-dependency-spike/native-full-runtime-aligned-entry-1/import-contract.json (same provenance family as getpid/clock_gettime: libScePosix POSIX-name row, ModuleName libkernel; the aligned-entry module that carried all 191 verbatim rows loaded on console)",
+      "derived_identities": 0,
+      "rationale": "The mission requires a real 16-byte read; sceKernelRead is NOT in the frozen 191-row contract, so the POSIX-name row `read` is the only verbatim-contract way to perform it. This is the ONLY delta from the igd1 import set and is loudly labeled as first-use-in-lineage (never yet invoked on console by this lineage, though its identity is from the console-loaded 191-row set)."
+    },
+    "module_start_contract": "guard -> open UE4SS.log O_WRONLY|O_CREAT|O_APPEND -> build+write PATH_TEST line (monotonic-ns boot timestamp via clock_gettime) -> open loadlist.txt O_RDONLY, read 16 bytes via `read` -> build ACTIVATION_TEST line with hex (or exact failure + errno via __error) -> write both lines -> close -> return 0 ALWAYS. No threads, no ctor walk, no C++, no experiments.",
+    "return_0_always": true
+  },
+  "claims": {
+    "local_packaging_only": true,
+    "native_executed": false,
+    "in_game_results": false,
+    "determinism_two_runs": "intended and scripted; result recorded in REPORT.md only after actual run",
+    "writability_conclusion": "DEFERRED to the staged launch: UE4SS.log appearing with the PATH_TEST line = path writable (composed-runtime failure is elsewhere); no file/no line = path ruled a blocker OR module did not start (disambiguation steps in STAGE-PLAN.md section 5)"
+  },
+  "bounds": {
+    "writes_confined_to": "outputs/2026-10-04-zcode-team/worker-minimal-path-test/",
+    "existing_files_elsewhere": "read-only; vendored sources copied, originals untouched",
+    "console_access": "none from this worker (no network/console rule); launch is user-coordinated per standing ritual and encoded in STAGE-PLAN.md",
+    "ploader_ini": "not modified by this worker; exact one-line addition provided in STAGE-PLAN.md"
+  }
+}

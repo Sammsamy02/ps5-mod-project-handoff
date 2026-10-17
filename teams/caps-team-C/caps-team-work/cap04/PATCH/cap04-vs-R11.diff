@@ -1,0 +1,572 @@
+--- a/src/LuaMod.cpp
++++ b/src/LuaMod.cpp
+@@ -5245,6 +5245,7 @@
+     {
+         auto r9_index_collect_new(std::vector<int32_t>& Out, std::vector<void*>& OutObj, bool (*BudgetExpired)()) -> bool; // [R9-NOTIFY] UObjectGlobals.cpp
+         auto r9_index_disabled() -> bool; // [R11-WORLD] UObjectGlobals.cpp
++        auto r9_index_snapshot_live(std::vector<int32_t>& OutIdx, std::vector<void*>& OutObj, bool (*Want)(Unreal::UClass*)) -> bool; // [EARLY-4] UObjectGlobals.cpp
+     }
+ 
+     // [R9-NOTIFY] NotifyOnNewObject producer for the PS5 (the StaticConstructObject seam is not
+@@ -5393,6 +5394,33 @@
+         static uint32_t s_errors{0};
+         static R9Pacer s_pace{};
+         static bool s_first_kind[4]{true, true, true, true};
++        // [EARLY-4] startup replay. On PC UE4SS the mods start during engine init, before the first
++        // map, so a hook registered in main.lua sees that map's LoadMap / InitGameState / BeginPlay.
++        // On PS5 the loader injects the runtime late (launch 14: ~69 s after the game process started),
++        // and objects alive when the index is first used are never reported as new. So, once, when
++        // the route first goes live AND world hooks were registered during startup (mods' main scripts and
++        // any ExecuteInGameThread callback that ran before the first pump after the start gate), every
++        // live Actor that already existed is fed
++        // through observe() exactly like a new one, BEFORE any newer object: the map that was already
++        // loaded (or loading) is delivered in the normal order (LoadMap pre -> InitGameState ->
++        // BeginPlay -> LoadMap post), ahead of every later map. Objects of the unprocessed new batch are
++        // excluded (they are observed live), so no object is fed twice. The route never goes live before
++        // startup closes (feed + note_index check s_startup_closed), so nothing is delivered live while
++        // mods are still starting and then replayed again. More than one live GameState
++        // (a map change in progress) = ambiguous order: the replay is skipped, loudly (fail closed).
++        // Not filtered: actors already marked PendingKill/Garbage but not yet collected. That internal
++        // flag bit is engine-version dependent and has no two-source layout value yet (cap #4 NOTES).
++        static std::atomic<bool> s_mods_started{false}; // set once by UE4SSProgram after the start gate
++        static bool s_startup_closed{false};
++        static bool s_startup_wanted{false};
++        static int s_replay_state{0}; // 0 idle, 1 requested, 2 running, 3 finished/skipped
++        static std::vector<int32_t> s_rp_idx{};
++        static std::vector<void*> s_rp_obj{};
++        static size_t s_rp_pos{0};
++        static uint64_t s_rp_fed{0};
++        static int64_t s_rp_start_ms{0};
++        static bool s_in_replay{false};
++        static bool s_first_map_noted{false};
+ 
+         static auto any_world_callbacks() -> bool // caller holds m_thread_actions_mutex
+         {
+@@ -5463,6 +5491,12 @@
+ 
+         static auto reset_batch() -> void // game thread, lock held (feed / refuse): forget hold + window
+         {
++            if (s_replay_state == 1 || s_replay_state == 2) // [EARLY-4] nobody listens / route refused: no replay
++            {
++                s_replay_state = 3;
++                release(s_rp_idx); release(s_rp_obj); s_rp_pos = 0;
++                try { Output::send<LogLevel::Warning>(STR("[EARLY] stage=startup-replay decision=aborted fed={} (route refused or no world hooks left)\n"), s_rp_fed); } catch (...) {}
++            }
+             release(s_hold); s_hold_pos = 0;
+             release(s_settle); s_settle_pos = 0;
+             release(s_win_gm); release(s_win_actor);
+@@ -5533,6 +5567,12 @@
+                 const bool world_ok = world && static_cast<Unreal::UStruct*>(world->GetClassPrivate()) == s_world;
+                 Output::send(STR("[WORLD-EV] map change seen (object index): world='{}' held_joined={} -> LoadMap pre queued; this map's InitGameState/BeginPlay/LoadMap post follow when its load window closes (PS5: all after the load)\n"),
+                              world_ok ? world->GetName() : StringType{STR("?")}, s_window_joined);
++                if (!s_first_map_noted)
++                {
++                    s_first_map_noted = true;
++                    Output::send(STR("[EARLY] stage=first-map-seen t_ms={} src={} world='{}'\n"), r3_now_ms(),
++                                 s_in_replay ? STR("replay") : STR("live"), world_ok ? world->GetName() : StringType{STR("?")});
++                }
+             }
+             catch (...)
+             {
+@@ -5636,6 +5676,7 @@
+                 if (refused_log::world_route_state.exchange(1, std::memory_order_acq_rel) == 0)
+                 {
+                     try { Output::send(STR("[WORLD-EV] route live: object index + engine classes Actor/GameModeBase/GameStateBase/World resolved and class-checked (tries={}, waited_ms={}); LoadMap/InitGameState/BeginPlay Lua hooks deliver after the event on the game-thread pump\n"), s_resolve_tries, now - s_first_wanted_ms); } catch (...) {}
++                    try { Output::send(STR("[EARLY] stage=world-route-live t_ms={} waited_ms={}\n"), now, now - s_first_wanted_ms); } catch (...) {} // [EARLY-4]
+                 }
+                 return true;
+             }
+@@ -5670,7 +5711,8 @@
+         {
+             if (!usable) { return; }
+             s_index_ok = true;
+-            if (s_wanted && refused_log::world_route_state.load(std::memory_order_acquire) == 0) { (void)ensure_ready(); }
++            // [EARLY-4] same rule as the feed: the route never goes live before startup closes
++            if (s_wanted && s_startup_closed && refused_log::world_route_state.load(std::memory_order_acquire) == 0) { (void)ensure_ready(); }
+         }
+ 
+         // Caller holds m_thread_actions_mutex; object is live and pointer-checked by the feed.
+@@ -5727,8 +5769,152 @@
+             }
+             if (want_gm) { (void)push_safe(s_hold, Held{gm_ev, level, now, loaded}); }
+             if (want_bp) { (void)push_safe(s_hold, Held{bp_ev, level, now, loaded}); }
++        }
++
++        // [EARLY-4] every feed call until startup closes (game thread, m_thread_actions_mutex held):
++        // a world hook registered before the first feed AFTER the start gate counts as a startup
++        // registration (mods' main scripts, and ExecuteInGameThread callbacks, which run before the
++        // feed in the same pump: the PS5 equivalent of "before the first map"). A pump that fires
++        // while mods are still starting keeps the window open.
++        static auto note_feed_locked() -> void
++        {
++            if (s_startup_closed) { return; }
++            if (any_world_callbacks()) { s_startup_wanted = true; }
++            if (!s_mods_started.load(std::memory_order_acquire)) { return; }
++            s_startup_closed = true;
++            try
++            {
++                Output::send(STR("[EARLY] stage=startup-hooks t_ms={} loadmap_pre={} loadmap_post={} initgamestate={} beginplay={}\n"), r3_now_ms(),
++                             LuaMod::m_load_map_pre_callbacks.size(), LuaMod::m_load_map_post_callbacks.size(),
++                             LuaMod::m_init_game_state_pre_callbacks.size() + LuaMod::m_init_game_state_post_callbacks.size(),
++                             LuaMod::m_begin_play_pre_callbacks.size() + LuaMod::m_begin_play_post_callbacks.size());
++            }
++            catch (...)
++            {
++            }
++        }
++
++        // Snapshot predicate (runs under the index lock, once per distinct class of a live object).
++        static auto replay_want(Unreal::UClass* cls) -> bool
++        {
++            return cls != nullptr && s_actor != nullptr && chain_has(static_cast<Unreal::UStruct*>(cls), s_actor);
++        }
++
++        // Decided once: the route is live and startup has closed. Startup registrations -> replay requested.
++        static auto maybe_request_replay() -> void
++        {
++            if (s_replay_state != 0 || !s_startup_closed || refused_log::world_route_state.load(std::memory_order_acquire) != 1) { return; }
++            s_replay_state = s_startup_wanted ? 1 : 3;
++            try { Output::send(STR("[EARLY] stage=replay-request t_ms={} startup_hooks={} replay={}\n"), r3_now_ms(), s_startup_wanted ? 1 : 0,
++                               s_replay_state == 1 ? STR("requested") : STR("not-startup")); } catch (...) {}
++        }
++
++        // Game thread, NOT holding m_thread_actions_mutex (takes the index lock). pending_idx[from..]
++        // are new objects collected but not matched yet: they are observed live, never replayed.
++        static auto maybe_start_replay(const std::vector<int32_t>& pending_idx, size_t from) -> void
++        {
++            maybe_request_replay();
++            if (s_replay_state != 1) { return; }
++            s_replay_state = 2;
++            s_rp_pos = 0;
++            s_rp_fed = 0;
++            s_rp_start_ms = r3_now_ms();
++            size_t baseline{0}, excluded{0}, gamestates{0};
++            bool ok{false};
++            try
++            {
++                ok = Unreal::UObjectGlobals::r9_index_snapshot_live(s_rp_idx, s_rp_obj, &replay_want);
++                if (ok)
++                {
++                    baseline = s_rp_idx.size();
++                    std::vector<int32_t> unmatched{};
++                    if (from < pending_idx.size()) { unmatched.assign(pending_idx.begin() + static_cast<std::ptrdiff_t>(from), pending_idx.end()); }
++                    std::sort(unmatched.begin(), unmatched.end());
++                    size_t w = 0;
++                    for (size_t r = 0; r < s_rp_idx.size(); ++r)
++                    {
++                        if (std::binary_search(unmatched.begin(), unmatched.end(), s_rp_idx[r])) { ++excluded; continue; }
++                        s_rp_idx[w] = s_rp_idx[r];
++                        s_rp_obj[w] = s_rp_obj[r];
++                        ++w;
++                    }
++                    s_rp_idx.resize(w);
++                    s_rp_obj.resize(w);
++                    for (void* p : s_rp_obj)
++                    {
++                        auto* o = static_cast<Unreal::UObject*>(p);
++                        if (o->HasAnyFlags(static_cast<Unreal::EObjectFlags>(Unreal::RF_ClassDefaultObject | Unreal::RF_ArchetypeObject))) { continue; }
++                        if (chain_has(static_cast<Unreal::UStruct*>(o->GetClassPrivate()), s_game_state)) { ++gamestates; }
++                    }
++                }
++            }
++            catch (...)
++            {
++                ok = false;
++            }
++            const char* decision = !ok ? "skip-index-unusable" : (gamestates > 1 ? "skip-ambiguous" : (s_rp_idx.empty() ? "none" : "replay"));
++            if (!ok || gamestates > 1 || s_rp_idx.empty())
++            {
++                release(s_rp_idx); release(s_rp_obj);
++                s_replay_state = 3;
++            }
++            try
++            {
++                StringType wide{};
++                for (const char* p = decision; *p != '\0'; ++p) { wide.push_back(static_cast<StringType::value_type>(static_cast<unsigned char>(*p))); }
++                const int64_t t = r3_now_ms();
++                if (gamestates > 1 || !ok)
++                {
++                    Output::send<LogLevel::Warning>(STR("[EARLY] stage=startup-replay t_ms={} decision={} candidates={} baseline={} excluded_new={} gamestates={} snapshot_ms={}\n"),
++                                                    t, wide, s_rp_idx.size(), baseline, excluded, gamestates, t - s_rp_start_ms);
++                }
++                else
++                {
++                    Output::send(STR("[EARLY] stage=startup-replay t_ms={} decision={} candidates={} baseline={} excluded_new={} gamestates={} snapshot_ms={}\n"),
++                                 t, wide, s_rp_idx.size(), baseline, excluded, gamestates, t - s_rp_start_ms);
++                }
++            }
++            catch (...)
++            {
++            }
++        }
++
++        // Game thread, m_thread_actions_mutex held. Feeds replayed actors through observe() under the
++        // matcher's budget. true = nothing (left) to replay: newer objects may be matched now.
++        static auto replay_step(std::chrono::steady_clock::time_point deadline) -> bool
++        {
++            if (s_replay_state != 2) { return true; }
++            s_in_replay = true;
++            while (s_rp_pos < s_rp_idx.size())
++            {
++                if ((s_rp_pos & 63) == 0 && s_rp_pos > 0 && std::chrono::steady_clock::now() > deadline) { s_in_replay = false; return false; }
++                const int32_t idx = s_rp_idx[s_rp_pos];
++                void* const expected = s_rp_obj[s_rp_pos];
++                ++s_rp_pos;
++                Unreal::FUObjectItem* item = Unreal::FUObjectArray::IndexToObject(idx);
++                if (!item || item->IsUnreachable()) { continue; }
++                Unreal::UObject* object = item->GetUObject();
++                if (!object || static_cast<void*>(object) != expected) { continue; } // freed / slot reused since the snapshot
++                observe(object, idx);
++                ++s_rp_fed;
++            }
++            s_in_replay = false;
++            s_replay_state = 3;
++            release(s_rp_idx); release(s_rp_obj); s_rp_pos = 0;
++            try
++            {
++                const int64_t t = r3_now_ms();
++                Output::send(STR("[EARLY] stage=startup-replay-done t_ms={} fed={} took_ms={} window_open={} held={}\n"), t, s_rp_fed, t - s_rp_start_ms,
++                             s_window_open ? 1 : 0, s_hold.size() - s_hold_pos);
++            }
++            catch (...)
++            {
++            }
++            return true;
+         }
+ 
++        static auto replay_running() -> bool { return s_replay_state == 2; }
++
+         // Lock held, every pump while the route is live: close a quiet window, expire the hold list.
+         static auto tick() -> void
+         {
+@@ -5902,6 +6088,7 @@
+                 {
+                     s_first_kind[ki] = false;
+                     try { Output::send(STR("[WORLD-EV] first delivery kind={} callbacks={} object='{}'\n"), kind_name(ev.kind), s_pre.size() + s_post.size(), short_name(alive ? ev.obj : nullptr)); } catch (...) {}
++                    try { Output::send(STR("[EARLY] stage=first-delivery kind={} t_ms={}\n"), kind_name(ev.kind), r3_now_ms()); } catch (...) {} // [EARLY-4]
+                 }
+                 if (is_map)
+                 {
+@@ -5948,6 +6135,13 @@
+         }
+     } // namespace world_ev
+ 
++    // [EARLY-4] called once by UE4SSProgram right after the "[L25] start gate" line (every mod's main
++    // script has returned): the startup-registration window closes at the next feed.
++    auto early4_mods_started() noexcept -> void
++    {
++        world_ev::s_mods_started.store(true, std::memory_order_release);
++    }
++
+     static auto r9_feed_notify_from_index() -> void
+     {
+         // backlog of new objects, matched under a per-frame budget (~1 ms) so a level load that creates
+@@ -5958,6 +6152,7 @@
+         {
+             std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+             world_ev::s_wanted = world_ev::wanted_locked(); // [WORLD-EV] map/InitGameState/BeginPlay hooks also read the index
++            world_ev::note_feed_locked(); // [EARLY-4] startup registrations = those present at the first feed after the start gate
+             if (LuaMod::m_static_construct_object_lua_callbacks.empty() && !world_ev::s_wanted)
+             {
+                 Unreal::UObjectGlobals::r9_index_notify_disarm(); // cheap: stop collecting while nobody listens
+@@ -5968,7 +6163,11 @@
+                 return;
+             }
+         }
+-        if (world_ev::s_wanted) { (void)world_ev::ensure_ready(); } // [WORLD-EV] outside the lock (class lookups)
++        // [WORLD-EV] outside the lock (class lookups). [EARLY-4] never before startup closes (first feed after
++        // the start gate): objects matched while mods are still starting are not delivered live, the startup
++        // replay delivers them once instead (a live delivery + the replay would deliver that map twice).
++        if (world_ev::s_wanted && world_ev::s_startup_closed) { (void)world_ev::ensure_ready(); }
++        world_ev::maybe_start_replay(s_backlog_idx, s_backlog_pos); // [EARLY-4] went live above: unmatched backlog stays live-only
+         if (s_backlog_pos >= s_backlog_idx.size())
+         {
+             s_backlog_idx.clear();
+@@ -5986,6 +6185,7 @@
+                                                                             +[]() -> bool { return std::chrono::steady_clock::now() > s_watch_budget_end; });
+             }
+             world_ev::note_index(r9_collected); // [WORLD-EV]
++            if (r9_collected) { world_ev::maybe_start_replay(s_backlog_idx, 0); } // [EARLY-4] went live in note_index: this batch is live-only
+             if (!r9_collected)
+             {
+                 static bool s_unusable_logged{false};
+@@ -5996,19 +6196,21 @@
+                 }
+                 return;
+             }
+-            if (s_backlog_idx.empty()) { return; }
++            if (s_backlog_idx.empty() && !world_ev::replay_running()) { return; } // [EARLY-4] a replay may run with no new objects
+             static bool s_logged{false};
+-            if (!s_logged)
++            if (!s_backlog_idx.empty() && !s_logged)
+             {
+                 s_logged = true;
+                 try { Output::send(STR("[R9-NOTIFY] NotifyOnNewObject delivered from the object index (first batch: {} new objects)\n"), s_backlog_idx.size()); } catch (...) {}
+             }
+         }
+-        if (s_backlog_pos >= s_backlog_idx.size()) { return; }
++        if (s_backlog_pos >= s_backlog_idx.size() && !world_ev::replay_running()) { return; }
+         std::chrono::steady_clock::time_point budget_end{}; // ~1 ms per ~16 ms window ([R9-PACE])
+         if (!s_r9_pace_match.begin(std::chrono::microseconds(1000), budget_end)) { return; }
+         const R9PaceEnd r9_pace_end{s_r9_pace_match};
+         std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++        // [EARLY-4] the startup replay goes first (older map before newer objects); newer objects wait
++        if (!world_ev::replay_step(budget_end)) { return; }
+         while (s_backlog_pos < s_backlog_idx.size())
+         {
+             if ((s_backlog_pos & 63) == 0 && s_backlog_pos > 0 && std::chrono::steady_clock::now() > budget_end) { break; }
+@@ -6670,7 +6872,7 @@
+     // deferred arm (R3 marshal world) pass these, so delivery semantics — game-thread
+     // pre/post-LoadMap timing, 5 pushed args, bool-or-nil return contract — are
+     // identical whichever path arms.
+-    static auto lua_load_map_pre_callback(Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) -> void
++    [[maybe_unused]] static auto lua_load_map_pre_callback(Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) -> void
+     {
+         TRY([&] {
+ #ifdef __PROSPERO__
+@@ -6723,7 +6925,7 @@
+         });
+     }
+ 
+-    static auto lua_load_map_post_callback(Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) -> void
++    [[maybe_unused]] static auto lua_load_map_post_callback(Unreal::Hook::TCallbackIterationData<bool>& CallbackIterationData, Unreal::UEngine* Engine, Unreal::FWorldContext& WorldContext, Unreal::FURL URL, Unreal::UPendingNetGame* PendingGame, Unreal::FString& Error) -> void
+     {
+         TRY([&] {
+ #ifdef __PROSPERO__
+@@ -6778,35 +6980,31 @@
+         });
+     }
+ 
+-    // One-shot deferred arm; called ONLY from funcptr_marshal_hook after the marshal
+-    // world is proven (identity published + published game thread + dispatch owner).
+-    // PROSPERO-only state + entry point (both callers are inside __PROSPERO__ blocks);
+-    // the delivery bodies above compile in every world (the eager block uses them).
++    // [EARLY-4] (cap #4) The PS5 one-shot deferred LoadMap DETOUR arm that used to sit here is
++    // removed. On PS5 game code is execute-only and the rules forbid code detours, so that arm
++    // could only ever be refused (launch 14: "[R3] LoadMap deferred arm refused (pre id 0, post id 0)"
++    // after two "Failed to add hook" lines), and a half-success would have left a partial native
++    // registration. LoadMap / InitGameState / BeginPlay Lua hooks on PS5 are delivered ONLY by the
++    // data-only [WORLD-EV] object-index route; refused_log::loadmap_state is set to 3 at startup
++    // and never changes. The delivery bodies above stay for the non-PS5 eager block.
+ #ifdef __PROSPERO__
+-    static std::atomic<bool> m_loadmap_deferred_arm_pending{false};
+-    static std::atomic<bool> m_loadmap_deferred_arm_attempted{false};
+-    static auto try_deferred_loadmap_arm() -> void
+-    {
+-        if (!m_loadmap_deferred_arm_pending.load(std::memory_order_acquire)) return; // W-works world (or nothing deferred)
+-        if (m_loadmap_deferred_arm_attempted.exchange(true, std::memory_order_acq_rel)) return; // exactly one attempt per process
+-        m_loadmap_deferred_arm_pending.store(false, std::memory_order_release);
+-        const Unreal::Hook::FCallbackOptions deferred_opts{false, false, STR("UE4SS"), STR("LuaModImpl")};
+-        const auto pre_id = Unreal::Hook::RegisterLoadMapPreCallback(&lua_load_map_pre_callback, deferred_opts);
+-        const auto post_id = Unreal::Hook::RegisterLoadMapPostCallback(&lua_load_map_post_callback, deferred_opts);
+-        if (pre_id != Unreal::Hook::ERROR_ID && post_id != Unreal::Hook::ERROR_ID)
++    // [EARLY-4] one-shot startup timeline markers (same steady clock as r3_now_ms; the value
++    // passed to the diagnostic sink is the low 32 bits of that clock, so the host verifier can
++    // prove the UE4SS log clock and the sink's CLOCK_MONOTONIC t_ms are the same clock).
++    namespace early4
++    {
++        static auto now_ms() -> int64_t
+         {
+-            Output::send(STR("[R3] LoadMap detour armed (deferred arm; marshal world proven): queued Lua RegisterLoadMapPreHook/PostHook callbacks deliver on real LoadMap events\n"));
+-            refused_log::loadmap_state.store(2, std::memory_order_release);
+-            return;
++            return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+         }
+-        // Fail-closed: the failed side above already emitted the composed layer's loud
+-        // refusal pair (InstallHook Warning + AddCallback "[UE4SS.LoadMap.LuaModImpl]
+-        // Failed to add hook, detour installation likely failed!" Error). Never a silent
+-        // skip: name exactly what stays undelivered, once, for the process lifetime.
+-        Output::send<LogLevel::Error>(STR("[R3] LoadMap deferred arm refused (pre id {:X}, post id {:X}): the LoadMap detour stays off for this process lifetime (no re-arm); Lua RegisterLoadMapPreHook/PostHook callbacks are delivered by the data-only object-index route instead (see [WORLD-EV] lines); mod loading and every other surface are unaffected\n"), pre_id, post_id);
+-        refused_log::loadmap_state.store(3, std::memory_order_release);
+-        // [WORLD-EV] no counted [REFUSED] line here any more: the object-index route delivers these
+-        // callbacks; if that route is refused it emits its own counted line.
++        static std::atomic<bool> s_first_pump_noted{false};
++        static auto note_first_pump(bool vmt_tick) -> void
++        {
++            if (s_first_pump_noted.exchange(true, std::memory_order_acq_rel)) { return; }
++            const int64_t t = now_ms();
++            diagnostic_event("early_first_pump", static_cast<unsigned int>(static_cast<uint64_t>(t) & 0xFFFF'FFFFu));
++            try { Output::send(STR("[EARLY] stage=first-pump t_ms={} src={}\n"), t, vmt_tick ? STR("vmt-tick") : STR("marshal")); } catch (...) {}
++        }
+     }
+ #endif
+ 
+@@ -6895,11 +7093,10 @@
+             NativeLuaActionDispatchScope action_dispatch;
+             if (!action_dispatch.owns_dispatch())
+                 return;
+-            // [R3][worker-gate5-loadmap r3] The marshal world is now PROVEN live (identity
+-            // published, this IS the published game thread, dispatch owned): land the
+-            // deferred LoadMap arm exactly once. No-op unless the r3 gate queued it in
+-            // on_program_start; if the arm is refused it refuses LOUDLY (fail-closed).
+-            try_deferred_loadmap_arm();
++            // [EARLY-4] the marshal world is now PROVEN live (identity published, this IS the
++            // published game thread, dispatch owned): record the first game-thread pump once.
++            // (The deferred LoadMap detour arm that ran here is removed: no detours on PS5.)
++            early4::note_first_pump(false);
+             // [FL-MAP] REMOVED from the dispatch path (Claude round-10 item 2,
+             // launch-2 spawner regression root cause): the 1 Hz World-identity
+             // scan ran INSIDE funcptr_marshal_hook — the same hook that
+@@ -6994,10 +7191,9 @@
+                     {
+                         return;
+                     }
+-                    // The marshal world is PROVEN live on the genuine game thread
+-                    // here (stronger than the carrier proof): land the deferred
+-                    // LoadMap arm exactly once, same as the marshal drain.
+-                    try_deferred_loadmap_arm();
++                    // [EARLY-4] first game-thread pump (the deferred LoadMap detour arm
++                    // that ran here is removed: no detours on PS5).
++                    early4::note_first_pump(true);
+                     {
+                         std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+                         LuaMod::m_is_processing_actions = true;
+@@ -10410,28 +10606,27 @@
+         // BEFORE on_program_start (failed(1,<msg>) ack chain), so this gate is reached
+         // only in worlds where the walks were admitted (fold-1) or seeded.
+         // =================================================================================
+-        if (Unreal::R3MarshalPumpPending())
++        // [EARLY-4] (cap #4) PS5: this data-only branch is UNCONDITIONAL (the eager detour block
++        // below is compiled out with #else), whatever the initializer's pump decision was; a
++        // world where the pump is not pending (another game / engine version) logs it here and
++        // still never reaches a code-detour registration.
+         {
+-            // [R3][worker-gate5-loadmap r3] narrows r2's all-lifetime loss: the sibling
+-            // registrations below stay unregistered for this process lifetime (unchanged
+-            // r2 law), while the LoadMap pre/post Lua callbacks are QUEUED and a one-shot
+-            // deferred arm is attempted once the FuncPtr-marshal world is proven live
+-            // (funcptr_marshal_hook -> try_deferred_loadmap_arm, declared above). If that
+-            // arm is refused, the refusal is LOUD (the composed layer's InstallHook
+-            // Warning + AddCallback Error pair plus the arm's own explicit Error) —
+-            // never a silent skip. The flag is set BEFORE the marshal consumer below can
+-            // arm the pump, so no drain can precede it.
+-            m_loadmap_deferred_arm_pending.store(true, std::memory_order_release);
++            if (!Unreal::R3MarshalPumpPending())
++            {
++                Output::send<LogLevel::Warning>(STR("[EARLY] pump-not-pending world: the eager detour block stays compiled out on PS5; the game-thread pump is the carrier marshal\n"));
++            }
++            // Publish the final LoadMap state BEFORE the skipped flag: WORLD-EV owns LoadMap
++            // delivery for the whole process (3 = no native delivery, never changes on PS5).
++            refused_log::loadmap_state.store(3, std::memory_order_release);
+             refused_log::eager_detour_block_skipped.store(true, std::memory_order_release);
+-            refused_log::loadmap_state.store(1, std::memory_order_release);
++            Output::send(STR("[EARLY] stage=loadmap-native state=off reason=ps5-no-code-detours owner=world-ev t_ms={}\n"), early4::now_ms());
+             // One startup line for every family below that will accept registrations and never deliver them.
+             // [WORLD-EV] InitGameState / BeginPlay left this list: the data-only object-index route delivers them
+             refused_log::emit("detour-block", StringType{STR("EndPlay,StaticConstructObject(NotifyOnNewObject),ULocalPlayerExec,CallFunctionByNameWithArguments,ProcessConsoleExec(+console handlers)")},
+                               StringType{STR("*")}, "detour-block-skipped-r3-marshal", "never-delivered");
+-            Output::send<LogLevel::Warning>(STR("[R3] LoadMap detour registrations deferred: in this world the initializer deferred its own detour registrations (R3 marshal owns the game-thread pump), so these eager arms are futile by the same law (owned-memory layer soft-refuses every live game-text access; each arm would log PLH SEV + an Error line and register nothing); InitGameState/BeginPlay/EndPlay/StaticConstructObject/ULocalPlayerExec/CallFunctionByNameWithArguments/ProcessConsoleExec/custom-event script hooks stay unregistered for this process lifetime (no re-arm); Lua-side LoadMap/InitGameState/BeginPlay callbacks are instead delivered by the data-only [WORLD-EV] object-index route (after the event; BeginPlay partial); a one-shot deferred LoadMap detour arm is still attempted when the marshal world is proven live and, only if it arms, takes over LoadMap delivery\n"));
++            Output::send<LogLevel::Warning>(STR("[R3] LoadMap detour registrations deferred: in this world the initializer deferred its own detour registrations (R3 marshal owns the game-thread pump), so these eager arms are futile by the same law (owned-memory layer soft-refuses every live game-text access; each arm would log PLH SEV + an Error line and register nothing); InitGameState/BeginPlay/EndPlay/StaticConstructObject/ULocalPlayerExec/CallFunctionByNameWithArguments/ProcessConsoleExec/custom-event script hooks stay unregistered for this process lifetime (no re-arm); Lua-side LoadMap/InitGameState/BeginPlay callbacks are instead delivered by the data-only [WORLD-EV] object-index route (after the event; BeginPlay partial; the map that is already loaded when mods start is replayed once, see [EARLY] stage=startup-replay); no LoadMap detour is ever attempted on PS5\n"));
+         }
+-        else
+-#endif
++#else
+         {
+         // [R3][worker-gate5-loadmap r3] delivery bodies moved to file-scope
+         // lua_load_map_pre_callback / lua_load_map_post_callback (see funcptr_marshal_hook
+@@ -11247,6 +11442,7 @@
+             Unreal::Hook::RegisterProcessInternalPostCallback(script_hook, {false, false, STR("UE4SS"), STR("LuaModImplScriptHook")});
+         }
+         } // [R3][worker-l11-loadmap-guard r2] end of the eager detour-arm block (see gate above)
++#endif // [EARLY-4] eager detour block: non-PS5 only
+     }
+ 
+     auto LuaMod::update_async() -> void
+--- a/src/UObjectGlobals.cpp
++++ b/src/UObjectGlobals.cpp
+@@ -2104,6 +2104,65 @@
+         return S.Disabled;
+     }
+ 
++    // [EARLY-4] (cap #4) read-only: every slot the index currently holds whose object is still live
++    // (same slot, same pointer, reachable), restricted to classes Want() accepts. Want is called at most
++    // once per distinct class, and only with the class the LIVE object names right now: a slot freed and
++    // refilled at the same address since the last sync (ClassAt may still name the old, possibly unloaded
++    // class) is skipped; the next collect reports it as new.
++    // Index order. false = index unusable (not built / switched off): nothing is returned.
++    auto r9_index_snapshot_live(std::vector<int32_t>& OutIdx, std::vector<void*>& OutObj, bool (*Want)(UClass*)) -> bool
++    {
++        OutIdx.clear();
++        OutObj.clear();
++        if (Want == nullptr) { return false; }
++        r9idx::State& S = *r9idx::g_state;
++        std::lock_guard Lock{S.Mutex};
++        if (S.Disabled || !S.Built) { return false; }
++        try
++        {
++            std::vector<int8_t> Verdict(S.Classes.size(), int8_t{-1}); // per class position: -1 unknown
++            const size_t Mask = S.HashKeys.empty() ? 0 : S.HashKeys.size() - 1;
++            const int32_t Num = S.SyncedNum;
++            for (int32_t i = 0; i < Num; ++i)
++            {
++                UObject* const Object = S.ObjAt[i];
++                if (Object == nullptr || r9idx::LiveAt(i) != Object) { continue; }
++                UClass* const Class = S.ClassAt[i];
++                if (Class == nullptr || Object->GetClassPrivate() != Class) { continue; } // stale class entry: never hand it to Want
++                int32_t c = -1;
++                if (!S.HashKeys.empty())
++                {
++                    size_t p = r9idx::HashPos(Class, Mask);
++                    while (S.HashKeys[p] != nullptr)
++                    {
++                        if (S.HashKeys[p] == Class) { c = S.HashVals[p]; break; }
++                        p = (p + 1) & Mask;
++                    }
++                }
++                bool bWant;
++                if (c >= 0 && static_cast<size_t>(c) < Verdict.size())
++                {
++                    if (Verdict[c] < 0) { Verdict[c] = Want(Class) ? int8_t{1} : int8_t{0}; }
++                    bWant = Verdict[c] == 1;
++                }
++                else
++                {
++                    bWant = Want(Class); // not listed (never expected): decide without memo
++                }
++                if (!bWant) { continue; }
++                OutIdx.push_back(i);
++                OutObj.push_back(Object);
++            }
++            return true;
++        }
++        catch (...)
++        {
++            OutIdx.clear();
++            OutObj.clear();
++            return false;
++        }
++    }
++
+     // [R9-NOTIFY] no registrations left: stop collecting.
+     auto r9_index_notify_disarm() -> void
+     {
+--- a/src/UE4SSProgram.cpp
++++ b/src/UE4SSProgram.cpp
+@@ -11,6 +11,10 @@
+ // Shared composition diagnostic sink (diagnostic.c, in-link C symbol).
+ // Declared unconditionally: used on PROSPERO (IniParser + input-gate diagnostics).
+ extern "C" void diagnostic_event(const char* tag, unsigned int value);
++namespace RC
++{
++    auto early4_mods_started() noexcept -> void; // [EARLY-4] LuaMod.cpp (PS5 world-event route)
++}
+ 
+ 
+ #ifdef TEXT
+@@ -1805,6 +1809,16 @@
+             }
+             Output::send(STR("[L25] start gate: {} started mod(s){}\n"),
+                          started_mod_count, start_ok ? STR("") : STR(" (start exception)"));
++#ifdef __PROSPERO__
++            {
++                // [EARLY-4] (cap #4) one-shot timeline marker: steady-clock ms in the log, its low 32 bits
++                // into the diagnostic sink (whose own t_ms is CLOCK_MONOTONIC) -> same-run clock proof.
++                const int64_t early_t = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
++                diagnostic_event("early_mods_started", static_cast<unsigned int>(static_cast<uint64_t>(early_t) & 0xFFFF'FFFFu));
++                Output::send(STR("[EARLY] stage=mods-started t_ms={} mods={}\n"), early_t, started_mod_count);
++                early4_mods_started(); // LuaMod.cpp [WORLD-EV]: the startup-registration window closes at the next feed
++            }
++#endif
+         }
+ 
+         if (settings_manager.General.EnableDebugKeyBindings)

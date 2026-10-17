@@ -1,0 +1,115 @@
+{
+  "worker": "worker-rung3-reflection-prep",
+  "date": "2026-10-04",
+  "task": "Define rung 3 (harmless reflected access) for THIS runtime, trace the reflection READ path in the port tree with file:line citations, choose the minimal evidence-clean Lua probe, and write the verification recipe. Proposal-only; no console contact, no engine execution.",
+  "workspace_root": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port",
+  "claims": [
+    {
+      "id": "R3-DEF",
+      "claim": "For this runtime (Townfall, UE 5.6.1 SHIPPING, prospero-x86_64-sysv), rung 3 'harmless reflected access' is precisely: a Lua-originated reflection READ that (a) resolves an engine object or property through the live reflection data (GUA iteration / property chain walk), (b) performs no mutation of engine memory, no object spawn, no UI, no engine function invocation other than the find-by-name FName construction itself, and (c) terminates with a recorded verdict (value, nil/invalid handle, or a thrown/caught refusal) without crashing or hanging the game process.",
+      "evidence": [
+        "worker-acceptance-evidence/EVIDENCE-SPEC.md:233-325 defines rung 3 as FindFirstOf/StaticFindObject resolving harmlessly; :325 explicitly excludes writes/spawns/property-sets from the rung",
+        "Task context: rungs 1-2 held after composition-5 launch (C2 seqlock QueryResultRecord, ticks_accepted advancing; GUA 0x97ba110 layout A, 71959 objects)"
+      ]
+    },
+    {
+      "id": "R3-TRACE-FIND",
+      "claim": "FindFirstOf Lua global -> string FName construction -> GUA iteration -> class FName compare is fully traced: LuaMod.cpp:1632-1660 registers the global and calls UObjectGlobals::FindFirstOf; UObjectGlobals.cpp:481-484 wraps the string form as FName(ClassName) with default FNAME_Add (NameTypes.hpp:307); the non-hash path (:454-476) iterates ForEachUObject over GUObjectArray (GUObjectArray->GetObjObjects(), UObjectGlobals.cpp:750-765), reads Object->GetClassPrivate() and compares Class->GetNamePrivate().Equals(ClassName) - an index-only compare that needs NO name-pool string resolution (NameTypes.hpp:345-348).",
+      "evidence": [
+        "port/ue4ss/src/Mod/LuaMod.cpp:1632,1637-1659",
+        "port/unreal/src/UObjectGlobals.cpp:434-479,481-484,745-765",
+        "port/unreal/include/Unreal/NameTypes.hpp:307,341-348",
+        "port/unreal/src/UObjectArray.cpp:394-396 (GetNumElements via same GetObjObjects accessor rung 2 already exercised)"
+      ]
+    },
+    {
+      "id": "R3-TRACE-GETPROP",
+      "claim": "GetPropertyValue Lua path is fully traced: LuaUObject.hpp:620-623 registers GetPropertyValue -> prepare_to_handle (hpp:791-840) does the nullptr guard (:800-819), custom-property list (:822), then object->GetClassPrivate()->FindProperty(FName(name, FNAME_Find)) (:821,:834-836); UStruct::FindProperty (UStruct.cpp:155-168) walks TFieldRange<FProperty> (ChildProperties/Children chains, IncludeSuper|IncludeDeprecated) comparing FField FNames index-only; handle_unreal_property_value (LuaUObject.cpp:2303-2370) routes non-function fields to data = base + property->GetOffset_Internal() (:2348) and the registered IntProperty pusher (UE4SSProgram.cpp:1708 -> push_intproperty LuaUObject.cpp:598-602 -> push_integer<int32_t> LuaUObject.hpp:975-1001) null-checks the data pointer (:978-981) and returns a Lua integer (:987).",
+      "evidence": [
+        "port/ue4ss/include/LuaType/LuaUObject.hpp:620-623,791-840,975-1001",
+        "port/ue4ss/src/LuaType/LuaUObject.cpp:2303-2370 (offset add at 2348), 598-602",
+        "port/unreal/src/UStruct.cpp:155-168",
+        "port/ue4ss/src/UE4SSProgram.cpp:1704-1711 (pusher registration)"
+      ]
+    },
+    {
+      "id": "R3-INI-PARSE",
+      "claim": "MemberVariableLayout.ini + VTableLayout.ini are parsed at startup, BEFORE engine scan/init: UE4SSProgram::setup_unreal() first calls load_unreal_offsets_from_file() (UE4SSProgram.cpp:936->896-928); on __PROSPERO__ the bytes come from mod_source->read(\"ue4ss/MemberVariableLayout.ini\") + \"ue4ss/VTableLayout.ini\", both REQUIRED (throw on either missing, :899-904), staged via StageNativeLayoutTexts (:905); NativeLayoutBinding.cpp StageNativeLayoutFiles/StageNativeLayoutTexts -> ParsePair -> StageNativeLayoutBundle (:131-138,:139-164). Publication into the live accessor maps happens only in PublishStagedNativeLayoutMaps (:175-199) after engine axes resolve, and the maps are swapped in once (:193-198).",
+      "evidence": [
+        "port/ue4ss/src/UE4SSProgram.cpp:896-928,930-963",
+        "port/ue4ss/src/NativeLayoutBinding.cpp:131-138,139-164,165-199",
+        "worker-activation-bundle/LAYOUT-GATE.md:12-37 (startup order), 39-71 (stage+publish requirements)",
+        "worker-settings-bundle-merge/STAGING-COMMANDS.md:42-60 (pair REQUIRED at ue4ss/ mod root, staged sizes 628 B / 226 B)"
+      ]
+    },
+    {
+      "id": "R3-GUARD",
+      "claim": "A bad offset REFUSES rather than crashes through four layered guards: (1) STAGING WIDTH GATE - every ini member entry requires a compiled accessor width from GetAccessorWidth; unknown/zero width throws 'Native accessor width unavailable' and the whole bundle is refused BEFORE engine init (NativeLayoutBinding.cpp:87-92); offset must be in [0, UEP_TotalSize) and width must fit (:105-116); (2) PUBLICATION GATE - staged identity must agree with resolved engine facts (major/minor/non_shipping/stats) or publication throws (NativeLayoutBinding.cpp:175-182); (3) ACCESS-TIME MISSING-KEY GATE - generated member accessors throw std::runtime_error 'Tried getting member variable <Class>::<Key> that doesn't exist in this engine version.' when the staged map lacks the key (generated_include/MemberVariableLayout_SrcWrapper_UObjectBase.hpp:42-56 GetClassPrivate; SrcWrapper_FProperty.hpp:3-12 GetArrayDim), so with the promoted 17-key pair (FUObjectArray 10 + TUObjectArray 7 only) any rung-3 accessor call REFUSES instead of reading offset 0; (4) PUSHER NULL GATE - push_integer refuses a null data pointer (LuaUObject.hpp:978-981).",
+      "evidence": [
+        "port/ue4ss/src/NativeLayoutBinding.cpp:87-92,105-116,143-146,175-182",
+        "port/unreal/generated_include/MemberVariableLayout_SrcWrapper_UObjectBase.hpp:42-56",
+        "port/unreal/generated_include/MemberVariableLayout_SrcWrapper_FProperty.hpp:3-12",
+        "port/ue4ss/include/LuaType/LuaUObject.hpp:975-1001"
+      ]
+    },
+    {
+      "id": "R3-WIDTH-TABLE-PROVENANCE",
+      "claim": "The width table behind GetAccessorWidth (included as NativeLayoutWidths.hpp, NativeLayoutBinding.cpp:3) is NOT present in this worktree's port tree; its content is the compiled-port width contract (419 canonical entries, 304 available) recorded in worker-2-layout-facts/profiles/townfall-ps5-ue56.profile.json compiled_port_widths (UObjectBase 5/5 incl. ClassPrivate 8 + NamePrivate 8; FProperty 9/10 incl. Offset_Internal 4; FField only 2/5 - NamePrivate/Next/Owner have NO compiled width).",
+      "evidence": [
+        "worker-2-layout-facts/profiles/townfall-ps5-ue56.profile.json:409-499 (UObjectBase, FProperty, FField, FName zero-entry note)",
+        "find over worktree: no NativeLayoutWidths.hpp exists (supplied by the composition build)"
+      ]
+    },
+    {
+      "id": "R3-CLASSNAME-EVIDENCE",
+      "claim": "The only engine CLASS name we hold runtime-relevant evidence for is GameEngine (C++ UGameEngine): symbol-survey fact ps_ugameengine_tick_file_image at serialized ELF vaddr 0x2fac8c0 (profile GameEngineTick.gameengine_tick, family_status validated-static) plus rung-1 acceptance (genuine game-thread callback through UGameEngine::Tick per composition-5 launch context and worker-query-harness/REPORT.md:190). NO GUA snapshot record in ingame-v1/v2/v3 facts, anchor-validation, c2-alternative, or igf6 results lists any object class name - the GUA validation covered only array-header words (anchor-validation REPORT.md:75: 'gated 96 B at 0x97ba110'). Therefore the probe uses FindFirstOf(\"GameEngine\") and nothing else; any other class name would be unevidenced guessing.",
+      "evidence": [
+        "worker-2-layout-facts/profiles/townfall-ps5-ue56.profile.json:354-378 (GameEngineTick fact)",
+        "outputs/2026-10-04-zcode-controller/console/ingame-v1+v2+v3 jsonl (no class-name fields; module-list names empty)",
+        "worker-anchor-validation/REPORT.md:75",
+        "worker-query-harness/REPORT.md:190",
+        "worker-itemspawner-lua-audit/LUA-API-MATRIX.md:26,28 (FindFirstOf/StaticFindObject registered; runtime value requires resolved GUObjectArray + published layouts)"
+      ]
+    },
+    {
+      "id": "R3-PROBE",
+      "claim": "The minimal rung-3 probe is: local g = FindFirstOf(\"GameEngine\") followed by read-only verification g:IsValid() and a deterministic re-find equality check (g == FindFirstOf(\"GameEngine\")). FindFirstOf returns a nullptr-safe userdata, never Lua nil (LuaMod.cpp:1650-1654); IsValid (LuaUObject.hpp:761-774) is itself read-only (host-side listener map + IsUnreachable ObjectFlags read). An INT-property GetPropertyValue step is designed (guarded 4-byte read, missing property returns an invalid handle rather than an error, LuaUObject.cpp:2328-2335) but is BLOCKED until the extended member pair (UObjectBase minimum; UStruct/FField/FProperty for the property walk) is staged+published AND FField::Next/NamePrivate compiled widths exist (currently width=null in the 419-entry contract, profile :447-455), so it stays an explicitly-sequenced step 2, not the first probe.",
+      "evidence": [
+        "port/ue4ss/src/Mod/LuaMod.cpp:1632-1660",
+        "port/ue4ss/include/LuaType/LuaUObject.hpp:761-774",
+        "port/ue4ss/src/LuaType/LuaUObject.cpp:2280-2300 (userdata equality), 2328-2335 (missing property -> invalid handle)",
+        "worker-emit-final-pair/emission-final/MemberVariableLayout.ini (identity 5.6.1-0+++UE5, build 04bb4330a7d71dcefe1cc2c4d19769d5, NonShipping=0, Stats=0; ONLY FUObjectArray + TUObjectArray sections)",
+        "worker-staged-pair-live/RUNG3-REQUIRED-READS.md:4-9 (all rung-3 families REFUSED by assembler until R1-R5 reads land), :73-75 (members without compiled widths stay skipped)"
+      ]
+    },
+    {
+      "id": "R3-FNAME-CAVEAT",
+      "claim": "A nil-looking FindFirstOf result is AMBIGUOUS by construction: if the FName string constructor is unresolved (FC-1 not wired), construct_with_string silently no-ops (NameTypes.hpp:241) leaving FName index 0 ('None'), the search matches nothing, and the mod still receives a valid-looking invalid userdata - no crash, no error. Rung-3 PASS therefore REQUIRES same-launch FC-1 probe records (ig_run_fc1_probe, C2 channel) or another in-launch positive control, per EVIDENCE-SPEC section 3.",
+      "evidence": [
+        "port/unreal/include/Unreal/NameTypes.hpp:239-255 (silent return when ConstructorInternal not ready), :228, :307",
+        "worker-acceptance-evidence/EVIDENCE-SPEC.md:253-275 (FC1-A..D records), :276-289 (PASS requires FC-1 when claimed)",
+        "worker-checkpoint-reconcile/CURRENT-STATE.md:10 (FName ctor candidate runtime 0x63d590, FC-1 runtime probe delivered)"
+      ]
+    },
+    {
+      "id": "R3-CARRIER",
+      "claim": "Least invasive carrier is a NEW additive Lua mod directory ue4ss/Mods/Rung3Probe/ (Scripts/main.lua + 0-byte enabled.txt), staged next to the sha256-pinned TownfallItemSpawner (main.lua sha256 f586043a...658 must NOT be touched - rung 4 depends on the unchanged bytes). The probe logs tagged lines ([Rung3Probe]) routed into the C1 runtime log like the existing mod's print channel (EVIDENCE-SPEC 0.1 fifth channel / 4.1).",
+      "evidence": [
+        "worker-settings-bundle-merge/STAGING-COMMANDS.md:22-24 (mod layout + pinned hashes), :98-99 (FTP staging path form)",
+        "worker-acceptance-evidence/EVIDENCE-SPEC.md:336-354 (mod print() routing into C1; enabled.txt marker, NativeModSource.cpp:134-135)"
+      ]
+    }
+  ],
+  "non_claims": [
+    "No engine/console execution was performed by this worker; everything is source trace + retained-artifact reads.",
+    "No claim that rung 3 is reached: the promoted pair staged at the mod root covers ONLY FUObjectArray+TUObjectArray; the UObjectBase/UStruct/UClass/FField/FProperty families are still REFUSED-by-assembler pending the batch2 live reads (worker-batch2-live-prep 111/111 prepared).",
+    "No claim that any specific property name on UGameEngine/UEngine is validated for this build - no property list has been read at runtime; the property-read step waits for R4/R5-validated facts.",
+    "No GUA object class names were ever observed at runtime; GameEngine is the sole evidenced class via the symbol survey + rung-1 Tick acceptance.",
+    "This recipe does not replace EVIDENCE-SPEC section 3; it refines it for the reflected-access subset and adds the exact failure signatures."
+  ],
+  "deliverables": [
+    "CLAIM.json (this file)",
+    "RUNG3-RECIPE.md",
+    "REPORT.md"
+  ]
+}

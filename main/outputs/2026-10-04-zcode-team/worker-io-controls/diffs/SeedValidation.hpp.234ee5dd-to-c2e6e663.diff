@@ -1,0 +1,40 @@
+--- 2026-10-04-zcode-team/worker-copyin-unit/staging/SeedValidation.hpp	2026-10-05 21:23:45
++++ 2026-10-04-zcode-team/worker-io-controls/staging/SeedValidation.hpp	2026-10-05 23:22:13
+@@ -442,18 +442,25 @@
+     //      refuses loudly; it NEVER falls back to a direct block read. On
+     //      span-membership-admitted boots the direct volatile reads stay
+     //      exactly as before.
+-    //   4. TRANSPORT LAW (session 934 + the definitive l11-1
+-    //      supplier-contract facts): every kernel touch is NID-resolved —
+-    //      the POSIX fd wrapper set open/write/read/close/unlink, all
+-    //      in-contract (libScePosix/libkernel); lseek and the
+-    //      sceKernelOpen/sceKernelClose spellings are NOT in the contract
+-    //      and are not used. Sink size is verified by WRITE-RETURN
+-    //      ACCOUNTING (rc==chunk over page-granular chunks) plus the
+-    //      first-page read-back (read) — the vacuity law without any seek.
+-    //      Convention: the wrappers use the classic -1/errno form (errno
+-    //      via __error, itself a contract import), matching the standalone
+-    //      payload's wrapper evidence. No raw syscall instruction remains
+-    //      anywhere on this path.
++    //   4. TRANSPORT LAW (RECONCILED, worker-io-controls 2026-10-05 —
++    //      supersedes the v5.2 POSIX-fd wording): the write path is the
++    //      Sony-native NID route sceKernelOpen/sceKernelWrite/sceKernelClose,
++    //      PROVEN in the game sandbox by session 1047 (0x20000 real pool
++    //      bytes into /data/plugins/modbridge-copyin-sink.bin, sink sha
++    //      6f849a31...; the v5.2 claim that the sceKernelOpen/Close
++    //      spellings were "not in the contract" was wrong in direction).
++    //      The write fd is CLOSED before the stdio read-back (the sandbox
++    //      FS does not publish unflushed writes from an open handle to a
++    //      second handle — 1047's only failure). Read-back stays stdio
++    //      fopen/fread (the proven live log-device route). Sink size is
++    //      still verified by WRITE-RETURN ACCOUNTING (rc==chunk over
++    //      page-granular chunks) plus the first-page read-back — the
++    //      vacuity law without any seek. Error shapes are classified under
++    //      BOTH conventions (-1+errno BSD wrapper, or the direct
++    //      negative-errno return) with a fresh errno capture per
++    //      operation. No raw syscall instruction remains anywhere on this
++    //      path. This resolver's SEMANTICS are unchanged: it consumes only
++    //      the copyin classification, never the transport.
+     enum class RangeMappedVerdict : int8_t
+     {
+         // RETIRED with edits 13b/14 (session 934): the mincore range verdict

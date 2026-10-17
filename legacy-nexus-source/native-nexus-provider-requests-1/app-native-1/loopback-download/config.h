@@ -1,0 +1,7 @@
+#define BUILD_ID "33ad30aed811fe5d1bb98ae6615198034daf7d2cac3f33df00b20f59f77cf92f"
+#define HOST_PROFILE "loopback"
+#define HOST_NATIVE 1
+#define HOST_ADDRESS "127.0.0.1"
+#define HOST_LIFETIME 0
+#define MB_HOST_DOWNLOAD 1
+#define MB_CRYPTO_CONFIG_ID "86adf3460965c831f05d27f490a309490a8a13efdb9d5fdb6eff453008e8d73f"

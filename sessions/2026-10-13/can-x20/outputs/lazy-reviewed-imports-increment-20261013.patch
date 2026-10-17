@@ -1,0 +1,366 @@
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -67,6 +67,7 @@
+     // dll-name(lowercased) -> { symbol/ordinal -> address }
+     std::unordered_map<std::string, std::unordered_map<std::string, RawExport>> raw_exports;
+     std::unordered_map<std::string, std::unordered_map<std::string, void*>> exports;
++    ExecutableMemoryBackend executable_backend{};
+     struct ModuleEntry
+     {
+         WinModule handle;
+@@ -486,6 +487,15 @@
+     return BuiltinInstallStatus::Ok;
+ }
+ 
++bool WinApiShim::set_executable_backend(const ExecutableMemoryBackend& backend)
++{
++    if (!backend.allocate_writable || !backend.seal_executable || !backend.release)
++        return false;
++    std::lock_guard g(m->mu);
++    m->executable_backend = backend;
++    return true;
++}
++
+ void* WinApiShim::resolve(const char* dll_name, const char* symbol, uint64_t ordinal)
+ {
+     const std::string dll = ascii_module_key(dll_name);
+@@ -511,27 +521,81 @@
+         if (selected.lookup(selected.handle, symbol, &out) && out) return out;
+     }
+ 
+-    // 2) built-in rows
+-    std::lock_guard g(m->mu);
+-    auto ex = m->exports.find(dll);
+-    if (ex != m->exports.end())
+-    {
++    // 2) already-published built-ins, or a reviewed row eligible for lazy
++    // installation. Never call platform callbacks while holding the mutex.
++    ExecutableMemoryBackend backend{};
++    bool eligible = false;
++    {
++        std::lock_guard g(m->mu);
++        auto ex = m->exports.find(dll);
++        if (ex != m->exports.end())
++        {
++            if (symbol)
++            {
++                auto sym = ex->second.find(symbol);
++                if (sym != ex->second.end()) return sym->second;
++            }
++            else if (ordinal)
++            {
++                char ord[24];
++                std::snprintf(ord, sizeof(ord), "#%llu", (unsigned long long)ordinal);
++                auto sym = ex->second.find(ord);
++                if (sym != ex->second.end()) return sym->second;
++            }
++        }
+         if (symbol)
++        {
++            auto catalog = m->raw_exports.find(dll);
++            if (catalog != m->raw_exports.end())
++            {
++                auto row = catalog->second.find(symbol);
++                eligible = row != catalog->second.end() &&
++                           row->second.reviewed_for_publication;
++            }
++            backend = m->executable_backend;
++        }
++    }
++
++    if (!eligible || !backend.allocate_writable || !backend.seal_executable ||
++        !backend.release) return nullptr;
++
++    // A sealing callback may inspect this same import. It must observe a
++    // missing import rather than recursively allocate another trampoline.
++    static thread_local bool in_lazy_install = false;
++    if (in_lazy_install) return nullptr;
++    in_lazy_install = true;
++    struct ResetLazyFlag
++    {
++        bool& flag;
++        ~ResetLazyFlag() { flag = false; }
++    } reset{in_lazy_install};
++
++    void* memory = nullptr;
++    size_t bytes = 0;
++    if (!backend.allocate_writable(sizeof(ContextBridgeTramp), &memory,
++                                   &bytes, backend.user) ||
++        !memory || bytes < sizeof(ContextBridgeTramp))
++    {
++        if (memory && bytes) backend.release(memory, bytes, backend.user);
++        return nullptr;
++    }
++    const BuiltinInstallStatus status = install_builtin_integer_wrapper(
++        dll_name, symbol, memory, bytes, backend.seal_executable, backend.user);
++    if (status == BuiltinInstallStatus::Ok) return memory;
++    backend.release(memory, bytes, backend.user);
++    if (status == BuiltinInstallStatus::AlreadyPublished)
++    {
++        std::lock_guard g(m->mu);
++        auto ex = m->exports.find(dll);
++        if (ex != m->exports.end())
+         {
+             auto sym = ex->second.find(symbol);
+             if (sym != ex->second.end()) return sym->second;
+         }
+-        else if (ordinal)
+-        {
+-            char ord[24];
+-            std::snprintf(ord, sizeof(ord), "#%llu", (unsigned long long)ordinal);
+-            auto sym = ex->second.find(ord);
+-            if (sym != ex->second.end()) return sym->second;
+-        }
+-    }
+-
+-    // 3) unknown: nullptr -> the loader refuses with the complete missing
+-    // list (fail closed; precise diagnostics per cap13 acceptance).
++    }
++
++    // 3) Unknown, unsupported, or failed install: the loader reports the
++    // complete missing list and refuses the image.
+     return nullptr;
+ }
+ 
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -83,8 +83,25 @@
+         const char* dll_name, const char* symbol, void* writable_slot,
+         size_t slot_bytes, SealExecutable seal, void* seal_user);
+ 
++    // Optional platform backend for lazy installation during PE import
++    // resolution. allocate_writable returns a region and its full size;
++    // seal_executable must make it RX and perform target cache maintenance.
++    // release is called on failed/duplicate installation. Published regions
++    // remain owned by the platform until process exit. Callbacks must not
++    // throw. No backend means reviewed imports remain unresolved.
++    struct ExecutableMemoryBackend
++    {
++        bool (*allocate_writable)(size_t minimum_bytes, void** memory,
++                                  size_t* region_bytes, void* user) = nullptr;
++        SealExecutable seal_executable = nullptr;
++        void (*release)(void* memory, size_t region_bytes, void* user) = nullptr;
++        void* user = nullptr;
++    };
++    bool set_executable_backend(const ExecutableMemoryBackend& backend);
++
+     // ImportResolver: exact match on (dll, symbol) or (dll, ordinal).
+-    // Unknown => nullptr (the loader refuses with the full missing list).
++    // Reviewed built-ins install on demand if a backend is configured.
++    // Unknown/unsupported => nullptr (loader reports the missing list).
+     void* resolve(const char* dll_name, const char* symbol, uint64_t ordinal) override;
+ 
+   private:
+--- /dev/null
++++ b/loader/tests/lazy_import_resolution_test.cpp
+@@ -0,0 +1,191 @@
++#include "win_api_shim.h"
++#include "win64_bridge.h"
++
++#include <atomic>
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <thread>
++#include <sys/mman.h>
++#include <unistd.h>
++
++static int failures = 0;
++static void check(bool ok, const char* label)
++{
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", label);
++    if (!ok) ++failures;
++}
++
++struct MemoryState
++{
++    cap13::WinApiShim* shim = nullptr;
++    const char* active_symbol = nullptr;
++    int allocated = 0;
++    int sealed = 0;
++    int released = 0;
++    bool reject_seal = false;
++    bool hidden_during_seal = true;
++};
++
++static bool allocate_writable(size_t minimum, void** address, size_t* bytes, void* user)
++{
++    auto& state = *static_cast<MemoryState*>(user);
++    ++state.allocated;
++    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
++    if (minimum > page) return false;
++    void* mapping = mmap(nullptr, page, PROT_READ | PROT_WRITE,
++                         MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (mapping == MAP_FAILED) return false;
++    *address = mapping;
++    *bytes = page;
++    return true;
++}
++
++static bool seal_executable(void* address, size_t bytes, void* user)
++{
++    auto& state = *static_cast<MemoryState*>(user);
++    ++state.sealed;
++    if (state.shim->resolve("KERNEL32.DLL", state.active_symbol, 0))
++        state.hidden_during_seal = false;
++    if (state.reject_seal) return false;
++    return mprotect(address, bytes, PROT_READ | PROT_EXEC) == 0;
++}
++
++static void release_mapping(void* address, size_t bytes, void* user)
++{
++    auto& state = *static_cast<MemoryState*>(user);
++    ++state.released;
++    munmap(address, bytes);
++}
++
++static uint64_t registered_sleep() { return 0; }
++static bool registered_lookup(cap13::WinModule, const char* symbol, void** result)
++{
++    if (symbol && __builtin_strcmp(symbol, "Sleep") == 0)
++    {
++        *result = reinterpret_cast<void*>(&registered_sleep);
++        return true;
++    }
++    return false;
++}
++
++struct RaceState
++{
++    std::atomic<int> allocated{0};
++    std::atomic<int> sealing{0};
++    std::atomic<int> released{0};
++};
++static bool race_allocate(size_t minimum, void** address, size_t* bytes, void* user)
++{
++    auto& state = *static_cast<RaceState*>(user);
++    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
++    if (minimum > page) return false;
++    void* mapping = mmap(nullptr, page, PROT_READ | PROT_WRITE,
++                         MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (mapping == MAP_FAILED) return false;
++    state.allocated.fetch_add(1);
++    *address = mapping;
++    *bytes = page;
++    return true;
++}
++static bool race_seal(void* address, size_t bytes, void* user)
++{
++    auto& state = *static_cast<RaceState*>(user);
++    state.sealing.fetch_add(1);
++    const auto limit = std::chrono::steady_clock::now() + std::chrono::seconds(2);
++    while (state.sealing.load() < 2)
++    {
++        if (std::chrono::steady_clock::now() > limit) return false;
++        std::this_thread::yield();
++    }
++    return mprotect(address, bytes, PROT_READ | PROT_EXEC) == 0;
++}
++static void race_release(void* address, size_t bytes, void* user)
++{
++    auto& state = *static_cast<RaceState*>(user);
++    state.released.fetch_add(1);
++    munmap(address, bytes);
++}
++
++int main()
++{
++    cap13::WinApiShim shim;
++    shim.register_builtin_exports();
++    check(shim.resolve("kernel32.dll", "Sleep", 0) == nullptr,
++          "without a platform backend reviewed imports remain unresolved");
++    MemoryState state{};
++    state.shim = &shim;
++    cap13::WinApiShim::ExecutableMemoryBackend backend{};
++    backend.allocate_writable = allocate_writable;
++    backend.seal_executable = seal_executable;
++    backend.release = release_mapping;
++    backend.user = &state;
++    check(shim.set_executable_backend(backend),
++          "complete executable-memory backend is accepted");
++    check(shim.resolve("kernel32.dll", "VirtualAlloc", 0) == nullptr &&
++          shim.resolve("kernel32.dll", "Imaginary", 0) == nullptr &&
++          state.allocated == 0,
++          "unreviewed and unknown imports do not allocate executable memory");
++
++    state.active_symbol = "GetCurrentThreadId";
++    void* thread_entry = shim.resolve("KERNEL32.DLL", state.active_symbol, 0);
++    check(thread_entry && state.allocated == 1 && state.sealed == 1 &&
++          state.released == 0 && state.hidden_during_seal,
++          "first resolution seals a trampoline while its import is hidden");
++    if (thread_entry)
++    {
++        const uint32_t first = static_cast<uint32_t>(cap13_win64_call0(thread_entry));
++        check(first != 0 && first == cap13_win64_call0(thread_entry),
++              "lazy Win64 import calls its typed SysV handler");
++    }
++    check(shim.resolve("kernel32.dll", "GetCurrentThreadId", 0) == thread_entry &&
++          state.allocated == 1,
++          "repeated import resolution returns one retained trampoline");
++
++    state.active_symbol = "GetCurrentProcessId";
++    state.reject_seal = true;
++    check(shim.resolve("kernel32.dll", state.active_symbol, 0) == nullptr &&
++          state.allocated == 2 && state.sealed == 2 && state.released == 1,
++          "failed executable sealing leaves import unresolved and releases memory");
++    state.reject_seal = false;
++    void* process_entry = shim.resolve("kernel32.dll", state.active_symbol, 0);
++    check(process_entry && state.allocated == 3 && state.sealed == 3 &&
++          state.released == 1 && state.hidden_during_seal &&
++          static_cast<uint32_t>(cap13_win64_call0(process_entry)) ==
++          static_cast<uint32_t>(getpid()),
++          "a later successful resolve installs the previously refused import");
++
++    cap13::WinApiShim registered;
++    registered.register_builtin_exports();
++    MemoryState registered_state{};
++    registered_state.shim = &registered;
++    backend.user = &registered_state;
++    check(registered.set_executable_backend(backend), "second backend is accepted");
++    registered.register_module("KERNEL32.DLL", nullptr, registered_lookup);
++    check(registered.resolve("kernel32.dll", "Sleep", 0) ==
++          reinterpret_cast<void*>(&registered_sleep) &&
++          registered_state.allocated == 0,
++          "registered module export retains priority over lazy built-ins");
++
++    cap13::WinApiShim racing;
++    racing.register_builtin_exports();
++    RaceState race{};
++    backend.allocate_writable = race_allocate;
++    backend.seal_executable = race_seal;
++    backend.release = race_release;
++    backend.user = &race;
++    check(racing.set_executable_backend(backend), "race backend is accepted");
++    void* first_entry = nullptr;
++    void* second_entry = nullptr;
++    std::thread first([&] { first_entry = racing.resolve("kernel32.dll", "Sleep", 0); });
++    std::thread second([&] { second_entry = racing.resolve("KERNEL32.DLL", "Sleep", 0); });
++    first.join();
++    second.join();
++    check(first_entry && first_entry == second_entry &&
++          racing.resolve("kernel32.dll", "Sleep", 0) == first_entry &&
++          race.allocated.load() == 2 && race.sealing.load() == 2 &&
++          race.released.load() == 1,
++          "concurrent install keeps one published trampoline and releases the loser");
++    std::printf("TOTAL: %d failed\n", failures);
++    return failures ? 1 : 0;
++}
+--- /dev/null
++++ b/loader/tests/run_lazy_import_resolution.py
+@@ -0,0 +1,16 @@
++#!/usr/bin/env python3
++"""Build and run lazy reviewed import resolution host checks."""
++import subprocess
++from pathlib import Path
++
++root = Path(__file__).resolve().parents[1]
++out = root / 'tests/lazy-import-resolution-host'
++subprocess.run([
++    'clang++', '-arch', 'x86_64', '-std=c++17', '-O1', '-g', '-Wall',
++    '-Wextra', '-Werror', '-pthread', '-I' + str(root / 'src'),
++    '-I' + str(root / 'include'),
++    str(root / 'tests/lazy_import_resolution_test.cpp'),
++    str(root / 'src/win_api_shim.cpp'),
++    str(root / 'src/win64_bridge.S'), '-o', str(out),
++], check=True, timeout=30)
++subprocess.run(['arch', '-x86_64', str(out)], check=True, timeout=20)

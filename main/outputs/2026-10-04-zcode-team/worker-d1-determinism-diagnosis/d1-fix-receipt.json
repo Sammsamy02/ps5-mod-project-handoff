@@ -1,0 +1,86 @@
+{
+  "receipt": "d1-fix-receipt",
+  "worker": "worker-d1-determinism-diagnosis",
+  "date": "2026-10-04",
+  "root_cause": "worker-comp6-driver/build_runtime_composition6.py line 627: --reuse-composition-run selected RUN4 (ue4ss-native-supplier-composition-4/run-3, stale composed object 45dd9901..., 117779552 B) instead of re-verifying RUN6 (ue4ss-native-supplier-composition-6/run-1, 4dd4f309..., 117702184 B). The reuse sha check was self-consistent against the stale run's own receipt, so candidate-2 silently linked the pre-comp6 lineage. 13 source_hashes differ RUN6 vs RUN4 (program replacement, initializer merge, Resolution-B vintages).",
+  "evidence": {
+    "candidate_1": {
+      "dir": "worker-comp6-driver/prx-candidate-composition6-1",
+      "composition_dir_pin": "ue4ss-native-supplier-composition-6/run-1",
+      "wrapped_sha256": "76ee6af39b407ab73f78c59a3a3d38979397636bb988d3585cf6dc987098e553",
+      "wrapped_bytes": 30773943,
+      "bare_original_sha256": "843a94d9600dbe2bef6fb2cd910a26f10b943fa5ad4af47161e9b6be50754a52",
+      "bare_sdk_sha256": "bce857c5f26b46f3865d3615922970042f79897b3d9af5a152071564c4131af7",
+      "combined_supplier_o_sha256": "116f1d702434df3366245a8ae5c629f6b9424b2651a1524b73b2ddfdbe989902"
+    },
+    "candidate_2": {
+      "dir": "worker-comp6-driver/prx-candidate-composition6-2",
+      "composition_dir_pin": "ue4ss-native-supplier-composition-4/run-3",
+      "wrapped_sha256": "074b5af48259aefcfef366492ba230ac38c95b5f53d94e9cbb0dd8eb35e674ef",
+      "wrapped_bytes": 30793159,
+      "combined_supplier_o_sha256": "4c89229ceb77d299c8044a3eeabd034d9c5d29d8b54a977d1349941973dc80f1",
+      "ld_input_log": "build log llvm-readelf -h and ld.lld -r consume .../ue4ss-native-supplier-composition-4/run-3/coherent-tick-file-witness-runtime.o"
+    },
+    "delta_attribution": {
+      "overlay_objects": "12 of 12 byte-identical across candidates (sha256 match); overlay recreate exonerated",
+      "combined_supplier_o_bytes": "+77512 (candidate-2 larger)",
+      "bare_elf_sections": {".text": 11936, ".eh_frame": 9104, ".gcc_except_table": 396, ".rodata": -4400, ".data.rel.ro": -224, ".rela.dyn": -192, "net": 16192},
+      "wrapped_fself_bytes": 19216,
+      "dynsym": "identical 0x12a8 (same exported surface)",
+      "composed_object_symbols": {"run6_defined_extern": 56089, "run4_defined_extern": 56143, "only_in_run4": 55, "only_in_run6": 1}
+    },
+    "exonerated": ["overlay recreate", "make_fself", "dotnet packager", "ld.lld -r", "__FILE__ path embedding (zero-byte delta across differing run/overlay/out paths)"]
+  },
+  "fix": {
+    "driver_copy": "build_runtime_composition6_d1fix.py",
+    "driver_copy_sha256": "27d85da3826fdbf0090869af86f7094f0211b498e820c2d003aa4520a452d550",
+    "generator": "make_d1fix_driver.py",
+    "edits": {
+      "E1": "MY -> worker-d1-determinism-diagnosis (scope isolation)",
+      "E2": "RECEIPTS -> worker-comp6-driver/receipts (content unchanged)",
+      "E3": "COMPOSE6_FIXED -> worker-comp6-driver pinned fixed script (sha 8dd92a6f... runtime-verified)",
+      "E4": "THE FIX: --reuse-composition-run now re-verifies the composition-6/run-1 object (stale RUN4 fallback removed)",
+      "E5": "help text updated",
+      "E6": "build_overlay overlay_dir parameter (refuse-if-exists retained; unannotated for python3.9.6)",
+      "E7": "--overlay-dir CLI argument, passed through"
+    },
+    "upstream_note": "Original worker-comp6-driver/build_runtime_composition6.py NOT modified (not this worker's file); owner should land the same E4 one-liner."
+  },
+  "proof_runs": [
+    {
+      "candidate": "prx-candidate-composition6-3",
+      "mode": "fresh Phase A compose under this worker dir + packaging",
+      "console_log": "run-c3.console.log",
+      "fresh_composed_object_sha256_prefix": "4dd4f309075cdc3e (bit-identical to RUN6)",
+      "wrapped_sha256": "76ee6af39b407ab73f78c59a3a3d38979397636bb988d3585cf6dc987098e553",
+      "bare_original_sha256": "843a94d9600dbe2bef6fb2cd910a26f10b943fa5ad4af47161e9b6be50754a52"
+    },
+    {
+      "candidate": "prx-candidate-composition6-4",
+      "mode": "FIXED --reuse-composition-run packaging",
+      "console_log": "run-c4.console.log",
+      "reuse_gate_line": "[gate] reused composed object OK: 4dd4f309075cdc3e... (117702184 bytes)",
+      "wrapped_sha256": "76ee6af39b407ab73f78c59a3a3d38979397636bb988d3585cf6dc987098e553",
+      "bare_original_sha256": "843a94d9600dbe2bef6fb2cd910a26f10b943fa5ad4af47161e9b6be50754a52"
+    }
+  ],
+  "determinism_result": "three consecutive packaging runs (one-pass cand-1, fresh-compose cand-3, fixed-reuse cand-4) byte-identical at bare-original, bare-sdk and wrapped fself levels; zero-byte delta; no __FILE__-class exception needed; determinism.json alternative format not required",
+  "gate": {
+    "script": "worker-composition5-gate/gate_check_composition5.py",
+    "fixed_pair": {
+      "command": "gate_check_composition5.py --build-dir <this worker>/prx-candidate-composition6-3 --compare-dir <this worker>/prx-candidate-composition6-4 --json <this worker>/gate-receipt-d1fix-c3-vs-c4.json",
+      "exit_code": 0,
+      "verdict": "GO (offline gate)",
+      "receipt": "gate-receipt-d1fix-c3-vs-c4.json",
+      "d1_line": "identical sha256 across two builds: 843a94d9600dbe2b... vs 843a94d9600dbe2b..."
+    },
+    "canonical_pair": {
+      "command": "gate_check_composition5.py --build-dir worker-comp6-driver/prx-candidate-composition6-1 --compare-dir <this worker>/prx-candidate-composition6-3 --json <this worker>/gate-receipt-d1fix-c1-vs-c3.json",
+      "exit_code": 0,
+      "verdict": "GO (offline gate)",
+      "receipt": "gate-receipt-d1fix-c1-vs-c3.json"
+    },
+    "checks": "8/8 PASS (W1 W2 W3 I1 D1 F1 S1 P1)"
+  },
+  "scope": "writes confined to outputs/2026-10-04-zcode-team/worker-d1-determinism-diagnosis/ + script-owned run/candidate dirs inside it; frozen trees and real ledger read-only; no console contact; no nested subagents"
+}

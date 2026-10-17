@@ -1,0 +1,114 @@
+{
+  "doc": "probe-expectations.json — worker-probe-prep, 2026-10-05. Machine-readable expectations for the T2 armed xwp probe run (route M-A step 1). Companion to PROBE-RUN-CARD.md. All values host-verified against staged artifacts; console constants remain [TARGET] until Step-0 RETR / post-STOR readbacks. Proposal-only: no console contact, no launches, no outcome claims.",
+  "probe": {
+    "name": "modbridge_exec_write_probe_armed",
+    "build_id": "igd1-e030a09eb4d1",
+    "variant": "armed",
+    "staged_local_path": "outputs/2026-10-04-zcode-team/worker-igw-row0-rebuild/modbridge_exec_write_probe_armed.prx",
+    "fself_sha256": "e1541af612f97bb450b5f61888ae0c2fc93dea72454723dc9e0ffafabd6002df",
+    "fself_bytes": 20013,
+    "bare_sdk_sha256": "cc544d6e8fe94c151ca9d49bd12613f87999e8be20dcb935ff824bb1ef37a6f9",
+    "bare_sdk_bytes": 69464,
+    "remote_path": "/data/plugins/modbridge_exec_write_probe_armed.prx",
+    "artifact_checker": "check_xwp_artifact.py <run-dir> armed -> all gates PASS (verified by worker-probe-prep on determinism/run-armed-1)",
+    "determinism": "top-level fself == run-armed-1 == run-armed-2 (relink-identical)"
+  },
+  "readback": {
+    "law": "SHT-strip: readback = segment-covered prefix of bare-sdk inner ELF; exact-length + body-hash(64..end) + Ehdr-exception (e_shoff 40..47, e_shentsize/e_shnum/e_shstrndx 58..63, embedded e_shnum==0)",
+    "expected_bytes": 67832,
+    "expected_body_sha256_64_to_end": "e3f13d1994a1b4d27de05e31885d5a5cf9ea91daea3c57c2c229afd3696c295e",
+    "stale_constant_warning": "FINAL-INI-LAYOUT §4 xwp row pins the OLD launch-9 probe (body daea2ff4...); the T2 build supersedes it. Length 67832 is coincidentally equal; the body sha is NOT.",
+    "verify_snippet_source": "worker-game-session-ridealongs/STAGE-PLAN-COMBINED.md §3"
+  },
+  "boot_route": {
+    "required": "townfall_game_boot_ploader_injection",
+    "title": "PPSA33286",
+    "excluded_route": "pldmgr /loadpayload standalone dispatch (HTTP 8084) — separate-process; row-0 vmmap pre-proof (game image exec span [0x400000,0x787c000) prot=0x4, tail page 0x7878000) would refuse outcome=5 with zero attempts",
+    "launch_owner": "USER (manual console launch; never automated)",
+    "duration_expectation": {
+      "probe_records_complete_after_launch_s": "15-40",
+      "injection_window_s": "13-20 (8 enabled entries, mode-2 ~1.6s spacing, 25s per-plugin cap)",
+      "user_window_budget_min": 5
+    }
+  },
+  "ini": {
+    "option": "A",
+    "local_source": "outputs/2026-10-04-zcode-controller/launch9-evidence/ploader-ini-9entry-restore.txt",
+    "remote_path": "/data/plugins/ploader.ini",
+    "sha256": "fd9c73937b2b1e45d0cc22721c3e03d977cf027a7a335e5599577b2b7f7c3507",
+    "bytes": 440,
+    "layout_check": "verify_final_ini_layout.py -> FINAL-INI-OK, rc=0 (re-run 2026-10-05 by worker-probe-prep)",
+    "expected_pre_image_sha256": "1216aab61236b0fc9734b1647c96e03db48beb3d333efe174ca08e97abededa0",
+    "expected_enabled_entries": 8,
+    "expected_ploader_notifications": {"ok_lines": 8, "fail_lines": 0},
+    "entries_verbatim": [
+      "[PPSA33286]",
+      "/data/plugins/modbridge_exec_write_probe_armed.prx = 2",
+      "/data/plugins/modbridge_fc1pool.prx = 2",
+      "/data/plugins/modbridge_supplier_composition.prx = 2",
+      "/data/plugins/modbridge_qh_driver.prx = 2",
+      "/data/plugins/modbridge_runtime_aligned_observer.prx = 2",
+      "/data/plugins/modbridge_runtime_aligned_entry.prx = 2",
+      "/data/plugins/modbridge_path_test.prx = 2",
+      "/data/plugins/modbridge_ingame_facts.prx = 0",
+      "/data/plugins/modbridge_carrier.prx = 2"
+    ],
+    "ridealong_constants": {
+      "modbridge_fc1pool.prx": {"fself_sha256": "d2431bf842fdba85321a6a08b2c1b6fdc9426c971fbc7cddfcd2b14fb49f0d96", "bytes": 22733, "readback_bytes": 67848, "body_sha256": "7e2dce27e415bea80c3100d74e6f58c9a2cd8697bc87e03b67226fba09646ed3"},
+      "modbridge_qh_driver.prx": {"fself_sha256": "52c3221665a423ddd2b22faddd4ac59ea8fd0ab8c1880c61e225d32a43df70a4", "bytes": 26157, "readback_bytes": 87112, "body_sha256": "71406d3ccc7c1da0688b68ff35fd35c4a7ef9241b4d02ce427504cd392002cf5"},
+      "modbridge_runtime_aligned_observer.prx": {"fself_sha256": "1afa0997682cc6ecc14fd9f82961d68755edfacb36b36a4135203e37b1011e30", "bytes": 30152151, "readback_bytes": 30143976, "body_sha256": "3f89a5b66bba614926f7e7b1273c1d2aadeb505b2797dcd7389b12cebeee6622"},
+      "modbridge_supplier_composition.prx": "controller-pinned; stay/refresh is controller's call; T2 verdict independent (probe records land before composition module_start)",
+      "modbridge_runtime_aligned_entry.prx": "owner constants at stage time",
+      "modbridge_path_test.prx": "owner constants at stage time",
+      "modbridge_carrier.prx": "owner constants at stage time"
+    }
+  },
+  "evidence_files": [
+    {"path": "/data/modbridge-exec-write-probe.jsonl", "role": "PRIMARY", "durable_tags": {"marker": "modbridge.execwriteprobe", "schema": 1, "build_id": "igd1-e030a09eb4d1"}, "pre_launch_baseline": {"bytes": 4362, "sha256": "20cff60141e356c2a30822c8e37d5225430c8cb487b9b3311e1115499339c2fe", "note": "launch-10 pinned cut; T2 records are everything past it (file is append-only across boots)"}},
+    {"path": "/data/plugins/UE4SS.log", "role": "mirror_best_effort_plus_ridealongs", "launch10_baseline_sha256": "edf404a56d0a9ed85e15d2b20a00bdd07e93b189d4e70a9db988d46acd22a0ff"},
+    {"path": "/data/modbridge/roots/PPSA33286/runtime-status.txt", "role": "context_only", "launch10_baseline_sha256": "57c40d4cf7e91c8ac73fd726b3a268e7b613ee3b202459d8d181db7b79f51c4b"},
+    {"path": "/data/modbridge-supplier-diag.jsonl", "role": "optional_sdiag_ridealong", "note": "absence normal; per-pid session split per evidence.sh G2; NOT a T2 verdict input"}
+  ],
+  "ledger_tags_proposed": ["XWP2-STOR", "XWP2-READBACK", "XWP2-PRESENCE", "INI9-PRE", "INI9-BAK", "INI9-STOR", "INI9-READBACK", "T2-LAUNCH", "T2-JSONL", "T2-MIRROR"],
+  "expected_record_grammar": {
+    "total_records": 19,
+    "sequence": [
+      {"seq": 1, "exp": "entry", "pinned": {"phase": "module_start", "armed": 1, "table_rows": 6}},
+      {"seq": 2, "exp": "startup", "pinned": {"attempt_budget": 8}},
+      {"seq": 3, "exp": "row", "pinned": {"row_index": 0, "addr": "0x0000000007878000", "from_prot": "0x0000000000000004", "to_prot": "0x0000000000000005", "page_count": 1, "confirmed": 1}},
+      {"seq": 4, "exp": "vmmap_persist", "pinned": {"span_prot": "0x0000000000000004", "attempt_addr": "0x0000000007878000", "attempt_len": 4096, "walk_trusted": 1}},
+      {"seq": 5, "exp": "attempt", "pinned": {"mprotect_route": "sceKernelMprotect_import", "requested_prot": "0x0000000000000005"}, "rc_field": "THE number; verdict key"},
+      {"seq": 6, "exp": "rw_test", "pinned": {"read_done": 1, "write_tested": 0}},
+      {"seq": 7, "exp": "restore", "pinned": {"outcome": 10, "restored_prot": "0x0000000000000004"}, "rc_field": 0},
+      {"seq": 8, "exp": "post_restore", "pinned": {"restored_matches_from_prot": 1, "post_observed_prot": "0x0000000000000004"}},
+      {"seq": "9-18", "exp": "rows_1_to_5", "pinned": "row(confirmed=0) + refusal(outcome=2 XWP_SKIP_NOT_CONFIRMED, no_memory_touched=1) per row"},
+      {"seq": 19, "exp": "summary", "pinned": {"rows_seen": 6, "rows_attempted": 1, "rows_refused": 0, "rows_skipped": 5, "attempts_used": 1, "attempt_budget": 8, "budget_exhausted": 0, "mirror_failures": 0, "armed": 1, "mprotect_route": "sceKernelMprotect_import"}}
+    ],
+    "outcome_enum": {"XWP_OK": 0, "XWP_SKIP_UNARMED": 1, "XWP_SKIP_NOT_CONFIRMED": 2, "XWP_SKIP_BUDGET": 3, "XWP_SKIP_ROW_OVERFLOW": 4, "XWP_REFUSE_NOT_COVERED": 5, "XWP_REFUSE_PROT_MISMATCH": 6, "XWP_ATTEMPT_MPROTECT_FAIL": 7, "XWP_ATTEMPT_OK": 8, "XWP_RESTORE_FAIL": 9, "XWP_RESTORE_OK": 10, "XWP_MPROTECT_IMPORT_ABSENT": 11},
+    "class_caveat": "T2 page = exec-span tail page past file-content end (extent 0x7879b1c); class-exact (VMMAP prot=0x4 record class), byte-remote proxy; residual runtime refusals on real code pages remain possible, fail-closed-loud"
+  },
+  "fold_flip": {
+    "unit": "worker-walk-site-transitions/ASMHelper.guarded.cpp (== fold-0 form composed into launch11 candidate)",
+    "edit": "#define RC_ASM_WALK_RX_GUARD 0 -> 1 (single token; keep __FILE_NAME__ basename pin)",
+    "admission": "--file; declare expected object in manifest; recompose through same launch11-combined edition/driver",
+    "expected_object_sha256": "f5627427131f53ace920cfa178e4cb5711c02fde1b47eca5d1a45e1a4957a3df",
+    "expected_object_properties": {"argc": 148, "syscall_instructions": 1, "export_surface": "identical to fold-0"},
+    "never_linked_caveat": "f5627427 was measured but never linked; recompose must re-verify the linked object against it",
+    "alternative_flag_flip": "-DRC_ASM_WALK_RX_GUARD=1 reproduces WST fold-1 bytes 6604ce2d... but argc=149 -> refused by SEC32-3 drift assertion; NOT the admissible form",
+    "initializer_untouched": "e7f349af... stays intact",
+    "admissibility_law": "WST-5: fold iff the X->RX mprotect rc==0 exists in the IGW verdict record chain; for T2 this is exactly the seq5 attempt rc==0"
+  },
+  "decision_table": [
+    {"id": 1, "outcome": "rc==0_clean_restore", "observes": {"seq5_attempt_rc": 0, "seq7_restore_outcome": 10, "seq8_restored_matches_from_prot": 1}, "verdict": "W_WORKS", "next_action": "fold_flip_and_recompose", "extra": "recomposed LAUNCH additionally blocked on RUNBOOK §5.1 ladder re-order (worker-r3-ladder, in progress, not terminal) — flip authorized, launch not"},
+    {"id": 2, "outcome": "rc==0_restore_fail", "observes": {"seq5_attempt_rc": 0, "seq7_restore_outcome": 9, "or_seq8_restored_matches_from_prot": 0}, "verdict": "W_WORKS_attempt_restore_unreliable", "next_action": "stop_do_not_flip_reconcile", "extra": "new evidence class; guard latch (ASM:118-122) would permanently refuse after first restore anomaly; any retry = NEW id probe, never identical bytes; M-D hedge evaluation applies in interim; [row derived by worker-probe-prep — not explicitly tabled in STAGING-PROPOSAL §3]"},
+    {"id": 3, "outcome": "rc!=0", "observes": {"seq5_attempt_rc": "<0", "seq5_outcome": 7, "errno": "recorded"}, "verdict": "W_FAILS_R_WORKS", "next_action": "fold_stays_0__MD_hedge", "extra": "D-1 (R->RW on RELRO [0x82bc000,0x953c000) prot=1) is its own unproven syscall-74 page class; needs NEW design-designated confirmed build id, NEVER this e1541af6 build; LAUNCH10-MATRIX R6 requires controller+user approval of a NEW falsifiable design; walk reads stay refused-loud fold-0"},
+    {"id": "4a", "outcome": "map_drift_refusal", "observes": {"refusal_outcome": [5, 6], "attempts_used": 0}, "verdict": "refused_map_drift", "next_action": "stop_reconcile_only", "extra": "fresh VMMAP lacks 0x7878000 or prot!=0x4; re-pinned probe = NEW id + rebuild; fail-closed, zero memory touched"},
+    {"id": "4b", "outcome": "probe_absent", "observes": {"jsonl_growth_past_cut": false}, "verdict": "ABSENT", "next_action": "fold0_stays__reconcile_staging", "extra": "check ploader FAIL lines, pre-image sha, XWP2-READBACK receipt, presence-guard log; wasted for verdict, no memory touched; NEW TAG + full re-stage"},
+    {"id": "4c", "outcome": "fatal", "observes": {"missing_seq": true}, "verdict": "FATAL", "next_action": "fold0_stays__reconcile_before_any_exec_page_work", "extra": "preserve raw logs; no replay"}
+  ],
+  "dependencies": {
+    "ladder_trap": "RUNBOOK §5.1 (worker-l11-marshal-integration): M-A creates the walk-permitted world where the vtable fallback assigns Tick -> ensure_engine_tick_hooked() throws 'EngineTick callback registration failed' at first default-method ExecuteInGameThread; marshal-first-when-armed re-order (ExecuteInGameThread + 3 WithDelay ladders, distinct-ID) owned by worker-r3-ladder, observed in progress (staging + objects exist, no REPORT) — BLOCKING for the post-W_WORKS launch only",
+    "unchanged_gates": ["GATE-2: fold-1 permits walk READS only; PLH detour disasm+write stays compiled out/rerouted (ASM:31-34)", "GATE-5: LuaMod eager LoadMap registration needs its own scoped guard (unowned, RUNBOOK §5.2)", "GATE-3: pad ownership, wpd2 retry, independent"]
+  },
+  "honest_bounds": "host-side derivation only; zero console contact; record grammar pinned by src + captured launch-9 jsonl (igd1-6ebab07f2111), not a console measurement; rc is the open number; no launch outcome predicted"
+}

@@ -1,0 +1,376 @@
+--- a/outputs/2026-10-08-l25-prep/pak-overlay/overlay_builder.py
++++ b/outputs/2026-10-08-l25-prep/pak-overlay/overlay_builder.py
+@@ -126,6 +126,9 @@
+ import uuid
+ from typing import Optional, Dict, List, Tuple, Sequence
+ 
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++from cityhash64 import cityhash64  # noqa: E402  (validated vs 17,138 stored FName hashes)
++
+ __all__ = [
+     "Refused", "parse_toc", "inspect_toc", "parse_toc_header",
+     "build_overlay", "ModSpec", "Blake3", "blake3_20", "main",
+@@ -1778,6 +1781,90 @@
+     return struct.unpack("<Q", chunk_id[:8])[0]
+ 
+ 
++def zen_imported_package_ids(data: bytes) -> List[int]:
++    """Package ids named INSIDE a Zen package header (ImportedPackageNames).
++
++    UE5 unversioned Zen layout (container header v5): HasVersioningInfo u32,
++    HeaderSize u32, ..., ImportedPackageNamesOffset i32 at byte 48; the names
++    are an FName batch followed by one i32 number per name. PackageId =
++    CityHash64(UTF-16LE(lower(name))) -- verified 127/127 against the real Leon
++    store, which lists exactly these ids in the same order (texture-diagnosis
++    tests/test_iostore_lib.py). Fails closed on anything else."""
++    def bad(why):
++        raise Refused("closest_match_package_unparsable", why)
++    if len(data) < 60:
++        bad("package shorter than a Zen summary")
++    has_ver, header_size = struct.unpack_from("<II", data, 0)
++    if has_ver != 0 or not 60 <= header_size <= len(data):
++        bad("versioned or malformed Zen summary")
++    off = struct.unpack_from("<i", data, 48)[0]
++    if not 60 <= off < header_size:
++        bad("imported package names offset outside header")
++    num = struct.unpack_from("<I", data, off)[0]
++    if num == 0:
++        return []
++    if num > 65536 or off + 16 + 10 * num > header_size:
++        bad("imported package name count out of range")
++    num_string_bytes = struct.unpack_from("<I", data, off + 4)[0]
++    if struct.unpack_from("<Q", data, off + 8)[0] != 0xC1640000:
++        bad("unknown FName hash algorithm")
++    pos = off + 16 + 8 * num
++    lens = struct.unpack_from(">%dh" % num, data, pos)
++    pos += 2 * num
++    strings_start = pos
++    names = []
++    for ln in lens:
++        width, count = (2, ln + 32768) if ln < 0 else (1, ln)
++        if pos + width * count > header_size:
++            bad("imported package name overruns header")
++        raw = data[pos:pos + width * count]
++        try:
++            names.append(raw.decode("utf-16-le" if width == 2 else "latin-1"))
++        except UnicodeDecodeError:
++            bad("imported package name is not valid UTF-16")
++        pos += width * count
++    # The batch states its own string byte total; any mismatch (including any
++    # alignment padding this parser does not model) is a refusal, never a guess.
++    if pos - strings_start != num_string_bytes:
++        bad("imported package name bytes %d != NumStringBytes %d"
++            % (pos - strings_start, num_string_bytes))
++    if pos + 4 * num > header_size:
++        bad("imported package name numbers overrun header")
++    numbers = struct.unpack_from("<%di" % num, data, pos)
++    full = [n if k == 0 else "%s_%d" % (n, k - 1) for n, k in zip(names, numbers)]
++    return [cityhash64(n.lower().encode("utf-16-le")) for n in full]
++
++
++def require_package_import_rewritten(mod: "ModSpec", package_id: int,
++                                     from_package_id: int,
++                                     to_package_id: int) -> None:
++    """closest-match must not repoint ONLY the store entry.
++
++    The package's own header names its imports (and the import map points at
++    the parent's PUBLIC EXPORT HASH, a hash of the parent's export name). A
++    store-only repoint leaves the package asking for the old parent's export
++    inside the new parent package -> unresolvable import on the console. Until
++    a DERIVED package copy with the import rewritten is supplied (see
++    texture-diagnosis tools/zen_import_rewrite.py), refuse."""
++    chunk_id = struct.pack("<Q", package_id) + bytes.fromhex("00000001")
++    require(chunk_id in mod.toc.ids, "closest_match_package_chunk_missing",
++            "0x%016x" % package_id)
++    row = mod.toc.ids.index(chunk_id)
++    with open(mod.ucas_path, "rb") as handle:
++        store = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
++        try:
++            data = extract_chunk_bytes(mod.toc, row, store)
++        finally:
++            store.close()
++    ids = zen_imported_package_ids(data)
++    require(to_package_id in ids and from_package_id not in ids,
++            "closest_match_package_import_not_rewritten",
++            "package 0x%016x still imports 0x%016x inside its own header "
++            "(store-only repoint would leave an unresolvable parent import); "
++            "supply a derived package copy whose import names 0x%016x"
++            % (package_id, from_package_id, to_package_id))
++
++
+ def plan_conflicts(mods: Sequence[ModSpec],
+                    hidden: Optional[Dict[str, set]] = None
+                    ) -> Dict[str, object]:
+@@ -1965,6 +2052,8 @@
+                         "repoint" % (mod.mod_id, pid,
+                                      ["0x%016x" % i for i in imports],
+                                      rep["from_package_id"]))
++                require_package_import_rewritten(
++                    mod, pid, rep["from_package_id"], rep["to_package_id"])
+                 indexes = [i for i, v in enumerate(imports)
+                            if v == rep["from_package_id"]]
+                 for i in indexes:
+--- a/outputs/2026-10-08-l25-prep/pak-overlay/test_overlay_builder.py
++++ b/outputs/2026-10-08-l25-prep/pak-overlay/test_overlay_builder.py
+@@ -754,7 +754,12 @@
+                                     "per-chunk extraction equality all "
+                                     "match (asserted in-test)",
+         }
+-        out_path = os.path.join(HERE, "leon-replay-drift.json")
++        # never written next to this file (the folder holds evidence files):
++        # OVERLAY_TEST_OUT names the output folder, else a fresh temp folder
++        out_dir = os.environ.get("OVERLAY_TEST_OUT") or tempfile.mkdtemp(
++            prefix="overlay-test-out-")
++        os.makedirs(out_dir, exist_ok=True)
++        out_path = os.path.join(out_dir, "leon-replay-drift.json")
+         with open(out_path, "w") as handle:
+             json.dump({"drift": drift, "receipt_counts": receipt["counts"],
+                        "container_header_merge":
+@@ -1218,37 +1223,22 @@
+         # merged store: 6 base + parent + instance (0x1001's mod entry dropped)
+         self.assertEqual(receipt["counts"]["merged_packages"], 8)
+ 
+-    def test_closest_match_repoints_derived_store_entry(self):
++    def test_closest_match_refuses_store_only_repoint(self):
++        """A store-entry-only repoint is refused: the package's own header
++        still names the old parent (texture-diagnosis finding). The synthetic
++        instance payload is not a Zen package, so the guard fails closed."""
+         base_bytes, header_chunk, size = self._base_inputs()
+         mod, payloads = self._modA()
+-        # repoint the added instance's parent (0x20001 -> base package 0x1003)
+         rows = parse_substitutions({"schema": 1, "rows": [
+             {"mod_id": "modA", "package_id": "%016x" % 0x20002,
+              "action": "closest-match",
+              "from_package_id": "%016x" % 0x20001,
+              "to_package_id": "%016x" % (0x1000 + 3)}]})
+-        utoc, sidecar, receipt = build_overlay(
+-            base_bytes, size, header_chunk, [mod], "reject", rows)
+-        applied = receipt["substitution_ledger"]["applied"][0]
+-        self.assertEqual(applied["action"], "closest-match")
+-        self.assertEqual(applied["store_entry"], "derived-import-repoint")
+-        self.assertEqual(applied["import_indexes"], [0])
+-        self.assertEqual(applied["store_entry_imports_before"],
+-                         ["0x%016x" % 0x20001])
+-        self.assertEqual(applied["store_entry_imports_after"],
+-                         ["0x%016x" % (0x1000 + 3)])
+-        # the merged ContainerHeader really carries the repointed import
+-        derived = parse_toc(utoc)
+-        view = _view(sidecar, size)
+-        header_id = derived.container_id + bytes.fromhex('00000006')
+-        merged = parse_container_header(extract_chunk_bytes(
+-            derived, derived.ids.index(header_id), view))
+-        self.assertEqual(merged.packages[0x20002].imported_packages,
+-                         (0x1000 + 3,))
+-        # mod payload bytes still verbatim (instance chunk unchanged)
+-        self.assertEqual(extract_chunk_bytes(
+-            derived, derived.ids.index(chunk_id_for(0x20002)), view),
+-            payloads[chunk_id_for(0x20002)])
++        with self.assertRaises(Refused) as caught:
++            build_overlay(base_bytes, size, header_chunk, [mod], "reject",
++                          rows)
++        self.assertEqual(caught.exception.code,
++                         "closest_match_package_unparsable")
+ 
+     def test_closest_match_refusals(self):
+         base_bytes, header_chunk, size = self._base_inputs()
+@@ -1433,47 +1423,15 @@
+         base_bytes = open(LEON_BASE_UTOC, "rb").read()
+         header_chunk = open(LEON_BASE_HEADER, "rb").read()
+         mod = ModSpec("leon2k", LEON_MOD_UTOC, LEON_MOD_UCAS)
+-        derived_utoc, sidecar, receipt = build_overlay(
+-            base_bytes, LEON_BASE_UCAS_SIZE, header_chunk, [mod], "reject",
+-            rows)
+-        ledger = receipt["substitution_ledger"]
+-        self.assertEqual(ledger["rows"], 42)
+-        self.assertEqual(ledger["actions"]["closest-match"], 42)
+-        self.assertTrue(all(row["store_entry"] == "derived-import-repoint"
+-                            and row["base_replaced"]
+-                            for row in ledger["applied"]))
+-        # semantics unchanged elsewhere
+-        self.assertEqual(receipt["counts"]["final_chunks"], 59573)
+-        self.assertEqual(receipt["counts"]["merged_directory"]["files"], 56993)
+-        derived = parse_toc(derived_utoc)
+-        validate_lookup(derived)
+-        self.assertEqual(receipt["byte_identity"]["mod_payloads_verbatim"],
+-                         True)
+-        # the merged header carries a repointed import (spot check: every
+-        # repointed entry no longer imports its old parent)
+-        header_id = derived.container_id + bytes.fromhex('00000006')
+-        view = _view(sidecar, LEON_BASE_UCAS_SIZE)
+-        merged = parse_container_header(extract_chunk_bytes(
+-            derived, derived.ids.index(header_id), view))
+-        for row in ledger["applied"]:
+-            pid = int(row["package_id"], 16)
+-            self.assertNotIn(int(row["from_package_id"], 16),
+-                             merged.packages[pid].imported_packages)
+-            self.assertIn(target_pid, merged.packages[pid].imported_packages)
+-        # write the fixture receipt for the report
+-        out = {
+-            "fixture": "GM leon-classification.json HIDE_VIA_BASE_INVISIBLE",
+-            "rows": len(rows), "skipped_no_import": skipped_no_import,
+-            "substitute_game_path": substitute_path,
+-            "substitute_package_id": "%016x" % target_pid,
+-            "sample_row": rows[0],
+-            "derived_index_sha256": receipt["output_utoc_sha256"],
+-            "ledger_shape": ledger["applied"][0],
+-        }
+-        with open(os.path.join(HERE, "leon-substitutions-fixture.json"),
+-                  "w") as handle:
+-            json.dump(out, handle, indent=2)
+-        print("\n[leon-subs] fixture receipt -> leon-substitutions-fixture.json")
++        # The real Leon instances still import their PC-only parent inside
++        # their own package header, so a store-only repoint is refused
++        # (texture-diagnosis finding; zen_import_rewrite.py supplies the
++        # derived package copy that makes this row admissible).
++        with self.assertRaises(Refused) as caught:
++            build_overlay(base_bytes, LEON_BASE_UCAS_SIZE, header_chunk,
++                          [mod], "reject", rows)
++        self.assertEqual(caught.exception.code,
++                         "closest_match_package_import_not_rewritten")
+ 
+ 
+ def _view(sidecar, base_size):
+--- /dev/null
++++ b/outputs/2026-10-08-l25-prep/pak-overlay/cityhash64.py
+@@ -0,0 +1,141 @@
++"""CityHash64 (v1.1 algorithm), pure Python, independent implementation.
++
++Used only to (a) self-check against the FName hashes stored in every Zen
++package name batch (algorithm id 0xC1640000 = CityHash64 of the lower-case
++name bytes), and (b) derive Zen public export hashes for substitution
++planning. Validated at runtime against real stored hashes; never trusted
++blind (see tests/test_cityhash.py).
++"""
++M = (1 << 64) - 1
++K0 = 0xC3A5C85C97CB3127
++K1 = 0xB492B66FBE98F273
++K2 = 0x9AE16A3B2F90404F
++KMUL = 0x9DDFEA08EB382D69
++
++
++def _f64(s, i):
++    return int.from_bytes(s[i:i + 8], "little")
++
++
++def _f32(s, i):
++    return int.from_bytes(s[i:i + 4], "little")
++
++
++def _rot(v, n):
++    return v if n == 0 else ((v >> n) | (v << (64 - n))) & M
++
++
++def _smix(v):
++    return v ^ (v >> 47)
++
++
++def _bswap(v):
++    return int.from_bytes(v.to_bytes(8, "little"), "big")
++
++
++def _h16(u, v, mul=KMUL):
++    a = ((u ^ v) * mul) & M
++    a ^= a >> 47
++    b = ((v ^ a) * mul) & M
++    b ^= b >> 47
++    return (b * mul) & M
++
++
++def _len0to16(s, n):
++    if n >= 8:
++        mul = (K2 + n * 2) & M
++        a = (_f64(s, 0) + K2) & M
++        b = _f64(s, n - 8)
++        c = (_rot(b, 37) * mul + a) & M
++        d = ((_rot(a, 25) + b) * mul) & M
++        return _h16(c, d, mul)
++    if n >= 4:
++        mul = (K2 + n * 2) & M
++        a = _f32(s, 0)
++        return _h16((n + (a << 3)) & M, _f32(s, n - 4), mul)
++    if n > 0:
++        a, b, c = s[0], s[n >> 1], s[n - 1]
++        y = (a + (b << 8)) & 0xFFFFFFFF
++        z = (n + (c << 2)) & 0xFFFFFFFF
++        return (_smix(((y * K2) ^ (z * K0)) & M) * K2) & M
++    return K2
++
++
++def _len17to32(s, n):
++    mul = (K2 + n * 2) & M
++    a = (_f64(s, 0) * K1) & M
++    b = _f64(s, 8)
++    c = (_f64(s, n - 8) * mul) & M
++    d = (_f64(s, n - 16) * K2) & M
++    return _h16((_rot((a + b) & M, 43) + _rot(c, 30) + d) & M,
++                (a + _rot((b + K2) & M, 18) + c) & M, mul)
++
++
++def _len33to64(s, n):
++    mul = (K2 + n * 2) & M
++    a = (_f64(s, 0) * K2) & M
++    b = _f64(s, 8)
++    c = _f64(s, n - 24)
++    d = _f64(s, n - 32)
++    e = (_f64(s, 16) * K2) & M
++    f = (_f64(s, 24) * 9) & M
++    g = _f64(s, n - 8)
++    h = (_f64(s, n - 16) * mul) & M
++    u = (_rot((a + g) & M, 43) + (_rot(b, 30) + c) * 9) & M
++    v = (((a + g) & M) ^ d) + f + 1 & M
++    w = (_bswap(((u + v) * mul) & M) + h) & M
++    x = (_rot((e + f) & M, 42) + c) & M
++    y = ((_bswap(((v + w) * mul) & M) + g) * mul) & M
++    z = (e + f + c) & M
++    a = (_bswap(((x + z) * mul + y) & M) + b) & M
++    b = (_smix(((z + a) * mul + d + h) & M) * mul) & M
++    return (b + x) & M
++
++
++def _weak(s, i, a, b):
++    w, x, y, z = _f64(s, i), _f64(s, i + 8), _f64(s, i + 16), _f64(s, i + 24)
++    a = (a + w) & M
++    b = _rot((b + a + z) & M, 21)
++    c = a
++    a = (a + x + y) & M
++    b = (b + _rot(a, 44)) & M
++    return (a + z) & M, (b + c) & M
++
++
++def cityhash64(s: bytes) -> int:
++    n = len(s)
++    if n <= 32:
++        return _len0to16(s, n) if n <= 16 else _len17to32(s, n)
++    if n <= 64:
++        return _len33to64(s, n)
++    x = _f64(s, n - 40)
++    y = (_f64(s, n - 16) + _f64(s, n - 56)) & M
++    z = _h16((_f64(s, n - 48) + n) & M, _f64(s, n - 24))
++    v = _weak(s, n - 64, n, z)
++    w = _weak(s, n - 32, (y + K1) & M, x)
++    x = (x * K1 + _f64(s, 0)) & M
++    rem = (n - 1) & ~63
++    p = 0
++    while True:
++        x = (_rot((x + y + v[0] + _f64(s, p + 8)) & M, 37) * K1) & M
++        y = (_rot((y + v[1] + _f64(s, p + 48)) & M, 42) * K1) & M
++        x ^= w[1]
++        y = (y + v[0] + _f64(s, p + 40)) & M
++        z = (_rot((z + w[0]) & M, 33) * K1) & M
++        v = _weak(s, p, (v[1] * K1) & M, (x + w[0]) & M)
++        w = _weak(s, p + 32, (z + w[1]) & M, (y + _f64(s, p + 16)) & M)
++        z, x = x, z
++        p += 64
++        rem -= 64
++        if rem == 0:
++            break
++    return _h16((_h16(v[0], w[0]) + _smix(y) * K1 + z) & M, (_h16(v[1], w[1]) + x) & M)
++
++
++def fname_hash(name: str) -> int:
++    """Hash stored in Zen name batches (lower-case; ASCII bytes or UTF-16LE)."""
++    low = name.lower()
++    try:
++        return cityhash64(low.encode("ascii"))
++    except UnicodeEncodeError:
++        return cityhash64(low.encode("utf-16-le"))

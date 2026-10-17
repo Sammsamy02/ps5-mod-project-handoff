@@ -1,0 +1,53 @@
+2c2,6
+< """Freshly compile the selected Tick owner connection and compose pinned units.
+---
+> """Extended copy of ue4ss-native-tick-file-owner-1/build_runtime.py (sha256 f9ca46fb56d1b01ee43464e74f4086aaa7940ada4988fe68f4e82a79a2161a03)
+> for composition-3: adds the bounded --replace-bootstrap-unit/--replace-receipt
+> mechanism PROPOSAL (worker-ack-integration-deep controller-patch/02). All frozen
+> gates unchanged; replacement sources are hash-attested staging copies.
+> Original: freshly compile the selected Tick owner connection and compose pinned units.
+10c14
+< W=Path(__file__).resolve().parent;S=W.parent;ROOT=S.parent.parent
+---
+> W=Path('/WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1');S=W.parent;ROOT=S.parent.parent
+22c26
+<  ap.add_argument('--extend-undefined-baseline',action='store_true',help='Allow NEW undefined native symbols introduced by extra units; every added symbol must be declared by a pinned SDK target library; the extended baseline is recorded');a=ap.parse_args()
+---
+>  ap.add_argument('--extend-undefined-baseline',action='store_true',help='Allow NEW undefined native symbols introduced by extra units; every added symbol must be declared by a pinned SDK target library; the extended baseline is recorded');ap.add_argument('--replace-bootstrap-unit',action='append',default=[],help='name=source_path; recompile a base bootstrap unit from an attested replacement source');ap.add_argument('--replace-receipt',type=Path,help='hash-pinned attestation covering replacement sources and every spike project file the replacement touches');a=ap.parse_args()
+83a88,123
+> 
+>  boot_repl=[]
+>  for spec in a.replace_bootstrap_unit:
+>   name,sep,rsrc=spec.partition('=')
+>   if not sep or name not in base['bootstrap_units'] or not Path(rsrc).is_file():raise ValueError('Bad replace-bootstrap-unit spec: '+spec)
+>   boot_repl.append((name,Path(rsrc)))
+>  if boot_repl and not a.replace_receipt:raise ValueError('Bootstrap replacement requires --replace-receipt attestation')
+>  rr={}
+>  idmap={}
+>  if a.replace_receipt:
+>   rrd=read(a.replace_receipt)
+>   for p,h in rrd['files'].items():
+>    rp=str(Path(p).resolve())
+>    if not Path(rp).is_file() or sha(rp)!=h:raise ValueError('Replace-receipt hash mismatch: '+p)
+>    rr[rp]=h
+>   for k,v in rrd.get('include_dir_map',{}).items():idmap[str(Path(k).resolve())]=str(Path(v).resolve())
+>  for name,rsrc in boot_repl:
+>   old=base['bootstrap_units'][name];target=out/('bootstrap-'+name+'.o');dep=out/('bootstrap-'+name+'.d');argv=old['argv'].copy()
+>   for i,x in enumerate(argv):
+>    if x=='-I' and i+1<len(argv):
+>     m=str(Path(argv[i+1]).resolve())
+>     if m in idmap:argv[i+1]=idmap[m]
+>   old_src=next(x for x in argv if x.endswith('/'+Path(old['source']).name))
+>   argv[argv.index(old_src)]=str(rsrc);argv[argv.index('-o')+1]=str(target);argv[argv.index('-MF')+1]=str(dep)
+>   lcfg=old.get('LLVM_CONFIG') or units['native-loadercontext']['LLVM_CONFIG']
+>   run('bootstrap-'+name,argv,dict(os.environ,LLVM_CONFIG=lcfg))
+>   for pd in deps(dep):
+>    rp=str(Path(pd).resolve())
+>    if rp.startswith(str(ROOT)):
+>     if rp not in pins:
+>      if rp in rr:pins[rp]=rr[rp]
+>      elif rp.startswith(str(S)) or rp.startswith(str(ROOT/'.superpowers')):raise ValueError('Unpinned replaced-bootstrap dependency: '+pd)
+>      else:pins[rp]=sha(pd)
+>     check(pd,pins[rp])
+>   selected[name]={**old,'source':str(rsrc),'source_sha256':sha(rsrc),'object':str(target),'object_sha256':sha(target),'dependency_file':str(dep),'argv':argv,'exit':0,'bootstrap_replaced':True}
+>   replacements[old['object']]=str(target);fresh.append(name)

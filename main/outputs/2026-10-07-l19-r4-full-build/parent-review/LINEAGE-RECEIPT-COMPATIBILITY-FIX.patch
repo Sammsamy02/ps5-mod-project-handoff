@@ -1,0 +1,65 @@
+--- prior/composition.py
++++ new/composition.py
+@@ -45,6 +45,48 @@
+                 'preexisting compiled declaration macro refused')
+         prefix += ['-DRC_NATIVE_LAYOUT_DECLARATIONS_HEADER="' + str(admission.pins['generated_header']) + '"']
+     return [argv[0], *prefix, *argv[1:]]
++
++
++def historical_delta(base, current):
++    """Measure cumulative lineage against its true pinned197-symbol baseline."""
++    path = pin({'path': base['base_receipt'], 'sha256': base['base_receipt_sha256']},
++               'historical composition baseline')
++    previous = read(path)['undefined_delta']['current']
++    measured = dict(added=sorted(current.keys() - previous.keys()),
++                    removed=sorted(previous.keys() - current.keys()),
++                    changed_bindings={n: [previous[n], current[n]] for n in current.keys() & previous.keys()
++                                      if current[n] != previous[n]}, current_count=len(current), current=current)
++    inherited = base['undefined_delta']
++    require(all(measured[k] == inherited[k] for k in ('added', 'removed', 'changed_bindings')),
++            'actual cumulative historical delta differs from admitted R3 lineage')
++    return dict(inherited, **measured)
++
++
++def sdk_nm_evidence(base, nm, command, run, env):
++    """Recreate the inherited packager's required captures from actual pinned libraries."""
++    import package_prx_l19
++    providers = base['undefined_delta']['provider_library_hashes']
++    required = sorted(set(package_prx_l19.ALL_EXTENDED_IMPORT_EVIDENCE.values()))
++    libraries = {}
++    # Authenticate every requested provider before the first tool invocation.
++    for filename in required:
++        name = filename.removeprefix('sdknm-').removesuffix('.stdout')
++        matches = [p for p in providers if Path(p).name == name]
++        require(len(matches) == 1, 'one inherited SDK provider pin required: ' + name)
++        path = matches[0]
++        libraries[filename] = pin({'path': path, 'sha256': providers[path]}, 'SDK provider/' + name)
++    evidence = {}
++    for filename, library in libraries.items():
++        name = filename.removesuffix('.stdout')
++        log = command(name, [str(nm), '-D', '--defined-only', '--format=posix', str(library)], run, env)
++        path = run / filename
++        path.write_text(log['stdout'])
++        pin({'path': str(library), 'sha256': providers[str(library)]}, 'SDK provider after capture')
++        evidence[name] = {'path': str(path), 'sha256': sha(path),
++                          'provider': {'path': str(library), 'sha256': providers[str(library)]},
++                          'command': {'path': str(run / (name + '.command.json')),
++                                      'sha256': sha(run / (name + '.command.json'))}}
++    return evidence
+ 
+ 
+ class Composer:
+@@ -169,9 +211,11 @@
+         a.validate_tool_aliases()
+         for name in a.recipes['recipes']:
+             a.check_dependencies(name, selected[name]['dependency_file'])
+-        inherited_delta = dict(a.base['undefined_delta'], current=current, current_count=len(current))
++        inherited_delta = historical_delta(a.base, current)
++        sdk_evidence = sdk_nm_evidence(a.base, a.pins['nm'], self.command, run, env)
+         receipt = dict(a.base, status='NATIVE_SELECTED_TICK_FILE_WITNESS_RELOCATABLE_COMPOSED',
+-                       base_receipt=a.recipes['base_receipt']['path'], base_receipt_sha256=a.recipes['base_receipt']['sha256'],
++                       r4_recomposition_base_receipt=a.recipes['base_receipt'],
++                       r4_sdk_provider_evidence=sdk_evidence,
+                        runtime_object=str(target), runtime_sha256=sha(target), runtime_bytes=target.stat().st_size,
+                        runtime_compilation_units=369, freshly_compiled_units=fresh, retained_runtime_units=369-len(fresh),
+                        selected_runtime_units=selected, undefined_delta=inherited_delta, source_hashes=a.allowed,

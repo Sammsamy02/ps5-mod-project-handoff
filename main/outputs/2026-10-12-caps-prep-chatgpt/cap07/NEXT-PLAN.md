@@ -1,0 +1,15 @@
+# Current Mac preparation slice
+
+Previous goal turn: progress — #7 conditional two-task/transfer evidence, #12 group integrity/source-layout contract and the reviewed unapplied #10 callback bridge source stage.
+
+Current goal turn: progress — #12 source-specified group-requirement planner (14 focused checks, synthetic CLI and root real-catalogue missing-row check), fresh scoped Leon input refresh, and #10 actual invocation-observation proof boundary. No source/metadata result completes any console capability. B7 + hooks +15-fields has no dependency on this prep.
+
+Next #7 work: obtain the exact missing secondary store/base export inputs and permitted independent transfer/API/ABI/quiescence evidence. The two-task append/tail-pop trace does not establish nonzero shifts, overlap behavior, arbitrary selector history, thresholds or concurrency. Both array transfer sites resolve to one encoded libc import with no plaintext semantic contract in this image. Observe actual factory setup/sort setting/selected handle route through the console owner at the authorized slot. Leon composition still refuses the missing secondary store; no subset is deployable as complete.
+
+Next #9/#11 work: establish a genuine authorized global-entry backend and native GUI/frame/input/render host, with callback revoke/drain before original mod-owner destruction. Config flags, API names, per-function thunks and child leases cannot replace those contracts. Preserve the real mods' global/table/paused-frame behavior; retained exact source hashes do not prove final-link/deployed behavior.
+
+Next #12 work: supply an already-local provenance-complete type8 payload through local_shader_intake.py, then use manifest-v1/RUN.md. Compare actual map identity/slots with explicit stored hashes/library indices. Use group-plan/README.md for bounded selected-group discovery requirements and group-intake-audit/DESIGN.md for exact raw type09 ID, TOC logical length=manifest compressed_size, whole-buffer IoHash and physical coverage. Exact shader-format text and separately admitted contiguous writer layout are prerequisites for group-ID recomputation; transport and group codecs are separate. Real type8/type9 bytes, frozen-object linkage and translation remain missing.
+
+Next #10 work: later owner integration of bridge-stage/ only after normal source/build gates, then the genuine target Mono platform/GC/TLS/context/AOT/corlib/exception host and controlled exact-name resolver. The probe must run synchronously inside the existing ready callback while program and provider image remain retained. The staged source is neither compiled ABI/TLS proof nor managed execution. Actual Townfall managed invocation, both runtime imports, typed result and exception capture must be observed under proof-observation-audit/ACCEPTANCE.md; metadata PASS/Run0 alone is insufficient. This remains the ordered last console test. #10 alone never holds Stellar Blade.
+
+No console contact, live runtime edit, build or Stellar Blade prep. Full1–12 objective/order remain in STATUS-TABLE.md; the disclosed earlier receipt-write incident remains in HANDBACK.md.

@@ -1,0 +1,14 @@
+--- a/outputs/ps5-mod-bridge/native-host/http.c
++++ b/outputs/ps5-mod-bridge/native-host/http.c
+@@ -287,9 +287,12 @@
+     int auth_post = !strcmp(method, "POST") &&
+         (!strcmp(target, "/api/auth/start") || !strcmp(target, "/api/auth/disconnect"));
+     int json_post = !strcmp(method, "POST") &&
+         (!strcmp(target, "/api/jobs") || !strcmp(target, "/api/generations") ||
+          !strcmp(target, "/api/acquisition-plan") ||
+          !strcmp(target, "/api/acquisitions") || job_resume_target(target, NULL));
+-    size_t body_limit = auth_post ? HTTP_AUTH_BODY_LIMIT : json_post ? HTTP_JOB_BODY_LIMIT : 0;
++    int service_post = !strcmp(method, "POST") &&
++        !strcmp(target, "/api/mod-service/request");
++    size_t body_limit = auth_post ? HTTP_AUTH_BODY_LIMIT :
++        (json_post || service_post) ? HTTP_JOB_BODY_LIMIT : 0;

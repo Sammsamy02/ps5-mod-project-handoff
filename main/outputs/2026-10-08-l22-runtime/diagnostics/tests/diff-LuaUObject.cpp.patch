@@ -1,0 +1,268 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-menu-complete-build/candidate/LuaUObject.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l22-runtime/diagnostics/src/LuaUObject.cpp
+@@ -1,3 +1,4 @@
++#include <L22Diagnostics/Logging.hpp>
+ #include <type_traits>
+ #ifdef __PROSPERO__
+ #include <exception>
+@@ -121,6 +122,7 @@
+             // Check before creating a ref; in-bounds add and commit cannot throw.
+             if (CommittedOutParameters == OutParameters.get().size())
+             {
++                L22Diagnostics::error("UFunction", "UFunction out-parameter capacity exceeded");
+                 luaL_error(Lua.get_lua_state(), "UFunction out-parameter capacity exceeded");
+                 return;
+             }
+@@ -139,8 +141,15 @@
+         {
+             return call_ufunction_from_lua_impl(Invocation->Lua, *Invocation);
+         }
++        catch (const std::exception& error)
++        {
++            L22Diagnostics::error("UFunction", error.what());
++            Invocation->PendingException = std::current_exception();
++            return 0;
++        }
+         catch (...)
+         {
++            L22Diagnostics::error("UFunction", "non-standard C++ exception");
+             // Keep C++ exceptions from crossing the C Lua protected frame. The
+             // caller rethrows while its reference owner can still unwind normally.
+             Invocation->PendingException = std::current_exception();
+@@ -155,7 +164,7 @@
+     {
+         if (!lua.is_userdata())
+         {
+-            lua.throw_error("[UFunction::setup_metamethods -> __call] Attempted to call a UFunction without UFunction userdata attached");
++            L22Diagnostics::throw_lua_error(lua, "[UFunction::setup_metamethods -> __call] Attempted to call a UFunction without UFunction userdata attached", "UFunction/property");
+         }
+ 
+         auto& lua_object = lua.get_userdata<LuaType::UFunction>();
+@@ -193,7 +202,7 @@
+ 
+         if (!func || !calling_context)
+         {
+-            lua.throw_error("[UFunction::call_ufunction_from_lua] Tried calling function without both UFunction and calling context");
++            L22Diagnostics::throw_lua_error(lua, "[UFunction::call_ufunction_from_lua] Tried calling function without both UFunction and calling context", "UFunction/property");
+         }
+ 
+         // Reflected offsets must fit both the declared parameter frame and
+@@ -203,7 +212,7 @@
+         const auto declared_parameter_size = static_cast<size_t>(func->GetParmsSize());
+         if (declared_parameter_size > parameter_capacity)
+         {
+-            lua.throw_error("UFunction parameter frame exceeds the Lua buffer capacity");
++            L22Diagnostics::throw_lua_error(lua, "UFunction parameter frame exceeds the Lua buffer capacity", "UFunction/property");
+             return 0;
+         }
+         if (func->HasChildren())
+@@ -220,7 +229,7 @@
+                 if (offset < 0 || element_size <= 0 || array_dim <= 0 ||
+                     static_cast<size_t>(offset) > declared_parameter_size)
+                 {
+-                    lua.throw_error("UFunction parameter has invalid reflected bounds");
++                    L22Diagnostics::throw_lua_error(lua, "UFunction parameter has invalid reflected bounds", "UFunction/property");
+                     return 0;
+                 }
+                 const auto remaining = declared_parameter_size - static_cast<size_t>(offset);
+@@ -228,7 +237,7 @@
+                 // offset+extent overflow on inconsistent reflected metadata.
+                 if (static_cast<size_t>(array_dim) > remaining / static_cast<size_t>(element_size))
+                 {
+-                    lua.throw_error("UFunction parameter extends beyond the declared frame");
++                    L22Diagnostics::throw_lua_error(lua, "UFunction parameter extends beyond the declared frame", "UFunction/property");
+                     return 0;
+                 }
+             }
+@@ -264,9 +273,9 @@
+ 
+             if (num_supplied_params != num_expected_params_with_return_value)
+             {
+-                lua.throw_error(fmt::format("[UFunction::setup_metamethods -> __call] UFunction expected {} parameters, received {}",
++                L22Diagnostics::throw_lua_error(lua, fmt::format("[UFunction::setup_metamethods -> __call] UFunction expected {} parameters, received {}",
+                                             num_expected_params_with_return_value,
+-                                            num_supplied_params));
++                                            num_supplied_params), "UFunction/property");
+             }
+ 
+             // for (uint8_t i = 0; i < num_expected_params; ++i)
+@@ -313,8 +322,8 @@
+ 
+                         if (!lua.is_table())
+                         {
+-                            lua.throw_error(
+-                                    "Tried storing reference to a Lua table for an 'Out' parameter when calling a UFunction but no table was on the stack");
++                            L22Diagnostics::throw_lua_error(lua, 
++                                    "Tried storing reference to a Lua table for an 'Out' parameter when calling a UFunction but no table was on the stack", "UFunction/property");
+                         }
+ 
+ #ifdef __PROSPERO__
+@@ -350,10 +359,10 @@
+                     {
+                         std::string parameter_type_name = to_string(property_type_fname.ToString());
+                         std::string parameter_name = to_string(param_next->GetName());
+-                        lua.throw_error(
++                        L22Diagnostics::throw_lua_error(lua, 
+                                 fmt::format("Tried calling UFunction without a registered handler for parameter. Parameter '{}' of type '{}' not supported.",
+                                             parameter_name,
+-                                            parameter_type_name));
++                                            parameter_type_name), "UFunction/property");
+                     }
+                 }
+             };
+@@ -363,6 +372,13 @@
+         // Every part of the system is designed to throw when stuff goes wrong
+         // This code should never be executed in those cases
+         calling_context->ProcessEvent(func, dynamic_unreal_function_data.data);
++        if (L22Diagnostics::is_add_to_viewport(func))
++        {
++            L22Diagnostics::observe([&]() {
++                Output::send(STR("[l22] AddToViewport returned object={} function={} (void return; not visual proof)\n"),
++                             static_cast<void*>(calling_context), static_cast<void*>(func));
++            });
++        }
+ 
+         // If there are any 'Out' params, update the table that they correspond to
+         if (has_out_params)
+@@ -404,7 +420,7 @@
+                 else
+                 {
+                     std::string param_type_name = to_string(param_type_fname.ToString());
+-                    lua.throw_error(fmt::format("Tried calling UFunction without a registered handler 'Out' param. Type '{}' not supported.", param_type_name));
++                    L22Diagnostics::throw_lua_error(lua, fmt::format("Tried calling UFunction without a registered handler 'Out' param. Type '{}' not supported.", param_type_name), "UFunction/property");
+                 }
+ 
+                 if (!reuse_same_table)
+@@ -435,8 +451,8 @@
+             else
+             {
+                 std::string return_value_type_name = to_string(return_value_property_type.ToString());
+-                lua.throw_error(fmt::format("Tried calling UFunction without a registered handler for return value. Return value of type '{}' not supported.",
+-                                            return_value_type_name));
++                L22Diagnostics::throw_lua_error(lua, fmt::format("Tried calling UFunction without a registered handler for return value. Return value of type '{}' not supported.",
++                                            return_value_type_name), "UFunction/property");
+             }
+ 
+             return 0;
+@@ -468,7 +484,15 @@
+ 
+         // Preserve the original error object, including non-string errors. All
+         // owned C++ locals are gone before this final longjmp to the Lua caller.
+-        if (Status != LUA_OK) return lua_error(LuaState);
++        if (Status != LUA_OK)
++        {
++            // Do not coerce numeric/table error objects: propagate the same object.
++            if (lua_type(LuaState, -1) == LUA_TSTRING)
++                L22Diagnostics::error("UFunction Lua error", lua_tostring(LuaState, -1));
++            else
++                L22Diagnostics::error("UFunction Lua error", "non-string Lua error (object preserved)");
++            return lua_error(LuaState);
++        }
+         return lua_gettop(LuaState);
+     }
+ #endif
+@@ -682,7 +706,7 @@
+     {
+         if (!script_struct || !data)
+         {
+-            lua.throw_error("convert_lua_table_to_struct: script_struct or data is null");
++            L22Diagnostics::throw_lua_error(lua, "convert_lua_table_to_struct: script_struct or data is null", "UFunction/property");
+             return;
+         }
+ 
+@@ -2306,7 +2330,7 @@
+         }
+         else
+         {
+-            lua.throw_error(error_overload_not_found);
++            L22Diagnostics::throw_lua_error(lua, error_overload_not_found, "UFunction/property");
+         }
+ 
+         return 1;
+@@ -2341,6 +2365,8 @@
+     auto handle_unreal_property_value(
+             const Operation operation, const LuaMadeSimple::Lua& lua, Unreal::UObject* base, Unreal::FName property_name, Unreal::FField* field) -> void
+     {
++        try
++        {
+         // In UE versions prior to 4.25, UFunctions can be found with 'find_property', and thus 'property' will not be nullptr
+         // So you must take that into account when checking if the Lua script is trying to call a UFunction
+         if (!field || field->GetClass().GetFName() == Unreal::GFunctionName)
+@@ -2361,6 +2387,7 @@
+ 
+             if (func)
+             {
++                L22Diagnostics::record_function_lookup(func, property_name.GetComparisonIndex());
+                 push_functionproperty(FunctionPusherParams{.lua = lua, .base = base, .function = func});
+             }
+             else
+@@ -2393,9 +2420,9 @@
+             // We can either throw an error and kill the execution
+             /**/
+             std::string property_type_name = to_string(property_type.ToString());
+-            lua.throw_error(fmt::format(
++            L22Diagnostics::throw_lua_error(lua, fmt::format(
+                     "[handle_unreal_property_value] Tried accessing unreal property without a registered handler. Property type '{}' not supported.",
+-                    property_type_name));
++                    property_type_name), "UFunction/property");
+             //*/
+ 
+             // Or we can treat unhandled property types as some sort of generic type
+@@ -2405,6 +2432,18 @@
+             push_unhandledproperty(lua, base);
+             //*/
+         }
++    
++        }
++        catch (const std::exception& error)
++        {
++            L22Diagnostics::error("property access/set", error.what());
++            throw;
++        }
++        catch (...)
++        {
++            L22Diagnostics::error("property access/set", "non-standard C++ exception");
++            throw;
++        }
+     }
+ 
+     RemoteUnrealParam::RemoteUnrealParam(void* ptr_object, Unreal::UObject* base, Unreal::FProperty* property, const Unreal::FName type)
+@@ -2500,6 +2539,8 @@
+ 
+     auto RemoteUnrealParam::prepare_to_handle(const Operation operation, const LuaMadeSimple::Lua& lua) -> void
+     {
++        try
++        {
+         auto& lua_object = lua.get_userdata<LuaType::RemoteUnrealParam>();
+ 
+         int32_t type_name_comparison_index = lua_object.m_type.GetComparisonIndex();
+@@ -2518,9 +2559,9 @@
+             // We can either throw an error and kill the execution
+             /**/
+             std::string property_type_name = to_string(lua_object.m_type.ToString());
+-            lua.throw_error(fmt::format(
++            L22Diagnostics::throw_lua_error(lua, fmt::format(
+                     "[RemoteUnrealParam::prepare_to_handle] Tried accessing unreal property without a registered handler. Property type '{}' not supported.",
+-                    property_type_name));
++                    property_type_name), "UFunction/property");
+             //*/
+ 
+             // Or we can treat unhandled property types as some sort of generic type
+@@ -2530,5 +2571,17 @@
+             push_unhandledproperty(lua, base);
+             //*/
+         }
++    
++        }
++        catch (const std::exception& error)
++        {
++            L22Diagnostics::error("property access/set", error.what());
++            throw;
++        }
++        catch (...)
++        {
++            L22Diagnostics::error("property access/set", "non-standard C++ exception");
++            throw;
++        }
+     }
+ } // namespace RC::LuaType

@@ -1,0 +1,1202 @@
+{
+ "schema": "refused-hooks/v2",
+ "generated": "2026-10-12",
+ "scope": "Mac-only; no console contact; B4 candidate LuaMod.cpp sha256 4d6bc63b7a90a8026a9c918ee6bee36c2d4eaa450220be82e8071f5427bfde9a",
+ "log_file": "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log",
+ "claim_label_legend": {
+  "console-proven": "cites a line of the B4 launch log",
+  "Mac-only": "code reading or static analysis",
+  "comparison": "earlier session, never a verdict"
+ },
+ "counts": {
+  "rows": 22,
+  "loud_refusals": 4,
+  "silent_refusals": 18,
+  "selftest_entries_counted_as_PASS_but_never_fire": 18,
+  "selftest_soft_refused_set": 12,
+  "selftest_extra_silent": 6,
+  "selftest_loud_fail": 2,
+  "minimap_loud_refusals": 3,
+  "minimap_silent": 1,
+  "spawner_silent": 1,
+  "note": "R21/R22 reclassified: loud, need extent fix + gate change + frame counter"
+ },
+ "root_causes": [
+  {
+   "id": "C1",
+   "what": "no detours on game code: whole eager hook block skipped",
+   "code": "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8871-8885 (else block to 9701)",
+   "console_proven": [
+    "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:621",
+    "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:668",
+    "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780",
+    "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:920-922"
+   ]
+  },
+  {
+   "id": "C2",
+   "what": "HookProcessInternal=0 and HookProcessLocalScriptFunction=0 leave ProcessInternalInternal unset and the script hook unregistered",
+   "code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp:3084",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:6017",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:9691-9694"
+   ],
+   "console_proven": [
+    "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:764-766"
+   ]
+  }
+ ],
+ "selftest_gaps_finding": {
+  "summary": "GAPS counter only counts calls that throw an error containing 'refus'. None of the 12 throws, so the next run prints GAPS 0.",
+  "code": [
+   "ST/main.lua:34-44,101",
+   "ST/part8.lua:14-20",
+   "ST/part9.lua:5-9",
+   "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3178,3234,3290,3897,3939,3981"
+  ],
+  "comparison_evidence": "evidence/acceptance-pass2-20261012.decoded.log calls 119-130 PASS registered",
+  "label": "Mac-only prediction",
+  "fix": "staged/ueselftest-gaps-from-runtime-counter.diff"
+ },
+ "vtable_pump_blocker": {
+  "summary": "[EU-VMT] arming refused: non-text-ent (D:623; D:658). The log gives no entry number.",
+  "label": "refusal console-proven; cause = Mac-only HYPOTHESIS",
+  "hypothesis": "the 512-entry scan runs past the end of the GameEngine vtable (real table seems to end at entry 178; extent 508; 126 non-code words inside) under a stand-in classifier (relocated pointer inside executable LOAD0, which starts at address 0)",
+  "evidence": [
+   "evidence/vtable_extent_check.out (image sha 3b6cfad4 matches B4 log)",
+   "evidence/vtable_extent_sensitivity.out"
+  ],
+  "sensitivity": "the runtime classifier rc_seed::classify_seed_address is not in the tree. Entries 175 (0x120) and 184 (0xe0) count as code only because LOAD0 starts at 0. With text_lo=0x1000 36 entries inside the real table fail too, so a stricter classifier would need a different fix.",
+  "fix_shape": "first log entry index and value on refusal (one launch settles it); then stop extent at first non-code non-zero word after the Tick slot, or use relocations",
+  "unblocks_if_true": [
+   "Tick pump",
+   "R05",
+   "R06"
+  ],
+  "does_not_unblock": [
+   "R21",
+   "R22 (also need gate and drain changes)"
+  ]
+ },
+ "staged_logging": {
+  "format": "[REFUSED] kind=<api> target='<path|name|->' mod='<mod|*>' reason=<code> effect=<throws|accepted-undelivered|queued-pending|never-delivered>",
+  "files": [
+   "staged/refused-log-vs-B4-candidate.diff",
+   "staged/apply_refused_log.py",
+   "staged/refused_log_helper.inc",
+   "staged/ueselftest-gaps-from-runtime-counter.diff"
+  ],
+  "host_test": "host-test/RESULT.txt (18 checks, 0 fail; mocks only, does not prove the real compile)",
+  "applies_to": {
+   "B4 candidate": "diff + script clean",
+   "B5 base": "script clean, diff 4/29 hunks fail",
+   "B6 work": "script clean"
+  },
+  "applied": false
+ },
+ "rows": [
+  {
+   "id": "R01",
+   "lua_api": "RegisterHook",
+   "target": "<Blueprint class path>:<script function> (minimap: On Interact Event, OnDoorEvent, OnHideEvent on the pawn BP class, MM:506-519)",
+   "registered_by": [
+    {
+     "mod": "TownfallMiniMap",
+     "count": 3,
+     "where": "MM:506-519 (registerInteractionHooks, called MM:4106)"
+    }
+   ],
+   "refusal_mode": "throws, at one of two places the B4 log cannot tell apart (caught by the mod's pcall; no log line)",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:5992-5994 (StaticFindObject by path first; throws 'no UFunction with the specified name was found')",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:6003 (native branch), 6017 (script branch needs Func==ProcessInternal), 6043 (error branch 'Was unable to register a hook')",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:5947 (lock held while raising)"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:994 minimap read the pawn class name (so registerInteractionHooks ran)",
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:807 and :818 are the only 'Registered native hook' lines (other mods, ClientRestart); none for the minimap",
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log: no '[StaticFindObject] long-name part ... not in FName pool' line (UObjectGlobals.cpp:493-499 prints it when a name part is missing) - the name-part-missing sub-case did not happen",
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:763 FUObjectHashTables unavailable, lookups use GUObjectArray"
+    ],
+    "unknown": [
+     "whether the path lookup found the function (then :6043) or not (then :5994); no /Game/... Blueprint function path resolution appears in B4 or in the three earlier decoded sessions searched"
+    ],
+    "mac_only": [
+     "refusal by code reading; runtime comments LuaMod.cpp:5686-5693 and :5855-5860 say Blueprint long-name lookups did not resolve on console before the layer-3 rewrite (UObjectGlobals.cpp:456-560, in the B4 build); that rewrite is console-proven only for /Script/ paths (D:807, D:818)"
+    ]
+   },
+   "settings_involved": [
+    "HookProcessInternal=0",
+    "HookProcessLocalScriptFunction=0 (UE4SS-settings.ini:61-62)",
+    "UnrealInitializer.cpp:3084 gate leaves ProcessInternalInternal unset"
+   ],
+   "pc_behaviour": "PC: HookProcessInternal=1 and HookProcessLocalScriptFunction=1; script hooks run in script_hook, a ProcessLocalScriptFunction post-callback (vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/):4267-4290, :6293, :7219-7221). Post-body only.",
+   "mod_loses": "Minimap loses instant interacted marking; it keeps pollInteracted/pollMaxedPickup (MM:363-378). Any PC mod reacting to a Blueprint event loses it fully.",
+   "data_only": {
+    "verdict": "possible-with-two-steps",
+    "route": "(1) scan-based function resolver (path lookup is unproven for /Game Blueprint functions), then (2) UFunction::Func pointer swap using the existing ScriptHookThunks (no native-flag requirement, ScriptHookThunks.cpp:123-155). The Func swap on script functions is console-proven by the 66 carriers: D:908-914 armed, D:918 carrier fired.",
+    "needs": [
+     "step 1 resolver: split path at last ':'; scan Function-class objects (same loop as r3_marshal_arm_event_carriers, LuaMod.cpp:5761-5818, console-proven D:914) matching event name (FNAME_Find, pool-only) and owner class name; bucket by name; run only when path lookup returns nothing; per-pass cost unmeasured",
+     "step 2 branch in RegisterHook/UnregisterHook: native flag clear + second signal (non-empty script bytes OR Func equals Func of /Script/CoreUObject.Object:ExecuteUbergraph, a data read at UnrealInitializer.cpp:3092) -> thunk path",
+     "no new offsets (Func, native flag already used)",
+     "step 3 one console probe (user OK per console action): hook one event from zzdiag, count hits, check parameter reading from a script frame, check the minimap's three events fire",
+     "coverage: engine-started calls only; Blueprint-to-Blueprint local calls bypass Func (LuaMod.cpp:5698-5705)"
+    ],
+    "risk": "medium; 256 thunk slots total, 66 used at startup; if the path lookup is the failing step the branch change alone changes nothing; parameter reading from a script frame unproven"
+   },
+   "selftest_entry": "not exercised (self-test hooks native ClientRestart, ST/part8.lua:7)",
+   "priority": "P1",
+   "claim_labels": {
+    "refusal": "console-proven that no hook registered; refusal site Mac-only and undecided between 5994 and 6043",
+    "carrier mechanism on script functions": "console-proven (D:908-918)",
+    "native RegisterHook": "console-proven (D:807,818,893-894)",
+    "path lookup of /Game Blueprint functions": "unknown",
+    "route coverage": "Mac-only"
+   },
+   "proposed_log_reason": [
+    "ufunction-not-found (path lookup, :5994)",
+    "bp-script-function-needs-processinternal-hook (:6043, native flag clear)",
+    "native-func-is-processinternal (:6043, native flag set)",
+    "ufunction-func-null (:6043)"
+   ],
+   "refusal_site_known": false,
+   "proposed_log_reason_note": "staged logger already emits the split (staged/apply_refused_log.py E2/E3); the next launch decides which one the console hits"
+  },
+  {
+   "id": "R02",
+   "lua_api": "UnregisterHook",
+   "target": "same as R01",
+   "registered_by": [
+    {
+     "mod": "ConsoleEnablerMod",
+     "count": 1,
+     "where": "native hook, works (D:893-894)"
+    }
+   ],
+   "refusal_mode": "throws for Blueprint functions (same two possible places as R01)",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:2430-2435"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "native unregister works: D:893-894"
+    ]
+   },
+   "settings_involved": [
+    "same as R01"
+   ],
+   "pc_behaviour": "PC: same as R01",
+   "mod_loses": "nothing today",
+   "data_only": {
+    "verdict": "possible-with-two-steps",
+    "route": "same route as R01 (needs the same resolver)",
+    "needs": [
+     "follows R01 steps 1-2"
+    ],
+    "risk": "medium"
+   },
+   "selftest_entry": "not exercised",
+   "priority": "P1",
+   "claim_labels": {
+    "refusal": "Mac-only"
+   },
+   "proposed_log_reason": [
+    "ufunction-not-found (path lookup, :5994)",
+    "bp-script-function-needs-processinternal-hook (:6043, native flag clear)",
+    "native-func-is-processinternal (:6043, native flag set)",
+    "ufunction-func-null (:6043)"
+   ]
+  },
+  {
+   "id": "R03",
+   "lua_api": "RegisterCustomEvent",
+   "target": "event name (matches by name across all script functions)",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part8.lua:10"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3062-3103 (queues into m_custom_event_callbacks)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:9691-9694 (only delivery path: ProcessLocalScriptFunction post-callback)"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:764-766 ProcessLocalScriptFunction is not available ...custom UFunctions or events for BPs",
+     "no 'Enabling custom events' line in the whole log"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 115 PASS ret=nil"
+    ]
+   },
+   "settings_involved": [
+    "HookProcessLocalScriptFunction=0"
+   ],
+   "pc_behaviour": "PC: vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/):2368 registers, :7219-7221 enables delivery",
+   "mod_loses": "Every mod that reacts to a Blueprint custom event by name",
+   "data_only": {
+    "verdict": "partial",
+    "route": "Func swap on each script function with that name; object-array walk by name, rebuilt when Blueprint classes load",
+    "needs": [
+     "R01 mechanism first",
+     "name search across all UFunctions (walk cost; or create-listener for new classes)",
+     "coverage limit same as R01, weaker than upstream"
+    ],
+    "risk": "medium-high"
+   },
+   "selftest_entry": "ST/part8.lua:10 (PASS ret=nil)",
+   "priority": "P2",
+   "claim_labels": {
+    "refusal": "console-proven absence of enable line"
+   },
+   "proposed_log_reason": "process-local-script-function-unavailable",
+   "related_works_noop": "UnregisterCustomEvent (LuaMod.cpp:3105, ST/part8.lua:11) works: removes from an empty list; not a refusal"
+  },
+  {
+   "id": "R04",
+   "lua_api": "NotifyOnNewObject",
+   "target": "Outer.Class, minimap: /Script/Townfall.Interactable",
+   "registered_by": [
+    {
+     "mod": "TownfallMiniMap",
+     "count": 1,
+     "where": "MM:4248-4262"
+    },
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part8.lua:9"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:2994-3059 (queues into m_static_construct_object_lua_callbacks)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:9002 (RegisterStaticConstructObjectPostCallback, inside the skipped block 8885-9701)"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:668 [UE4SS.StaticConstructObject.ObjectSearcherPoolHook] Failed to add hook, detour installation likely failed!",
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 names StaticConstructObject among the stay-unregistered list"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 114 PASS ret=nil"
+    ]
+   },
+   "settings_involved": [
+    "code gate R3MarshalPumpPending (LuaMod.cpp:8871); no INI key",
+    "bUseUObjectArrayCache=false (UE4SS-settings.ini:15): the class create listener (UnrealInitializer.cpp:603-604, inside the if(bUseUObjectArrayCache) block starting :562) is not registered in this config; nothing fills the gap"
+   ],
+   "pc_behaviour": "PC: vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/):2303 registers, :6626 delivers from a StaticConstructObject post detour",
+   "mod_loses": "Minimap cache of interactables goes stale when in use (MM:2745-2746, 2861-2873, 4250-4262). Any mod tagging new actors/widgets.",
+   "data_only": {
+    "verdict": "yes-two-ways",
+    "route": "(1) engine's own AddUObjectCreateListener ('variant C'); (2) poll only new tail slots of the object array on the pump",
+    "needs": [
+     "route 1: engine create-op address from two independent sources + prologue signature admission (only delete ops 0x8841A0/0x884240 are admitted today; IT-LOOKUP-SPEED.md:144-152); queue + serial check because notification arrives mid-construction; delete listener already exists",
+     "route 2: read bShouldRecycleObjectIndices (profile offset 148); exact only if false"
+    ],
+    "risk": "route 1 medium (new pin, listener ABI risk); route 2 low risk, may miss create-and-destroy between ticks"
+   },
+   "selftest_entry": "ST/part8.lua:9 (PASS ret=nil)",
+   "priority": "P2",
+   "claim_labels": {
+    "refusal": "console-proven (D:668, D:780)",
+    "routes": "Mac-only"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R05",
+   "lua_api": "RegisterLoadMapPreHook",
+   "target": "UEngine::LoadMap (vtable byte offset 0x4F8)",
+   "registered_by": [
+    {
+     "mod": "TownfallItemSpawner",
+     "count": 1,
+     "where": "main.lua:731-744 (RegisterLoadMapPreHook)"
+    },
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part8.lua:12"
+    }
+   ],
+   "refusal_mode": "accepted silently (queued), never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3124-3149 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:5373-5392 try_deferred_loadmap_arm (one attempt, RegisterLoadMapPre/PostCallback = detour)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8882 pending flag"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 deferral warning",
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:920-921 [UE4SS.LoadMap.LuaModImpl] Failed to add hook x2",
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:922 [R3] LoadMap deferred arm refused (pre id 0, post id 0)"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 117 PASS ret=nil"
+    ]
+   },
+   "settings_involved": [
+    "HookLoadMap=true (address resolved: D 'GameEngine::LoadMap address 0x3c4d460')",
+    "code gate LuaMod.cpp:8871"
+   ],
+   "pc_behaviour": "PC: vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/):2426/2453 queue, :6450 detour on LoadMap",
+   "mod_loses": "Spawner: per-map reset never runs, menu refs/items/spawned list stay stale after a map change",
+   "data_only": {
+    "verdict": "possible",
+    "route": "private vtable copy of the GameEngine object (VmtTickPumpCore.inc), replace slot 0x4F8 with a trampoline that queues/calls Lua pre, calls the original once, then post; or (post only) extend the FL-MAP world watch",
+    "needs": [
+     "vtable pump must arm: copied-vtable arm is refused today (D:623 non-text-ent; D:658). Cause is a Mac-only hypothesis (see vtable_pump_blocker); first add the entry-index/value log on refusal",
+     "slot 0x4F8: ONE static inference (ENGINE-SLOT-FACTS-v2.json: live_validation=false, 'Method identity is an inference'). D:616 'GameEngine::LoadMap address 0x3c4d460' is the runtime reading the same profile offset, so it confirms table content only; my image replay reuses 0x4F8. NOT two independent sources. A second source is needed: the staged log-only LoadMap entry (round5-staging/world-fix/04-event-map-logger.patch) firing exactly at a map change with a map name matching the runtime's World change",
+     "extend the staged logging-only entry to deliver Lua callbacks (pre before original, post after)",
+     "Lua call must not hold the actions lock (B5/B6/B7)",
+     "existing alternative for POST only: [FL-MAP] src=marshal-watch (LuaMod.cpp:5110-5135, 5240-5247), a bounded 1 Hz World-identity check on the proven pump; log-only today, no [FL-MAP] line in the B4 log; could deliver RegisterLoadMapPostHook up to 1 s late with no vtable work; cannot deliver PRE"
+    ],
+    "risk": "medium; one object's vptr swapped; Lua called from inside LoadMap on the game thread"
+   },
+   "selftest_entry": "ST/part8.lua:12 (PASS ret=nil)",
+   "priority": "P1",
+   "claim_labels": {
+    "refusal": "console-proven",
+    "slot identity": "Mac-only, one static inference (not two sources)",
+    "table content": "console-proven live read of the profile offset (D:616) - consistency only",
+    "extent cause": "Mac-only hypothesis"
+   },
+   "proposed_log_reason": "loadmap-detour-arm-refused"
+  },
+  {
+   "id": "R06",
+   "lua_api": "RegisterLoadMapPostHook",
+   "target": "UEngine::LoadMap (vtable byte offset 0x4F8)",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part8.lua:13"
+    }
+   ],
+   "refusal_mode": "accepted silently (queued), never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3151-3176 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:5373-5392 try_deferred_loadmap_arm (one attempt, RegisterLoadMapPre/PostCallback = detour)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8882 pending flag"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 deferral warning",
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:920-921 [UE4SS.LoadMap.LuaModImpl] Failed to add hook x2",
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:922 [R3] LoadMap deferred arm refused (pre id 0, post id 0)"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 118 PASS ret=nil"
+    ]
+   },
+   "settings_involved": [
+    "HookLoadMap=true (address resolved: D 'GameEngine::LoadMap address 0x3c4d460')",
+    "code gate LuaMod.cpp:8871"
+   ],
+   "pc_behaviour": "PC: vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/):2426/2453 queue, :6450 detour on LoadMap",
+   "mod_loses": "post-load initialisation",
+   "data_only": {
+    "verdict": "possible",
+    "route": "private vtable copy of the GameEngine object (VmtTickPumpCore.inc), replace slot 0x4F8 with a trampoline that queues/calls Lua pre, calls the original once, then post",
+    "needs": [
+     "vtable pump must arm: copied-vtable arm is refused today (D:623 non-text-ent; D:658). Cause is a Mac-only hypothesis (see vtable_pump_blocker); first add the entry-index/value log on refusal",
+     "slot 0x4F8: ONE static inference (ENGINE-SLOT-FACTS-v2.json: live_validation=false, 'Method identity is an inference'). D:616 'GameEngine::LoadMap address 0x3c4d460' is the runtime reading the same profile offset, so it confirms table content only; my image replay reuses 0x4F8. NOT two independent sources. A second source is needed: the staged log-only LoadMap entry (round5-staging/world-fix/04-event-map-logger.patch) firing exactly at a map change with a map name matching the runtime's World change",
+     "extend the staged logging-only entry to deliver Lua callbacks (pre before original, post after)",
+     "Lua call must not hold the actions lock (B5/B6/B7)",
+     "existing alternative for POST only: [FL-MAP] src=marshal-watch (LuaMod.cpp:5110-5135, 5240-5247), a bounded 1 Hz World-identity check on the proven pump; log-only today, no [FL-MAP] line in the B4 log; could deliver RegisterLoadMapPostHook up to 1 s late with no vtable work; cannot deliver PRE"
+    ],
+    "risk": "medium; one object's vptr swapped; Lua called from inside LoadMap on the game thread"
+   },
+   "selftest_entry": "ST/part8.lua:13 (PASS ret=nil)",
+   "priority": "P1",
+   "claim_labels": {
+    "refusal": "console-proven",
+    "slot identity": "Mac-only, one static inference (not two sources)",
+    "table content": "console-proven live read of the profile offset (D:616) - consistency only",
+    "extent cause": "Mac-only hypothesis"
+   },
+   "proposed_log_reason": "loadmap-detour-arm-refused"
+  },
+  {
+   "id": "R07",
+   "lua_api": "RegisterInitGameStatePreHook",
+   "target": "AGameModeBase::InitGameState (vtable 0x7B8, D 'address 0x33db2b0')",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part8.lua:14"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3178-3204 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8896 (detour registration inside the skipped block 8885-9701)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8871 gate"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 names this family as staying unregistered",
+     "no log line from the registration itself"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 119 PASS registered (ST/part8.lua:14 returns 'registered' because the call does not throw)"
+    ]
+   },
+   "settings_involved": [
+    "HookInitGameState=true",
+    "code gate LuaMod.cpp:8871 (flipping the setting does nothing while the block is skipped)"
+   ],
+   "pc_behaviour": "PC: all Hook* settings 1 and detour installed (vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/), e.g. :6520-6925)",
+   "mod_loses": "State setup when the game state is ready",
+   "data_only": {
+    "verdict": "no-exact-approximation-only",
+    "route": "none exact. Approximation: deliver from the LoadMap post hook (R06 route), later than PC, no real pre. Per-instance vptr swap cannot be in place before the call (game mode is created each map); writing class vtables is not data-only under the owned-memory rules",
+    "needs": [
+     "detour-only for exact (Phase B)"
+    ],
+    "risk": "n/a"
+   },
+   "selftest_entry": "ST/part8.lua:14 (PASS registered; not counted as a GAP, see selftest_gaps_finding)",
+   "priority": "P3",
+   "claim_labels": {
+    "refusal": "Mac-only (code) + console-proven startup summary D:780",
+    "comparison run": "earlier session"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R08",
+   "lua_api": "RegisterInitGameStatePostHook",
+   "target": "AGameModeBase::InitGameState",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part8.lua:15"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3206-3232 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8913 (detour registration inside the skipped block 8885-9701)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8871 gate"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 names this family as staying unregistered",
+     "no log line from the registration itself"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 120 PASS registered (ST/part8.lua:15 returns 'registered' because the call does not throw)"
+    ]
+   },
+   "settings_involved": [
+    "HookInitGameState=true",
+    "code gate LuaMod.cpp:8871 (flipping the setting does nothing while the block is skipped)"
+   ],
+   "pc_behaviour": "PC: all Hook* settings 1 and detour installed (vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/), e.g. :6520-6925)",
+   "mod_loses": "State setup when the game state is ready",
+   "data_only": {
+    "verdict": "no-exact-approximation-only",
+    "route": "same as R07",
+    "needs": [
+     "detour-only for exact (Phase B)"
+    ],
+    "risk": "n/a"
+   },
+   "selftest_entry": "ST/part8.lua:15 (PASS registered; not counted as a GAP, see selftest_gaps_finding)",
+   "priority": "P3",
+   "claim_labels": {
+    "refusal": "Mac-only (code) + console-proven startup summary D:780",
+    "comparison run": "earlier session"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R09",
+   "lua_api": "RegisterBeginPlayPreHook",
+   "target": "AActor::BeginPlay",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part8.lua:16"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3234-3260 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8930 (detour registration inside the skipped block 8885-9701)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8871 gate"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 names this family as staying unregistered",
+     "no log line from the registration itself"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 121 PASS registered (ST/part8.lua:16 returns 'registered' because the call does not throw)"
+    ]
+   },
+   "settings_involved": [
+    "HookBeginPlay=false",
+    "code gate LuaMod.cpp:8871 (flipping the setting does nothing while the block is skipped)"
+   ],
+   "pc_behaviour": "PC: all Hook* settings 1 and detour installed (vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/), e.g. :6520-6925)",
+   "mod_loses": "'when actor X spawns' mods",
+   "data_only": {
+    "verdict": "partial",
+    "route": "Func swap on ReceiveBeginPlay: base /Script/Engine.Actor function plus each Blueprint override (carrier-scan style, D:914 66 overrides). Runs inside BeginPlay so 'pre' is late",
+    "needs": [
+     "probe needed: does the event dispatch on this engine for actors without script"
+    ],
+    "risk": "medium"
+   },
+   "selftest_entry": "ST/part8.lua:16 (PASS registered; not counted as a GAP, see selftest_gaps_finding)",
+   "priority": "P2",
+   "claim_labels": {
+    "refusal": "Mac-only (code) + console-proven startup summary D:780",
+    "comparison run": "earlier session"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R10",
+   "lua_api": "RegisterBeginPlayPostHook",
+   "target": "AActor::BeginPlay",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part8.lua:17"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3262-3288 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8947 (detour registration inside the skipped block 8885-9701)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8871 gate"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 names this family as staying unregistered",
+     "no log line from the registration itself"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 122 PASS registered (ST/part8.lua:17 returns 'registered' because the call does not throw)"
+    ]
+   },
+   "settings_involved": [
+    "HookBeginPlay=false",
+    "code gate LuaMod.cpp:8871 (flipping the setting does nothing while the block is skipped)"
+   ],
+   "pc_behaviour": "PC: all Hook* settings 1 and detour installed (vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/), e.g. :6520-6925)",
+   "mod_loses": "'when actor X spawns' mods",
+   "data_only": {
+    "verdict": "partial",
+    "route": "same as R09; closest to PC for post",
+    "needs": [
+     "same as R09"
+    ],
+    "risk": "medium"
+   },
+   "selftest_entry": "ST/part8.lua:17 (PASS registered; not counted as a GAP, see selftest_gaps_finding)",
+   "priority": "P2",
+   "claim_labels": {
+    "refusal": "Mac-only (code) + console-proven startup summary D:780",
+    "comparison run": "earlier session"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R11",
+   "lua_api": "RegisterEndPlayPreHook",
+   "target": "AActor::EndPlay",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part8.lua:18"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3290-3316 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8964 (detour registration inside the skipped block 8885-9701)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8871 gate"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 names this family as staying unregistered",
+     "no log line from the registration itself"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 123 PASS registered (ST/part8.lua:18 returns 'registered' because the call does not throw)"
+    ]
+   },
+   "settings_involved": [
+    "HookEndPlay=false",
+    "code gate LuaMod.cpp:8871 (flipping the setting does nothing while the block is skipped)"
+   ],
+   "pc_behaviour": "PC: all Hook* settings 1 and detour installed (vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/), e.g. :6520-6925)",
+   "mod_loses": "'actor removed' mods",
+   "data_only": {
+    "verdict": "partial",
+    "route": "Func swap on ReceiveEndPlay (reason is an event parameter)",
+    "needs": [
+     "same as R09"
+    ],
+    "risk": "medium"
+   },
+   "selftest_entry": "ST/part8.lua:18 (PASS registered; not counted as a GAP, see selftest_gaps_finding)",
+   "priority": "P2",
+   "claim_labels": {
+    "refusal": "Mac-only (code) + console-proven startup summary D:780",
+    "comparison run": "earlier session"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R12",
+   "lua_api": "RegisterEndPlayPostHook",
+   "target": "AActor::EndPlay",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part8.lua:19"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3318-3344 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8983 (detour registration inside the skipped block 8885-9701)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8871 gate"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 names this family as staying unregistered",
+     "no log line from the registration itself"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 124 PASS registered (ST/part8.lua:19 returns 'registered' because the call does not throw)"
+    ]
+   },
+   "settings_involved": [
+    "HookEndPlay=false",
+    "code gate LuaMod.cpp:8871 (flipping the setting does nothing while the block is skipped)"
+   ],
+   "pc_behaviour": "PC: all Hook* settings 1 and detour installed (vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/), e.g. :6520-6925)",
+   "mod_loses": "'actor removed' mods",
+   "data_only": {
+    "verdict": "partial",
+    "route": "same as R11",
+    "needs": [
+     "same as R09"
+    ],
+    "risk": "medium"
+   },
+   "selftest_entry": "ST/part8.lua:19 (PASS registered; not counted as a GAP, see selftest_gaps_finding)",
+   "priority": "P2",
+   "claim_labels": {
+    "refusal": "Mac-only (code) + console-proven startup summary D:780",
+    "comparison run": "earlier session"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R13",
+   "lua_api": "RegisterProcessConsoleExecPreHook",
+   "target": "UObject::ProcessConsoleExec",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part8.lua:20"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3897-3916 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:9331-9689 (detour registration inside the skipped block 8885-9701)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8871 gate"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 names this family as staying unregistered",
+     "no log line from the registration itself"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 125 PASS registered (ST/part8.lua:20 returns 'registered' because the call does not throw)"
+    ]
+   },
+   "settings_involved": [
+    "HookProcessConsoleExec=false",
+    "code gate LuaMod.cpp:8871 (flipping the setting does nothing while the block is skipped)"
+   ],
+   "pc_behaviour": "PC: all Hook* settings 1 and detour installed (vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/), e.g. :6520-6925)",
+   "mod_loses": "Interception of console/exec commands (usable only with a console UI or keyboard, parked)",
+   "data_only": {
+    "verdict": "needs-measurement",
+    "route": "script-started commands: Func swap on native PlayerController:ConsoleCommand / KismetSystemLibrary:ExecuteConsoleCommand (hookable like ClientRestart); typed console commands: vptr swap needs a measured slot, not in the B4 profile",
+    "needs": [
+     "slot + offset from two sources"
+    ],
+    "risk": "medium-unknown"
+   },
+   "selftest_entry": "ST/part8.lua:20 (PASS registered; not counted as a GAP, see selftest_gaps_finding)",
+   "priority": "P3",
+   "claim_labels": {
+    "refusal": "Mac-only (code) + console-proven startup summary D:780",
+    "comparison run": "earlier session"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R14",
+   "lua_api": "RegisterProcessConsoleExecPostHook",
+   "target": "UObject::ProcessConsoleExec",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part9.lua:5"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3918-3937 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:9331-9689 (detour registration inside the skipped block 8885-9701)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8871 gate"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 names this family as staying unregistered",
+     "no log line from the registration itself"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 126 PASS registered (ST/part9.lua:5 returns 'registered' because the call does not throw)"
+    ]
+   },
+   "settings_involved": [
+    "HookProcessConsoleExec=false",
+    "code gate LuaMod.cpp:8871 (flipping the setting does nothing while the block is skipped)"
+   ],
+   "pc_behaviour": "PC: all Hook* settings 1 and detour installed (vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/), e.g. :6520-6925)",
+   "mod_loses": "Interception of console/exec commands (usable only with a console UI or keyboard, parked)",
+   "data_only": {
+    "verdict": "needs-measurement",
+    "route": "same as R13",
+    "needs": [
+     "same as R13"
+    ],
+    "risk": "medium-unknown"
+   },
+   "selftest_entry": "ST/part9.lua:5 (PASS registered; not counted as a GAP, see selftest_gaps_finding)",
+   "priority": "P3",
+   "claim_labels": {
+    "refusal": "Mac-only (code) + console-proven startup summary D:780",
+    "comparison run": "earlier session"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R15",
+   "lua_api": "RegisterConsoleCommandHandler",
+   "target": "console command name",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part9.lua:10"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:4067-4106 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:9331-9689 (ProcessConsoleExec callbacks, skipped block)"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 131 PASS ret=nil"
+    ]
+   },
+   "settings_involved": [
+    "HookProcessConsoleExec=false",
+    "code gate LuaMod.cpp:8871"
+   ],
+   "pc_behaviour": "PC: vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/):3298",
+   "mod_loses": "Custom typed console commands (needs a console UI/keyboard, parked)",
+   "data_only": {
+    "verdict": "needs-measurement",
+    "route": "same as R13",
+    "needs": [
+     "same as R13"
+    ],
+    "risk": "medium-unknown"
+   },
+   "selftest_entry": "ST/part9.lua:10 (PASS ret=nil)",
+   "priority": "P3",
+   "claim_labels": {
+    "refusal": "Mac-only + D:780"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R16",
+   "lua_api": "RegisterConsoleCommandGlobalHandler",
+   "target": "console command name",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part9.lua:11"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:4023-4065 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:9331-9689 (ProcessConsoleExec callbacks, skipped block)"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 132 PASS ret=nil"
+    ]
+   },
+   "settings_involved": [
+    "HookProcessConsoleExec=false",
+    "code gate LuaMod.cpp:8871"
+   ],
+   "pc_behaviour": "PC: vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/):3263",
+   "mod_loses": "Custom typed console commands (needs a console UI/keyboard, parked)",
+   "data_only": {
+    "verdict": "needs-measurement",
+    "route": "same as R13",
+    "needs": [
+     "same as R13"
+    ],
+    "risk": "medium-unknown"
+   },
+   "selftest_entry": "ST/part9.lua:11 (PASS ret=nil)",
+   "priority": "P3",
+   "claim_labels": {
+    "refusal": "Mac-only + D:780"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R17",
+   "lua_api": "RegisterCallFunctionByNameWithArgumentsPreHook",
+   "target": "UObject::CallFunctionByNameWithArguments",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part9.lua:6"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3939-3958 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:9230 (detour registration inside the skipped block 8885-9701)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8871 gate"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 names this family as staying unregistered",
+     "no log line from the registration itself"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 127 PASS registered (ST/part9.lua:6 returns 'registered' because the call does not throw)"
+    ]
+   },
+   "settings_involved": [
+    "HookCallFunctionByNameWithArguments=false",
+    "code gate LuaMod.cpp:8871 (flipping the setting does nothing while the block is skipped)"
+   ],
+   "pc_behaviour": "PC: all Hook* settings 1 and detour installed (vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/), e.g. :6520-6925)",
+   "mod_loses": "Interception of console/exec commands (usable only with a console UI or keyboard, parked)",
+   "data_only": {
+    "verdict": "no-detour-only",
+    "route": "not a Blueprint function and, by engine knowledge (unverified in tree), not a virtual: nothing to swap",
+    "needs": [
+     "verify no UFunction and no vtable slot; otherwise Phase B"
+    ],
+    "risk": "n/a"
+   },
+   "selftest_entry": "ST/part9.lua:6 (PASS registered; not counted as a GAP, see selftest_gaps_finding)",
+   "priority": "P3",
+   "claim_labels": {
+    "refusal": "Mac-only (code) + console-proven startup summary D:780",
+    "comparison run": "earlier session"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R18",
+   "lua_api": "RegisterCallFunctionByNameWithArgumentsPostHook",
+   "target": "UObject::CallFunctionByNameWithArguments",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part9.lua:7"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3960-3979 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:9280 (detour registration inside the skipped block 8885-9701)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8871 gate"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 names this family as staying unregistered",
+     "no log line from the registration itself"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 128 PASS registered (ST/part9.lua:7 returns 'registered' because the call does not throw)"
+    ]
+   },
+   "settings_involved": [
+    "HookCallFunctionByNameWithArguments=false",
+    "code gate LuaMod.cpp:8871 (flipping the setting does nothing while the block is skipped)"
+   ],
+   "pc_behaviour": "PC: all Hook* settings 1 and detour installed (vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/), e.g. :6520-6925)",
+   "mod_loses": "Interception of console/exec commands (usable only with a console UI or keyboard, parked)",
+   "data_only": {
+    "verdict": "no-detour-only",
+    "route": "same as R17",
+    "needs": [
+     "same as R17"
+    ],
+    "risk": "n/a"
+   },
+   "selftest_entry": "ST/part9.lua:7 (PASS registered; not counted as a GAP, see selftest_gaps_finding)",
+   "priority": "P3",
+   "claim_labels": {
+    "refusal": "Mac-only (code) + console-proven startup summary D:780",
+    "comparison run": "earlier session"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R19",
+   "lua_api": "RegisterULocalPlayerExecPreHook",
+   "target": "ULocalPlayer::Exec (FExec secondary base)",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part9.lua:8"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:3981-4000 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:9104 (detour registration inside the skipped block 8885-9701)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8871 gate"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 names this family as staying unregistered",
+     "no log line from the registration itself"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 129 PASS registered (ST/part9.lua:8 returns 'registered' because the call does not throw)"
+    ]
+   },
+   "settings_involved": [
+    "HookLocalPlayerExec=false",
+    "FExecVTableOffsetInLocalPlayer=0",
+    "code gate LuaMod.cpp:8871 (flipping the setting does nothing while the block is skipped)"
+   ],
+   "pc_behaviour": "PC: all Hook* settings 1 and detour installed (vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/), e.g. :6520-6925)",
+   "mod_loses": "Interception of console/exec commands (usable only with a console UI or keyboard, parked)",
+   "data_only": {
+    "verdict": "needs-measurement",
+    "route": "vptr swap of the single LocalPlayer's FExec subobject; secondary vptr offset (FExecVTableOffsetInLocalPlayer, unset=0) and Exec slot both unmeasured",
+    "needs": [
+     "two-source measurement"
+    ],
+    "risk": "medium-unknown"
+   },
+   "selftest_entry": "ST/part9.lua:8 (PASS registered; not counted as a GAP, see selftest_gaps_finding)",
+   "priority": "P3",
+   "claim_labels": {
+    "refusal": "Mac-only (code) + console-proven startup summary D:780",
+    "comparison run": "earlier session"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R20",
+   "lua_api": "RegisterULocalPlayerExecPostHook",
+   "target": "ULocalPlayer::Exec (FExec secondary base)",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part9.lua:9"
+    }
+   ],
+   "refusal_mode": "accepted silently, never fires",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:4002-4021 (queue)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:9167 (detour registration inside the skipped block 8885-9701)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:8871 gate"
+   ],
+   "b4_log_evidence": {
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:780 names this family as staying unregistered",
+     "no log line from the registration itself"
+    ],
+    "comparison": [
+     "acceptance-pass2 call 130 PASS registered (ST/part9.lua:9 returns 'registered' because the call does not throw)"
+    ]
+   },
+   "settings_involved": [
+    "HookLocalPlayerExec=false",
+    "FExecVTableOffsetInLocalPlayer=0",
+    "code gate LuaMod.cpp:8871 (flipping the setting does nothing while the block is skipped)"
+   ],
+   "pc_behaviour": "PC: all Hook* settings 1 and detour installed (vendored upstream UE4SS/src/Mod/LuaMod.cpp (.superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/), e.g. :6520-6925)",
+   "mod_loses": "Interception of console/exec commands (usable only with a console UI or keyboard, parked)",
+   "data_only": {
+    "verdict": "needs-measurement",
+    "route": "same as R19",
+    "needs": [
+     "same as R19"
+    ],
+    "risk": "medium-unknown"
+   },
+   "selftest_entry": "ST/part9.lua:9 (PASS registered; not counted as a GAP, see selftest_gaps_finding)",
+   "priority": "P3",
+   "claim_labels": {
+    "refusal": "Mac-only (code) + console-proven startup summary D:780",
+    "comparison run": "earlier session"
+   },
+   "proposed_log_reason": "detour-block-skipped-r3-marshal"
+  },
+  {
+   "id": "R21",
+   "lua_api": "ExecuteInGameThreadAfterFrames",
+   "target": "frame-counted delay (game thread)",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part9.lua:23"
+    }
+   ],
+   "refusal_mode": "throws (loud)",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:6782-6784 (throws whenever funcptr_marshal_usable()==R3MarshalPumpPending(), :4669-4683)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp:2941 sets pump_pending true; :2948-2951 says it stays true after vmt_pump_arm, so arming the vtable pump does not clear the throw",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:6790 (EngineTick hook not available)"
+   ],
+   "b4_log_evidence": {
+    "comparison": [
+     "acceptance-pass2 call 144 FAIL: frame-based ... (earlier session)"
+    ],
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:621 EngineTick pre-callback registrations refused"
+    ]
+   },
+   "settings_involved": [
+    "HookEngineTick=true but the detour registration is compiled out in R3 marshal mode"
+   ],
+   "pc_behaviour": "PC: EngineTick pump counts frames",
+   "mod_loses": "Any 'wait N frames' mod",
+   "data_only": {
+    "verdict": "possible-but-needs-code-changes-beyond-extent-fix",
+    "route": "count frames in the copied-vtable Tick entry (runs once per real frame by design)",
+    "needs": [
+     "vtable pump arms (extent hypothesis or whatever the refusal line shows)",
+     "change the two throw gates (LuaMod.cpp:6782-6784, 7009-7011) to let frame delays through when the vtable pump is armed; keep ensure_engine_tick_hooked() (a detour) out of the path",
+     "frame counting in the vtable drain: VmtEngineTickDrain (LuaMod.cpp:5542-5600) calls process_delayed_actions<kFuncPtrMarshalExecutor>, which takes only marshal-tagged actions and skips frame-based ones (:4891-4905); frame decrement happens only for method==EngineTick (:4915-4919), other methods log 'should not happen' (:4922-4926) -> new executor tag or frame counter, and the action's method tag must match",
+     "Tick slot 0x310 is only a profile value so far (D:619 'Scan failed, falling back to vtable address'); the pump has never run on the console",
+     "own labelled build; LuaMod.cpp regions B5/B6 also edit"
+    ],
+    "risk": "medium"
+   },
+   "selftest_entry": "ST/part9.lua:23 (FAIL, loud)",
+   "priority": "P2",
+   "claim_labels": {
+    "refusal": "Mac-only (code); EngineTick refusal console-proven (D:621)",
+    "frame-delay FAIL text": "comparison (pass2 lines 1279/1281, earlier session)",
+    "route": "Mac-only"
+   },
+   "proposed_log_reason": "frame-delays-need-enginetick-pump (as emitted by the staged patch)"
+  },
+  {
+   "id": "R22",
+   "lua_api": "LoopInGameThreadAfterFrames",
+   "target": "frame-counted delay (game thread)",
+   "registered_by": [
+    {
+     "mod": "ueselftest",
+     "count": 1,
+     "where": "ST/part9.lua:25"
+    }
+   ],
+   "refusal_mode": "throws (loud)",
+   "refusal_code": [
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:7009-7011 (throws whenever funcptr_marshal_usable()==R3MarshalPumpPending(), :4669-4683)",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp:2941 sets pump_pending true; :2948-2951 says it stays true after vmt_pump_arm, so arming the vtable pump does not clear the throw",
+    "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp:7017 (EngineTick hook not available)"
+   ],
+   "b4_log_evidence": {
+    "comparison": [
+     "acceptance-pass2 call 146 FAIL: frame-based ... (earlier session)"
+    ],
+    "console_proven": [
+     "outputs/2026-10-08-l25-prep/evidence/launch-l26-B4-launch1-20261012/decoded/ue4ss.decoded.log:621 EngineTick pre-callback registrations refused"
+    ]
+   },
+   "settings_involved": [
+    "HookEngineTick=true but the detour registration is compiled out in R3 marshal mode"
+   ],
+   "pc_behaviour": "PC: EngineTick pump counts frames",
+   "mod_loses": "Any 'wait N frames' mod",
+   "data_only": {
+    "verdict": "possible-but-needs-code-changes-beyond-extent-fix",
+    "route": "count frames in the copied-vtable Tick entry (runs once per real frame by design)",
+    "needs": [
+     "vtable pump arms (extent hypothesis or whatever the refusal line shows)",
+     "change the two throw gates (LuaMod.cpp:6782-6784, 7009-7011) to let frame delays through when the vtable pump is armed; keep ensure_engine_tick_hooked() (a detour) out of the path",
+     "frame counting in the vtable drain: VmtEngineTickDrain (LuaMod.cpp:5542-5600) calls process_delayed_actions<kFuncPtrMarshalExecutor>, which takes only marshal-tagged actions and skips frame-based ones (:4891-4905); frame decrement happens only for method==EngineTick (:4915-4919), other methods log 'should not happen' (:4922-4926) -> new executor tag or frame counter, and the action's method tag must match",
+     "Tick slot 0x310 is only a profile value so far (D:619 'Scan failed, falling back to vtable address'); the pump has never run on the console",
+     "own labelled build; LuaMod.cpp regions B5/B6 also edit"
+    ],
+    "risk": "medium"
+   },
+   "selftest_entry": "ST/part9.lua:25 (FAIL, loud)",
+   "priority": "P2",
+   "claim_labels": {
+    "refusal": "Mac-only (code); EngineTick refusal console-proven (D:621)",
+    "frame-delay FAIL text": "comparison (pass2 lines 1279/1281, earlier session)",
+    "route": "Mac-only"
+   },
+   "proposed_log_reason": "frame-delays-need-enginetick-pump (as emitted by the staged patch)"
+  }
+ ],
+ "revision": {
+  "v2": "2026-10-12 review fixes: R21/R22 not unblocked by the extent fix; R01 refusal site unknown and resolver step added; LoadMap slot is one source; FL-MAP watch added; vtable extent labelled hypothesis with sensitivity run; small omissions added",
+  "review": "REVIEW.md"
+ }
+}

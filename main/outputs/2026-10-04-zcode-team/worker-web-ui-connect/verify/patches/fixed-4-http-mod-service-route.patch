@@ -1,0 +1,46 @@
+--- a/outputs/ps5-mod-bridge/native-host/http.c
++++ b/outputs/ps5-mod-bridge/native-host/http.c
+@@ -771,29 +774,39 @@
+ static int mod_service_response(struct parsed_request *request, const struct host_info *info,
+                                 struct http_response *out) {
+     int records = !strcmp(request->target, "/api/mod-service/records");
+-    if (!records && strcmp(request->target, "/api/mod-service")) return 0;
+-    if (strcmp(request->method, "GET")) { http_error(out, 405); return 1; }
++    int forward = !strcmp(request->target, "/api/mod-service/request");
++    if (!records && !forward && strcmp(request->target, "/api/mod-service")) return 0;
++    if (!forward && strcmp(request->method, "GET")) { http_error(out, 405); return 1; }
++    if (forward && strcmp(request->method, "POST")) { http_error(out, 405); return 1; }
+     if (!mb_mod_service_usable(info->mod_service)) { http_error(out, 503); return 1; }
+ #if MB_HOST_DOWNLOAD
+     if (!info->auth) { http_error(out, 503); return 1; }
+     mb_nexus_auth_admit_params_v1 admission = {
+         .struct_size = sizeof(admission), .abi_version = MB_NEXUS_AUTH_ABI_V1,
+         .cookie = *request->cookie ? request->cookie : NULL,
+         .cookie_bytes = *request->cookie ? 43u : 0u,
+         .admission = MB_NEXUS_AUTH_ADMISSION_READ, .require_account = 0
+     };
+     mb_nexus_auth_result_v1 result = { .struct_size = sizeof(result), .abi_version = MB_NEXUS_AUTH_ABI_V1 };
+     if (mb_nexus_auth_admit_v1(info->auth, &admission, &result) != MB_NEXUS_AUTH_OK || !result.complete) {
+         auth_status_error(out, result.status); return 1;
+     }
+     char *copy = NULL; size_t size = 0;
+-    int status = mb_mod_service_read(info->mod_service,
+-        records ? MB_MOD_SERVICE_RECORDS : MB_MOD_SERVICE_DESCRIBE, &copy, &size);
++    int status;
++    if (forward) {
++        if (!request->body || !request->body_bytes ||
++            request->body_bytes > MB_MOD_SERVICE_RESPONSE_LIMIT) { http_error(out, 400); return 1; }
++        status = mb_mod_service_call(info->mod_service,
++            (const char *)request->body, request->body_bytes, &copy, &size);
++    } else {
++        status = mb_mod_service_read(info->mod_service,
++            records ? MB_MOD_SERVICE_RECORDS : MB_MOD_SERVICE_DESCRIBE, &copy, &size);
++    }
+     if (status != 200) { http_error(out, status); return 1; }
+     out->owned_body = copy; out->owned_capacity = size + 1;
+     out->size = size; out->status = 200;
+ #else
+     http_error(out, 503);
+ #endif
+     return 1;
+ }

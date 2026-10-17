@@ -1,0 +1,17 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-hook-registration-errors-1/src/LuaMod.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/.superpowers/native-dependency-spike/ue4ss-native-game-thread-1/src/LuaMod.cpp
+@@ -4104,6 +4104,14 @@
+                                    [[maybe_unused]] Unreal::UFunction* Function,
+                                    [[maybe_unused]] void* Parms) -> void
+     {
++#ifdef __PROSPERO__
++        // ProcessEvent may run on worker threads. Do not inspect Lua action
++        // state until the real Tick has published this exact caller thread.
++        if (!Unreal::IsInGameThreadRaw())
++        {
++            return;
++        }
++#endif
+         {
+             std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+             LuaMod::m_is_processing_actions = true;

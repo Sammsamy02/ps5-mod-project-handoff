@@ -1,0 +1,1457 @@
+# B6 diagnostics (staged, not applied, not built). Applies ON TOP OF ../sites/final-b5.diff (final B5: 15 raise sites + 2 get_mod_ref sites).
+# Base files: final-b5-applied copies of candidate/src/LuaMod.cpp (sha afaf5caa..., i.e. B5 only), LuaPathShim.cpp, LuaMadeSimple/LuaMadeSimple.cpp, include/LuaMadeSimple/LuaMadeSimple.hpp
+# Apply from the worktree root, after final-b5.diff: patch -p1 < b6.diff
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMadeSimple/LuaMadeSimple.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMadeSimple/LuaMadeSimple.cpp
+@@ -87,6 +87,109 @@
+         // The shared buffer is always NUL-terminated at its last byte, so a
+         // concurrent writer can mix two texts but never overrun.
+         copy_text_bounded(out, out_size, g_last_raised_error);
++    }
++
++    // [B6-LEAKCORE-BEGIN] diagnostics only (see LuaMadeSimple.hpp DiagHooks).
++    // Per-thread count of live host lock scopes. A Lua raise is a longjmp here,
++    // so a scope skipped by it keeps the count too high for good.
++    namespace
++    {
++        thread_local int tl_diag_depth = 0;         // live scopes on this thread (skipped ones included)
++        thread_local int tl_diag_frame_base = 0;    // depth at entry of the innermost registered fn / call_function
++        thread_local int tl_diag_call_nesting = 0;  // call_function nesting on this thread
++        DiagHooks g_diag_hooks{};
++    }
++
++    auto diag_install_hooks(const DiagHooks& hooks) noexcept -> void { g_diag_hooks = hooks; }
++    auto diag_scope_enter() noexcept -> int { return tl_diag_depth++; }
++    auto diag_scope_exit() noexcept -> void { if (tl_diag_depth > 0) { --tl_diag_depth; } }
++    auto diag_scope_depth() noexcept -> int { return tl_diag_depth; }
++
++    // Defined next to the lstate.h use (glue, outside this region).
++    static auto diag_main_state(lua_State* lua_state) noexcept -> lua_State*;
++
++    static auto diag_report(lua_State* lua_state, const char* kind, bool name_fn, const char* text, int extra) noexcept -> void
++    {
++        const auto report = g_diag_hooks.on_leak;
++        if (report == nullptr) { return; }
++        char fn[64];
++        fn[0] = '\0';
++        if (name_fn)
++        {
++            lua_Debug ar;
++            if (lua_getstack(lua_state, 0, &ar) != 0 && lua_getinfo(lua_state, "n", &ar) != 0 && ar.name != nullptr)
++            {
++                copy_text_bounded(fn, sizeof(fn), ar.name);
++            }
++        }
++        report(diag_main_state(lua_state), kind, fn, text != nullptr ? text : "", extra, tl_diag_depth);
++    }
++
++    // Right before a Lua raise (luaL_error = longjmp): any scope opened since
++    // the innermost registered function was entered is about to be skipped.
++    static auto diag_check_raise(lua_State* lua_state, const char* text) noexcept -> void
++    {
++        const int extra = tl_diag_depth - tl_diag_frame_base;
++        if (extra > 0) { diag_report(lua_state, "raise", true, text, extra); }
++    }
++
++    // Frame of one registered function (process_lua_function). Not RAII on
++    // purpose: a longjmp skips it, and the nearest call_function frame
++    // restores the base afterwards.
++    struct DiagFnFrame { int saved_base; };
++    static auto diag_fn_enter() noexcept -> DiagFnFrame
++    {
++        DiagFnFrame frame{tl_diag_frame_base};
++        tl_diag_frame_base = tl_diag_depth;
++        return frame;
++    }
++    static auto diag_fn_return(lua_State* lua_state, const DiagFnFrame& frame) noexcept -> void
++    {
++        const int extra = tl_diag_depth - tl_diag_frame_base;
++        if (extra > 0) { diag_report(lua_state, "return", true, "", extra); }
++        tl_diag_frame_base = frame.saved_base;
++    }
++
++    // One call_function (a lua_pcall boundary). RAII is safe here: a longjmp
++    // inside the pcall lands in this frame, it never skips it.
++    class DiagCallFrame
++    {
++        lua_State* m_state;
++        int m_depth_in;
++        int m_saved_base;
++        long long m_token{0};
++        lua_State* m_main{nullptr};  // only when timed; the destructor never dereferences m_state
++        bool m_outermost;
++    public:
++        explicit DiagCallFrame(lua_State* lua_state) noexcept
++            : m_state(lua_state), m_depth_in(tl_diag_depth), m_saved_base(tl_diag_frame_base), m_outermost(tl_diag_call_nesting == 0)
++        {
++            tl_diag_frame_base = tl_diag_depth;
++            ++tl_diag_call_nesting;
++            if (m_outermost && g_diag_hooks.call_begin != nullptr)
++            {
++                m_token = g_diag_hooks.call_begin();
++                if (m_token != 0) { m_main = diag_main_state(lua_state); }
++            }
++        }
++        auto after_pcall(int status) const noexcept -> void
++        {
++            if (status != LUA_OK && tl_diag_depth > m_depth_in) { diag_report(m_state, "pcall", false, "", tl_diag_depth - m_depth_in); }
++        }
++        ~DiagCallFrame()
++        {
++            tl_diag_frame_base = m_saved_base;
++            --tl_diag_call_nesting;
++            if (m_token != 0 && g_diag_hooks.call_end != nullptr) { g_diag_hooks.call_end(m_main, m_token); }
++        }
++        DiagCallFrame(const DiagCallFrame&) = delete;
++        auto operator=(const DiagCallFrame&) -> DiagCallFrame& = delete;
++    };
++    // [B6-LEAKCORE-END]
++
++    static auto diag_main_state(lua_State* lua_state) noexcept -> lua_State*
++    {
++        return lua_state != nullptr ? lua_state->l_G->mainthread : nullptr;
+     }
+ 
+     // luaL_newstate() post-conditions, copied verbatim from the port's lauxlib.c
+@@ -1415,7 +1518,10 @@
+         // Error handler is at func_abs_idx (absolute)
+         int err_handler_abs = func_abs_idx;
+ 
+-        if (int status = lua_pcall(L, num_params, num_return_values, err_handler_abs); status != LUA_OK)
++        DiagCallFrame diag_frame{L}; // [B6] diagnostics only
++        const int pcall_status = lua_pcall(L, num_params, num_return_values, err_handler_abs);
++        diag_frame.after_pcall(pcall_status);
++        if (int status = pcall_status; status != LUA_OK)
+         {
+             // Error message (with traceback) is on stack, error handler already notified callbacks
+             const char* msg = lua_tostring(L, -1);
+@@ -1593,6 +1699,7 @@
+         }
+         g_raised_errors.fetch_add(1);
+         copy_text_bounded(g_last_raised_error, sizeof(g_last_raised_error), final_text);
++        diag_check_raise(lua_state, final_text); // [B6] diagnostics only
+         luaL_error(lua_state, "%s", final_text);
+     }
+ 
+@@ -1723,7 +1830,8 @@
+             throw_error(lua_state, "[process_lua_function] The optional was empty");
+         }
+ 
+-        return TRY(lua_state, [&] {
++        const auto diag_frame = diag_fn_enter(); // [B6] diagnostics only
++        const int function_result = TRY(lua_state, [&] {
+             auto return_value = lua_functions[func_id].value()(data_owner);
+             for (const auto& post_process_callback : data_owner.m_post_function_process_callbacks)
+             {
+@@ -1731,5 +1839,7 @@
+             }
+             return return_value;
+         });
++        diag_fn_return(lua_state, diag_frame);
++        return function_result;
+     }
+ } // namespace RC::LuaMadeSimple
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/include/LuaMadeSimple/LuaMadeSimple.hpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/include/LuaMadeSimple/LuaMadeSimple.hpp
+@@ -834,6 +834,32 @@
+     // [B2] Copies the most recently raised Lua error text (no allocation; the
+     // buffer is shared by all states, so a concurrent raise may mix two texts).
+     RC_LMS_API auto copy_last_raised_error(char* out, size_t out_size) noexcept -> void;
++
++    // [B6-API-BEGIN] Diagnostics only; none of this changes what a Lua call does.
++    // Lua is compiled as C here, so a Lua raise is a longjmp that skips C++
++    // destructors. A host that tracks its lock scopes with diag_scope_enter /
++    // diag_scope_exit (one RAII wrapper) can see a scope that was skipped: the
++    // per-thread depth stays too high. The library compares that depth with
++    // the depth at the entry of the innermost registered function / call_function
++    // and tells the host through DiagHooks (all hooks optional, none may throw).
++    struct DiagHooks
++    {
++        // kind: "raise" = a Lua error is about to be raised while scopes opened
++        // inside this registered function are still alive; "return" = a
++        // registered function returned with extra scopes; "pcall" = a pcall in
++        // call_function came back with an error and extra scopes. fn is the
++        // Lua-visible name of the registered function ("" when unknown).
++        void (*on_leak)(lua_State* main_state, const char* kind, const char* fn, const char* text, int extra, int depth) noexcept = nullptr;
++        // call_begin returns 0 to skip timing, else a token handed to call_end.
++        // Called only around the OUTERMOST call_function on a thread.
++        long long (*call_begin)() noexcept = nullptr;
++        void (*call_end)(lua_State* main_state, long long token) noexcept = nullptr;
++    };
++    RC_LMS_API auto diag_install_hooks(const DiagHooks& hooks) noexcept -> void;
++    RC_LMS_API auto diag_scope_enter() noexcept -> int;  // returns the depth before the increment
++    RC_LMS_API auto diag_scope_exit() noexcept -> void;
++    RC_LMS_API auto diag_scope_depth() noexcept -> int;
++    // [B6-API-END]
+ 
+     // Push the error handler function onto the stack and return its stack index
+     // Use this with lua_pcall to capture callstack before it unwinds
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
+@@ -168,6 +168,554 @@
+ 
+ namespace RC
+ {
++    // =====================================================================================
++    // [B6] Diagnostics (staged on top of B5). Nothing here changes what a mod, a hook or
++    // the engine does: counters, one RAII wrapper that tracks the lock depth, and log
++    // lines. Everything between the CORE markers uses only the standard library plus the
++    // four glue functions declared at its top, so the host tests compile exactly this text
++    // (outputs/.../b6-diagnostics/tests/extract_core.py slices it out of the staged file).
++    //
++    //   [LOCKLEAK]  a Lua-callable function returned or raised while a lock scope opened
++    //               inside it was still alive (longjmp skipped the destructor)
++    //   [LOCKWAIT]  a lock acquisition waited more than 250 ms, or is still waiting
++    //   [PERF]      once per second from the game-thread pump
++    //   [l22] widget/object construct summary   (rate limiter for the per-widget line)
++    // =====================================================================================
++    // [B6-CORE-BEGIN]
++    namespace
++    {
++    namespace b6diag
++    {
++        using i64 = long long;
++
++        // ---- glue, defined after this region (the tests define their own) -----------
++        auto emit_line(const char* line) -> void;   // one log line, no trailing newline
++        auto on_game_thread() -> bool;              // true on the published game thread
++
++        constexpr i64 kLockWaitLogMs = 250;         // log an acquisition that waited longer
++        constexpr int kWaitSlots = 8;
++        constexpr int kMaxMods = 16;                // slot kMaxMods is the "?" slot
++        constexpr int kWidgetLinesPerSecond = 5;
++
++        inline auto now_ms() noexcept -> i64
++        {
++            return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
++        }
++        inline auto now_us() noexcept -> i64
++        {
++            return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
++        }
++
++        // Copies up to n-1 chars, control characters (newlines of multi-line Lua
++        // errors) become spaces, always NUL-terminated.
++        inline auto copy_one_line(char* out, size_t n, const char* text) noexcept -> void
++        {
++            if (out == nullptr || n == 0) { return; }
++            size_t i = 0;
++            if (text != nullptr)
++            {
++                for (; i + 1 < n && text[i] != '\0'; ++i)
++                {
++                    const unsigned char c = static_cast<unsigned char>(text[i]);
++                    out[i] = (c < 0x20 || c == 0x7f) ? ' ' : static_cast<char>(c);
++                }
++            }
++            out[i] = '\0';
++        }
++
++        // ---- rate limiter: at most `limit` verbatim lines per window --------------
++        // Events past the limit are counted. When a window ends, the verdict of the
++        // next admit()/flush() carries the finished window's totals, so the caller
++        // can print ONE summary line. Thread safe (own mutex, never held while logging).
++        struct RateLimiter
++        {
++            struct Verdict
++            {
++                bool show{false};
++                int prev_total{0};       // events in the window that just ended
++                int prev_suppressed{0};  // of those, not shown (0 = no summary needed)
++            };
++            std::mutex mutex{};
++            bool started{false};
++            i64 window_start_ms{0};
++            int total{0};
++            int shown{0};
++
++            auto roll_locked(i64 now, i64 window_ms) -> Verdict
++            {
++                Verdict v{};
++                if (!started || now - window_start_ms >= window_ms)
++                {
++                    if (started && total > shown)
++                    {
++                        v.prev_total = total;
++                        v.prev_suppressed = total - shown;
++                    }
++                    started = true;
++                    window_start_ms = now;
++                    total = 0;
++                    shown = 0;
++                }
++                return v;
++            }
++            auto admit(i64 now, int limit, i64 window_ms) -> Verdict
++            {
++                std::lock_guard<std::mutex> guard{mutex};
++                Verdict v = roll_locked(now, window_ms);
++                ++total;
++                if (shown < limit)
++                {
++                    ++shown;
++                    v.show = true;
++                }
++                return v;
++            }
++            // Ends an expired window without counting an event (called from the pump).
++            auto flush(i64 now, i64 window_ms) -> Verdict
++            {
++                std::lock_guard<std::mutex> guard{mutex};
++                return roll_locked(now, window_ms);
++            }
++        };
++
++        // ---- per-mod table (key = the mod's main lua_State) ------------------------
++        struct ModSlot
++        {
++            std::atomic<lua_State*> key{nullptr};
++            char name[40]{};
++            std::atomic<i64> game_us{0};          // game-thread Lua time (outermost call_function)
++            std::atomic<i64> game_calls{0};
++            i64 prev_game_us{0};                  // pump bookkeeping (pump thread only)
++            i64 prev_game_calls{0};
++            std::atomic<i64> leak_total{0};
++            std::atomic<i64> leak_unlogged{0};    // leaks since the last [LOCKLEAK] line for this mod
++            std::atomic<i64> leak_last_log_ms{0};
++        };
++        inline ModSlot g_mods[kMaxMods + 1];
++        inline std::atomic<int> g_mod_count{0};
++        inline std::atomic<i64> g_leak_total{0};
++
++        inline auto register_mod(lua_State* key, const char* ascii_name) -> void
++        {
++            if (key == nullptr) { return; }
++            const int have = std::min(g_mod_count.load(std::memory_order_acquire), kMaxMods);
++            for (int i = 0; i < have; ++i)
++            {
++                if (g_mods[i].key.load(std::memory_order_acquire) == key) { return; }
++            }
++            const int index = g_mod_count.fetch_add(1, std::memory_order_acq_rel);
++            if (index >= kMaxMods) { return; }
++            copy_one_line(g_mods[index].name, sizeof(g_mods[index].name), ascii_name != nullptr ? ascii_name : "?");
++            g_mods[index].key.store(key, std::memory_order_release);
++        }
++        inline auto find_mod(lua_State* key) -> ModSlot&
++        {
++            const int have = std::min(g_mod_count.load(std::memory_order_acquire), kMaxMods);
++            for (int i = 0; i < have; ++i)
++            {
++                if (g_mods[i].key.load(std::memory_order_acquire) == key && key != nullptr) { return g_mods[i]; }
++            }
++            if (g_mods[kMaxMods].name[0] == '\0') { copy_one_line(g_mods[kMaxMods].name, sizeof(g_mods[kMaxMods].name), "?"); }
++            return g_mods[kMaxMods];
++        }
++
++        // ---- [LOCKLEAK] -------------------------------------------------------------
++        // Decides whether this mod's leak is logged now: the first one always, later
++        // ones at most every `gap_ms`, with the number skipped since the last line.
++        struct LeakVerdict
++        {
++            bool log{false};
++            i64 repeats{0};  // leaks not logged since the previous line, including this one
++        };
++        inline auto leak_decide(ModSlot& slot, i64 now, i64 gap_ms) -> LeakVerdict
++        {
++            slot.leak_total.fetch_add(1, std::memory_order_relaxed);
++            const i64 pending = slot.leak_unlogged.fetch_add(1, std::memory_order_relaxed) + 1;
++            i64 last = slot.leak_last_log_ms.load(std::memory_order_relaxed);
++            if (last == 0 || now - last >= gap_ms)
++            {
++                if (slot.leak_last_log_ms.compare_exchange_strong(last, now, std::memory_order_relaxed))
++                {
++                    slot.leak_unlogged.store(0, std::memory_order_relaxed);
++                    return LeakVerdict{true, pending};
++                }
++            }
++            return LeakVerdict{false, pending};
++        }
++        // Hook installed into LuaMadeSimple (see DiagHooks). Never throws.
++        inline auto on_leak(lua_State* main_state, const char* kind, const char* fn, const char* text, int extra, int depth) noexcept -> void
++        {
++            try
++            {
++                ModSlot& slot = find_mod(main_state);
++                g_leak_total.fetch_add(1, std::memory_order_relaxed);
++                const LeakVerdict verdict = leak_decide(slot, now_ms(), 30000);
++                if (!verdict.log) { return; }
++                char one_line[160];
++                copy_one_line(one_line, sizeof(one_line), text);
++                char line[480];
++                std::snprintf(line, sizeof(line), "[LOCKLEAK] mod=%s fn=%s kind=%s extra=%d depth=%d repeats=%lld err=%s",
++                              slot.name, (fn != nullptr && fn[0] != '\0') ? fn : "?", kind != nullptr ? kind : "?", extra, depth, verdict.repeats, one_line);
++                emit_line(line);
++            }
++            catch (...)
++            {
++            }
++        }
++        // The pump runs on the game thread outside any dispatch. A depth above zero
++        // there that does not change between two pumps is a skipped lock scope.
++        inline auto pump_depth_stuck(int depth_now, bool dispatching, int& last_depth) noexcept -> bool
++        {
++            const bool stuck = depth_now > 0 && !dispatching && depth_now == last_depth;
++            last_depth = (depth_now > 0 && !dispatching) ? depth_now : 0;
++            return stuck;
++        }
++
++        // ---- game-thread Lua time per mod (hooks for LuaMadeSimple::call_function) ----
++        inline auto hook_call_begin() noexcept -> long long { return on_game_thread() ? now_us() : 0; }
++        inline auto hook_call_end(lua_State* main_state, long long begin_us) noexcept -> void
++        {
++            ModSlot& slot = find_mod(main_state);
++            slot.game_us.fetch_add(now_us() - begin_us, std::memory_order_relaxed);
++            slot.game_calls.fetch_add(1, std::memory_order_relaxed);
++        }
++        inline auto install_hooks_once() -> void
++        {
++            static const bool installed = []() {
++                LuaMadeSimple::DiagHooks hooks{};
++                hooks.on_leak = &on_leak;
++                hooks.call_begin = &hook_call_begin;
++                hooks.call_end = &hook_call_end;
++                LuaMadeSimple::diag_install_hooks(hooks);
++                return true;
++            }();
++            (void)installed;
++        }
++
++        // ---- lock tracking ---------------------------------------------------------
++        struct WaitSlot
++        {
++            std::atomic<i64> since_ms{0};   // 0 = free, -1 = being claimed
++            std::atomic<int> line{0};
++            std::atomic<int> game{0};
++            std::atomic<i64> last_log_ms{0};
++        };
++        struct Holder
++        {
++            std::atomic<i64> since_ms{0};   // 0 = nobody (outermost scope of one thread)
++            std::atomic<int> line{0};
++            std::atomic<int> game{0};
++        };
++        inline WaitSlot g_wait[kWaitSlots];
++        inline Holder g_holder;
++        inline std::atomic<i64> g_slow_acquires{0};
++        inline std::atomic<i64> g_slow_max_ms{0};      // since the last [PERF] line
++        inline std::atomic<i64> g_lockwait_events{0};  // acquisitions over kLockWaitLogMs
++        inline RateLimiter g_lockwait_limiter{};
++
++        inline auto wait_begin(i64 t0, int line, int game) noexcept -> int
++        {
++            for (int i = 0; i < kWaitSlots; ++i)
++            {
++                i64 expected = 0;
++                if (g_wait[i].since_ms.compare_exchange_strong(expected, -1, std::memory_order_acq_rel))
++                {
++                    g_wait[i].line.store(line, std::memory_order_relaxed);
++                    g_wait[i].game.store(game, std::memory_order_relaxed);
++                    g_wait[i].last_log_ms.store(0, std::memory_order_relaxed);
++                    g_wait[i].since_ms.store(t0, std::memory_order_release);
++                    return i;
++                }
++            }
++            return -1;
++        }
++        inline auto thread_word(int game) noexcept -> const char* { return game != 0 ? "game" : "other"; }
++        inline auto log_lockwait(i64 waited_ms, int line, int game) -> void
++        {
++            const auto verdict = g_lockwait_limiter.admit(now_ms(), 5, 10000);
++            char buffer[200];
++            if (verdict.prev_suppressed > 0)
++            {
++                std::snprintf(buffer, sizeof(buffer), "[LOCKWAIT] summary: %d acquisitions over %lld ms in the last window, %d lines suppressed",
++                              verdict.prev_total, static_cast<i64>(kLockWaitLogMs), verdict.prev_suppressed);
++                emit_line(buffer);
++            }
++            if (verdict.show)
++            {
++                std::snprintf(buffer, sizeof(buffer), "[LOCKWAIT] site_line=%d thread=%s waited_ms=%lld", line, thread_word(game), waited_ms);
++                emit_line(buffer);
++            }
++        }
++        // Slow path of the acquisition: only reached when try_lock failed, so the
++        // uncontended path never reads a clock.
++        inline auto lock_slow(std::recursive_mutex& mutex, int line) -> void
++        {
++            const i64 t0 = now_ms();
++            const int game = on_game_thread() ? 1 : 0;
++            const int slot = wait_begin(t0, line, game);
++            mutex.lock();
++            if (slot >= 0) { g_wait[slot].since_ms.store(0, std::memory_order_release); }
++            const i64 waited = now_ms() - t0;
++            g_slow_acquires.fetch_add(1, std::memory_order_relaxed);
++            i64 seen = g_slow_max_ms.load(std::memory_order_relaxed);
++            while (waited > seen && !g_slow_max_ms.compare_exchange_weak(seen, waited, std::memory_order_relaxed)) {}
++            if (waited > kLockWaitLogMs)
++            {
++                g_lockwait_events.fetch_add(1, std::memory_order_relaxed);
++                log_lockwait(waited, line, game);
++            }
++        }
++        inline auto holder_set(int line) -> void
++        {
++            g_holder.line.store(line, std::memory_order_relaxed);
++            g_holder.game.store(on_game_thread() ? 1 : 0, std::memory_order_relaxed);
++            g_holder.since_ms.store(now_ms(), std::memory_order_release);
++        }
++        inline auto holder_clear() noexcept -> void { g_holder.since_ms.store(0, std::memory_order_release); }
++
++        // Replaces std::lock_guard<std::recursive_mutex> on LuaMod::m_thread_actions_mutex.
++        // Same locking behaviour. Adds: the per-thread scope depth (a skipped destructor
++        // leaves it too high), the wait bookkeeping above, and the "who holds it" record.
++        // `line` is __LINE__ of the declaration (site id, resolved with the staged file).
++        class ActionsLock
++        {
++            std::recursive_mutex& m_mutex;
++        public:
++            ActionsLock(std::recursive_mutex& mutex, int line) : m_mutex(mutex)
++            {
++                if (!m_mutex.try_lock()) { lock_slow(m_mutex, line); }
++                if (LuaMadeSimple::diag_scope_enter() == 0) { holder_set(line); }
++            }
++            ~ActionsLock()
++            {
++                LuaMadeSimple::diag_scope_exit();
++                if (LuaMadeSimple::diag_scope_depth() == 0) { holder_clear(); }
++                m_mutex.unlock();
++            }
++            ActionsLock(const ActionsLock&) = delete;
++            auto operator=(const ActionsLock&) -> ActionsLock& = delete;
++        };
++
++        // Lines for waiters stuck longer than kLockWaitLogMs, at most one per slot every
++        // 5 s. Called from the pump, so a lock that never comes back is still reported.
++        inline auto scan_stuck_waiters(i64 now, char (*lines)[260], int max_lines) -> int
++        {
++            int produced = 0;
++            const i64 holder_since = g_holder.since_ms.load(std::memory_order_acquire);
++            for (int i = 0; i < kWaitSlots && produced < max_lines; ++i)
++            {
++                const i64 since = g_wait[i].since_ms.load(std::memory_order_acquire);
++                if (since <= 0 || now - since <= kLockWaitLogMs) { continue; }
++                const i64 last = g_wait[i].last_log_ms.load(std::memory_order_relaxed);
++                if (last != 0 && now - last < 5000) { continue; }
++                g_wait[i].last_log_ms.store(now, std::memory_order_relaxed);
++                if (holder_since > 0)
++                {
++                    std::snprintf(lines[produced], sizeof(lines[produced]),
++                                  "[LOCKWAIT] still waiting site_line=%d thread=%s waited_ms=%lld holder_line=%d holder_thread=%s holder_held_ms=%lld",
++                                  g_wait[i].line.load(std::memory_order_relaxed), thread_word(g_wait[i].game.load(std::memory_order_relaxed)), now - since,
++                                  g_holder.line.load(std::memory_order_relaxed), thread_word(g_holder.game.load(std::memory_order_relaxed)), now - holder_since);
++                }
++                else
++                {
++                    std::snprintf(lines[produced], sizeof(lines[produced]),
++                                  "[LOCKWAIT] still waiting site_line=%d thread=%s waited_ms=%lld holder=none-recorded",
++                                  g_wait[i].line.load(std::memory_order_relaxed), thread_word(g_wait[i].game.load(std::memory_order_relaxed)), now - since);
++                }
++                ++produced;
++            }
++            return produced;
++        }
++
++        // ---- FindFirstOf / FindAllOf, widget constructions ---------------------------
++        inline std::atomic<i64> g_find_first_calls{0};
++        inline std::atomic<i64> g_find_first_us{0};
++        inline std::atomic<i64> g_find_all_calls{0};
++        inline std::atomic<i64> g_find_all_us{0};
++        inline std::atomic<i64> g_widgets{0};
++        inline RateLimiter g_widget_limiter{};
++
++        // Counts the call on entry and adds its duration on exit. A Lua raise skips the
++        // destructor: the call is counted, its time is not. Nothing else is held.
++        class FindTimer
++        {
++            std::atomic<i64>& m_us;
++            i64 m_t0;
++        public:
++            FindTimer(std::atomic<i64>& calls, std::atomic<i64>& us) noexcept : m_us(us), m_t0(now_us()) { calls.fetch_add(1, std::memory_order_relaxed); }
++            ~FindTimer() { m_us.fetch_add(now_us() - m_t0, std::memory_order_relaxed); }
++            FindTimer(const FindTimer&) = delete;
++            auto operator=(const FindTimer&) -> FindTimer& = delete;
++        };
++
++        inline auto widget_gate(i64 now) -> RateLimiter::Verdict
++        {
++            g_widgets.fetch_add(1, std::memory_order_relaxed);
++            return g_widget_limiter.admit(now, kWidgetLinesPerSecond, 1000);
++        }
++        inline auto emit_widget_summary(const RateLimiter::Verdict& verdict) -> void
++        {
++            if (verdict.prev_suppressed <= 0) { return; }
++            char line[200];
++            std::snprintf(line, sizeof(line), "[l22] widget/object construct summary: %d constructed in the last window, %d log lines suppressed",
++                          verdict.prev_total, verdict.prev_suppressed);
++            emit_line(line);
++        }
++
++        // ---- [PERF] ----------------------------------------------------------------
++        struct QueueDepths
++        {
++            bool ok{false};       // false = the lock was busy, sizes not read
++            size_t game{0}, game_pending{0}, delayed{0}, delayed_pending{0}, tick{0}, tick_pending{0};
++        };
++        struct PerfInput
++        {
++            struct ModRow { const char* name; i64 us; i64 calls; };
++            i64 dt_ms{0};
++            ModRow rows[kMaxMods + 1]{};
++            int row_count{0};
++            i64 ff_calls{0}, ff_us{0}, fa_calls{0}, fa_us{0};
++            i64 widgets{0};
++            QueueDepths queues{};
++            i64 slow_acquires{0}, slow_max_ms{0}, lockwait_events{0};
++            i64 leaks{0};
++            int pump_depth{0};
++        };
++        // Bounded text builder: every append is a literal-format snprintf, the
++        // buffer is always NUL-terminated and never overrun.
++        struct TextBuf
++        {
++            char* out;
++            size_t n;
++            size_t used{0};
++            auto room() const noexcept -> size_t { return used < n ? n - used : 0; }
++            auto tail() noexcept -> char* { return out + (used < n ? used : n - 1); }
++            auto adv(int wrote) noexcept -> void
++            {
++                if (wrote > 0) { used = std::min(n - 1, used + static_cast<size_t>(wrote)); }
++            }
++        };
++        // "x.y" milliseconds from microseconds.
++        inline auto put_ms(TextBuf& b, i64 us) noexcept -> void
++        {
++            b.adv(std::snprintf(b.tail(), b.room(), "%lld.%lld", us / 1000, (us % 1000) / 100));
++        }
++        // Always NUL-terminated, never writes past n. Returns the length.
++        inline auto format_perf(char* out, size_t n, const PerfInput& in) noexcept -> size_t
++        {
++            if (out == nullptr || n == 0) { return 0; }
++            out[0] = '\0';
++            TextBuf b{out, n};
++            b.adv(std::snprintf(b.tail(), b.room(), "[PERF] dt=%lldms lua_ms={", in.dt_ms));
++            bool any = false;
++            for (int i = 0; i < in.row_count; ++i)
++            {
++                if (in.rows[i].calls <= 0) { continue; }
++                b.adv(std::snprintf(b.tail(), b.room(), "%s%s:", any ? "," : "", in.rows[i].name != nullptr ? in.rows[i].name : "?"));
++                put_ms(b, in.rows[i].us);
++                b.adv(std::snprintf(b.tail(), b.room(), "/%lld", in.rows[i].calls));
++                any = true;
++            }
++            b.adv(std::snprintf(b.tail(), b.room(), "%s} find_first=%lld/", any ? "" : "-", in.ff_calls));
++            put_ms(b, in.ff_us);
++            b.adv(std::snprintf(b.tail(), b.room(), "ms find_all=%lld/", in.fa_calls));
++            put_ms(b, in.fa_us);
++            b.adv(std::snprintf(b.tail(), b.room(), "ms widgets=%lld", in.widgets));
++            if (in.queues.ok)
++            {
++                b.adv(std::snprintf(b.tail(), b.room(), " q=g%zu,p%zu,d%zu,pd%zu,e%zu,pe%zu", in.queues.game, in.queues.game_pending, in.queues.delayed,
++                                    in.queues.delayed_pending, in.queues.tick, in.queues.tick_pending));
++            }
++            else
++            {
++                b.adv(std::snprintf(b.tail(), b.room(), " q=busy"));
++            }
++            b.adv(std::snprintf(b.tail(), b.room(), " lockwait=%lld/max%lldms/over%lld leaks=%lld pump_depth=%d", in.slow_acquires, in.slow_max_ms,
++                                in.lockwait_events, in.leaks, in.pump_depth));
++            return b.used;
++        }
++        // Fills `in` from the live counters and moves the "since last line" baselines.
++        // Pump thread only (the baselines are plain).
++        inline auto collect_perf(PerfInput& in, i64 now, i64& last_ms, const QueueDepths& queues, int pump_depth) -> void
++        {
++            static i64 prev_ff_calls = 0, prev_ff_us = 0, prev_fa_calls = 0, prev_fa_us = 0, prev_widgets = 0;
++            in.dt_ms = last_ms == 0 ? 0 : now - last_ms;
++            last_ms = now;
++            const int have = std::min(g_mod_count.load(std::memory_order_acquire), kMaxMods);
++            in.row_count = 0;
++            for (int i = 0; i <= kMaxMods; ++i)
++            {
++                if (i >= have && i != kMaxMods) { continue; }
++                ModSlot& slot = g_mods[i];
++                const i64 us = slot.game_us.load(std::memory_order_relaxed);
++                const i64 calls = slot.game_calls.load(std::memory_order_relaxed);
++                in.rows[in.row_count++] = PerfInput::ModRow{slot.name[0] != '\0' ? slot.name : "?", us - slot.prev_game_us, calls - slot.prev_game_calls};
++                slot.prev_game_us = us;
++                slot.prev_game_calls = calls;
++            }
++            const i64 ff_calls = g_find_first_calls.load(std::memory_order_relaxed), ff_us = g_find_first_us.load(std::memory_order_relaxed);
++            const i64 fa_calls = g_find_all_calls.load(std::memory_order_relaxed), fa_us = g_find_all_us.load(std::memory_order_relaxed);
++            const i64 widgets = g_widgets.load(std::memory_order_relaxed);
++            in.ff_calls = ff_calls - prev_ff_calls; in.ff_us = ff_us - prev_ff_us;
++            in.fa_calls = fa_calls - prev_fa_calls; in.fa_us = fa_us - prev_fa_us;
++            in.widgets = widgets - prev_widgets;
++            prev_ff_calls = ff_calls; prev_ff_us = ff_us; prev_fa_calls = fa_calls; prev_fa_us = fa_us; prev_widgets = widgets;
++            in.queues = queues;
++            in.slow_acquires = g_slow_acquires.exchange(0, std::memory_order_relaxed);
++            in.slow_max_ms = g_slow_max_ms.exchange(0, std::memory_order_relaxed);
++            in.lockwait_events = g_lockwait_events.load(std::memory_order_relaxed);
++            in.leaks = g_leak_total.load(std::memory_order_relaxed);
++            in.pump_depth = pump_depth;
++        }
++        // True once per `min_gap_ms` (both pumps may call; only one line per second).
++        inline auto perf_gate(std::atomic<i64>& last, i64 now, i64 min_gap_ms) noexcept -> bool
++        {
++            i64 seen = last.load(std::memory_order_relaxed);
++            return now - seen >= min_gap_ms && last.compare_exchange_strong(seen, now, std::memory_order_relaxed);
++        }
++    }
++    }
++    // [B6-CORE-END]
++
++    // [B6-GLUE-BEGIN]
++    namespace
++    {
++    namespace b6diag
++    {
++        // Glue for the CORE region above (kept outside it: needs the engine/logging headers).
++        auto emit_line(const char* line) -> void
++        {
++            StringType wide{};
++            for (const char* p = line; p != nullptr && *p != '\0'; ++p)
++            {
++                wide.push_back(static_cast<StringType::value_type>(static_cast<unsigned char>(*p)));
++            }
++            L22Diagnostics::observe([&]() { Output::send(STR("{}\n"), wide); });
++        }
++        auto on_game_thread() -> bool
++        {
++#if defined(__PROSPERO__)
++            return Unreal::IsInGameThreadRaw();
++#else
++            // Host-only branch: GetGameThreadId() can throw before engine init, and this runs
++            // inside ActionsLock's constructor after the lock is taken, so it must not throw.
++            try { return std::this_thread::get_id() == Unreal::GetGameThreadId(); } catch (...) { return false; }
++#endif
++        }
++        // Mod names are plain ASCII; anything else prints as '?'.
++        auto ascii_name(char* out, size_t n, StringViewType name) -> void
++        {
++            size_t i = 0;
++            for (; i + 1 < n && i < name.size(); ++i)
++            {
++                const auto c = static_cast<unsigned long>(name[i]);
++                out[i] = (c >= 0x20 && c < 0x7f) ? static_cast<char>(c) : '?';
++            }
++            out[i] = '\0';
++        }
++    }
++    }
++    // [B6-GLUE-END]
+ #if defined(__PROSPERO__)
+     namespace L23GameThreadProbe {
+         extern "C" int32_t scePthreadGetthreadid(void);
+@@ -262,7 +810,7 @@
+             try {
+                 // Same lock as the production dispatcher: no concurrent drain
+                 // can race the queued marker or the protected main-state call.
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                 if(!state.begin(owner,now_ms(),scePthreadGetthreadid())) return;
+                 const int top=lua_gettop(L);
+                 lua_pushcfunction(L,request);
+@@ -1145,6 +1693,13 @@
+ #endif
+         , m_lua(LuaMadeSimple::new_state())
+     {
++        {
++            // [B6] diagnostics only: name this mod's Lua state for [LOCKLEAK] / [PERF].
++            b6diag::install_hooks_once();
++            char b6_name[40];
++            b6diag::ascii_name(b6_name, sizeof(b6_name), get_name());
++            b6diag::register_mod(m_lua.get_lua_state(), b6_name);
++        }
+         if (m_native_source)
+         {
+             const auto path = modbridge::normalize_path_for_lua(m_mod_path);
+@@ -1887,6 +2442,7 @@
+         });
+ 
+         lua.register_function("FindFirstOf", [](const LuaMadeSimple::Lua& lua) -> int {
++            b6diag::FindTimer b6_find_timer{b6diag::g_find_first_calls, b6diag::g_find_first_us}; // [B6] diagnostics only
+             // Stack size @ the start of the function is the same as the number of params
+             int32_t stack_size = lua.get_stack_size();
+ 
+@@ -1938,6 +2494,7 @@
+         });
+ 
+         lua.register_function("FindAllOf", [](const LuaMadeSimple::Lua& lua) -> int {
++            b6diag::FindTimer b6_find_timer{b6diag::g_find_all_calls, b6diag::g_find_all_us}; // [B6] diagnostics only
+             // Stack size @ the start of the function is the same as the number of params
+             int32_t stack_size = lua.get_stack_size();
+ 
+@@ -2248,7 +2805,7 @@
+                     L22Diagnostics::observe([&]() {
+                         Output::send(STR("[l22] keybind callback entry key={} ref={}\n"), static_cast<int>(callback_key), callback_register_index);
+                     });
+-                    std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                    b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                     try
+                     {
+                         lua.registry().get_function_ref(callback_register_index);
+@@ -2363,7 +2920,7 @@
+     });
+ 
+             lua.register_function("UnregisterHook", [](const LuaMadeSimple::Lua& lua) -> int {
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+ 
+                 std::string error_overload_not_found{R"(
+ No overload found for function 'UnregisterHook'.
+@@ -2641,10 +3198,17 @@
+             Unreal::UObject* created_object = Unreal::UObjectGlobals::StaticConstructObject(params);
+             if (created_object)
+             {
+-                L22Diagnostics::observe([&]() {
+-                    Output::send(STR("[l22] widget/object constructed via StaticConstructObject class={} object={} (non-null return)\n"),
+-                                 static_cast<void*>(param_class), static_cast<void*>(created_object));
+-                });
++                // [B6] at most kWidgetLinesPerSecond of these lines per second; the rest are
++                // counted and reported by one "[l22] widget/object construct summary" line.
++                const auto b6_widget_verdict = b6diag::widget_gate(b6diag::now_ms());
++                b6diag::emit_widget_summary(b6_widget_verdict);
++                if (b6_widget_verdict.show)
++                {
++                    L22Diagnostics::observe([&]() {
++                        Output::send(STR("[l22] widget/object constructed via StaticConstructObject class={} object={} (non-null return)\n"),
++                                     static_cast<void*>(param_class), static_cast<void*>(created_object));
++                    });
++                }
+             }
+             else
+             {
+@@ -3080,7 +3644,7 @@
+         });
+ 
+         lua.register_function("RegisterCustomEvent", [](const LuaMadeSimple::Lua& lua) -> int {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+             std::string error_overload_not_found{R"(
+ No overload found for function 'RegisterCustomEvent'.
+ Overloads:
+@@ -3123,7 +3687,7 @@
+         });
+ 
+         lua.register_function("UnregisterCustomEvent", [](const LuaMadeSimple::Lua& lua) -> int {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+             std::string error_overload_not_found{R"(
+ No overload found for function 'UnregisterCustomEvent'.
+ Overloads:
+@@ -4607,7 +5171,7 @@
+ 
+         class NativeLuaActionDispatchScope
+         {
+-            std::unique_lock<std::recursive_mutex> Lock{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock Lock{LuaMod::m_thread_actions_mutex, __LINE__};
+             bool PreviousProcessing{LuaMod::m_is_processing_actions};
+             bool OwnsDispatch{!PreviousProcessing && !NativeLuaActionDispatching};
+         public:
+@@ -4713,11 +5277,92 @@
+     }
+ #endif
+ 
++    // [B6] The 1 Hz game-thread line: [PERF], the pump-side [MEM], stuck-lock waiters, the
++    // widget summary and the persistent-lock-depth check. Called from the two pumps BEFORE
++    // they take the dispatch lock, so it keeps running when another lock scope is stuck.
++    // It makes no Lua call and takes no tracked lock (queue sizes are read under a plain
++    // try_lock; "q=busy" when another thread holds it).
++    // [B6-PUMP-BEGIN]
++    static std::atomic<int> g_b6_gc_kb_cache{0};      // last gc_kb printed by the ExecuteInGameThread [MEM] path
++    static std::atomic<b6diag::i64> g_b6_perf_last_ms{0};
++    static std::atomic<b6diag::i64> g_b6_mem_pump_ms{0};
++    [[maybe_unused]] static auto b6_pump_mem_recent() -> bool
++    {
++        const b6diag::i64 at = g_b6_mem_pump_ms.load(std::memory_order_relaxed);
++        return at != 0 && b6diag::now_ms() - at < 2500;
++    }
++    [[maybe_unused]] static auto b6_pump_1hz() -> void
++    {
++        try
++        {
++            const b6diag::i64 now = b6diag::now_ms();
++            if (!b6diag::perf_gate(g_b6_perf_last_ms, now, 900))
++            {
++                return;
++            }
++            static b6diag::i64 s_report_ms = 0;
++            static int s_last_depth = 0;
++            const int depth = LuaMadeSimple::diag_scope_depth();
++#if defined(__PROSPERO__)
++            const bool dispatching = NativeLuaActionDispatching;
++#else
++            const bool dispatching = false;
++#endif
++            if (b6diag::pump_depth_stuck(depth, dispatching, s_last_depth))
++            {
++                b6diag::on_leak(nullptr, "pump", "pump", "game-thread lock depth unchanged between two pumps and no dispatch is running", depth, depth);
++            }
++            b6diag::QueueDepths queues{};
++            if (LuaMod::m_thread_actions_mutex.try_lock())
++            {
++                queues.ok = true;
++                queues.game = LuaMod::m_game_thread_actions.size();
++                queues.game_pending = LuaMod::m_pending_game_thread_actions.size();
++                queues.delayed = LuaMod::m_delayed_game_thread_actions.size();
++                queues.delayed_pending = LuaMod::m_pending_delayed_game_thread_actions.size();
++                queues.tick = LuaMod::m_engine_tick_actions.size();
++                queues.tick_pending = LuaMod::m_pending_engine_tick_actions.size();
++                LuaMod::m_thread_actions_mutex.unlock();
++            }
++            b6diag::PerfInput perf{};
++            b6diag::collect_perf(perf, now, s_report_ms, queues, depth);
++            char line[900];
++            b6diag::format_perf(line, sizeof(line), perf);
++            b6diag::emit_line(line);
++
++            char waits[4][260];
++            const int stuck = b6diag::scan_stuck_waiters(now, waits, 4);
++            for (int i = 0; i < stuck; ++i)
++            {
++                b6diag::emit_line(waits[i]);
++            }
++            b6diag::emit_widget_summary(b6diag::g_widget_limiter.flush(now, 1000));
++
++            // [MEM] from the pump: no Lua call (gc_kb is the last value the other path saw).
++            const auto snap = LuaMadeSimple::query_lua_memory(nullptr);
++            char mem[520];
++            std::snprintf(mem, sizeof(mem),
++                          "[MEM] state=pump gc_kb=%d live_kb=%zu blocks=%zu allocs=%zu fails=%zu fail_o=%zu fail_n=%zu arena_cap_kb=%zu arena_used_kb=%zu "
++                          "arena_ext_kb=%zu errs=%zu cxx=%zu src=pump",
++                          g_b6_gc_kb_cache.load(std::memory_order_relaxed), snap.live_bytes / 1024, snap.live_blocks, snap.total_alloc_calls,
++                          snap.failed_calls, snap.last_fail_osize, snap.last_fail_nsize, snap.arena_capacity_bytes / 1024, snap.arena_used_bytes / 1024,
++                          snap.arena_external_bytes / 1024, snap.raised_errors, snap.cxx_exceptions);
++            b6diag::emit_line(mem);
++            g_b6_mem_pump_ms.store(now, std::memory_order_relaxed);
++            diagnostic_event("lua_mem_gc_kb", static_cast<unsigned int>(g_b6_gc_kb_cache.load(std::memory_order_relaxed) < 0 ? 0 : g_b6_gc_kb_cache.load(std::memory_order_relaxed)));
++            diagnostic_event("lua_mem_fails", static_cast<unsigned int>(snap.failed_calls));
++        }
++        catch (...)
++        {
++        }
++    }
++    // [B6-PUMP-END]
++
+     static auto process_simple_actions(std::vector<LuaMod::SimpleLuaAction>& actions) -> void
+     {
+         std::vector<LuaMod::SimpleLuaAction> to_run{};
+         {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+             if (actions.empty())
+             {
+                 return;
+@@ -4754,7 +5399,7 @@
+ 
+         if (!deferred.empty())
+         {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+             actions.insert(
+                 actions.end(),
+                 std::make_move_iterator(deferred.begin()),
+@@ -4778,7 +5423,7 @@
+ 
+         std::vector<PendingNotifyExec> to_execute{};
+         {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+             if (LuaMod::m_pending_notify_on_new_object_callbacks.empty())
+             {
+                 return;
+@@ -4892,7 +5537,7 @@
+ 
+         std::vector<ReadyDelayedExec> ready{};
+         {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+             const auto now = std::chrono::steady_clock::now();
+             for (size_t i = 0; i < actions.size(); ++i)
+             {
+@@ -4975,7 +5620,7 @@
+         }
+ 
+         {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+             const auto now = std::chrono::steady_clock::now();
+             for (auto& exec : ready)
+             {
+@@ -5054,7 +5699,7 @@
+             return;
+ #endif
+         {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+             LuaMod::m_is_processing_actions = true;
+         }
+ 
+@@ -5064,7 +5709,7 @@
+         process_pending_notify_on_new_object_callbacks();
+ 
+         {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+             LuaMod::m_is_processing_actions = false;
+             if (!LuaMod::m_pending_game_thread_actions.empty())
+             {
+@@ -5485,6 +6130,7 @@
+                 s_marshal_pump_event_ms.compare_exchange_strong(last_pump_event_ms, pump_now_ms, std::memory_order_relaxed))
+             {
+                 diagnostic_event("r3_marshal_pumped", static_cast<unsigned int>(pump_now_ms & 0xFFFF'FFFF));
++                b6_pump_1hz(); // [B6] diagnostics only; runs before the dispatch lock below
+             }
+         }
+         NativeLuaActionDispatchScope action_dispatch;
+@@ -5507,7 +6153,7 @@
+         // [FL-MAP-EV] registration in UnrealInitializer).
+ #endif
+         {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+             LuaMod::m_is_processing_actions = true;
+         }
+ 
+@@ -5517,7 +6163,7 @@
+         process_pending_notify_on_new_object_callbacks();
+ 
+         {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+             LuaMod::m_is_processing_actions = false;
+             if (!LuaMod::m_pending_game_thread_actions.empty())
+             {
+@@ -5571,6 +6217,7 @@
+                 {
+                     return;
+                 }
++                b6_pump_1hz(); // [B6] diagnostics only; own 1 Hz gate, runs before the dispatch lock
+                 NativeLuaActionDispatchScope action_dispatch;
+                 if (!action_dispatch.owns_dispatch())
+                 {
+@@ -5581,7 +6228,7 @@
+                 // LoadMap arm exactly once, same as the marshal drain.
+                 try_deferred_loadmap_arm();
+                 {
+-                    std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                    b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                     LuaMod::m_is_processing_actions = true;
+                     // FIX4 per-tick cap: drain at most kCap simple actions per
+                     // genuine tick; the overflow moves to the FRONT of the
+@@ -5613,7 +6260,7 @@
+                     process_pending_notify_on_new_object_callbacks();
+                 }
+                 {
+-                    std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                    b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                     LuaMod::m_is_processing_actions = false;
+                     if (!LuaMod::m_pending_game_thread_actions.empty())
+                     {
+@@ -5659,7 +6306,7 @@
+             return;
+ #endif
+         {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+             LuaMod::m_is_processing_actions = true;
+         }
+ 
+@@ -5669,7 +6316,7 @@
+         process_pending_notify_on_new_object_callbacks();
+ 
+         {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+             LuaMod::m_is_processing_actions = false;
+             if (!LuaMod::m_pending_engine_tick_actions.empty())
+             {
+@@ -5918,7 +6565,7 @@
+     auto LuaMod::ensure_engine_tick_hooked() -> void
+     {
+ #ifdef __PROSPERO__
+-        std::lock_guard<std::recursive_mutex> guard{m_thread_actions_mutex};
++        b6diag::ActionsLock guard{m_thread_actions_mutex, __LINE__};
+ #endif
+         if (!m_is_engine_tick_hooked)
+         {
+@@ -5937,7 +6584,7 @@
+     auto LuaMod::ensure_process_event_hooked(LuaMod* mod) -> void
+     {
+ #ifdef __PROSPERO__
+-        std::lock_guard<std::recursive_mutex> guard{m_thread_actions_mutex};
++        b6diag::ActionsLock guard{m_thread_actions_mutex, __LINE__};
+         if (NativeProcessEventHookId == Unreal::Hook::ERROR_ID)
+         {
+             const auto id = Unreal::Hook::RegisterProcessEventPreCallback(process_event_hook, {false, false, STR("UE4SS"), STR("LuaModImpl")});
+@@ -5964,7 +6611,7 @@
+     auto LuaMod::setup_lua_global_functions_main_state_only() const -> void
+     {
+         m_lua.register_function("RegisterHook", [](const LuaMadeSimple::Lua& lua) -> int {
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+ 
+             std::string error_overload_not_found{R"(
+ No overload found for function 'RegisterHook'.
+@@ -6233,7 +6880,7 @@
+ 
+             // Acquire mutex before ANY Lua state operations to prevent race conditions
+             // when async thread and game thread both access the same hook_lua state
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+ 
+             auto [hook_lua, lua_thread_registry_index] = make_hook_state(mod);
+ 
+@@ -6306,6 +6953,11 @@
+                         // [B2] read-only: LUA_GCCOUNT only. IS's forced LUA_GCSTEP was
+                         // dropped (a diagnostic must not change GC timing).
+                         const int gc_kb = lua_gc(lua.get_lua_state(), LUA_GCCOUNT);
++                        g_b6_gc_kb_cache.store(gc_kb, std::memory_order_relaxed); // [B6]
++                        if (b6_pump_mem_recent())
++                        {
++                            return; // [B6] the pump already printed [MEM] (and the events) this second
++                        }
+                         const auto snap = LuaMadeSimple::query_lua_memory(lua.get_lua_state());
+                         Output::send(STR("[MEM] state={} gc_kb={} live_kb={} blocks={} allocs={} fails={} fail_o={} fail_n={} arena_cap_kb={} arena_used_kb={} arena_ext_kb={} errs={} cxx={}\n"),
+                                      static_cast<void*>(lua.get_lua_state()),
+@@ -6510,7 +7162,7 @@
+                 auto delay_ms = lua_tointeger(L, 2);
+ 
+                 // Acquire mutex before ANY Lua state operations to prevent race conditions
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+ 
+                 // Check if handle already exists (check both main and pending queues)
+                 for (const auto& action : LuaMod::m_delayed_game_thread_actions)
+@@ -6564,7 +7216,7 @@
+                 auto delay_ms = lua_tointeger(L, 1);
+ 
+                 // Acquire mutex before ANY Lua state operations to prevent race conditions
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+ 
+                 auto [hook_lua, lua_thread_registry_index] = make_hook_state(mod);
+ 
+@@ -6716,7 +7368,7 @@
+             auto delay_ms = lua_tointeger(L, 2);
+ 
+             // Acquire mutex before ANY Lua state operations to prevent race conditions
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+ 
+             // Check if an action with this handle already exists (check both main and pending queues)
+             for (auto& action : LuaMod::m_delayed_game_thread_actions)
+@@ -6817,7 +7469,7 @@
+             auto mod = get_mod_ref(lua);
+ 
+             // Acquire mutex before ANY Lua state operations to prevent race conditions
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+ 
+             auto [hook_lua, lua_thread_registry_index] = make_hook_state(mod);
+ 
+@@ -6969,7 +7621,7 @@
+             auto delay_ms = lua.get_integer();
+ 
+             // Acquire mutex before ANY Lua state operations to prevent race conditions
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+ 
+             auto [hook_lua, lua_thread_registry_index] = make_hook_state(mod);
+ 
+@@ -7044,7 +7696,7 @@
+             auto mod = get_mod_ref(lua);
+ 
+             // Acquire mutex before ANY Lua state operations to prevent race conditions
+-            std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++            b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+ 
+             auto [hook_lua, lua_thread_registry_index] = make_hook_state(mod);
+ 
+@@ -7097,7 +7749,7 @@
+             bool found = false;
+ 
+             {
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                 for (auto& action : LuaMod::m_delayed_game_thread_actions)
+                 {
+                     // Only allow resetting actions owned by the calling mod
+@@ -7163,7 +7815,7 @@
+             bool found = false;
+ 
+             {
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                 for (auto& action : LuaMod::m_delayed_game_thread_actions)
+                 {
+                     // Only allow modifying actions owned by the calling mod
+@@ -7231,7 +7883,7 @@
+             bool found = false;
+ 
+             {
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                 for (auto& action : LuaMod::m_delayed_game_thread_actions)
+                 {
+                     // Only allow pausing actions owned by the calling mod
+@@ -7310,7 +7962,7 @@
+             bool found = false;
+ 
+             {
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                 for (auto& action : LuaMod::m_delayed_game_thread_actions)
+                 {
+                     // Only allow unpausing actions owned by the calling mod
+@@ -7360,7 +8012,7 @@
+             bool found = false;
+ 
+             {
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                 for (auto& action : LuaMod::m_delayed_game_thread_actions)
+                 {
+                     // Only allow cancelling actions owned by the calling mod
+@@ -7405,7 +8057,7 @@
+             bool valid = false;
+ 
+             {
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                 for (const auto& action : LuaMod::m_delayed_game_thread_actions)
+                 {
+                     if (action.handle == handle && action.status != LuaMod::DelayedActionStatus::PendingRemoval)
+@@ -7447,7 +8099,7 @@
+             bool active = false;
+ 
+             {
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                 for (const auto& action : LuaMod::m_delayed_game_thread_actions)
+                 {
+                     if (action.handle == handle && action.status == LuaMod::DelayedActionStatus::Active)
+@@ -7489,7 +8141,7 @@
+             bool paused = false;
+ 
+             {
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                 for (const auto& action : LuaMod::m_delayed_game_thread_actions)
+                 {
+                     if (action.handle == handle && action.status == LuaMod::DelayedActionStatus::Paused)
+@@ -7531,7 +8183,7 @@
+             int64_t remaining = -1;
+ 
+             {
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                 for (const auto& action : LuaMod::m_delayed_game_thread_actions)
+                 {
+                     if (action.handle == handle && action.status != LuaMod::DelayedActionStatus::PendingRemoval)
+@@ -7614,7 +8266,7 @@
+             int64_t elapsed = -1;
+ 
+             {
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                 for (const auto& action : LuaMod::m_delayed_game_thread_actions)
+                 {
+                     if (action.handle == handle && action.status != LuaMod::DelayedActionStatus::PendingRemoval)
+@@ -7699,7 +8351,7 @@
+             int64_t rate = -1;
+ 
+             {
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                 for (const auto& action : LuaMod::m_delayed_game_thread_actions)
+                 {
+                     if (action.handle == handle && action.status != LuaMod::DelayedActionStatus::PendingRemoval)
+@@ -7753,7 +8405,7 @@
+             int64_t count = 0;
+ 
+             {
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+                 for (auto& action : LuaMod::m_delayed_game_thread_actions)
+                 {
+                     // Check if this action belongs to the current mod by comparing hook lua states
+@@ -8426,7 +9078,7 @@
+             // Wait for an in-flight action dispatch before any teardown side
+             // effect. Do not retain this mutex while joining the async worker,
+             // which may itself need it to queue an action.
+-            std::lock_guard<std::recursive_mutex> guard{m_thread_actions_mutex};
++            b6diag::ActionsLock guard{m_thread_actions_mutex, __LINE__};
+             if (NativeLuaActionDispatching)
+                 throw std::runtime_error("Cannot synchronously uninstall a mod during Lua action dispatch; queue uninstall instead");
+         }
+@@ -8442,7 +9094,7 @@
+         }
+ 
+         // Now acquire mutex to safely modify shared data structures
+-        std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++        b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+ 
+ #if defined(__PROSPERO__)
+         L23GameThreadProbe::Cancel(this);
+@@ -8533,7 +9185,7 @@
+         // Must be done BEFORE m_hook_lua is set to nullptr
+         // Must hold mutex to synchronize with hook functions that process these vectors
+         {
+-            std::lock_guard<std::recursive_mutex> guard{m_thread_actions_mutex};
++            b6diag::ActionsLock guard{m_thread_actions_mutex, __LINE__};
+             std::erase_if(m_game_thread_actions, [&](const SimpleLuaAction& action) {
+                 return action.lua == m_hook_lua;
+             });
+@@ -8629,7 +9281,7 @@
+ 
+     static auto script_hook([[maybe_unused]] Unreal::Hook::TCallbackIterationData<void>& CallbackIterationData, [[maybe_unused]] Unreal::UObject* Context, Unreal::FFrame& Stack, [[maybe_unused]] void* RESULT_DECL) -> void
+     {
+-        std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++        b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+ 
+         auto execute_hook = [&](std::vector<LuaMod::FunctionHookData>& callback_container, bool precise_name_match) {
+             if (callback_container.empty())
+@@ -9024,7 +9676,7 @@
+                 // IMPORTANT: StaticConstructObject can be called from outside of the game thread (loading threads, etc.)
+                 // Lua is NOT thread-safe. If we're on the game thread, we can call Lua directly.
+                 // If we're on another thread, we must queue the callback for later processing.
+-                std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
++                b6diag::ActionsLock guard{LuaMod::m_thread_actions_mutex, __LINE__};
+ 
+                 Unreal::UStruct* object_class = constructed_object->GetClassPrivate();
+                 while (object_class)
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaPathShim.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaPathShim.cpp
+@@ -164,6 +164,9 @@
+             int rejected_markers = 0;
+             int write_area_markers = 0;
+             int dir_markers = 0;
++            // [B6] why the sandbox write path failed (diagnostics only).
++            int write_fail_markers = 0;     // first failure per mod only
++            std::string last_dir_why;       // outcome of the latest create_directories attempt
+         };
+ 
+         auto shim_context_gc(lua_State* L) -> int
+@@ -638,11 +641,18 @@
+             std::error_code ec;
+             const bool created = std::filesystem::create_directories(parent, ec); // checked below
+             const bool usable = !ec; // created==false + !ec == already existed (deploy pre-create)
++            // [B6] say WHY: the OS error text/code when refused, else created / already there.
++            const std::string why = ec ? ("refused: " + ec.message() + " (code " + std::to_string(ec.value()) + ")")
++                                       : (created ? std::string{"created"} : std::string{"already existed"});
++            {
++                std::lock_guard<std::mutex> guard{context.mutex};
++                context.last_dir_why = why;
++            }
+             if (context.dir_markers < kMaxMarkers)
+             {
+                 ++context.dir_markers;
+-                Output::send(STR("[SHIM] write-area dir {} created={} usable={}\n"),
+-                             ensure_str(key), created, usable);
++                Output::send(STR("[SHIM] write-area dir {} created={} usable={} why={}\n"),
++                             ensure_str(key), created, usable, ensure_str(why));
+             }
+             return usable;
+         }
+@@ -783,6 +793,41 @@
+         // ran io.open(nil, nil) and could never succeed. The originals (and
+         // the mode string the caller holds a pointer into) now stay on the
+         // stack below the results; a C function returns only the top values.
++        // [B6-SHIMFAIL-BEGIN]
++        // [B6] The backend's last failure on this thread: errno (io.open returns
++        // nil, message, errno) and its message. Diagnostics only.
++        thread_local int tl_backend_errno = 0;
++        thread_local char tl_backend_text[256] = {0};
++        auto note_backend_failure(lua_State* L, int base, bool raised) -> void
++        {
++            tl_backend_errno = 0;
++            tl_backend_text[0] = '\0';
++            const char* text = nullptr;
++            if (raised)
++            {
++                text = lua_type(L, -1) == LUA_TSTRING ? lua_tostring(L, -1) : nullptr;
++            }
++            else
++            {
++                const int top = lua_gettop(L);
++                if (top >= base + 2 && lua_type(L, base + 2) == LUA_TSTRING) { text = lua_tostring(L, base + 2); }
++                if (top >= base + 3 && lua_isinteger(L, base + 3)) { tl_backend_errno = static_cast<int>(lua_tointeger(L, base + 3)); }
++            }
++            if (text != nullptr)
++            {
++                // Long messages ("<path>: <strerror>") keep their TAIL, where the OS text is.
++                const size_t len = std::strlen(text);
++                if (len < sizeof(tl_backend_text)) { std::memcpy(tl_backend_text, text, len + 1); }
++                else
++                {
++                    const size_t keep = sizeof(tl_backend_text) - 4; // "..." + tail + NUL
++                    std::memcpy(tl_backend_text, "...", 3);
++                    std::memcpy(tl_backend_text + 3, text + (len - keep), keep);
++                    tl_backend_text[sizeof(tl_backend_text) - 1] = '\0';
++                }
++            }
++        }
++
+         auto try_original(lua_State* L, int argc, const std::string& physical) -> int
+         {
+             lua_settop(L, argc);
+@@ -799,6 +844,7 @@
+             }
+             if (lua_pcall(L, argc, LUA_MULTRET, 0) != LUA_OK)
+             {
++                note_backend_failure(L, base, true); // [B6]
+                 lua_settop(L, base); // drop the error; the caller tries the next location
+                 return 0;
+             }
+@@ -807,9 +853,11 @@
+             {
+                 return results;
+             }
++            note_backend_failure(L, base, false); // [B6]
+             lua_settop(L, base);
+             return 0;
+         }
++        // [B6-SHIMFAIL-END]
+ 
+         auto io_open_wrapper(lua_State* L) -> int
+         {
+@@ -858,13 +906,37 @@
+                 {
+                     return results;
+                 }
++                const int first_errno = tl_backend_errno; // [B6]
++                std::string first_text{tl_backend_text};
++                int retry_errno = -1; // -1 = no retry (directory step refused or already attempted)
+                 if (ensure_parent_dirs_once(*context, target))
+                 {
+                     if (const int results = try_original(L, argc, target); results > 0)
+                     {
+                         return results;
+                     }
++                    retry_errno = tl_backend_errno;
+                 }
++                // [B6] First failed sandbox write per mod: say what the OS said. The write
++                // still falls back to the in-memory spill below, exactly as before.
++                bool log_write_fail = false;
++                std::string dir_why;
++                {
++                    std::lock_guard<std::mutex> guard{context->mutex};
++                    if (context->write_fail_markers < 1)
++                    {
++                        context->write_fail_markers = 1;
++                        log_write_fail = true;
++                        dir_why = context->last_dir_why.empty() ? std::string{"not attempted"} : context->last_dir_why;
++                    }
++                }
++                if (log_write_fail)
++                {
++                    Output::send(STR("[SHIM] write-fail mod={} path={} errno={} strerror={} backend={} dir={} retry_errno={} -> spill\n"),
++                                 ensure_str(context->mod_name), ensure_str(target), first_errno,
++                                 ensure_str(first_errno != 0 ? std::strerror(first_errno) : "no errno from backend"),
++                                 ensure_str(first_text), ensure_str(dir_why), retry_errno);
++                }
+                 return push_memfile(L, context, target, mode);
+             }
+             // Read order: mod-root physical -> sandbox physical -> spill.

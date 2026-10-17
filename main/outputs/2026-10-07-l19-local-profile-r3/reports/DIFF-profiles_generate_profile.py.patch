@@ -1,0 +1,51 @@
+--- r2/profiles/generate_profile.py
++++ r3/profiles/generate_profile.py
+@@ -77,18 +77,31 @@
+  static_paths=[workspace/'outputs/2026-10-07-l19-static-layout-check'/filename for filename in ['STATIC-FACTS.json','REFLECTION-FACTS.json']]
+  static_paths += [workspace/'outputs/2026-10-07-l19-unresolved-evidence'/filename for filename in ['FIELDC-FACTS.json','UCLASS-FACTS.json']]
+  static_paths += [workspace/'outputs/2026-10-07-l19-class-size-evidence/CLASS-SIZE-FACTS.json',workspace/'outputs/2026-10-07-l19-property-subtype-evidence/SUBTYPE-FACTS.json']
++ static_paths += [workspace/'outputs/2026-10-07-l19-remaining-interface-evidence/INTERFACE-FACTS.json']
++ tick_path=workspace/'outputs/2026-10-07-l19-worker-engine-slots/ENGINE-TICK-FACTS.json'
++ tick_audit_path=workspace/'outputs/2026-10-07-l19-final-audit/r3/TICK-AUDIT.json'
++ tick_audit=json.loads(tick_audit_path.read_text());assert tick_audit['status']=='ENGINE_TICK_STATIC_AUDIT_PASS'
++ assert Path(tick_audit['fact_receipt']['path']).resolve()==tick_path.resolve() and tick_audit['fact_receipt']['sha256']==hashlib.sha256(tick_path.read_bytes()).hexdigest()
++ static_paths += [tick_path]
+  for static_path in static_paths:
+   static=json.loads(static_path.read_text());assert static['image']['sha256']==sha
+-  for key,window in static['evidence'].items():
++  instruction_windows=static.get('evidence',static.get('instruction_evidence'));assert isinstance(instruction_windows,dict)
++  for key,window in instruction_windows.items():
+    offset=int(window['file_byte_offset'],0);vaddr=int(window['elf_image_vaddr'],0);raw=bytes.fromhex(window['instruction_bytes']);assert b[offset:offset+len(raw)]==raw
+    loads=[h for h in ph if h[0]==1 and h[3]<=vaddr and vaddr-h[3]+len(raw)<=h[5]];assert len(loads)==1 and offset==loads[0][2]+vaddr-loads[0][3]
+-  for window in static.get('data_evidence',{}).values():
+-   offset=int(window.get('file_byte_offset',window.get('relocation_file_offset')),0);raw=bytes.fromhex(window.get('bytes',window.get('entry_bytes')));assert b[offset:offset+len(raw)]==raw
++  data_windows=static.get('data_evidence',{});data_windows=list(data_windows.values()) if isinstance(data_windows,dict) else list(data_windows)
++  data_windows+=static.get('relocations',[])
++  for window in data_windows:
++   offset=int(window.get('file_byte_offset',window.get('relocation_file_offset',window.get('file_offset'))),0);raw=bytes.fromhex(window.get('bytes',window.get('entry_bytes')));assert b[offset:offset+len(raw)]==raw
+    if 'elf_image_vaddr' in window:
+     vaddr=int(window['elf_image_vaddr'],0);loads=[h for h in ph if h[0]==1 and h[3]<=vaddr and vaddr-h[3]+len(raw)<=h[5]];assert len(loads)==1 and offset==loads[0][2]+vaddr-loads[0][3]
+    if 'r_offset' in window:
+     assert len(raw)==24 and struct.unpack('<QQq',raw)==(int(window['r_offset'],0),int(window['r_info'],0),int(window.get('r_addend',window.get('addend')),0))
+   for fact in static['facts']:
++   if static_path==tick_path:
++    accepted=tick_audit['accepted_fact'];assert fact['key']==accepted['key'] and fact['value']==accepted['value'] and fact['width_bytes']==accepted['width_bytes']
++    assert accepted['status']=='validated-static' and accepted['confidence']=='high' and not accepted['live_validation']
++    fact=dict(fact,status=accepted['status'])
+    if fact['status']!='validated-static' or fact['confidence']!='high':continue
+    static_resolved[fact['key']]=fact
+    kind='vtable' if fact['key'].endswith('.vtable_byte_offset') else 'member'
+@@ -96,9 +109,11 @@
+    matches=[pin for pin in pins[kind] if pin['name']==name]
+    for pin in matches:pin.update(offset=int(fact['value'],0),width=fact['width_bytes'],source=str(static_path.relative_to(workspace))+':'+fact['key'])
+   sources.append(static_path);evidence['sources'][str(static_path.relative_to(workspace))]=hashlib.sha256(static_path.read_bytes()).hexdigest()
+-  evidence['static_layout_windows_verified_'+static_path.name]=len(static['evidence'])
+-  evidence['static_layout_data_windows_verified_'+static_path.name]=len(static.get('data_evidence',{}))
++  evidence['static_layout_windows_verified_'+static_path.name]=len(instruction_windows)
++  evidence['static_layout_data_windows_verified_'+static_path.name]=len(data_windows)
+  audit_path=workspace/'outputs/2026-10-07-l19-fact-summary-r2/SUBTYPE-AUDIT.json';sources.append(audit_path);evidence['sources'][str(audit_path.relative_to(workspace))]=hashlib.sha256(audit_path.read_bytes()).hexdigest()
++ for audit_path in [workspace/'outputs/2026-10-07-l19-final-audit/r3/INTERFACE-AUDIT.json',workspace/'outputs/2026-10-07-l19-final-audit/r3/PUBLIC-OWNER-AUDIT.json',tick_audit_path,workspace/'outputs/2026-10-07-l19-active-getter-proof-r3/TARGET-SIX-GETTERS.json',workspace/'outputs/2026-10-07-l19-active-getter-proof-r3/TARGET-SIX-GETTERS-ATTEMPT1.json',workspace/'outputs/2026-10-07-l19-remaining-total-evidence/REMAINING-TOTAL-FACTS.json']:
++  sources.append(audit_path);evidence['sources'][str(audit_path.relative_to(workspace))]=hashlib.sha256(audit_path.read_bytes()).hexdigest()
+  assert static_resolved['object_storage.native_chunked_65536']['value'] is True
+  assert static_resolved['FField.owner_variant_encoding']['value']=={'storage_bytes':8,'tag_bit':0,'tag_set_kind':'UObject','tag_clear_kind':'FField','untag_mask':'0xfffffffffffffffe'}
+  evidence['resolved_runtime_static_facts']={k:static_resolved[k] for k in ['object_storage.native_chunked_65536','FField.owner_variant_encoding','UClass.ClassCastFlags','FFieldClass.CastFlags']}

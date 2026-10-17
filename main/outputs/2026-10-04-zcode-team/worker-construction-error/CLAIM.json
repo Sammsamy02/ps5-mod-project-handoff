@@ -1,0 +1,69 @@
+{
+  "worker": "worker-construction-error",
+  "date": "2026-10-05",
+  "scope": "pid-466 construction-rejection garbled error (combined candidate, run-l11-2 lineage): root cause on target binaries, settings-path trace, staged fix, secondary ODR audit",
+  "local_only": true,
+  "claims": [
+    {
+      "id": "CE1",
+      "claim": "The stored error 'TeIiasrfie opre ' (16 bytes incl. trailing space, byte-verified in l11run2-ue4ss.log line 60) is exactly chars [0,2,4,...,30] of the 33-char format literal 'The IniParser failed to parse: {}' — a [::2] down-conversion of a 2-byte-unit (UTF-16-shaped) wide string by a converter that reads 4-byte elements and keeps the low 16 bits.",
+      "evidence": "od dump of l11run2-ue4ss.log line 60; python s[::2] equality; element arithmetic in ANALYSIS.md section 3"
+    },
+    {
+      "id": "CE2",
+      "claim": "The PS5 composition compiles wchar_t as 2 bytes (short-wchar codegen): a probe L\"AB\" compiled with the exact retained-program argv emits .rodata.str2.2 = 41 00 42 00, and every STR() literal in the shipped program.o/settings.o is UTF-16-encoded (zero UTF-32 copies), while all symbol types still mangle as 'w' (wchar_t).",
+      "evidence": "probe compile wsize.o via prospero-clang++ with run-l11-2 argv; byte search of program.o/settings.o/coherent-full-1/program.o and all three shipped aside PRX binaries (u16 literal count 1, u32 count 0 in each)"
+    },
+    {
+      "id": "CE3",
+      "claim": "The PS5 SDK's prebuilt libc++.a (and the byte-identical strong copy in coherent-tick-file-witness-runtime.o, the only definition among linked objects) implements __codecvt_utf8<wchar_t>::do_in and __codecvt_utf8_utf16<wchar_t>::do_out with 4-byte-element helpers (utf8_to_utf16 writes unsigned-int units; utf16_to_utf8 reads const unsigned int* keeping low 16 bits via movzwl %r11w,%ebx) plus a sarq $1 (divide-by-2) to_next fixup — an ABI built for 4-byte wchar. On 2-byte-wchar data this garbles both directions: to_wstring interleaves a NUL unit after every character; to_string returns every other character.",
+      "evidence": "disassembly of libc++.a locale.cpp.o (sha b1480e6e...) sections .text._ZNKSt3__120__codecvt_utf8_utf16IwE6do_out* / .text._ZNSt3__1L13utf16_to_utf8EPKj* and the identical witness-object copies (sha fb52c7f8...); relocation records proving do_out->utf16_to_utf8(PKj) and do_in->utf8_to_utf16(PKh/Pj)"
+    },
+    {
+      "id": "CE4",
+      "claim": "Throw site: in the ACTIVATED path SettingsManager::deserialize(file, receiver) takes the mod-source branch (SettingsManager.cpp:60-67): read(\"ue4ss/UE4SS-settings.ini\") -> ensure_str(std::string(bytes)) -> parser.parse(contents). ensure_str interleave-corrupts the ini (NUL after every unit), the real retained IniParser rejects it, and the ctor catch (program-wpd1 UE4SSProgram.cpp:232-236) stores the emergency message via create_emergency_console_for_early_error -> to_string -> copy_error_into_message — the ONLY ErrorObject writer reachable during construction.",
+      "evidence": "SettingsManager.cpp sha 3e618c4c... (byte-identical to launch-10's settings unit); program.o relocation order: setup_paths@0x526 -> deserialize@0x540 -> [catch: fmt::format@0x5ca -> create_emergency@0x5fe] -> validate_native_services@0x678"
+    },
+    {
+      "id": "CE5",
+      "claim": "The l10->l11 combined-candidate delta does NOT touch the parse path; the failure fired on first exercise because the wpd2 pad-coexist deferral is the first candidate whose construction actually reaches settings_manager.deserialize (all launch-10-era runs refused earlier: 317 activation ASCII check, 341 MFA size, 355/370 backend pad phase-6 — all before the program ctor; pid 341's 'constructor_count 235 return 0' pairs are the bridge's module-prologue ctors, not UE4SSProgram).",
+      "evidence": "LAUNCH10-RESULTS.md refusal ladder; wpd1 program diff (42 lines, validate_native_services only); settings unit source sha identical in both builds; pid-466 sdiag epoch: pad_input_deferred(seq538,t=76163232) -> runtime_start_failed(seq540,t=76163238)"
+    },
+    {
+      "id": "CE6",
+      "claim": "The real exception (recovered by worker-iniparser-repro's disassembly-faithful host pipeline, byte-exact match incl. trailing space) is: The IniParser failed to parse: Syntax error(8 : 2): Expected state NewLineStarted or StartOfFile, got CreateSectionKey — i.e. the parser choked on the NUL-interleaved '[General]' header. The suffix is UNRECOVERABLE from the console sink alone: element 16 of the broken conversion is a NUL unit, so strlen terminates at 16 for ANY suffix length.",
+      "evidence": "worker-iniparser-repro harness final_pipeline MATCH: YES (byte-exact); my independent element arithmetic (ANALYSIS.md section 3)"
+    },
+    {
+      "id": "CE7",
+      "claim": "VTableLayout.ini is EXCLUDED as the cause: it is parsed by NativeLayoutBinding.cpp's dedicated narrow parser from mod-source raw bytes, not by the IniParser, and the throw sits inside the settings-only try block (CE4 relocation order). The staged UE4SS-settings.ini (sha d8faa4ec..., the pinned v3) is clean and parses end-to-end through the real parser once the conversion is fixed. Console state of VTableLayout.ini remains unverified from local evidence; restage it cleanly at the next window, but it did not cause this failure.",
+      "evidence": "SettingsManager.cpp branch structure; NativeLayoutBinding.cpp parser; iniparser-repro REPRO.md ini verification; d8faa4ec sha on evidence/UE4SS-settings.ini"
+    },
+    {
+      "id": "CE8",
+      "claim": "STAGED FIX (verified): the conversion fix must bypass std::wstring_convert entirely. The staged Helpers/String.hpp (sha 7c983db4..., identical to worker-iniparser-repro's staged fix, with my independent compile verification) routes to_wstring/to_string (all four non-Windows entry points) through the port's own explicit RC::Unicode::EncodeUtf8/DecodeUtf8. It compiles clean (exit 0, 0 errors) on the real wpd1 UE4SSProgram.cpp AND the real SettingsManager.cpp under the exact run-l11-2 retained-program argv; host fixed_proof shows ensure_str produces 1448 units (not 2896) and the settings parse then succeeds with correct values. Fixing the conversion fixes BOTH halves: the parse failure and the stored-error garble.",
+      "evidence": "receipts/compile-program-wpd1-with-fix.log (exit 0), receipts/compile-settings-with-fix.log (exit 0, object produced); worker-iniparser-repro fixed_proof/final_pipeline outputs"
+    },
+    {
+      "id": "CE9",
+      "claim": "Secondary audit (original tasks): (a) wpd2 Handler.cpp contains no raw buffer writes and never touches the ErrorObject; Handler.hpp is byte-unchanged. (b) PS5PadSource.hpp append-only members are consumed consistently in the composed PRX: PS5PadSource.cpp and PS5PadNative.cpp (the allocating TU) are staged as one self-consistent pair using quoted-include self-directory resolution; the composition unit list contains no other PS5PadSource-allocating TU (no pad-config unit is compiled). The DIFF.md section-4 heap-buffer-overflow was a host-test recipe issue only. (c) Caveat: verified via unit list + include map, not by symbol-level proof of every reference. The construction failure is fully explained by CE1-CE6 and does not involve the pad units.",
+      "evidence": "run-l11-2 commands.json unit sources + -I maps; worker-pad-coexist DIFF.md sections 2-4"
+    }
+  ],
+  "non_claims": [
+    "No console validation of the staged fix (LOCAL ONLY; next launch belongs to the controller).",
+    "The exact recovered line:col (8:2) is worker-iniparser-repro's host-derived value (high confidence, not target-verified).",
+    "The suffix length/content is not derivable from the console sink (masked by the NUL element); only the host-emulation recovery applies.",
+    "No claim that launch-10 settings parsing 'succeeded with corruption then swallowed': launch-10-era runs never reached the program ctor at all (CE5), so l10 behavior of the parse path is unobserved on target.",
+    "No >8 quality, no completion claim; proposal-level staged fix only, fold discipline (sha gates + freshen-deps regen + offline gates) owned by the controller compose chain."
+  ],
+  "evidence_hashes": {
+    "shipped_prx_lineage": "run-l11-2 (luamod.o 813b249d... matches EDITIONS.json pin)",
+    "libcxx_archive": "b1480e6edcb7cffba5ea999cb13da0d40b0def4c215ead442649bba71d32414f",
+    "program_o": "1c9fed679b17639ed9e4217f2296b687882d64c38843608c4ec7794ed43e5603",
+    "settings_o": "9c5b89a03597f47255fe4dc65ab8e868efa11d2c94b4b682aa2a170cbe0f782e",
+    "coherent_tick_file_witness_runtime_o": "fb52c7f8f1f3bab1a5e22a60846e93f3b68a3fb37930455b5394a4f130385a46",
+    "staged_fix_String_hpp": "7c983db4548b39b16625f979bfd2256647df0f57788e9ae27672af51b8302524",
+    "staged_settings_ini": "d8faa4eca2ed2f22 (first 16, worker-iniparser-repro evidence copy)"
+  }
+}

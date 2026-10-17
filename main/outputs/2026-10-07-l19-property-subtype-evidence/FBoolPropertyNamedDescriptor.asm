@@ -1,0 +1,7 @@
+0x3fe569 (file 0x402569) 488d3508856107 lea rsi, [rip + 0x7618508]
+0x3fe570 (file 0x402570) 4c8d0da9feffff lea r9, [rip - 0x157]
+0x3fe577 (file 0x402577) ba00000200 mov edx, 0x20000
+0x3fe57c (file 0x40257c) b901800200 mov ecx, 0x28001
+0x3fe581 (file 0x402581) 4989c0 mov r8, rax
+0x3fe584 (file 0x402584) 4c89f7 mov rdi, r14
+0x3fe587 (file 0x402587) e80454f6ff call 0x363990

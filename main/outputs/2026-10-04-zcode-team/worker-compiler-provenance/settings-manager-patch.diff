@@ -1,0 +1,52 @@
+7d6
+< #include <Platform/NativeSettingsFile.hpp>
+60,61c59,60
+<         // A fresh installation uses native defaults without creating a config file.
+<         if (!Platform::native_settings_file_present(file_name))
+---
+>         Ini::Parser parser;
+>         if (const auto& source = receiver.native_mod_source())
+63c62,76
+<             return;
+---
+>             auto settings = source->read("ue4ss/UE4SS-settings.ini");
+>             if (!settings) throw std::runtime_error("Native activation is missing ue4ss/UE4SS-settings.ini");
+>             if (settings->bytes.find('\0') != settings->bytes.npos)
+>                 throw std::runtime_error("Native UE4SS settings contain NUL");
+>             // Direct ASCII-to-wchar_t conversion: the PS5 SDK's libc++ has a
+>             // codecvt bug (4-byte-unit helpers with 2-byte wchar_t) that garbles
+>             // ensure_str on this platform. The settings file is pure ASCII, so
+>             // each byte maps 1:1 to a wchar_t of the same value.
+>             StringType contents;
+>             contents.reserve(settings->bytes.size());
+>             for (const char c : settings->bytes)
+>             {
+>                 contents.push_back(static_cast<CharType>(static_cast<unsigned char>(c)));
+>             }
+>             parser.parse(contents);
+65c78,84
+<         auto file = File::open(file_name, File::OpenFor::Reading, File::OverwriteExistingFile::No, File::CreateIfNonExistent::No);
+---
+>         else
+>         {
+>             // Reading configuration during validation must not create a missing file.
+>             auto file = File::open(file_name, File::OpenFor::Reading, File::OverwriteExistingFile::No, File::CreateIfNonExistent::No);
+>             parser.parse(file);
+>             file.close();
+>         }
+68d86
+< #endif
+71a90
+> #endif
+101,102d119
+< 
+<         constexpr static File::CharType section_general[] = STR("General");
+104,105c121,122
+<         // Preserve an explicit provider request for native service validation.
+<         REGISTER_STRING_SETTING(General.InputSource, section_general, InputSource)
+---
+>         if (receiver.native_mod_source() && (!Overrides.ModsFolderPath.empty() || !Overrides.ControllingModsTxt.empty()))
+>             throw std::runtime_error("Native activation does not support filesystem mod path overrides");
+106a124,125
+> 
+>         constexpr static File::CharType section_general[] = STR("General");

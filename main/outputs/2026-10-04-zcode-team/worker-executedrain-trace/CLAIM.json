@@ -1,0 +1,193 @@
+{
+  "worker": "worker-executedrain-trace",
+  "date": "2026-10-05",
+  "mission": "Resolve the mod-load-readiness vs pc-ps5-comparison disagreement on the Item Spawner F7 spawn path: trace ExecuteInGameThread end-to-end in the composed launch-10 units and determine whether the deferred-closure drain requires ProcessEvent/CallFunction (the unresolved adapter set) or ONLY the EngineTick closure.",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "composed_units": {
+    "build_edition": "outputs/2026-10-04-zcode-controller/launch10-build/EDITION.json — edition launch10-final-a; runner launch10_one_pass.py; driver build_runtime_composition6_l10.py (3 tagged edits + bridge via CLI)",
+    "initializer_unit": {
+      "file": "outputs/2026-10-04-zcode-controller/launch10-build/final-units/UnrealInitializer.cpp",
+      "sha256": "c3a1c9eb188a6d61e608fb36795a1658bd6689db123ef01fe9d0b3f77bdeee68",
+      "note": "pool-bound v2 = worker-launch10-readpath-guard/staging (v2 b943aed5..., which composes the gmalloc V1/V2 validator) + launch10-c spanpub accessors. Diff vs readpath-guard staging is ONLY the FName-pool admission region (87 diff lines, 0 in the EngineTick block); EngineTick block identical, shifted +69 lines. Witness-verified inputs: worker-launch10-build-witness/WITNESS.md (verdict table rows 1a/1b PASS, byte-identical compile gate)."
+    },
+    "luamod_unit": {
+      "file": ".superpowers/native-dependency-spike/ue4ss-native-notify-cancel-1/src/LuaMod.cpp",
+      "sha256": "0f0697a3a5ac99282598b2f98427c7696ae6012de81771410a1b6b099c7fca3c",
+      "proof": "worker-launch10-prebuild/ue4ss-native-supplier-composition-6-l10/run-a/receipt.json unit 'luamod' source + source_sha256 (368-unit composed run receipt). NOT the port-tree LuaMod.cpp; the r3 DIFF-1 luamod funcptr-marshal patch was proven NOT composable into launch-10 (worker-launch10-r3-armed CLAIM blockers 1-3)."
+    },
+    "program_unit": "outputs/2026-10-04-zcode-team/worker-comp6-driver/staging/comp6-program/UE4SSProgram.cpp",
+    "hook_api": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/Hooks/Hooks.cpp + include/Unreal/Hooks/Internal/DetourInstance.hpp",
+    "polyhook": ".superpowers/native-dependency-spike/ue4ss-native-polyhook-sources-1/port/polyhook/sources/x64Detour.cpp (PS5 port)",
+    "mod_payload": "outputs/2026-10-04-zcode-team/worker-itemspawner-bundle/bundle/ue4ss/Mods/TownfallItemSpawner/Scripts/main.lua"
+  },
+  "hops": [
+    {
+      "n": 1,
+      "name": "F7 keybind defers into ExecuteInGameThread (mod source)",
+      "pins": [
+        "main.lua:694-696 RegisterKeyBind(Key.F7, function() ExecuteInGameThread(toggleMenu) end); line 695 is the ExecuteInGameThread call",
+        "main.lua:698-727 the UP/DOWN/RETURN/LEFT/RIGHT keybinds use the same ExecuteInGameThread deferral",
+        "main.lua:746 top-level log(\"Loaded v1.0. Clean pickup-only release. F7 opens the menu.\") runs at script load (mod thread), NOT through the drain"
+      ]
+    },
+    {
+      "n": 2,
+      "name": "Lua binding: ExecuteInGameThread registers + queues a SimpleLuaAction (composed luamod unit)",
+      "pins": [
+        "LuaMod.cpp(notify-cancel):4700 m_lua.register_function(\"ExecuteInGameThread\", ...)",
+        "LuaMod.cpp:4709 method = LuaMod::m_default_game_thread_method (overload #1)",
+        "LuaMod.cpp:4725-4731 EngineTick branch: is_engine_tick_hook_available() gate (throws the 'EngineTick hook is not available (AOB scan failed)' Lua error at 4729 if false) then ensure_engine_tick_hooked()",
+        "LuaMod.cpp:4736 make_hook_state(mod) — a dedicated hook Lua thread state",
+        "LuaMod.cpp:4738-4740 callback moved cross-state + luaL_ref'd (registry ref held, not the stack)",
+        "LuaMod.cpp:4743-4763 QUEUE: EngineTick method -> m_pending_engine_tick_actions (4759) or m_engine_tick_actions (4762). Pure host-side vector under m_thread_actions_mutex. NOTHING engine-side is touched at enqueue time.",
+        "method default source: UE4SSProgram.cpp(comp6-program staging):1494 LuaMod::m_default_game_thread_method = settings_manager.General.DefaultExecuteInGameThreadMethod; (port tree line 1475-1476)",
+        "settings value: worker-itemspawner-bundle/bundle/ue4ss/UE4SS-settings.ini:8 DefaultExecuteInGameThreadMethod=EngineTick (explicit); worker-settings-bundle-merge/staged-package/ue4ss/UE4SS-settings.ini line 10 agrees; parse at SettingsManager.cpp:151-158"
+      ]
+    },
+    {
+      "n": 3,
+      "name": "Availability gate the binding checks",
+      "pins": [
+        "LuaMod.cpp(notify-cancel):4516-4519 is_engine_tick_hook_available() -> UE4SSRuntime::IsEngineTickAvailable()",
+        "UE4SSRuntime.cpp(port):10-16 IsEngineTickAvailable() returns Unreal::UEngine::TickInternal.is_ready() — i.e. true only after the initializer assigned the tick address (hop 7)",
+        "ProcessEvent counterpart: UE4SSRuntime.cpp:18-24 ProcessEventInternal.is_ready() — checked ONLY for the ProcessEvent method branch, which launch-10 never takes (settings pin EngineTick)"
+      ]
+    },
+    {
+      "n": 4,
+      "name": "Drain trigger: LuaModImpl EngineTick callback registration (lazy, at first ExecuteInGameThread call)",
+      "pins": [
+        "LuaMod.cpp(notify-cancel):4527-4541 ensure_engine_tick_hooked(); PROSPERO branch 4535: Unreal::Hook::RegisterEngineTickPreCallback(engine_tick_hook, {false,false,STR(\"UE4SS\"),STR(\"LuaModImpl\")}), ERROR_ID -> runtime_error throw at 4536-4537",
+        "by this time the detour is ALREADY armed by the initializer (hop 7), so AddCallback only appends; if it ever arms first, the same PLH path runs"
+      ]
+    },
+    {
+      "n": 5,
+      "name": "The drain itself — engine_tick_hook -> process_simple_actions -> lua_pcall (NO engine call)",
+      "pins": [
+        "LuaMod.cpp(notify-cancel):4467-4470 engine_tick_hook(CallbackIterationData, UEngine*, float, bool) — invoked BY the detour while the engine's real Tick runs",
+        "LuaMod.cpp:4471-4477 PROSPERO gate: if (!Unreal::IsInGameThreadRaw()) return; — depends on the identity published by the initializer's HookedEngineTick (hop 8); then NativeLuaActionDispatchScope owns_dispatch (4478-4480)",
+        "LuaMod.cpp:4488 process_simple_actions(LuaMod::m_engine_tick_actions) — THE DRAIN",
+        "LuaMod.cpp:4113-4152 process_simple_actions: moves the vector out under the mutex (4117-4124); per action: registry().get_function_ref + lua_data.lua->call_function(0, 0) at 4137-4138; unref at 4140",
+        "LuaMadeSimple.cpp(ue4ss-native-build-1 port/first):949-980 Lua::call_function -> lua_pcall(L, num_params, num_return_values, err_handler_abs) at 971 — a pure Lua VM call",
+        "CONCLUSION (Q2): the drain calls NO engine function. ProcessEvent/CallFunction appear NOWHERE in queue->drain. The only engine dependency is that the EngineTick detour FIRES (engine's own Tick) and the game-thread identity was published.",
+        "delayed/WithDelay/AfterFrames variants drain in the same hook: LuaMod.cpp:4489 process_delayed_actions<EngineTick> — same closure-only mechanism (the Item Spawner uses none of them)"
+      ]
+    },
+    {
+      "n": 6,
+      "name": "Hook API: RegisterEngineTickPreCallback -> shared EngineTick detour",
+      "pins": [
+        "Hooks.cpp(port):239-242 RegisterEngineTickPreCallback(callback, options) -> I::GetDetourInstance<EDetourTarget::EngineTick>()->AddCallback(std::move(callback), EHookType::Pre, std::move(options))",
+        "Hooks.cpp:225-227 (PreCallback without options) and 232-235 (Post) share the SAME detour instance — initializer + LuaModImpl callbacks all hang off one detour",
+        "Hooks.cpp:588-590 HookEngineTick() explicit arm path: TDetourTraits<EDetourTarget::EngineTick>::Impl::EnsureHooked()",
+        "DetourTraits.hpp:64-67 EngineTick traits: Signature=EngineTickSignature, Base=TDetourInstance<EngineTick,...>",
+        "DetourInstance.hpp:282-289 AddCallback: EnsureHooked() at 284; failure -> Error log + ERROR_ID return (286-288) — the initializer turns ERROR_ID into a named throw (hop 8)",
+        "DetourInstance.hpp:232-239 EnsureHooked = InstallHook() + ActivateHook() under InstallMutex",
+        "DetourInstance.hpp:149-169 InstallHook: guards (*bShouldHook) at 152 and TargetFunction->is_ready() at 158; then PLH::x64Detour(bit_cast<uint64_t>(TargetFunction->get_function_address()), &StaticHookFn, &Trampoline) at 164-166",
+        "DetourInstance.hpp:174-184 ActivateHook -> PLHDetour->hook() at 183",
+        "UEngine.hpp(port):19 static Function<TickSignature> TickInternal — the address container the detour reads"
+      ]
+    },
+    {
+      "n": 7,
+      "name": "What hook() does to the target page (exec READ + exec WRITE)",
+      "pins": [
+        "x64Detour.cpp:322-325 hook(): m_disasm.disassemble(m_fnAddress, m_fnAddress, m_fnAddress + 100, *this) — DISASSEMBLES up to 100 bytes AT THE TARGET = data-mode READ of exec memory",
+        "x64Detour.cpp:327-331 empty-insts refusal; 333-337 followJmp prologue-thunk resolution",
+        "x64Detour.cpp:387-390 trampoline re-disassembly; ~399-402: MemoryProtector prot(m_fnAddress, m_hookSize, ProtFlag::RWX, *this) + ZydisDisassembler::writeEncoding(m_hookInsts) — mprotect RWX + WRITE the jmp patch = the FLAG-1 exec-writability class",
+        "x64Detour.cpp:405-408 nops written after the jmp",
+        "x64Detour.cpp:73-135 safe_mem_read used by pattern-scan helpers in the same unit",
+        "verdict language already pinned in the launch-10 initializer comment: final-units/UnrealInitializer.cpp:1880-1884 'The eventual detour patch on the resolved address remains FLAG-1 class (exec-writability verdict, SIGNATURES-INVENTORY C4) and fails LOUD (ERROR_ID throw) if refused.'",
+        "in-game exec-write evidence: NONE — the IGW exec-write probe ran with all 6 rows SKIPPED (no_memory_touched, outcome=2, rows_attempted=0): launch10-prep/xwp-jsonl-baseline.txt (modbridge.execwriteprobe seq 3-14) and README-RETURN §1; the W_WORKS / W_FAILS_R_WORKS verdict that would activate the walk-site guard fold-1 is still missing (worker-launch10-walkguard-prep CLAIM L10WGP-5)"
+      ]
+    },
+    {
+      "n": 8,
+      "name": "Initializer pump registration in the ARMED launch-10 path (composed initializer unit)",
+      "pins": [
+        "final-units/UnrealInitializer.cpp:1053 '[Seeds] Required-slot seed table armed (slots 0/2/3/4); the ps_scan arm and both Lua override scans are skipped' (arming gate 1040-1051 throws on any missing REQUIRED slot; SHAPE A)",
+        "final-units:1078 SeedArming::consume_required_slot_seeds(...) inside ScanGame() (986) — seeds 0/2/3/4 bind with read-path guards (slots 0/1/3 DataReadable-only; slots 2/4 CodeCallOnly bind-only) BEFORE Initialize()",
+        "final-units:1518 Initialize(const Config&) — the block that registers the tick pump",
+        "final-units:1781-1786 GameEngine instance lookup ('GameEngine CDO/Instance' log)",
+        "final-units:1816-1821 bHookLoadMap (default TRUE, SettingsManager.hpp:119) -> OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UEngine, LoadMap, GameEngine) — the FIRST vtable walk, before tick",
+        "final-units:1825-1828 bHookEngineTick -> 'Finding GameEngine::Tick' (1827) -> vtable_address = OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL(UEngine, Tick, GameEngine) (1828); scan_address = UEngine::TickInternal.get_function_address() (1829) — NULL on the armed build (no scan exists; slot 10 deliberately NOT seeded, comment 1867-1884)",
+        "final-units:1865-1895 EngineTickResolveMethod branch: default is FunctionResolveMethod::Scan (SettingsManager.hpp:126, no ini override — staged ini has NO [Hooks] section) -> 1867 'if (scan_address)' false -> 1892 'Scan failed, falling back to vtable address for GameEngine::Tick' -> 1893 UEngine::TickInternal.assign_address(vtable_address). ARMED BUILD TAKES: Scan branch, vtable fallback.",
+        "final-units:1913-1917 PROSPERO: RegisterEngineTickPreCallback(HookedEngineTick, {false,false,UE4SS,GameThreadInitializer}); ERROR_ID -> throw \"Native game-thread initializer callback registration failed\" (1916) — this AddCallback is what ARMS the detour (hop 6 InstallHook+ActivateHook run here, inside Initialize)",
+        "final-units:1920-1927 second registration: QueryHarnessEngineTickDispatch (persistent; 'the query harness must observe EVERY genuine engine tick (two consecutive accepted reads)')",
+        "final-units:2116 PostInitialize(UnrealConfig) — GMalloc null-throw at 394-397 never fires on the armed build (slot 3 already bound at hop-8 consume)",
+        "the vtable/scan mismatch WARNING walk at 1833-1863 is unreachable with null scan_address (comment 1873-1878)"
+      ]
+    },
+    {
+      "n": 9,
+      "name": "Resolve dependency of the vtable route — it DOES read exec memory (Q3 flag)",
+      "pins": [
+        "UnrealVirtualBaseVC.hpp(port):118-134 OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL: reads the instance vptr (132: *(void**)instance — RW/R data, serviced, OK), reads the vtable ENTRY (133 first part — R-- LOAD1 data, OK), then passes the ENTRY VALUE to ASM::resolve_function_address_from_potential_jmp",
+        "ASMHelper.cpp(port/first):49-69 resolve_function_address_from_potential_jmp -> get_first_instruction_at_address (9-22) -> ZydisDecoderDecodeFull on up to 16 bytes AT THE TARGET = DATA-MODE READ OF THE --X LOAD0 SEGMENT (thunk check)",
+        "the launch-10 initializer names this exact read the igf6 crash class: final-units:1016-1023 'the FIRST vtable walk (LoadMap, OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL -> ASMHelper.cpp:57-69 unconditional text READ — the igf6 crash class), and past that the tick detour WRITE'",
+        "walks hit on the armed path BEFORE/AT tick: LoadMap 1819, Tick 1828, InitGameState 1936, BeginPlay 1945, EndPlay 1954, AActor::Tick 1963, GameViewportClient::Tick 1972, ProcessEvent 1981 (bHookUObjectProcessEvent default TRUE SettingsManager.hpp:128 — so ProcessEventInternal ALSO gets assigned by the same vtable route if the walks survive)",
+        "MITIGATION NOT IN THIS BUILD: the walk-site RX guard (ASMHELPER-WALK-GUARD.diff, fold-0 default-off / fold-1 verdict-gated) is a SEPARATE candidate (worker-launch10-walkguard-prep); the launch10-final-a EDITION.json edits (lmf geometryfix, final-units initializer, diagnostic sink, kMaxAnchorMappings header) do NOT include the asmhelper unit — the pristine ASMHelper is composed",
+        "oracle already expects these walks to be the hazard: worker-launch10-acceptance-criteria/ORACLE.md row F29 'first vtable walks — the launch-9 crash site' (crash-shaped signature: log ends right after 'Finding GameEngine::LoadMap')"
+      ]
+    },
+    {
+      "n": 10,
+      "name": "Publication dependency of the drain (PROSPERO-specific, in the composed luamod unit)",
+      "pins": [
+        "LuaMod.cpp(notify-cancel):4471-4476 engine_tick_hook returns early unless Unreal::IsInGameThreadRaw()",
+        "UnrealInitializer.cpp(port):1534-1539 IsInGameThreadRaw() -> NativeGameThreadIdentity.in_current_raw() (PROSPERO)",
+        "final-units/UnrealInitializer.cpp:161-221 HookedEngineTick: publishes NativeGameThreadIdentity.publish_current() at 172 on the FIRST genuine tick (immutable, first-published wins; Unavailable -> error log 175-177; DifferentThread -> return 178-181); RemoveSelf at 219",
+        "final-units:153 static NativeThreadDetail::Identity NativeGameThreadIdentity; header include line 12",
+        "so the initializer's GameThreadInitializer registration (1913) is a PREREQUISITE of the LuaModImpl drain, not an optional extra: no publication -> every F7 closure queues forever and nothing runs (silent, no log line)"
+      ]
+    },
+    {
+      "n": 11,
+      "name": "Item Spawner execution ABOVE the drain (menu open vs actual spawn)",
+      "pins": [
+        "toggleMenu -> showMenu(true) -> scanItems() then buildUI(): main.lua:626-656",
+        "menu build UFunction calls (':' syntax -> Lua UObject call machinery -> ProcessEvent): widgetLib:Create (main.lua:518, pcall-wrapped, SCO fallback at 524), ui.canvas:AddChild (529, NOT pcall-wrapped), SetContent (554/561), ui.root:AddToViewport(9999) (633), ui.root:SetVisibility (634, and 656/660)",
+        "spawn action UFunction calls: gameplay:BeginDeferredActorSpawnFromClass (main.lua:297-299) + gameplay:FinishSpawningActor (301) on the GameplayStatics CDO — the ACTUAL item spawn is a UFunction call, NOT StaticConstructObject",
+        "spawn support calls that ARE seeded-adapter: StaticFindObject (283/288), LoadAsset (287), class/construct helpers (42-56: StaticConstructObject + FName), FindFirstOf (64: ItemDatabaseSubsystem), property writes (323-326)",
+        "seeded slots covering the adapter primitives (final-units/SeedTable.h:31-34): slot 0 g_uobject_array linked 0x93ba110 runtime 0x97ba110 (FindFirstOf); slot 2 fname_ctor_wchar linked 0x23d590 runtime 0x63d590 (FName()); slot 3 gmalloc linked 0x930add8 runtime 0x970add8; slot 4 static_construct_object_internal linked 0x490aa0 runtime 0x890aa0",
+        "base-0x400000 translation rule confirmed three ways in the SeedTable rip_arithmetic fields; runtime GameEngine::Tick = 0x400000 + 0x2fac8c0 = 0x33ac8c0 (CP2 pin, README-RETURN §5)"
+      ]
+    },
+    {
+      "n": 12,
+      "name": "Target function existence at the pinned address (Q4, tier-1 byte evidence — Ghidra full analysis NOT run)",
+      "pins": [
+        "retained image: .superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin sha256 3b6cfad4dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc (matches the geometry eboot pin in worker-launch10-readpath-guard/CLAIM.json)",
+        "layout profile: worker-2-layout-facts/profiles/townfall-ps5-ue56.profile.json static_survey_facts.GameEngineTick.facts.gameengine_tick = validated-static, elf_image_vaddr 0x2fac8c0, value_kind file_image_label, producer ps_ugameengine_tick_file_image, caveat 'still needs a genuine mapped owner and proof correspondence', runtime_validation.validated=false",
+        "capstone 1-byte-tier decode of the 64 bytes at file offset 0x2fac8c0 (== linked vaddr, LOAD0 p_offset==p_vaddr class): 55 48 89 e5 41 57 41 56 41 54 53 80 3d ea b9 33 06 01 0f 85 ... -> push rbp; mov rbp,rsp; push r15/r14/r12/rbx; cmp byte ptr [rip+0x633b9ea],1; jne +0x8e; mov r14,rdi; mov rbx,rsi; mov r15,rdx; call 0x178b20; lea rsi,[rip+0x4a2d983]; mov rdi,rax — a REAL x86-64 function entry (PS5 is x86-64), NOT data, NOT ud2",
+        "conclusion: the drain's target function exists at the expected address class (exec LOAD0, valid prologue) at the linked-image address the live vtable resolves at runtime (0x33ac8c0 = 0x400000 + 0x2fac8c0); the ORACLE expects exactly this value in the launch-10 log (ORACLE.md F29: 'GameEngine::Tick address (vtable: 0x33ac8c0; scan: <null-form>)')",
+        "Ghidra 12.1.4 full analysis NOT run — see REPORT.md limits; the open question it could narrow (semantic identity of the function) is already covered by the profile's validated-static survey; it would NOT change the drain verdict, which turns on the in-game exec-page verdicts, not the static identity"
+      ]
+    }
+  ],
+  "answers": {
+    "q1_end_to_end": "Pinned hops 1-11 above: main.lua:695 -> LuaMod(notify-cancel):4700 binding -> 4762 queue (m_engine_tick_actions, host-side vector) -> pump = EngineTick detour armed by final-units:1913 (AddCallback->EnsureHooked->PLH::x64Detour on UEngine::TickInternal, address assigned at final-units:1893 from the live vtable) -> engine's real GameEngine::Tick fires the detour -> LuaMod(notify-cancel):4467 engine_tick_hook (IsInGameThreadRaw-gated by the initializer's publication, final-units:172) -> 4488 process_simple_actions -> 4137-4138 lua call -> LuaMadeSimple.cpp:971 lua_pcall. The engine function the drain ultimately needs is the game's own GameEngine::Tick executing through the detour — nothing else.",
+    "q2_drain_requires": "ONLY the EngineTick closure. ProcessEvent / CallFunction / any UFunction machinery appear NOWHERE in the enqueue->drain path (the drain is lua_pcall on the hook Lua state). ProcessEvent is needed only by the OTHER method branch (ExecuteInGameThread(closure, EGameThreadMethod.ProcessEvent), launch-10 never takes it — settings pin EngineTick) and by the mod's own ':' UFunction calls ABOVE the drain (menu UI + the actual BeginDeferredActorSpawnFromClass spawn).",
+    "q3_resolve_method": "EngineTickResolveMethod default = Scan (SettingsManager.hpp:126; staged console ini has no [Hooks] section so the default stands; HookEngineTick default true, SettingsManager.hpp:125, unchanged). Armed build: scan arm is structurally dead (final-units:1867-1878 comment; scan_address null), so Initialize takes the Scan branch's VTABLE FALLBACK at 1892-1893. The resolve DOES need exec-page-readable content: (a) every OPTIONAL_GET_ADDRESS_OF_UNREAL_VIRTUAL performs a Zydis data-read of the target's first instruction bytes (UnrealVirtualBaseVC.hpp:133 -> ASMHelper.cpp:52->9-22) — LoadMap at 1819 is the FIRST such walk, before tick; (b) PLH::x64Detour::hook() disassembles up to 100 bytes at the target (x64Detour.cpp:325). FLAG AS REQUESTED: the tick registration path performs data-mode reads of exec pages, unmitigated in launch10-final-a (walkguard candidate not composed). Whether those reads fault is the NOT-localized igf6 mechanism (exec-only enforcement is the leading hypothesis, never reached in-game: igf6 was interrupted before the first exec-span read; launch-9 refused upstream of the initializer at the PLH lease read + facts adapter). The detour WRITE is separately governed (FLAG-1) and fails LOUD (named throw final-units:1916) if refused.",
+    "q4_address": "CONFIRMED at tier-1 (capstone byte decode, no Ghidra run): valid x86-64 function prologue at linked vaddr 0x2fac8c0 in the sha-pinned retained eboot; runtime 0x33ac8c0 = base 0x400000 + 0x2fac8c0 matches the CP2 pin, the SeedTable translation rule, and oracle row F29's expected log value. What launch-10 runtime evidence still resolves: whether the LIVE vtable entry actually holds 0x33ac8c0 (the F29 log line prints it) and whether reads/writes on that page survive (F29 walk survival + no registration-failure throw).",
+    "q5_verdict": "CONDITIONAL — see DRAIN-TRACE.md. The drain mechanism is source-complete and needs only the EngineTick closure (mod-load-readiness is RIGHT at the Lua level). But the pump arm sits on two unproven in-game exec-page verdicts exactly as pc-ps5-comparison warned (exec READ at the resolve+disassembly hops, exec WRITE at the detour patch), and the menu/spawn EXECUTION above the drain additionally sits on the UFunction-call machinery (ProcessEvent) that is the known adapter gap (DIFF-1 funcptr-marshal fix not composable into launch-10). Matrix rows already encode this: R1/R2 need W_WORKS; R5 (BOTH_FAIL) explicitly states 'F7-2 dead (no closure drain)' — the same conclusion this trace derives from source."
+  },
+  "deciding_runtime_evidence": [
+    "F29 walk survival (UE4SS.log): 'Finding GameEngine::LoadMap' -> 'GameEngine::LoadMap address 0x<hex>' -> 'Finding GameEngine::Tick' -> 'GameEngine::Tick address (vtable: 0x33ac8c0; scan: 0x0)' -> 'Scan failed, falling back to vtable address for GameEngine::Tick' (final-units:1827,1831,1892) and progression to 'Finding GameModeBase::InitGameState' (1936). Log ending mid-lines after 'Finding GameEngine::LoadMap' = exec-read fault class = SPAWN-PATH-BLOCKED at the resolve walks.",
+    "Absence of the named throw in status failed detail: 'Native game-thread initializer callback registration failed' (final-units:1916) or 'Query harness tick dispatch callback registration failed' (1926). Presence = detour write refused (FLAG-1) = loud BLOCKED at the pump arm.",
+    "status 'state <k> engine-ready 0' (RuntimeAckSink::engine_ready, runtime_owner.cpp:172) — initializer completed; the pump registrations survived.",
+    "FIRST-DRAIN PROOF (the log lines the task asks for): after F7, UE4SS.log shows '[Lua] [TownfallItemSpawner] Menu created.' (main.lua:643, executed INSIDE the drained toggleMenu->buildUI closure). '[Lua] [TownfallItemSpawner] UI creation failed: <err>' (main.lua:636) equally proves the drain ran (the closure executed and failed above it). F7 pressed with NEITHER line and no Lua error line = the drain never ran (publication or pump failure — silent class, hop 10). Precondition line at mod load: '[Lua] [TownfallItemSpawner] Loaded v1.0. Clean pickup-only release. F7 opens the menu.' (main.lua:746) proves mod load, NOT the drain (it runs at script load).",
+    "Menu-open beyond the drain still needs the UFunction calls to work (main.lua:529/633/634 un-pcall'd); the visible spawn needs BeginDeferredActorSpawnFromClass/FinishSpawningActor (main.lua:297-301) — success line '[Lua] [TownfallItemSpawner] Spawned <item> x<n> ID=<id>' (main.lua:335 via 337 status). That is the adapter-machinery question OUTSIDE this trace's drain scope."
+  ],
+  "verification": {
+    "method": "source read of the composed units at their pinned shas (receipt cross-checked), full-chain grep, byte decode of the retained eboot at the pinned offset with capstone x86-64; NO execution on any target, NO Ghidra full analysis, NO console contact",
+    "cross_checks": [
+      "worker-launch10-build-witness/WITNESS.md rows 1a/1b: readpath-guard initializer inputs PASS, byte-identical compile gate",
+      "worker-launch10-prebuild run-a/receipt.json: composed luamod unit = notify-cancel LuaMod.cpp 0f0697a3",
+      "EDITION.json sha re-verified on disk for final-units/UnrealInitializer.cpp (c3a1c9eb)",
+      "oracle F29/G2 rows agree with the pinned log lines and the 0x33ac8c0 expectation",
+      "LAUNCH10-MATRIX.md rows R1-R5/R9 agree with the derived dependency structure (F7-2 live via tick hook; dead in the no-exec row)"
+    ]
+  }
+}

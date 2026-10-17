@@ -1,0 +1,189 @@
+--- a/src/UObjectGlobals.cpp	2026-10-11 21:26:18
++++ b/src/UObjectGlobals.cpp	2026-10-11 21:26:18
+@@ -1090,10 +1090,101 @@
+         }
+     }
+ #endif
++
++    // =====================================================================================
++    // [IT lookup-speed 02, Claude round-13 item 2] Per-walk class-verdict memo.
++    //
++    // COST MEASURED (self-test 2026-10-11, evidence/acceptance-pass2-20261012.log):
++    //   FindFirstOf 78ms, FindAllOf 78-86ms over [FFO2] scanned=35479 objects
++    //   = ~2.2us per object. The per-object FName compare is NOT the cost:
++    //   FName::Equals is ComparisonIndex equality (NameTypes.hpp:471-474, a
++    //   u32 compare; no string decode anywhere in the FName-overload walk —
++    //   decoding only happens per CALL in FindXOfQueryMismatch, and per
++    //   object only in the string-walk FALLBACK arm). The cost is
++    //   IsValidObjectForFindXOf: SIX full UStruct::SuperStruct chain walks
++    //   per object (IsA<UClass/UFunction/UPackage/UEnum/UScriptStruct> +
++    //   HasAnyFlags' virtual versioned-container call), plus the
++    //   TSuperStructRange query walk re-walking the SAME chain a 7th time.
++    //   ~30-40 dependent, scattered loads per object; at ~60-100ns per
++    //   dependent miss that is the whole 2.2us.
++    //
++    // FIX: both predicates depend ONLY on the object's class pointer. A
++    // session has a few thousand DISTINCT classes for ~35K objects, so a
++    // direct-mapped {UClass*, verdict} table turns the six chain walks into
++    // one hot probe and the query-chain walk into one more probe. The walk
++    // keeps upstream's exact control flow (first direct match breaks; a
++    // super-chain match records and keeps scanning), only the two predicate
++    // evaluations are memoized. Collision in the direct-mapped table just
++    // recomputes (correct, never wrong).
++    // =====================================================================================
++    struct FFindXofClassVerdict
++    {
++        UClass* Class{nullptr};
++        int8_t IsValidForFindXOf{-1};   // -1 unknown, 0 invalid, 1 valid
++        int8_t ChainMatchesQuery{-1};   // -1 unknown, 0 no, 1 yes (this walk's query)
++    };
++    struct FFindXofClassMemo
++    {
++        // 2048 entries * 16B = 32KB on the walk's stack frame; power of two
++        // for the mask. A collision recompute costs one un-memoized verdict
++        // (the old per-object path), never a wrong answer.
++        static constexpr uint32_t TableSize = 2048;
++        FFindXofClassVerdict Slots[TableSize]{};
++
++        auto Probe(UClass* Class) -> FFindXofClassVerdict*
++        {
++            // UObject heap pointers are 16B-aligned+ and scattered; >>6 mixes.
++            const uint32_t Key = (static_cast<uint32_t>(reinterpret_cast<uintptr_t>(Class) >> 6)) & (TableSize - 1);
++            return &Slots[Key];
++        }
++
++        // Memoized IsValidObjectForFindXOf. Classes are never destroyed while
++        // instances exist, and neither the EObjectFlags the filter reads nor a
++        // class's position in another class's chain changes at runtime, so a
++        // per-class verdict is stable for the life of the walk (and of the
++        // class: RF_ClassDefaultObject / RF_ArchetypeObject are set at
++        // construction and never cleared).
++        auto ValidForFindXOf(UObject* Object, UClass* Class, FFindXofClassVerdict* Slot) -> bool
++        {
++            if (Slot->Class != Class)
++            {
++                *Slot = FFindXofClassVerdict{Class, -1, -1};
++            }
++            if (Slot->IsValidForFindXOf < 0)
++            {
++                Slot->IsValidForFindXOf = IsValidObjectForFindXOf(Object) ? 1 : 0;
++            }
++            return Slot->IsValidForFindXOf != 0;
++        }
++
++        // Memoized "does Class's super chain (excluding Class itself; the
++        // direct compare is separate) contain ClassName".
++        auto ChainContainsQuery(UClass* Class, FFindXofClassVerdict* Slot, FName ClassName) -> bool
++        {
++            if (Slot->Class != Class)
++            {
++                *Slot = FFindXofClassVerdict{Class, -1, -1};
++            }
++            if (Slot->ChainMatchesQuery < 0)
++            {
++                Slot->ChainMatchesQuery = 0;
++                for (UStruct* SuperStruct : TSuperStructRange(Class))
++                {
++                    if (SuperStruct->GetNamePrivate().Equals(ClassName))
++                    {
++                        Slot->ChainMatchesQuery = 1;
++                        break;
++                    }
++                }
++            }
++            return Slot->ChainMatchesQuery != 0;
++        }
++    };
+ 
+     auto FindFirstOf(FName ClassName) -> UObject*
+     {
+         UObject* ObjectFound{nullptr};
++        FFindXofClassMemo Memo{};
+ #ifdef __PROSPERO__
+         FindXOfFfo2Stats FFO2{};
+ #endif
+@@ -1130,29 +1221,30 @@
+ #endif
+             UClass* Class = Object->GetClassPrivate();
+ 
++            // [IT lookup-speed 02] O(1) integer compare first (Equals is
++            // ComparisonIndex equality); the expensive filter verdict is
++            // memoized per DISTINCT class pointer, so the common case per
++            // object is: 1 class read + 1 int compare + 1 memo probe.
+             const bool bDirectClassMatch = Class->GetNamePrivate().Equals(ClassName);
+ #ifdef __PROSPERO__
+             if (bDirectClassMatch) { ++FFO2.exact; }
+ #endif
+-            if (bDirectClassMatch && IsValidObjectForFindXOf(Object))
++            FFindXofClassVerdict* MemoSlot = Memo.Probe(Class);
++            if (bDirectClassMatch && Memo.ValidForFindXOf(Object, Class, MemoSlot))
+             {
+                 ObjectFound = Object;
+                 return LoopAction::Break;
+ 
+             }
+ 
+-            if (!IsValidObjectForFindXOf(Object)) { return LoopAction::Continue; }
++            if (!Memo.ValidForFindXOf(Object, Class, MemoSlot)) { return LoopAction::Continue; }
+ 
+-            for (UStruct* super_struct : TSuperStructRange(Class))
++            if (Memo.ChainContainsQuery(Class, MemoSlot, ClassName))
+             {
+-                if (super_struct->GetNamePrivate().Equals(ClassName))
+-                {
+ #ifdef __PROSPERO__
+-                    ++FFO2.via_super;
++                ++FFO2.via_super;
+ #endif
+-                    ObjectFound = Object;
+-                    break;
+-                }
++                ObjectFound = Object;
+             }
+ 
+             return LoopAction::Continue;
+@@ -1295,6 +1387,7 @@
+ 
+     auto FindAllOf(FName ClassName, std::vector<UObject*>& OutStorage) -> void
+     {
++        FFindXofClassMemo Memo{};
+ #ifdef __PROSPERO__
+         FindXOfFfo2Stats FFO2{};
+         UObject* FFO2First{nullptr};
+@@ -1343,7 +1436,10 @@
+ #ifdef __PROSPERO__
+             if (bDirectClassMatch) { ++FFO2.exact; }
+ #endif
+-            if (bDirectClassMatch && IsValidObjectForFindXOf(Object))
++            // [IT lookup-speed 02] memoized per-class verdicts; same control
++            // flow as before, ~30-40 scattered loads per object -> 2 probes.
++            FFindXofClassVerdict* MemoSlot = Memo.Probe(Class);
++            if (bDirectClassMatch && Memo.ValidForFindXOf(Object, Class, MemoSlot))
+             {
+                 OutStorage.emplace_back(Object);
+ #ifdef __PROSPERO__
+@@ -1352,19 +1448,15 @@
+                 return LoopAction::Continue;
+             }
+ 
+-            if (!IsValidObjectForFindXOf(Object)) { return LoopAction::Continue; }
++            if (!Memo.ValidForFindXOf(Object, Class, MemoSlot)) { return LoopAction::Continue; }
+ 
+-            for (UStruct* SuperStruct : TSuperStructRange(Class))
++            if (Memo.ChainContainsQuery(Class, MemoSlot, ClassName))
+             {
+-                if (SuperStruct->GetNamePrivate().Equals(ClassName))
+-                {
+-                    OutStorage.emplace_back(Object);
++                OutStorage.emplace_back(Object);
+ #ifdef __PROSPERO__
+-                    ++FFO2.via_super;
+-                    if (!FFO2First) { FFO2First = Object; }
++                ++FFO2.via_super;
++                if (!FFO2First) { FFO2First = Object; }
+ #endif
+-                    break;
+-                }
+             }
+ 
+             return LoopAction::Continue;

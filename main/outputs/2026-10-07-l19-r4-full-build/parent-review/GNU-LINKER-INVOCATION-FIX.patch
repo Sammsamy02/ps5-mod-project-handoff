@@ -1,0 +1,25 @@
+--- execution-v3/admission.py
++++ execution/admission.py
+@@ -234,6 +234,11 @@
+         aliases = self.data.get('tool_aliases', {})
+         expected = str(self.pins['linker'].parent / 'clang++')
+         require(expected in aliases, 'exact delegated clang++ alias mapping required')
++        linker_alias = str(self.pins['linker'].parent / 'ld.lld')
++        require(self.data.get('linker_invocation') == linker_alias and linker_alias in aliases,
++                'exact GNU ld.lld invocation/alias mapping required')
++        require(aliases[linker_alias].get('resolved_path') == str(self.pins['linker']),
++                'GNU linker invocation must resolve to pinned linker executable')
+         for path, record in aliases.items():
+             alias = Path(path)
+             require(alias.is_absolute() and alias.is_symlink(), 'expected compiler alias missing')
+--- execution-v3/composition.py
++++ execution/composition.py
+@@ -140,7 +140,7 @@
+         hashes = {p: sha(p) for p in ordered}
+         write(run / 'input-hashes.json', hashes)
+         target = run / 'coherent-tick-file-witness-runtime.o'
+-        link = [str(a.pins['linker']), '-m', 'elf_x86_64', '-r', *ordered,
++        link = [a.data['linker_invocation'], '-m', 'elf_x86_64', '-r', *ordered,
+                 '-Map=' + str(run / 'runtime.map'), '-o', str(target)]
+         log = self.command('link', link, run, env)
+         calls.append({k: log[k] for k in ('name', 'argv', 'exit', 'seconds')})

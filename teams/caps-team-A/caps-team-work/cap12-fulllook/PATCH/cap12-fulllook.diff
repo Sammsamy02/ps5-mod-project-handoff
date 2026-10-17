@@ -1,0 +1,2246 @@
+diff -ruN -x _ tools-orig/master_fetch_plan.py tools/master_fetch_plan.py
+--- tools-orig/master_fetch_plan.py	2026-10-13 09:56:11
++++ tools/master_fetch_plan.py	2026-10-13 10:23:37
+@@ -17,6 +17,10 @@
+               (c) up to --child-instances smallest registry instances of each
+               planned or already-candidate master (whole chunk), whose
+               TextureParameterValues give the second source for role mapping.
++ROUND 4: --same-model-special also admits special-shading-model masters
++(Hair, Eye ...) that pass the rest of the two-source gate, for the same-model
++route of reparent_plan (their child instances give the slot evidence: texture
++class, virtual-texture flag, alpha channel of the bound game textures).
+ Fetch: harvest/ftp_range_fetch.py --plan <this> --out <dir>. Also written:
+ <out>.p1.json / <out>.p2.json (priority 1 / 2 only), because ftp_range_fetch's
+ #12 row path does not carry 'priority' into --max-priority.
+@@ -61,7 +65,7 @@
+     return out
+ 
+ 
+-def build(registry, typeidx, peers, checked, mod_names, tocs, skel_bytes, child_n):
++def build(registry, typeidx, peers, checked, mod_names, tocs, skel_bytes, child_n, same_model_special=False):
+     headers = {r['package']: r for r in checked}
+     fetched = set(headers)
+     used = rp.skeletal_use(checked, registry)
+@@ -72,7 +76,7 @@
+             continue
+         pkg = a['package']
+         props = mc.base_props(pkg, registry, typeidx, peers, headers)
+-        why = rp.base_gate(props)
++        why = rp.base_gate(props, allow_special=same_model_special)
+         if why:
+             refused[why.split(':')[0]] = refused.get(why.split(':')[0], 0) + 1
+             continue
+@@ -128,6 +132,8 @@
+     ap.add_argument('--mod-ucas', required=True)
+     ap.add_argument('--skeletal-header-bytes', type=int, default=262144)
+     ap.add_argument('--child-instances', type=int, default=2)
++    ap.add_argument('--same-model-special', action='store_true',
++                    help='also plan special-model (hair, eye ...) masters and their instances')
+     ap.add_argument('--out', required=True)
+     a = ap.parse_args(argv)
+     if a.skeletal_header_bytes < 4096 or a.child_instances < 0:
+@@ -141,7 +147,7 @@
+     checked = [r for p in a.checked_headers for r in _jl(p)['checked'] if 'verified' in r]
+     pk, _ = mma.load_mod(a.mod_utoc, a.mod_ucas)
+     rows, missing, summary = build(registry, typeidx, peers, checked, set(pk), a.toc,
+-                                   a.skeletal_header_bytes, a.child_instances)
++                                   a.skeletal_header_bytes, a.child_instances, a.same_model_special)
+     base = a.out[:-5] if a.out.endswith('.json') else a.out
+     for path, sel in ((a.out, rows), (base + '.p1.json', [r for r in rows if r['priority'] == 1]),
+                       (base + '.p2.json', [r for r in rows if r['priority'] == 2])):
+diff -ruN -x _ tools-orig/material_props.py tools/material_props.py
+--- tools-orig/material_props.py	1969-12-31 18:00:00
++++ tools/material_props.py	2026-10-13 10:52:40
+@@ -0,0 +1,361 @@
++#!/usr/bin/env python3
++"""Reader C: blend mode and shading model read from a cooked Material's OWN
++property block (Mac-only, read-only, generic UE5; no game, mod or asset names,
++no hard-coded property indices or enum values).
++
++A zen-cooked UObject export starts with an unversioned property block:
++  fragments u16 (bits 0-6 skip, bit 7 has-zeroes, bit 8 is-last, bits 9-15 value
++  count), then a zero mask when any fragment has zeroes (bits = values in such
++  fragments; u8 if <= 8 bits, u16 if <= 16, else u32 words), then the values of
++  the present, non-zero properties in schema order. (Public serializer format,
++  the same for every UE5 class; the class schema itself is NOT used.)
++
++Which schema index holds which property, and what each value means, is LEARNED
++from the game's own cooked Materials against their asset-registry tags
++(BlendMode, ShadingModel, ShadingModels). A field is learned only if exactly one
++schema index explains EVERY training material:
++  presence   index present  <=>  registry value != one single default label
++  value      enum fields: the first byte, a 1:1 map byte <-> registry label
++             (absent or zero-masked = the default label);
++             the shading-model bit field: a nested unversioned struct with one
++             value (u16 header 0x0300) whose u16 equals the registry
++             'ShadingModelField' number (absent = the default number).
++Values are walked in order; a present property before a learned one whose size
++is not learned makes that material unreadable (fail closed). Any training
++contradiction -> the field is not learned -> nothing is readable.
++
++Leave-one-out: for a base candidate, the decoder is learned WITHOUT that
++material, so its own registry tags never feed its own reader-C value; reader C
++and the registry are then two sources (two different files of the game).
++For a mod material (no registry) reader C gives the mod's own settings; the enum
++ShadingModel and the ShadingModels bit field are two separately learned fields
++and must agree, and reader C's blend group must agree with the existing mod
++readers A/B (shader types / base-pass buffer), which also proves the learned
++schema applies to that mod's cook.
++"""
++import struct
++
++BLEND, MODEL, FIELD = 'BlendMode', 'ShadingModel', 'ShadingModels'
++MIN_TRAIN = 20          # training materials needed before any field is learned
++MIN_VALUES = 2          # distinct non-default registry labels seen for an enum field
++RAW_SIZES = (1, 2, 4, 8)  # sizes tried for other properties that precede a learned field
++MIN_RAW_ROWS = 3        # training rows that must really test a learned raw size
++
++
++class PropsError(ValueError):
++    pass
++
++
++def need(ok, why):
++    if not ok:
++        raise PropsError(why)
++
++
++def parse_header(b):
++    """-> (entries [(schema index, is_zero)], offset of the first value)."""
++    need(b is not None and len(b) >= 2, 'no export bytes')
++    p, idx, entries, frags = 0, 0, [], []
++    while True:
++        need(p + 2 <= len(b), 'property header truncated')
++        v = struct.unpack_from('<H', b, p)[0]
++        p += 2
++        skip, hz, last, num = v & 0x7F, (v >> 7) & 1, (v >> 8) & 1, v >> 9
++        idx += skip
++        frags.append((idx, num, hz))
++        idx += num
++        need(len(frags) <= 512 and idx <= 4096, 'implausible property header')
++        if last:
++            break
++    nz = sum(num for _i, num, hz in frags if hz)
++    mask = []
++    if nz:
++        if nz <= 8:
++            need(p + 1 <= len(b), 'zero mask truncated')
++            word, nbytes = b[p], 1
++        elif nz <= 16:
++            need(p + 2 <= len(b), 'zero mask truncated')
++            word, nbytes = struct.unpack_from('<H', b, p)[0], 2
++        else:
++            nbytes = 4 * ((nz + 31) // 32)
++            need(p + nbytes <= len(b), 'zero mask truncated')
++            word = int.from_bytes(b[p:p + nbytes], 'little')
++        mask = [(word >> k) & 1 for k in range(nz)]
++        p += nbytes
++    k = 0
++    for start, num, hz in frags:
++        for j in range(num):
++            z = False
++            if hz:
++                z = bool(mask[k])
++                k += 1
++            entries.append((start + j, z))
++    return entries, p
++
++
++def _walk(b, sizes, wanted):
++    """Values of the wanted indices, walking present values whose sizes are known.
++    sizes: {index: 'byte' | 'struct16' | n (raw bytes, value not used)}. -> {index: value or 'absent' or 'zero'} or raise."""
++    entries, p = parse_header(b)
++    out = {i: 'absent' for i in wanted}
++    last = max(wanted)
++    for i, z in entries:
++        if i > last:
++            break
++        if z:
++            if i in wanted:
++                out[i] = 'zero'
++            continue
++        kind = sizes.get(i)
++        need(kind is not None, f'property {i} before a learned field has no learned size')
++        if kind == 'byte':
++            need(p + 1 <= len(b), 'value truncated')
++            v, p = b[p], p + 1
++        elif isinstance(kind, int):
++            need(p + kind <= len(b), 'value truncated')
++            v, p = None, p + kind
++        else:
++            need(p + 4 <= len(b), 'value truncated')
++            h, v = struct.unpack_from('<HH', b, p)
++            need(h == 0x0300, 'nested struct header is not one-value/last')
++            p += 4
++        if i in wanted:
++            out[i] = v
++    return out
++
++
++def _field_number(tags):
++    v = (tags.get(FIELD) or '')
++    if '=' not in v:
++        return None
++    try:
++        return int(v.split('=', 1)[1].strip(' )'))
++    except ValueError:
++        return None
++
++
++class Decoder:
++    """Learned from [(package, export bytes, registry tags)]."""
++
++    def __init__(self, train):
++        self.ok, self.why, self.fields = False, None, {}
++        rows = []
++        for pkg, b, tags in train:
++            try:
++                entries, _p = parse_header(b)
++            except PropsError:
++                continue
++            labels = {BLEND: tags.get(BLEND), MODEL: tags.get(MODEL), FIELD: _field_number(tags)}
++            if None in labels.values():
++                continue
++            rows.append((pkg, b, {i for i, _z in entries}, labels))
++        self.n_train = len(rows)
++        if len(rows) < MIN_TRAIN:
++            self.why = f'only {len(rows)} training materials (need {MIN_TRAIN})'
++            return
++        cand = {}
++        for f in (BLEND, MODEL, FIELD):
++            labs = [r[3][f] for r in rows]
++            hits = []
++            for i in sorted(set().union(*(r[2] for r in rows))):
++                absent = {lab for r, lab in zip(rows, labs) if i not in r[2]}
++                present = {lab for r, lab in zip(rows, labs) if i in r[2]}
++                if len(absent) == 1 and not (absent & present) and present:
++                    hits.append((i, next(iter(absent))))
++            if not hits:
++                self.why = f'{f}: no schema index explains every training material'
++                return
++            cand[f] = hits
++        good = []
++        for fb in cand[BLEND]:
++            for fm in cand[MODEL]:
++                for ff in cand[FIELD]:
++                    if len({fb[0], fm[0], ff[0]}) < 3:
++                        continue
++                    found = {BLEND: fb, MODEL: fm, FIELD: ff}
++                    r = self._check(rows, found)
++                    if r is not None:
++                        good.append((found, r))
++        if len(good) != 1:
++            self.why = (f'{len(good)} assignments of schema indices decode every training material '
++                        '(need exactly 1)')
++            return
++        found, (sizes, maps, wanted, used) = good[0]
++        sizes, self.raw_learned = self._learn_raw(rows, found, sizes, maps)
++        again = self._check(rows, found, sizes)
++        if again is None:
++            self.why = 'learned sizes of preceding properties break the decode'
++            return
++        sizes, maps, wanted, used = again
++        self.n_used = used
++        self.found, self.sizes, self.maps, self.wanted = found, sizes, maps, wanted
++        self.ok = True
++
++    @classmethod
++    def _learn_raw(cls, rows, found, sizes, maps):
++        """Sizes of other properties that precede a learned field: a size is kept
++        only if exactly one of RAW_SIZES decodes EVERY row holding that property
++        consistently AND at least MIN_RAW_ROWS of those rows really test it (the
++        walk passes the property and reaches a present learned field after it).
++        'rows' in the result counts only those testing rows."""
++        last = max(found[f][0] for f in found)
++        learned = {}
++        sizes = dict(sizes)
++        others = sorted({i for r in rows for i in r[2] if i < last and i not in sizes})
++        for u in others:
++            holders = [r for r in rows if u in r[2]]
++            ok = []
++            for n in RAW_SIZES:
++                trial = {**sizes, u: n}
++                verdicts = [cls._row_ok(r, found, trial, maps, u) for r in holders]
++                if False in verdicts:
++                    continue
++                tested = verdicts.count('tested')
++                if tested >= MIN_RAW_ROWS:
++                    ok.append((n, tested))
++            if len(ok) == 1:
++                sizes[u] = ok[0][0]
++                learned[u] = {'bytes': ok[0][0], 'rows': ok[0][1]}
++        return sizes, learned
++
++    @staticmethod
++    def _row_ok(row, found, sizes, maps, u):
++        """'tested' (u passed and a present learned field after it decoded right),
++        'blocked' (another unknown property: no verdict, or nothing after u to test),
++        or False (contradiction)."""
++        _pkg, b, pres, labels = row
++        wanted = [found[f][0] for f in (BLEND, MODEL, FIELD)]
++        try:
++            vals = _walk(b, sizes, wanted)
++        except PropsError as e:
++            return 'blocked' if 'no learned size' in str(e) else False
++        for f in (BLEND, MODEL):
++            v = vals[found[f][0]]
++            if v == 'absent':
++                continue
++            code = 0 if v == 'zero' else v
++            if maps[f].get(code) != labels[f]:
++                return False
++        v = vals[found[FIELD][0]]
++        got = found[FIELD][1] if v == 'absent' else (0 if v == 'zero' else v)
++        if got != labels[FIELD]:
++            return False
++        after = [found[f][0] for f in found if found[f][0] > u and found[f][0] in pres]
++        return 'tested' if after else 'blocked'
++
++    @staticmethod
++    def _check(rows, found, sizes=None):
++        """Value consistency of one index assignment over all decodable rows, or None."""
++        sizes = sizes or {found[BLEND][0]: 'byte', found[MODEL][0]: 'byte', found[FIELD][0]: 'struct16'}
++        wanted = [found[f][0] for f in (BLEND, MODEL, FIELD)]
++        maps = {BLEND: {}, MODEL: {}}
++        used = 0
++        for pkg, b, _pres, labels in rows:
++            try:
++                vals = _walk(b, sizes, wanted)
++            except PropsError as e:
++                if 'no learned size' in str(e):
++                    continue                 # other properties before ours: not usable for training
++                return None                  # this assignment contradicts the row's bytes
++            used += 1
++            for f in (BLEND, MODEL):
++                i, _default = found[f]
++                v = vals[i]
++                if v == 'absent':
++                    continue                 # presence rule already checked
++                code = 0 if v == 'zero' else v
++                if maps[f].setdefault(code, labels[f]) != labels[f]:
++                    return None
++            i, default = found[FIELD]
++            v = vals[i]
++            got = default if v == 'absent' else (0 if v == 'zero' else v)
++            if got != labels[FIELD]:
++                return None
++        for f in (BLEND, MODEL):
++            if len(set(maps[f].values())) != len(maps[f]) or len(maps[f]) < MIN_VALUES:
++                return None
++        if used < MIN_TRAIN:
++            return None
++        return sizes, maps, wanted, used
++
++    from_expression = 'MSM_FromMaterialExpression'   # registry label of the per-pixel enum value
++
++    def read(self, b, bits):
++        """-> {'readable', blend, models, model_enum, field, why}. bits: shading-model bit -> name."""
++        if not self.ok:
++            return {'readable': False, 'why': 'reader C not learned: ' + (self.why or '?')}
++        try:
++            vals = _walk(b, self.sizes, self.wanted)
++        except PropsError as e:
++            return {'readable': False, 'why': 'reader C: ' + str(e)}
++        out = {'readable': False}
++        res = {}
++        for f in (BLEND, MODEL):
++            i, default = self.found[f]
++            v = vals[i]
++            if v == 'absent':
++                res[f] = default
++            else:
++                code = 0 if v == 'zero' else v
++                if code not in self.maps[f]:
++                    out['why'] = f'reader C: {f} byte {code} never seen in the game'
++                    return out
++                res[f] = self.maps[f][code]
++        i, default = self.found[FIELD]
++        v = vals[i]
++        field = default if v == 'absent' else (0 if v == 'zero' else v)
++        models = set()
++        for k in range(16):
++            if field >> k & 1:
++                if k not in bits:
++                    out['why'] = f'reader C: shading-model bit {k} has no name in the registry'
++                    return out
++                models.add(bits[k])
++        if not models:
++            out['why'] = 'reader C: empty shading-model field'
++            return out
++        enum = res[MODEL]
++        # the enum and the bit field are two separately learned fields: they must agree
++        if enum == self.from_expression:
++            out['field_only'] = True          # per-pixel model: only the bit field names the models (one field)
++        elif models != {enum}:
++            out['why'] = f'reader C: enum {enum} disagrees with bit field {sorted(models)}'
++            return out
++        out.update(readable=True, blend=res[BLEND], model_enum=enum, field=field, models=sorted(models))
++        return out
++
++
++def top_export_bytes(z):
++    top = [e for e in z.exports if e['outer'][0] == 'Null']
++    return z.export_bytes(top[0]) if len(top) == 1 else None
++
++
++def training_set(whole, registry, material_class):
++    """[(package, export bytes, registry tags)] for whole-chunk base Materials."""
++    out = []
++    for pkg, z in sorted(whole.items()):
++        a = registry.asset(pkg)
++        if not a or a['class'] != material_class:
++            continue
++        b = top_export_bytes(z)
++        if b:
++            out.append((pkg, b, a['tags']))
++    return out
++
++
++class ReaderC:
++    """Caches one full decoder plus leave-one-out decoders on demand."""
++
++    def __init__(self, train, bits):
++        self.train, self.bits = train, bits
++        self.full = Decoder(train)
++        self._loo = {}
++
++    def base(self, pkg, blob, exclude):
++        """Reader C for a base material, decoder learned without `exclude` packages."""
++        key = frozenset(exclude)
++        if key not in self._loo:
++            self._loo[key] = Decoder([t for t in self.train if t[0] not in key])
++        return self._loo[key].read(blob, self.bits)
++
++    def mod(self, blob):
++        return self.full.read(blob, self.bits)
+diff -ruN -x _ tools-orig/param_roles.py tools/param_roles.py
+--- tools-orig/param_roles.py	2026-10-13 09:56:11
++++ tools/param_roles.py	2026-10-13 10:53:13
+@@ -21,19 +21,56 @@
+             name only (one source) and a rename cannot swizzle channels -> not
+             remapped; the base parent's own default for that slot is used and the
+             loss is disclosed.
++ROUND 4 (full look, Mac-only) adds, for EVERY mapping (exact or renamed):
++  slot gate  a mod texture may feed a base slot only if
++               mod   its layout is a plain mip chain (texture_layout.plain_mips:
++                     export mip table + bulk chunk size), i.e. not a virtual texture,
++               base  (1) every texture the game binds to that slot is non-virtual in
++                     the registry (VirtualTextureStreaming False), and (2) the
++                     parent's own default textures (its imports) of that slot's class
++                     (normal / colour / linear) are ALL non-virtual and at least one
++                     exists: a virtual sampler must have a virtual default of its
++                     class, so no virtual sampler of that class exists. A virtual-
++                     texture sampler cannot sample a plain mod texture, so a slot
++                     failing (1) or (2) is LOST,
++               class a BC5 normal map only feeds a normal slot and vice versa.
++  letters    for EVERY mapping: if the mod texture name or any bound game
++             texture name ends in packed letters (ORM, MRO ...), all of them must
++             name the same letters (so an exact name like 'Mask' cannot read an ORM
++             texture through an MRO slot).
++  packed     a packed mask keeps its slot only with the SAME channel letters in
++             the same order (rename allowed, swizzle never): letters from (1) the
++             parameter names on both sides and (2) the texture names on both
++             sides (the mod texture bound to it; every game texture bound to the
++             base slot, which must also be linear in the registry). Any other
++             order (ORM vs MRO ...) is lost; texture bytes are never changed.
++  colour+alpha  'base_color_alpha' slots (a base-colour word plus alpha/opacity)
++             take a mod colour (base_color or base_color_alpha role) only when
++             (mod) the material is masked, its texture format carries alpha, its
++             alpha is a cut-out (texture_layout.cutout_alpha), and the instance
++             binds no other texture named alpha/opacity/mask, and
++             (base) every game texture bound to the slot is sRGB AND has an alpha
++             channel in the registry. Otherwise the slot is lost.
+ Texture bindings are decoded from the instance's own export bytes
+ (TextureParameterValues: u32 count, then per entry 4 header bytes, FName
+ (8), 5 bytes, i32 import index, 16-byte GUID; 37-byte stride), a layout read from
+ the data (mod PC cook and base PS5 cook agree). Ambiguous or missing -> no
+ binding (fail closed).
+ """
++import os
+ import re
+ import struct
++import sys
+ 
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++import texture_layout as tlay  # noqa: E402
++
+ TOKENS = re.compile(r'[a-z0-9]+')
+ BASE_COLOR = {'basecolor', 'basecolour', 'albedo', 'diffuse'}
+ NORMAL = {'normal', 'normals', 'normalmap'}
+ FILLER = {'texture', 'tex', 'map', 'sampler'}
++SUBJECT = {'hair', 'fur'}      # the subject of the texture, not its channel content
++ALPHA = {'alpha', 'opacity'}
+ PACKED_LETTERS = set('ormash')
+ COLOR_FORMATS = {'PF_DXT1', 'PF_DXT3', 'PF_DXT5', 'PF_BC7', 'PF_B8G8R8A8', 'PF_R8G8B8A8', 'PF_FloatRGBA'}
+ NORMAL_FORMATS = {'PF_BC5'}
+@@ -42,19 +79,73 @@
+ 
+ 
+ def role_of(name):
+-    """-> 'base_color' | 'normal' | 'packed:<LETTERS>' | None. Filler words
+-    (texture/tex/map/sampler) are ignored; any other extra word (tint, strength,
+-    wet, detail ...) means a different parameter, so no role."""
+-    core = ''.join(w for w in TOKENS.findall(name.lower()) if w not in FILLER)
+-    if core in BASE_COLOR:
+-        return 'base_color'
+-    if core in NORMAL:
+-        return 'normal'
+-    if 3 <= len(core) <= 4 and set(core) <= PACKED_LETTERS and len(set(core)) == len(core):
++    """-> 'base_color' | 'base_color_alpha' | 'normal' | 'packed:<LETTERS>' | None.
++    Filler words (texture/tex/map/sampler) and subject words (hair/fur) are
++    ignored; any other extra word (tint, strength, wet, detail ...) means a
++    different parameter, so no role."""
++    words = [w for w in TOKENS.findall(name.lower()) if w not in FILLER]
++    core = ''.join(w for w in words if w not in SUBJECT)
++    if core in BASE_COLOR or core in NORMAL:
++        return 'base_color' if core in BASE_COLOR else 'normal'
++    if any(w in ALPHA for w in words):
++        rest = [w for w in words if w not in ALPHA and w not in SUBJECT]
++        if len(rest) == 1 and rest[0] in BASE_COLOR:
++            return 'base_color_alpha'
++        return None
++    if 3 <= len(core) <= 4 and set(core) <= PACKED_LETTERS and len(set(core)) == len(core) \
++            and len(words) == 1:
+         return 'packed:' + core.upper()
+     return None
+ 
+ 
++def name_letters(package):
++    """Packed-channel letters from a texture package's own name suffix
++    ('/X/T_Body_ORM' -> 'ORM'), or None."""
++    last = package.rsplit('/', 1)[-1].rsplit('_', 1)[-1].lower()
++    if 3 <= len(last) <= 4 and set(last) <= PACKED_LETTERS and len(set(last)) == len(last):
++        return last.upper()
++    return None
++
++
++def tex_class(tags):
++    """Registry tags -> 'normal' | 'colour' | 'linear' | None."""
++    if not tags or tags.get('CompressionSettings') is None or tags.get('SRGB') not in ('True', 'False'):
++        return None
++    if tags['CompressionSettings'] == 'TC_Normalmap':
++        return 'normal'
++    return 'colour' if tags['SRGB'] == 'True' else 'linear'
++
++
++def slot_gate(q, mod_tex_fact, mod_fmt, base_bind, tex_tags, defaults):
++    """None if the mod texture may feed base slot q, else why not (fail closed)."""
++    if not mod_tex_fact or not mod_tex_fact.get('proven'):
++        return 'mod texture layout not proven plain (could be virtual): ' + \
++            ((mod_tex_fact or {}).get('why') or 'not checked')
++    bound = sorted((base_bind or {}).get(q, ()))
++    if not bound:
++        return 'no fetched base instance binds a texture to it'
++    tags = [tex_tags(t) for t in bound]
++    if any(t is None or t.get('VirtualTextureStreaming') not in ('True', 'False') for t in tags):
++        return 'virtual-texture status of a bound game texture unknown'
++    if any(t['VirtualTextureStreaming'] == 'True' for t in tags):
++        return 'game binds VIRTUAL textures to this slot; a plain mod texture cannot feed a virtual sampler'
++    classes = {tex_class(t) for t in tags}
++    if len(classes) != 1 or None in classes:
++        return f'bound game textures disagree on their class {sorted(map(str, classes))}'
++    cls = next(iter(classes))
++    same = [d for d in (defaults or []) if d and tex_class(d) == cls]
++    if any(d.get('VirtualTextureStreaming') not in ('True', 'False') for d in same):
++        return f'virtual-texture status of a {cls} default texture of the parent unknown'
++    if any(d['VirtualTextureStreaming'] == 'True' for d in same):
++        return (f'parent has a VIRTUAL {cls} default texture, so one of its {cls} samplers is virtual and this '
++                f'slot cannot be proven plain (second source missing)')
++    if not same:
++        return f'parent has no {cls} default texture (second source for a plain {cls} slot missing)'
++    if (mod_fmt in NORMAL_FORMATS) != (cls == 'normal'):
++        return f'sampler class mismatch: mod {mod_fmt or "unknown"} vs game {cls} slot'
++    return None
++
++
+ def texture_bindings(pkg):
+     """{parameter name: imported package} from a zen MIC's TextureParameterValues,
+     or (None, why)."""
+@@ -100,6 +191,8 @@
+ 
+ 
+ def mod_evidence(role, fmt):
++    if role == 'base_color_alpha':
++        return fmt in tlay.ALPHA_FORMATS
+     if role == 'normal':
+         return fmt in NORMAL_FORMATS
+     if role == 'base_color':
+@@ -113,54 +206,165 @@
+     cs = tags.get('CompressionSettings')
+     if role == 'normal':
+         return cs == 'TC_Normalmap'
++    if role == 'base_color_alpha':
++        return tags.get('SRGB') == 'True' and tags.get('HasAlphaChannel') == 'True' and cs != 'TC_Normalmap'
+     if role == 'base_color':
+         return tags.get('SRGB') == 'True' and cs not in ('TC_Normalmap', 'TC_Masks', 'TC_Grayscale', 'TC_Alpha',
+                                                           'TC_VectorDisplacementmap', 'TC_DistanceFieldFont')
+     return False
+ 
+ 
+-def map_params(params, mod_bind, mod_formats, base_names, base_bind, tex_tags, mod_names):
++def map_params(params, mod_bind, mod_formats, base_names, base_bind, tex_tags, mod_names,
++               mod_tex=None, defaults=None, mod_masked=False):
+     """params: mod instance parameter names. mod_bind: {param: mod texture package}
+     mod_formats: {mod texture package: PF_*}. base_names: names of the base parent.
+     base_bind: {base param: set(base texture packages)} from fetched base instances.
+     tex_tags: callable(package) -> registry tags or None.
++    mod_tex: callable(mod texture package) -> texture_layout facts
++             {'proven', 'format', 'cutout': {...}} or None (None -> nothing maps).
++    defaults: registry tags of the parent's own default textures.
++    mod_masked: the mod material is masked (two readers).
+     -> (mapping {param: {to, how, evidence}}, lost {param: why})"""
+     mapping, lost = {}, {}
+     base_set = set(base_names)
++    mod_bind = mod_bind or {}
++    base_bind = base_bind or {}
++
++    def gate(p, q):
++        tex = mod_bind.get(p)
++        if tex is None:
++            return 'mod instance binds no texture to it'
++        names = [tex] + sorted(base_bind.get(q, ()))
++        letters = {name_letters(t) for t in names}
++        if letters - {None} and len(letters) != 1:
++            return (f'texture names disagree on packed channel letters {sorted(map(str, letters))} '
++                    f'({", ".join(t.rsplit("/", 1)[-1] for t in names)})')
++        fact = mod_tex(tex) if mod_tex else None
++        return slot_gate(q, fact, mod_formats.get(tex), base_bind, tex_tags, defaults)
++
++    alpha_words = {w for q in params if q in mod_bind
++                   for w in TOKENS.findall(q.lower()) if w in ALPHA | {'mask', 'opacitymask'}}
++
++    def alpha_ok(p):
++        """None if mod parameter p may feed a colour+alpha slot, else why not."""
++        tex = mod_bind.get(p)
++        fact = (mod_tex(tex) if (mod_tex and tex) else None) or {}
++        cut = fact.get('cutout') or {}
++        if not mod_masked:
++            return 'mod material not masked'
++        if mod_formats.get(tex) not in tlay.ALPHA_FORMATS:
++            return f'mod texture format {mod_formats.get(tex) or "unknown"} carries no alpha'
++        if not cut.get('cutout'):
++            return 'mod texture alpha is not a proven cut-out: ' + str(cut.get('why') or 'not checked')
++        own = {w for w in TOKENS.findall(p.lower()) if w in ALPHA}
++        if alpha_words - own:
++            return (f'the mod instance binds another texture named {sorted(alpha_words - own)}: its cut-out may '
++                    'come from there, not from this alpha')
++        return None
++
++    def packed_ok(p, q, letters):
++        tex = mod_bind.get(p)
++        if tex is None or name_letters(tex) != letters:
++            return f'mod texture name does not repeat the letters {letters} (second source missing)'
++        bound = sorted(base_bind.get(q, ()))
++        if not bound:
++            return 'no fetched base instance binds a texture to it'
++        for t in bound:
++            if name_letters(t) != letters:
++                return f'game texture {t.rsplit("/", 1)[-1]} bound to {q} does not name the letters {letters}'
++            if tex_class(tex_tags(t)) != 'linear':
++                return f'game texture bound to {q} is not linear (sRGB or unknown)'
++        return None
++
+     for p in params:
++        r = role_of(p)
+         if p in base_set:
+-            if (base_bind or {}).get(p):
+-                mapping[p] = {'to': p, 'how': 'exact'}
+-            else:
++            if not base_bind.get(p):
+                 lost[p] = 'same name in the base parent, but no fetched base instance binds a texture to it'
++                continue
++            if r and r.startswith('packed:'):
++                why = packed_ok(p, p, r[7:])
++                if why:
++                    lost[p] = f'packed mask {r[7:]} (same name): ' + why
++                    continue
++            why = gate(p, p)
++            if why:
++                lost[p] = why
++                continue
++            mapping[p] = {'to': p, 'how': 'exact'}
+             continue
+-        r = role_of(p)
+         if r is None:
+             lost[p] = 'no known role and no same-named base parameter'
+             continue
+         if r.startswith('packed:'):
+-            others = sorted(q for q in base_set if (role_of(q) or '').startswith('packed:'))
+-            lost[p] = (f'packed mask {r[7:]}: channel order has one source (the name) and a rename cannot '
+-                       f'swizzle channels; base packed slots {others or "none"} keep their defaults')
++            letters = r[7:]
++            same = sorted(q for q in base_set if role_of(q) == r and q not in mod_names)
++            others = sorted(q for q in base_set if (role_of(q) or '').startswith('packed:') and role_of(q) != r)
++            if not same:
++                lost[p] = (f'packed mask {letters}: no base slot with the same channel order; base packed slots '
++                           f'{others or "none"} would need a channel swizzle (forbidden: texture bytes are never '
++                           'changed); they keep their defaults')
++                continue
++            ok = []
++            whys = {}
++            for q in same:
++                why = packed_ok(p, q, letters) or gate(p, q)
++                if why:
++                    whys[q] = why
++                else:
++                    ok.append(q)
++            if len(ok) != 1:
++                lost[p] = f'packed mask {letters}: {len(ok)} usable same-order slots {same} (need 1): {whys}'
++                continue
++            mapping[p] = {'to': ok[0], 'how': 'role:' + r,
++                          'evidence': {'mod_texture': mod_bind.get(p), 'letters': letters,
++                                       'base_textures': sorted(base_bind[ok[0]])}}
+             continue
+-        qs = sorted(q for q in base_set if role_of(q) == r and q not in mod_names)
++        tex = mod_bind.get(p)
++        fmt = mod_formats.get(tex) if tex else None
++        targets = {r}
++        alpha_why = alpha_ok(p)
++        if r == 'base_color' and alpha_why is None:
++            targets.add('base_color_alpha')
++        qs = sorted(q for q in base_set if role_of(q) in targets and q not in mod_names)
+         if not qs:
+-            lost[p] = f'base parent has no {r} parameter'
++            extra = sorted(q for q in base_set if role_of(q) == 'base_color_alpha')
++            lost[p] = f'base parent has no {r} parameter' + (
++                f' (colour+alpha slot {extra} refused: {alpha_why})' if extra and alpha_why else '')
+             continue
+-        tex = mod_bind.get(p) if mod_bind else None
+-        fmt = mod_formats.get(tex) if tex else None
+         if not mod_evidence(r, fmt):
+             lost[p] = f'{r}: mod texture format {fmt or "unknown"} does not confirm the layout (second source missing)'
+             continue
+-        ok = [q for q in qs if any(base_evidence(r, tex_tags(t)) for t in (base_bind or {}).get(q, ()))]
++        ok, whys = [], {}
++        for q in qs:
++            rq = role_of(q)
++            if rq == 'base_color_alpha' and alpha_why:
++                whys[q] = 'colour+alpha slot refused: ' + alpha_why
++                continue
++            confirmed = [t for t in base_bind.get(q, ()) if base_evidence(rq, tex_tags(t))]
++            if not confirmed or len(confirmed) != len(base_bind.get(q, ())):
++                whys[q] = (f'{rq}: game textures bound to it do not all confirm the layout '
++                           f'({len(confirmed)}/{len(base_bind.get(q, ()))})')
++                if rq == 'base_color_alpha':
++                    whys[q] += ('; the game binds colour textures WITHOUT an alpha channel here (registry), so the '
++                                "game's cut-out does not come from this slot's alpha and the mod's alpha "
++                                'cut-out would be ignored')
++                continue
++            why = gate(p, q)
++            if why:
++                whys[q] = why
++                continue
++            ok.append(q)
+         if len(ok) != 1:
+-            lost[p] = (f'{r}: {len(ok)} base parameters {qs} confirmed by a bound base texture '
+-                       '(need exactly 1; second source missing or ambiguous)')
++            lost[p] = (f'{r}: {len(ok)} base parameters of {qs} confirmed by bound base textures and the slot '
++                       f'gate (need exactly 1; second source missing or ambiguous): {whys}')
+             continue
+         q = ok[0]
+-        mapping[p] = {'to': q, 'how': 'role:' + r,
++        mapping[p] = {'to': q, 'how': 'role:' + role_of(q),
+                       'evidence': {'mod_texture': tex, 'mod_format': fmt,
+-                                   'base_textures': sorted(t for t in base_bind[q] if base_evidence(r, tex_tags(t)))}}
++                                   'base_textures': sorted(base_bind[q])}}
++        if role_of(q) == 'base_color_alpha':
++            mapping[p]['evidence']['cutout'] = (mod_tex(tex) or {}).get('cutout')
+     targets = {}
+     for p, v in mapping.items():
+         targets.setdefault(v['to'], []).append(p)
+diff -ruN -x _ tools-orig/part_roles.py tools/part_roles.py
+--- tools-orig/part_roles.py	1969-12-31 18:00:00
++++ tools/part_roles.py	2026-10-13 10:53:32
+@@ -0,0 +1,88 @@
++#!/usr/bin/env python3
++"""Part role (skin / hair / eye / cloth / hard) of a mod material instance and
++of a base parent, used ONLY to rank parents that are already allowed and map
++the same number of parameters (Mac-only, generic; an English part vocabulary,
++no game, mod or asset names). Vocabulary origin: common English words for
++character parts, written while working on the first test mod (so it includes
++that mod's part words: face, mouth, lash, pistol, knife, watch, props); it
++never decides whether a parent is allowed, only the order among allowed ones.
++
++Two sources per side:
++  model  the shading model, read with two sources (mod: reader C enum + bit
++         field; base: asset registry + reader C, leave-one-out):
++           Hair -> hair, Eye -> eye, Cloth in the set -> cloth,
++           only skin-type models (SubsurfaceProfile, Subsurface,
++           PreintegratedSkin) -> skin, ClearCoat only -> hard, anything else none
++  names  word tokens of the instance / material name, its master's name and
++         (mod side) the names of the textures it binds; camelCase and _ split.
++role(model, names):
++  both give the same role          -> (role, 2)
++  one gives a role, other gives none -> (role, 1)
++  they disagree or neither gives one -> (None, 0)   [disagreement is reported]
++score(part, parent):  0 same role, both strength 2;  1 same role otherwise;
++                      2 either side unknown;          3 known and different.
++"""
++import re
++
++VOCAB = {
++    'skin': {'skin', 'face', 'head', 'hand', 'hands', 'mouth', 'lip', 'lips', 'teeth', 'tongue', 'neck'},
++    'hair': {'hair', 'beard', 'brow', 'brows', 'eyebrow', 'eyebrows', 'lash', 'lashes', 'eyelash',
++             'eyelashes', 'fur', 'groom', 'moustache', 'mustache'},
++    'eye': {'eye', 'eyes', 'eyeball', 'iris', 'cornea', 'sclera'},
++    'cloth': {'cloth', 'clothes', 'clothing', 'shirt', 'jacket', 'coat', 'trousers', 'pants', 'jeans', 'dress',
++              'shoes', 'boots', 'tights', 'vest', 'glove', 'gloves', 'outfit', 'fabric', 'leather', 'hoodie',
++              'sweater', 'skirt', 'socks', 'scarf'},
++    'hard': {'metal', 'metallic', 'pistol', 'gun', 'rifle', 'knife', 'blade', 'weapon', 'watch', 'watches',
++             'chrome', 'steel', 'prop', 'props', 'plastic', 'glass'},
++}
++SKIN_MODELS = {'MSM_SubsurfaceProfile', 'MSM_Subsurface', 'MSM_PreintegratedSkin'}
++SPLIT = re.compile(r'[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+')
++
++
++def tokens(*names):
++    out = set()
++    for n in names:
++        if not n:
++            continue
++        for part in re.split(r'[/_\-\s.+]+', n.rsplit('/', 1)[-1]):
++            out.update(t.lower() for t in SPLIT.findall(part))
++    return out
++
++
++def role_from_names(*names):
++    t = tokens(*names)
++    hits = {r for r, words in VOCAB.items() if t & words}
++    return next(iter(hits)) if len(hits) == 1 else None
++
++
++def role_from_models(models):
++    if not models:
++        return None
++    m = set(models)
++    if 'MSM_Hair' in m:
++        return 'hair'
++    if 'MSM_Eye' in m:
++        return 'eye'
++    if 'MSM_Cloth' in m:
++        return 'cloth'
++    if m <= SKIN_MODELS:
++        return 'skin'
++    if m == {'MSM_ClearCoat'}:
++        return 'hard'
++    return None
++
++
++def role(models, *names):
++    a, b = role_from_models(models), role_from_names(*names)
++    if a and b and a != b:
++        return {'role': None, 'strength': 0, 'model': a, 'names': b, 'note': f'model says {a}, names say {b}'}
++    r = a or b
++    return {'role': r, 'strength': (2 if a and b else 1) if r else 0, 'model': a, 'names': b}
++
++
++def score(part, parent):
++    if not part['role'] or not parent['role']:
++        return 2
++    if part['role'] != parent['role']:
++        return 3
++    return 0 if part['strength'] == 2 and parent['strength'] == 2 else 1
+diff -ruN -x _ tools-orig/reparent_plan.py tools/reparent_plan.py
+--- tools-orig/reparent_plan.py	2026-10-13 09:56:11
++++ tools/reparent_plan.py	2026-10-13 10:53:32
+@@ -35,7 +35,29 @@
+   MIC with NO own parameters, mod Materials: not matched (as round 1).
+   not matched -> 'known-checker', or 'restore-base' only with --allow-restore-base
+      AND the package overrides a base package proven to have target shader maps.
+-Exit 1 if zero materials were checked or zero candidates survived.
++ROUND 4 (full look, Mac-only):
++  * reader C (material_props.py): blend mode and shading model from the
++    material's OWN property block, decoder learned from the game's materials
++    against the registry (leave-one-out for base parents). Base parent model =
++    registry AND reader C (two files) -> 'models_two_source'. Mod model = reader
++    C enum AND bit field (two fields) whose blend group must agree with readers
++    A/B; if A/B could not tell opaque from masked, reader C must not contradict
++    the user decision (--accept-unproven-opaque). An unreadable mod model
++    refuses EVERY parent (A/B cannot exclude a special model); a special model
++    named only by the bit field (per-pixel enum) refuses the same-model route.
++  * special shading models (Hair, Eye, SingleLayerWater, ThinTranslucent): a mod
++    instance whose model is special may take ONLY a Material parent with the
++    SAME model set (two sources each side) and blend group; a non-special mod
++    instance never takes a special parent; an unreadable mod model never takes a
++    special parent. Never crosses models; refusing is the default.
++  * slot gate + packed same-order + colour+alpha rules (param_roles.py) apply
++    to every mapped parameter (virtual-texture slots are lost).
++  * ranking among allowed parents: most mapped, then part-role match
++    (part_roles.py), then shading-model match (0 same set, 1 parent set contains
++    the mod model, 2 other/unknown), then most exact, Material before instance,
++    fewer names, name.
++Exit 1 if zero materials were checked, zero candidates survived or reader C
++could not be learned.
+ """
+ import argparse
+ import json
+@@ -48,7 +70,11 @@
+ import container_header  # noqa: E402
+ import material_class as mc  # noqa: E402
+ import mod_material_audit as mma  # noqa: E402
++import material_props as mprops  # noqa: E402
+ import param_roles as pr  # noqa: E402
++import part_roles  # noqa: E402
++import texture_layout as tlay  # noqa: E402
++import utoc  # noqa: E402
+ import shader_library as sl  # noqa: E402
+ import zen  # noqa: E402
+ 
+@@ -103,22 +129,27 @@
+     return {k: sorted(v) for k, v in used.items()}
+ 
+ 
+-def base_gate(props):
+-    """None if a two-source class allows this parent at all, else why not."""
++def base_gate(props, allow_special=False):
++    """None if a two-source class allows this parent at all, else why not.
++    allow_special: let special-model parents through (the same-model route
++    checks them per mod instance)."""
+     if not props.get('readable'):
+         return 'class not readable from two sources: ' + props.get('why', '?')
+     if props['domain'] != mc.SURFACE:
+         return f"domain {props['domain']} is not a surface material"
+     if props['lit'] != 'lit':
+         return f"shading is {props['lit']} (mod materials need a lit parent)"
+-    if props['special']:
++    if props['special'] and not allow_special:
+         return f"special shading model {props['special']} (one source suffices to refuse)"
+     if props['blend_group'] not in (mc.OPAQUE, mc.MASKED):
+         return f"blend {props['blend']} (translucent family)"
+     return None
+ 
+ 
+-def candidates(checked, store, mod_names, registry=None, props_of=None):
++def candidates(checked, store, mod_names, registry=None, props_of=None, model_c=None):
++    """model_c: callable(package, props) -> reader C result for the parent's
++    master (leave-one-out), or None. Special-model parents are kept only when
++    reader C confirms the registry model set (two sources)."""
+     used = skeletal_use(checked, registry)
+     cands, excluded, details = {}, {}, {}
+     for r in checked:
+@@ -143,9 +174,21 @@
+             if props_of is None:
+                 why = 'no material class reader (asset registry + shader types) given'
+             else:
+-                props = props_of(pkg)
+-                why = base_gate(props)
++                props = dict(props_of(pkg))
++                why = base_gate(props, allow_special=model_c is not None)
+         if why is None:
++            rc = model_c(pkg, props) if model_c else None
++            props['reader_c'] = rc
++            two = bool(rc and rc.get('readable') and rc['models'] == props['models']
++                       and rc['blend'] == props['blend'])
++            props['models_two_source'] = two
++            if rc and rc.get('readable') and not two:
++                why = (f"sources disagree on the shading model: registry {props['blend']} {props['models']}, "
++                       f"reader C {rc['blend']} {rc['models']}")
++            elif props['special'] and not (two and mats[0]['class'] == mma.MATERIAL):
++                why = (f"special shading model {props['special']} not confirmed by two sources on a Material "
++                       f"({(rc or {}).get('why') or 'instance parent'})")
++        if why is None:
+             cands[pkg] = {'names': r['names'], 'export': mats[0]['name'], 'class': mats[0]['class'],
+                           'verified': r['verified'], 'skeletal_mesh_evidence': used[pkg], 'props': props}
+             continue
+@@ -159,7 +202,7 @@
+ 
+ 
+ def rank(pkg, o):
+-    return (-o['mapped'], -o['exact'], o['is_mic'], o['names'], pkg)
++    return (-o['mapped'], o.get('role_score', 2), o.get('model_score', 2), -o['exact'], o['is_mic'], o['names'], pkg)
+ 
+ 
+ def best_option(options):
+@@ -182,9 +225,13 @@
+     """What plan() needs besides the audit: mod class reader, base texture
+     bindings, registry texture tags, mod texture formats."""
+ 
+-    def __init__(self, mod_class, base_bind, tex_tags, mod_formats, accept_unproven_opaque=False):
++    def __init__(self, mod_class, base_bind, tex_tags, mod_formats, accept_unproven_opaque=False,
++                 mod_c=None, mod_tex=None, defaults=None):
+         self.mod_class, self.base_bind, self.tex_tags, self.mod_formats = mod_class, base_bind, tex_tags, mod_formats
+         self.accept_unproven_opaque = accept_unproven_opaque
++        self.mod_c = mod_c or (lambda name: {'readable': False, 'why': 'no reader C given'})
++        self.mod_tex = mod_tex                     # None -> no mod texture is proven -> nothing maps
++        self.defaults = defaults or (lambda cand: [])
+ 
+ 
+ def mod_master(audit_by, name, depth=16):
+@@ -198,11 +245,30 @@
+     return None
+ 
+ 
++GROUP_OF_BLEND = {'BLEND_Opaque': mc.OPAQUE, 'BLEND_Masked': mc.MASKED}
++
++
++def model_score(mod_models, parent_props):
++    """0 same model set (two sources each side), 1 parent set contains the mod
++    model(s), 2 other or unknown."""
++    if not mod_models:
++        return 2
++    pm = set(parent_props.get('models') or ())
++    if set(mod_models) == pm and parent_props.get('models_two_source'):
++        return 0
++    return 1 if set(mod_models) <= pm else 2
++
++
++def _mod_names(pk, bind, master):
++    return [pk.name if hasattr(pk, 'name') else None, master] + sorted((bind or {}).values())
++
++
+ def plan(audit, mod_packages, cands, allow_partial, allow_restore_base=False, ctx=None):
+     if ctx is None:
+         raise ValueError('plan() needs a Context (two-source class + parameter evidence)')
+     rows = []
+     audit_by = {m['package']: m for m in audit['materials']}
++    special_set = set(mc.SPECIAL_MODELS)
+     for m in audit['materials']:
+         if m['verdict'] not in ('NO_TARGET_SHADERS', 'INHERITS_MISSING'):
+             continue
+@@ -215,45 +281,100 @@
+         if m['class'] == 'MaterialInstanceConstant' and m['verdict'] == 'INHERITS_MISSING' and params:
+             master = mod_master(audit_by, m['package'])
+             mp = ctx.mod_class(master) if master else {'readable': False, 'why': 'mod master not found'}
++            mcr = ctx.mod_c(master) if master else {'readable': False, 'why': 'mod master not found'}
++            c_group = GROUP_OF_BLEND.get(mcr.get('blend'), mc.TRANSLUCENT) if mcr.get('readable') else None
+             if not mp.get('readable') and mp.get('unproven_opaque') and ctx.accept_unproven_opaque:
+-                mp = dict(mp, readable=True, blend_group=mc.OPAQUE,
+-                          note='USER DECISION (--accept-unproven-opaque): opaque is not proven by two readers; '
+-                               'if the mod material is really masked, its cut-outs are filled in')
++                if c_group not in (None, mc.OPAQUE):
++                    mp = dict(mp, why=f"user decision refused: reader C (own property block) says {mcr['blend']}")
++                else:
++                    mp = dict(mp, readable=True, blend_group=mc.OPAQUE,
++                              note='USER DECISION (--accept-unproven-opaque): opaque is not proven by two readers; '
++                                   'if the mod material is really masked, its cut-outs are filled in' +
++                                   ('; reader C (the material\'s own property block) also reads opaque'
++                                    if c_group == mc.OPAQUE else ''))
+             row['mod_master'] = master
+             row['mod_class'] = {k: mp[k] for k in ('readable', 'blend_group', 'why', 'note', 'reader_a_classes',
+                                                    'reader_b', 'unproven_opaque') if k in mp}
++            row['mod_model'] = {k: mcr[k] for k in ('readable', 'blend', 'models', 'model_enum', 'why') if k in mcr}
++            mod_models = mcr['models'] if mcr.get('readable') else None
++            mod_special = sorted(set(mod_models or ()) & special_set)
+             if not mp.get('readable'):
+                 why = 'mod material class not readable from two readers: ' + mp.get('why', '?')
+             elif mp['blend_group'] not in (mc.OPAQUE, mc.MASKED):
+                 why = f"{mp['blend_group']} mod material: no parent class handled"
++            elif not mcr.get('readable'):
++                # readers A/B never see the shading model: without reader C a special (hair, eye ...)
++                # model cannot be excluded, so no parent is allowed (fail closed)
++                why = 'mod shading model unreadable (reader C): ' + str(mcr.get('why') or '?')
++            elif mod_special and mcr.get('field_only'):
++                why = (f"mod special model {mod_special} named only by the bit field (per-pixel enum): "
++                       'not two fields, same-model route refused')
++            elif c_group is not None and c_group != mp['blend_group']:
++                why = (f"mod readers disagree: shader types/base pass say {mp['blend_group']}, "
++                       f"reader C (own property block) says {mcr['blend']}")
+             else:
+                 bind, _ = pr.texture_bindings(pk)
++                part = part_roles.role(mod_models, *_mod_names(pk, bind, master))
++                row['part_role'] = part
+                 options, maps, refused = {}, {}, {}
+                 for c, cd in cands.items():
+                     names = cd['names']
+-                    if cd['props']['blend_group'] != mp['blend_group']:
++                    cp = cd['props']
++                    if cp['blend_group'] != mp['blend_group']:
+                         if set(params) & set(names) or any(pr.role_of(q) for q in names):
+-                            refused[c] = (f"{cd['props']['blend_group']} parent for a {mp['blend_group']} mod "
+-                                          f"instance ({cd['props']['sources']['asset_registry']}, both sources)")
++                            refused[c] = (f"{cp['blend_group']} parent for a {mp['blend_group']} mod "
++                                          f"instance ({cp['sources']['asset_registry']}, both sources)")
+                         continue
++                    if cp.get('special') or mod_special:
++                        if not mod_special:
++                            refused[c] = (f"special shading model {cp['special']} parent for a "
++                                          f"{'/'.join(mod_models or ['unreadable'])} mod instance (never cross)")
++                            continue
++                        if not cp.get('special'):
++                            refused[c] = (f"{'/'.join(cp['models'])} parent for a {'/'.join(mod_special)} "
++                                          'mod instance (never cross shading models)')
++                            continue
++                        if not (cp.get('models_two_source') and set(cp['models']) == set(mod_models)
++                                and cd['class'] == mma.MATERIAL):
++                            refused[c] = (f"same-model route needs the SAME model set from two sources on a "
++                                          f"Material: parent {cp['models']} vs mod {mod_models}")
++                            continue
+                     mapping, lost = pr.map_params(params, bind or {}, ctx.mod_formats, names,
+-                                                  ctx.base_bind(c), ctx.tex_tags, set(pk.names))
++                                                  ctx.base_bind(c), ctx.tex_tags, set(pk.names),
++                                                  mod_tex=ctx.mod_tex, defaults=ctx.defaults(c),
++                                                  mod_masked=mp['blend_group'] == mc.MASKED)
+                     maps[c] = (mapping, lost)
++                    prole = part_roles.role(cp['models'] if cp.get('models_two_source') else None,
++                                            c, cp.get('master'))
+                     options[c] = {'mapped': len(mapping), 'exact': sum(v['how'] == 'exact' for v in mapping.values()),
+-                                  'is_mic': cd['class'] == mma.MIC, 'names': len(names)}
++                                  'is_mic': cd['class'] == mma.MIC, 'names': len(names),
++                                  'role_score': part_roles.score(part, prole), 'parent_role': prole,
++                                  'model_score': model_score(mod_models, cp)}
+                 if refused:
+                     row['refused_parents'] = refused
++                row['options_evaluated'] = len(options)
++                row['considered'] = [{'parent': k, 'mapped': v['mapped'], 'role_score': v['role_score'],
++                                      'model_score': v['model_score'], 'lost': maps[k][1]}
++                                     for _r, k, v in sorted((rank(k, v), k, v) for k, v in options.items())[:6]]
+                 target, cov = choose(params, options, allow_partial)
+                 if target is None:
+                     best = best_option(options)
+                     need_txt = (f'partial needs --allow-partial and coverage >= {MIN_PARTIAL_COVERAGE}'
+                                 if cov < 1 else '')
+-                    why = 'no allowed candidate maps its parameters' if not best or not best[1]['mapped'] else (
++                    why = ('no allowed candidate' if not best else
++                           f"best allowed candidate {best[0]} maps 0/{len(params)} parameters; lost: {maps[best[0]][1]}"
++                           ) if not best or not best[1]['mapped'] else (
+                         f"best allowed candidate {best[0]} maps {best[1]['mapped']}/{len(params)} parameters "
+                         f"({need_txt}); lost: {maps[best[0]][1]}")
++                    if mod_special and not options:
++                        why = (f"no game parent with the same {'/'.join(mod_special)} shading model and blend "
++                               'from two sources')
+                 else:
+                     row['param_map'], row['lost_params'] = maps[target]
+                     row['param_renames'] = {k: v['to'] for k, v in maps[target][0].items() if v['how'] != 'exact'}
++                    row['ranking'] = {k: options[target][k] for k in ('role_score', 'model_score', 'parent_role')}
++                    row['runner_up'] = sorted(((rank(k, v), k) for k, v in options.items() if k != target))[:1]
++                    row['runner_up'] = row['runner_up'][0][1] if row['runner_up'] else None
+         elif m['class'] == 'MaterialInstanceConstant':
+             why = 'no own parameters: look comes only from the mod parent, which cannot be emulated'
+         else:
+@@ -262,13 +383,30 @@
+         if target:
+             c = cands[target]
+             p = c['props']
++            mm = row['mod_model']
++            notes = []
++            if p.get('models_two_source') and mm.get('readable'):
++                if set(mm['models']) == set(p['models']):
++                    notes.append(f"same shading model {p['models']} (two sources each side)")
++                else:
++                    notes.append(f"shading model differs: mod {mm['models']} (reader C), parent {p['models']} "
++                                 '(registry + reader C): lighting differs from PC')
++            else:
++                notes.append(f"parent shading models {p['models']} from "
++                             f"{'two sources' if p.get('models_two_source') else 'one source (asset registry)'}; "
++                             f"mod model {mm.get('models') if mm.get('readable') else 'not readable'}: "
++                             'lighting may differ')
++            if row['ranking']['role_score'] == 3:
++                notes.append(f"role mismatch: {row['part_role']['role']} part on a "
++                             f"{row['ranking']['parent_role']['role']} parent (no allowed parent of its role maps "
++                             'as many parameters)')
+             row.update({'action': 'reparent' if cov == 1 else 'reparent-partial', 'new_parent': target,
+                         'new_export': c['export'], 'new_parent_class': c['class'],
+                         'candidate_verified': c['verified'], 'skeletal_mesh_evidence': c['skeletal_mesh_evidence'],
+                         'parent_class': {'domain': p['domain'], 'blend': p['blend'], 'lit': p['lit'],
++                                         'models': p['models'], 'models_two_source': p.get('models_two_source'),
+                                          'sources': p['sources']},
+-                        'look_notes': [f"parent shading models {p['models']} come from one source (asset "
+-                                       'registry) and the mod model is not readable: lighting may differ'],
++                        'look_notes': notes,
+                         'store_entry_repoint': {'package_id': f"{cityhash.ue_name_hash(m['package']):016x}",
+                                                 'from_package_id': f"{cityhash.ue_name_hash(m['parent']):016x}",
+                                                 'to_package_id': f'{cityhash.ue_name_hash(target):016x}'}})
+@@ -317,9 +455,50 @@
+     return out
+ 
+ 
+-def build_context(registry, peers, mod_pk, whole, headers, accept_unproven_opaque=False):
++def build_context(registry, peers, mod_pk, whole, headers, accept_unproven_opaque=False,
++                  reader_c=None, mod_toc=None, mod_read=None):
++    """reader_c: material_props.ReaderC; mod_toc/mod_read: the mod .utoc (utoc.Toc)
++    and a ucas reader, for the mod textures' bulk-data layout proof."""
+     mod_cache = {}
++    c_cache = {}
+ 
++    def mod_c(name):
++        if reader_c is None:
++            return {'readable': False, 'why': 'no reader C'}
++        if name not in c_cache:
++            p = mod_pk.get(name)
++            blob = mprops.top_export_bytes(p) if p else None
++            c_cache[name] = reader_c.mod(blob) if blob else {'readable': False, 'why': 'no export data'}
++        return c_cache[name]
++
++    bulk_rows = tlay.mod_bulk_index(mod_toc) if mod_toc is not None else {}
++    tex_cache = {}
++
++    def mod_tex(tex):
++        if mod_toc is None:
++            return None
++        if tex not in tex_cache:
++            p = mod_pk.get(tex)
++            rows_ = bulk_rows.get(cityhash.ue_name_hash(tex), [])
++            if p is None:
++                tex_cache[tex] = {'proven': False, 'why': 'mod texture package missing'}
++            else:
++                fact = tlay.plain_mips(p, [mod_toc.offlen[r][1] for r in rows_])
++                if fact.get('proven') and fact['format'] in tlay.ALPHA_FORMATS and mod_read is not None:
++                    fact['cutout'] = tlay.cutout_alpha(p, [mod_toc.read_chunk(r, mod_read) for r in rows_])
++                tex_cache[tex] = fact
++        return tex_cache[tex]
++
++    def defaults(cand):
++        m, chain = mc.master_of(cand, registry, headers)
++        h = headers.get(m) if m else None
++        out = []
++        for i in (h or {}).get('imports', []):
++            a = registry.asset(i)
++            if a and a['class'].startswith('/Script/Engine.Texture'):
++                out.append(a['tags'])
++        return out
++
+     def mod_class(name):
+         if name not in mod_cache:
+             p = mod_pk.get(name)
+@@ -351,7 +530,8 @@
+         f = pr.pixel_format(p)
+         if f:
+             formats[n] = f
+-    return Context(mod_class, base_bind, tex_tags, formats, accept_unproven_opaque)
++    return Context(mod_class, base_bind, tex_tags, formats, accept_unproven_opaque,
++                   mod_c=mod_c, mod_tex=mod_tex, defaults=defaults)
+ 
+ 
+ def main(argv=None):
+@@ -387,13 +567,35 @@
+ 
+     def props_of(pkg):
+         return mc.base_props(pkg, registry, typeidx, peers, headers)
+-    cands, excluded, details = candidates(checked, store, set(pk), registry, props_of)
+     whole = fetched_packages(a.fetched_dir, checked)
+-    ctx = build_context(registry, peers, pk, whole, headers, a.accept_unproven_opaque)
++    train = mprops.training_set(whole, registry, mc.MATERIAL_AR_CLASS)
++    rc = mprops.ReaderC(train, peers.bits)
++    print(f'reparent_plan: reader C trained on {rc.full.n_train} game materials: '
++          + (f'learned {rc.full.found} (decodable {rc.full.n_used})' if rc.full.ok else 'NOT learned: ' + str(rc.full.why)))
++    if not rc.full.ok:
++        print('reparent_plan: FAIL (reader C not learned from the fetched game Materials)')
++        return 1
++
++    def model_c(pkg, props):
++        m = props.get('master')
++        z = whole.get(m) if m else None
++        if z is None:
++            return {'readable': False, 'why': 'master export not fetched whole'}
++        return rc.base(m, mprops.top_export_bytes(z), set(props.get('chain') or [m]))
++    cands, excluded, details = candidates(checked, store, set(pk), registry, props_of, model_c)
++    mod_toc = utoc.load(a.mod_utoc)
++    ctx = build_context(registry, peers, pk, whole, headers, a.accept_unproven_opaque,
++                        reader_c=rc, mod_toc=mod_toc, mod_read=mma.reader(a.mod_ucas))
+     rows = plan(audit, pk, cands, a.allow_partial, a.allow_restore_base, ctx)
++    n_two = sum(bool(c['props'].get('models_two_source')) for c in cands.values())
++    print(f'reparent_plan: {n_two}/{len(cands)} candidates have a two-source shading model '
++          '(registry + reader C)')
+     _jd({'label': 'Mac-only', 'inputs': {'asset_registry_assets': registry.counts['assets'],
+                                          'class_population': len(peers.pop),
+-                                         'whole_chunk_base_packages': len(whole)},
++                                         'whole_chunk_base_packages': len(whole),
++                                         'reader_c': {'trained': rc.full.n_train, 'decodable': rc.full.n_used,
++                                                      'fields': {k: list(v) for k, v in rc.full.found.items()},
++                                                      'raw_sizes': rc.full.raw_learned}},
+          'candidates': {k: {x: v[x] for x in v if x != 'names'} for k, v in cands.items()},
+          'excluded': excluded, 'excluded_class_detail': details, 'rows': rows}, a.out)
+     acts = {}
+@@ -402,8 +604,12 @@
+     print(f'reparent_plan: checked {len(rows)} materials against {len(checked)} fetched headers '
+           f'({len(peers.pop)} game materials in the class population) -> {len(cands)} candidates; '
+           f'excluded {({k: len(v) for k, v in excluded.items()})}; actions {acts}')
+-    ok = bool(rows) and bool(cands)
+-    print('reparent_plan:', 'DONE' if ok else 'FAIL (zero materials or zero candidates)')
++    evaluated = [r for r in rows if 'options_evaluated' in r]
++    pairs = sum(r['options_evaluated'] for r in evaluated)
++    print(f'reparent_plan: parameter/slot gate evaluated {pairs} (mod instance, parent) pairs for '
++          f'{len(evaluated)} instances')
++    ok = bool(rows) and bool(cands) and (pairs > 0 or not evaluated)
++    print('reparent_plan:', 'DONE' if ok else 'FAIL (zero materials, zero candidates or zero gate evaluations)')
+     return 0 if ok else 1
+ 
+ 
+diff -ruN -x _ tools-orig/test_cap12.py tools/test_cap12.py
+--- tools-orig/test_cap12.py	2026-10-13 09:56:11
++++ tools/test_cap12.py	2026-10-13 10:55:34
+@@ -51,10 +51,12 @@
+ LIBS = [FETCHED + '/manifests/Townfall_Chunk0.type8.bin', FETCHED + '/manifests/Global.type8.bin']
+ ALL_CH = [FETCHED + f'/manifests/pakchunk{n}-ps5.container-header.bin' for n in (0, 1, 10, 11, 12)]
+ CHECKED = [EV + '/cap12-20261012/round1-check.json', EV + '/cap12-20261012/round2-check.json']
++CHECKED3 = CHECKED + [EV + '/cap12-20261012/round3-check.json']   # round 4 (full look) uses all three rounds
+ AUDIT5 = EV + '/cap12-20261012/leon-material-audit-5hdr.json'
+ CLOTH = '/Game/Townfall/Characters/Materials/M_MRO_Cloth_NonVT'
+ LIQUID = '/Game/Townfall/Characters/Simon/Materials/M_Simon_Medical_Liquid_Inside_Tube'
+ TUBES = '/Game/Townfall/Characters/Simon/Materials/M_Medical_Tubes'
++NONVT = '/Game/Townfall/Characters/Materials/M_MRO_Cloth_NonVT'
+ PY = [sys.executable, '-I']
+ 
+ _cache = {}
+@@ -138,7 +140,7 @@
+ 
+ def fetched_file(pkg):
+     name = f'{cityhash.ue_name_hash(pkg):016x}.hdr.bin'
+-    for d in ('headers-r1', 'headers-r2'):
++    for d in ('headers-r1', 'headers-r2', 'headers-r3'):
+         if os.path.exists(os.path.join(FETCHED, d, name)):
+             return os.path.join(FETCHED, d, name)
+     raise AssertionError(f'real input missing: fetched header of {pkg}')
+@@ -654,10 +656,18 @@
+         self.assertEqual(cands, {})
+         self.assertIn('no material class reader (asset registry + shader types) given', excl)
+ 
++    LIN = {'SRGB': 'False', 'CompressionSettings': 'TC_Default', 'VirtualTextureStreaming': 'False'}
++
+     def _ctx(self, classes_by_master, accept=False):
+         bound = {n: {'/T/' + n} for n in ('BaseColor', 'Normal', 'ORM', 'HairAO')}   # texture slots in the base
++        # round 4: the slot gate needs proven-plain mod textures and non-virtual game slots (stubbed here)
++        def mod_c(m):        # round 4: reader C stub, a non-special model with the blend of the class stub
++            g = classes_by_master.get(m, {}).get('blend_group')
++            return {'readable': True, 'models': ['MSM_DefaultLit'], 'model_enum': 'MSM_DefaultLit',
++                    'blend': {'masked': 'BLEND_Masked'}.get(g, 'BLEND_Opaque')}
+         return reparent_plan.Context(lambda m: classes_by_master.get(m, {'readable': False, 'why': 'test'}),
+-                                     lambda c: bound, lambda t: None, {}, accept)
++                                     lambda c: bound, lambda t: self.LIN, {}, accept, mod_c=mod_c,
++                                     mod_tex=lambda t: {'proven': True}, defaults=lambda c: [self.LIN])
+ 
+     def test_plan_rules_on_real_leon_audit(self):   # F4 + round 2 blend matching
+         pk, libs = leon()
+@@ -983,50 +993,62 @@
+         self.assertIsNone(pr.texture_bindings(pk['/Game/Leon/M_Leon_Body'])[0])
+ 
+     def test_map_params(self):
+-        tags = {'/T/D': {'SRGB': 'True', 'CompressionSettings': 'TC_BC7'},
+-                '/T/N': {'SRGB': 'False', 'CompressionSettings': 'TC_Normalmap'},
+-                '/T/M': {'SRGB': 'False', 'CompressionSettings': 'TC_BC7'}}
++        nv = {'VirtualTextureStreaming': 'False'}
++        tags = {'/T/D': dict(nv, SRGB='True', CompressionSettings='TC_BC7'),
++                '/T/N': dict(nv, SRGB='False', CompressionSettings='TC_Normalmap'),
++                '/T/M': dict(nv, SRGB='False', CompressionSettings='TC_BC7')}
++        _mp = pr.map_params                                   # round 4: slot gate inputs (proven-plain mod
++        dflt = list(tags.values())                            # textures, non-virtual defaults of each class)
++
++        def map_params(*a, **k):
++            k.setdefault('mod_tex', lambda t: {'proven': True})
++            k.setdefault('defaults', dflt)
++            return _mp(*a, **k)
+         mod_bind = {'BaseColor': '/L/D', 'Nrm': '/L/N', 'ORM': '/L/M'}
+         fmts = {'/L/D': 'PF_DXT1', '/L/N': 'PF_BC5', '/L/M': 'PF_DXT1'}
+         base_names = ['BaseColour', 'Normal - Texture', 'MRO']
+         base_bind = {'BaseColour': {'/T/D'}, 'Normal - Texture': {'/T/N'}, 'MRO': {'/T/M'}}
+-        m, lost = pr.map_params(['BaseColor', 'ORM'], mod_bind, fmts, base_names, base_bind, tags.get, set())
++        m, lost = map_params(['BaseColor', 'ORM'], mod_bind, fmts, base_names, base_bind, tags.get, set())
+         self.assertEqual(m['BaseColor']['to'], 'BaseColour')
+         self.assertEqual(m['BaseColor']['how'], 'role:base_color')
+-        self.assertIn('channel order has one source', lost['ORM'])          # packed never remapped
+-        m, lost = pr.map_params(['Normal - Texture'], {}, {}, base_names, base_bind, tags.get, set())
+-        self.assertEqual(m['Normal - Texture']['how'], 'exact')            # exact: no layout question
+-        m, lost = pr.map_params(['Normal - Texture'], {}, {}, base_names, {}, tags.get, set())
++        self.assertIn('channel swizzle', lost['ORM'])                      # packed never swizzled
++        nb = {'Normal - Texture': '/L/N'}
++        m, lost = map_params(['Normal - Texture'], nb, fmts, base_names, base_bind, tags.get, set())
++        self.assertEqual(m['Normal - Texture']['how'], 'exact')            # exact: no rename (slot gate still runs)
++        m, lost = map_params(['Normal - Texture'], {}, {}, base_names, base_bind, tags.get, set())
++        self.assertIn('binds no texture', lost['Normal - Texture'])        # round 4: nothing to gate -> lost
++        m, lost = map_params(['Normal - Texture'], nb, fmts, base_names, {}, tags.get, set())
+         self.assertIn('no fetched base instance binds', lost['Normal - Texture'])   # R2-4: slot type unverified
+         mb = dict(mod_bind, Normal='/L/N')
+-        m, lost = pr.map_params(['Normal'], mb, fmts, base_names, base_bind, tags.get, set())
++        m, lost = map_params(['Normal'], mb, fmts, base_names, base_bind, tags.get, set())
+         self.assertEqual(m['Normal']['to'], 'Normal - Texture')
+         # negatives: missing / wrong second source
+-        m, lost = pr.map_params(['BaseColor'], mod_bind, fmts, base_names, {}, tags.get, set())
++        m, lost = map_params(['BaseColor'], mod_bind, fmts, base_names, {}, tags.get, set())
+         self.assertIn('second source', lost['BaseColor'])                  # no bound base texture
+-        m, lost = pr.map_params(['BaseColor'], mod_bind, {'/L/D': 'PF_BC5'}, base_names, base_bind, tags.get, set())
++        m, lost = map_params(['BaseColor'], mod_bind, {'/L/D': 'PF_BC5'}, base_names, base_bind, tags.get, set())
+         self.assertIn('does not confirm', lost['BaseColor'])               # mod texture is a normal format
+         bad = dict(tags, **{'/T/D': {'SRGB': 'False', 'CompressionSettings': 'TC_Masks'}})
+-        m, lost = pr.map_params(['BaseColor'], mod_bind, fmts, base_names, base_bind, bad.get, set())
++        m, lost = map_params(['BaseColor'], mod_bind, fmts, base_names, base_bind, bad.get, set())
+         self.assertIn('BaseColor', lost)                                    # base texture is not colour
+         two = {'BaseColour': {'/T/D'}, 'Albedo': {'/T/D'}}
+-        m, lost = pr.map_params(['BaseColor'], mod_bind, fmts, ['BaseColour', 'Albedo'], two, tags.get, set())
++        m, lost = map_params(['BaseColor'], mod_bind, fmts, ['BaseColour', 'Albedo'], two, tags.get, set())
+         self.assertIn('ambiguous', lost['BaseColor'])                       # two confirmed targets
+-        m, lost = pr.map_params(['BaseColor'], mod_bind, fmts, base_names, base_bind, tags.get, {'BaseColour'})
++        m, lost = map_params(['BaseColor'], mod_bind, fmts, base_names, base_bind, tags.get, {'BaseColour'})
+         self.assertIn('BaseColor', lost)                                    # rename would collide
+         mb2 = dict(mod_bind, Albedo='/L/D')                                 # R2-3: two mod params, one target
+-        m, lost = pr.map_params(['BaseColor', 'Albedo'], mb2, fmts, base_names, base_bind, tags.get, set())
++        m, lost = map_params(['BaseColor', 'Albedo'], mb2, fmts, base_names, base_bind, tags.get, set())
+         self.assertEqual(m, {})
+         self.assertIn('same base parameter', lost['Albedo'])
+-        m, lost = pr.map_params(['Wobble'], mod_bind, fmts, base_names, base_bind, tags.get, set())
++        m, lost = map_params(['Wobble'], mod_bind, fmts, base_names, base_bind, tags.get, set())
+         self.assertIn('no known role', lost['Wobble'])
+ 
+ 
+-def _plan_args(tmp, extra=()):
++def _plan_args(tmp, extra=(), rounds=3):
+     L = LEON_TOC[:-5]
++    chk, dirs = (CHECKED3, ['/headers-r1', '/headers-r2', '/headers-r3']) if rounds == 3 else (CHECKED, ['/headers-r1', '/headers-r2'])
+     return PY + [os.path.join(TOOLS, 'reparent_plan.py'), '--audit', AUDIT5, '--mod-utoc', LEON_TOC,
+-                 '--mod-ucas', L + '.ucas', '--checked-headers'] + CHECKED + [
+-        '--fetched-dir', FETCHED + '/headers-r1', FETCHED + '/headers-r2', '--base-header'] + ALL_CH + [
++                 '--mod-ucas', L + '.ucas', '--checked-headers'] + chk + [
++        '--fetched-dir'] + [FETCHED + d for d in dirs] + ['--base-header'] + ALL_CH + [
+         '--asset-registry', AR_BIN, '--library'] + LIBS + ['--stinfo'] + STINFO + list(extra) + [
+         '--out', os.path.join(tmp, 'plan.json')]
+ 
+@@ -1034,6 +1056,10 @@
+ class T15RealDataRound2(unittest.TestCase):
+     def test_reparent_plan_real_default_and_partial(self):
+         tmp = tempfile.mkdtemp()
++        # round 4: rounds 1-2 hold too few whole game Materials to learn reader C -> the tool fails closed
++        r = subprocess.run(_plan_args(tmp, rounds=2), capture_output=True, text=True)
++        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
++        self.assertIn('reader C not learned', r.stdout)
+         r = subprocess.run(_plan_args(tmp), capture_output=True, text=True)
+         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+         self.assertIn('418 game materials in the class population', r.stdout)
+@@ -1069,6 +1095,7 @@
+             self.assertIn('ORM', x['lost_params'])
+             self.assertEqual(x['coverage'], 0.667)
+             self.assertTrue(any('USER DECISION' in n for n in x['look_notes']))
++            self.assertEqual(x['new_parent'], NONVT)                                # round 4: non-virtual slots
+         hair = rows['/Game/Leon/MI_Leon_Hair']                                       # 1/4 < 0.5 -> stays
+         self.assertEqual(hair['action'], 'known-checker')
+         self.assertEqual(hair['mod_class']['blend_group'], 'masked')
+@@ -1087,7 +1114,7 @@
+     def test_master_fetch_plan_real(self):
+         tmp = tempfile.mkdtemp()
+         out = os.path.join(tmp, 'r3.json')
+-        r = subprocess.run(PY + [os.path.join(TOOLS, 'master_fetch_plan.py'), '--asset-registry', AR_BIN,
++        r = subprocess.run(PY + [os.path.join(TOOLS, 'master_fetch_plan.py'), '--asset-registry', AR_BIN,  # rounds 1-2
+                                  '--library'] + LIBS + ['--stinfo'] + STINFO + ['--base-header'] + ALL_CH +
+                            ['--toc'] + BASE + ['--checked-headers'] + CHECKED +
+                            ['--mod-utoc', LEON_TOC, '--mod-ucas', LEON_CAS, '--out', out],
+diff -ruN -x _ tools-orig/test_fulllook.py tools/test_fulllook.py
+--- tools-orig/test_fulllook.py	1969-12-31 18:00:00
++++ tools/test_fulllook.py	2026-10-13 10:57:45
+@@ -0,0 +1,681 @@
++#!/usr/bin/env python3
++"""Host tests for capability #12 round 4 'full look' rules (Mac-only, read-only
++inputs). Real-data tests FAIL (never skip) when an input is missing. Every test
++asserts a non-zero count of checked items and prints it. Writes only to a temp dir.
++
++Rules covered: reader C (material_props), plain-mip / cut-out proof
++(texture_layout), slot gate / packed same-order / colour+alpha (param_roles),
++part roles (part_roles), same-model special route + role/model ranking
++(reparent_plan), --same-model-special fetch plan (master_fetch_plan).
++"""
++import json
++import os
++import struct
++import subprocess
++import sys
++import tempfile
++import unittest
++
++HERE = os.path.dirname(os.path.abspath(__file__))
++sys.path.insert(0, HERE)
++import material_class as mc  # noqa: E402
++import material_props as mp  # noqa: E402
++import mic_reparent  # noqa: E402
++import mod_material_audit as mma  # noqa: E402
++import param_roles as pr  # noqa: E402
++import part_roles  # noqa: E402
++import reparent_plan as rp  # noqa: E402
++import test_cap12 as T  # noqa: E402   (shared real-input paths and caches)
++import texture_layout as tl  # noqa: E402
++import utoc  # noqa: E402
++import zen  # noqa: E402
++
++HAIR = '/Game/Townfall/Characters/Materials/M_Hair'
++HAIR_BEARD = '/Game/Townfall/Characters/Materials/M_Hair_Beard'
++SKIN_HANDS = '/Game/Townfall/Characters/Materials/M_SkinBasic_Hands'
++NONVT = '/Game/Townfall/Characters/Materials/M_MRO_Cloth_NonVT'
++LEON_MI = ['Eye', 'Face', 'Hair', 'Knife', 'Lash', 'LowerBody', 'Mouth', 'Pistol', 'Props', 'UpperBody', 'Watches']
++BITS = {0: 'MSM_Unlit', 1: 'MSM_DefaultLit', 5: 'MSM_SubsurfaceProfile', 7: 'MSM_Hair', 8: 'MSM_Cloth'}
++_c = {}
++
++
++def gate(name, n):
++    print(f'  [gate] {name}: checked {n}')
++    assert n > 0, f'{name}: zero items checked'
++
++
++# ---------------- synthetic builders ----------------
++def uv_blob(items, tail=b''):
++    """items: sorted [(schema index, value bytes or None for a zero-masked value)] -> unversioned block."""
++    runs, prev = [], None
++    for i, v in items:
++        if runs and i == prev + 1:
++            runs[-1][1].append(v)
++        else:
++            runs.append([i, [v]])
++        prev = i
++    frags, pos, zbits = [], 0, []
++    for k, (start, vals) in enumerate(runs):
++        skip = start - pos
++        while skip > 127:
++            frags.append(127)
++            skip -= 127
++        hz = any(v is None for v in vals)
++        frags.append(skip | (hz << 7) | (len(vals) << 9))
++        if hz:
++            zbits += [v is None for v in vals]
++        pos = start + len(vals)
++    frags[-1] |= 1 << 8
++    out = b''.join(struct.pack('<H', f) for f in frags)
++    if zbits:
++        word = sum(1 << k for k, z in enumerate(zbits) if z)
++        out += bytes([word]) if len(zbits) <= 8 else struct.pack('<H', word)
++    return out + b''.join(v for _i, v in items if v is not None) + tail
++
++
++B, M, F, X = 5, 9, 11, 2             # synthetic schema: blend, model, field, a 4-byte property before them
++BLEND_CODE = {'BLEND_Masked': 1, 'BLEND_Translucent': 2}
++MODEL_CODE = {'MSM_Unlit': 0, 'MSM_SubsurfaceProfile': 5, 'MSM_Hair': 7, 'MSM_Cloth': 8}
++FIELD_OF = {'MSM_DefaultLit': 2, 'MSM_Unlit': 1, 'MSM_SubsurfaceProfile': 32, 'MSM_Hair': 128, 'MSM_Cloth': 256}
++
++
++def mat_blob(blend, model, extra=False, field=None, zero_model=False):
++    items = []
++    if extra:
++        items.append((X, b'\xc1\xff\xff\xff'))
++    if blend != 'BLEND_Opaque':
++        items.append((B, bytes([BLEND_CODE[blend]])))
++    if model != 'MSM_DefaultLit':
++        items.append((M, None if (zero_model or MODEL_CODE[model] == 0) else bytes([MODEL_CODE[model]])))
++        f = FIELD_OF[model] if field is None else field
++        items.append((F, struct.pack('<HH', 0x0300, f)))
++    elif field is not None:
++        items.append((F, struct.pack('<HH', 0x0300, field)))
++    items.append((40, b'\x01'))
++    return uv_blob(items, b'\x00' * 32)
++
++
++def tags(blend, model):
++    return {'BlendMode': blend, 'ShadingModel': model, 'ShadingModels': f'(ShadingModelField={FIELD_OF[model]})'}
++
++
++def train_set(n=30):
++    combos = [('BLEND_Opaque', 'MSM_DefaultLit'), ('BLEND_Masked', 'MSM_Hair'), ('BLEND_Opaque', 'MSM_SubsurfaceProfile'),
++              ('BLEND_Translucent', 'MSM_DefaultLit'), ('BLEND_Masked', 'MSM_Unlit'), ('BLEND_Opaque', 'MSM_Cloth')]
++    out = []
++    for k in range(n):
++        bl, mo = combos[k % len(combos)]
++        out.append((f'/G/M{k}', mat_blob(bl, mo, extra=(k % 4 == 0)), tags(bl, mo)))
++    return out
++
++
++class FakePkg:
++    def __init__(self, blobs, name='/L/T'):
++        self.exports = [{'outer': ('Null',)} for _ in blobs]
++        self._b = blobs
++        self.name = name
++
++    def export_bytes(self, e):
++        return self._b[self.exports.index(e)]
++
++
++def tex_blob(fmt, w, h, n_stream, halve=True):
++    out = b'\x01\x02' + fmt.encode() + b'\x00' + struct.pack('<II', 0, n_stream + 3)
++    for k in range(n_stream):
++        x, y = (max(1, w >> k), max(1, h >> k)) if halve else (w, h)
++        out += struct.pack('<IIII', k, x, y, 1)
++    return out + struct.pack('<I', n_stream) + b'\xaa' * 40      # inline tail (not a mip row)
++
++
++def dxt5_blocks(n, clear_ratio):
++    """n DXT5 blocks; a fraction of blocks fully clear (alpha 0), the rest alpha 200."""
++    out = b''
++    for k in range(n):
++        a = 0 if k < n * clear_ratio else 200
++        out += bytes([a, a]) + b'\x00' * 6 + b'\x00' * 8
++    return out
++
++
++# ---------------- tests ----------------
++class Counted(unittest.TestCase):
++    """Counts the assertions a test really makes, so its gate line reports them (never a fixed number)."""
++
++    def setUp(self):
++        self.n = 0
++
++    def _c(name):  # noqa: N805
++        def f(self, *a, **k):
++            self.n = getattr(self, 'n', 0) + 1
++            return getattr(unittest.TestCase, name)(self, *a, **k)
++        return f
++    assertEqual, assertIn, assertTrue, assertFalse, assertIsNone, assertGreater, assertGreaterEqual, assertNotIn = (
++        _c('assertEqual'), _c('assertIn'), _c('assertTrue'), _c('assertFalse'), _c('assertIsNone'),
++        _c('assertGreater'), _c('assertGreaterEqual'), _c('assertNotIn'))
++
++
++class R01ReaderC(Counted):
++    def test_parse_header_and_zero_mask(self):
++        b = uv_blob([(3, b'\x07'), (4, None), (130, b'\x01')])
++        entries, p = mp.parse_header(b)
++        self.assertEqual(entries, [(3, False), (4, True), (130, False)])
++        self.assertEqual(b[p:p + 2], b'\x07\x01')
++        with self.assertRaises(mp.PropsError):
++            mp.parse_header(b'\x05')                                   # truncated
++        gate('header entries', len(entries))
++
++    def test_learned_decoder_synthetic(self):
++        tr = train_set()
++        d = mp.Decoder(tr)
++        self.assertTrue(d.ok, d.why)
++        self.assertEqual({k: v[0] for k, v in d.found.items()}, {mp.BLEND: B, mp.MODEL: M, mp.FIELD: F})
++        self.assertEqual(d.raw_learned, {X: {'bytes': 4, 'rows': 5}})  # 4-byte size, 5 rows really test it
++        r = d.read(mat_blob('BLEND_Masked', 'MSM_Hair', extra=True), BITS)
++        self.assertEqual((r['blend'], r['models']), ('BLEND_Masked', ['MSM_Hair']))
++        r = d.read(mat_blob('BLEND_Masked', 'MSM_Unlit'), BITS)     # zero-masked enum value = byte 0
++        self.assertEqual(r['models'], ['MSM_Unlit'])
++        gate('synthetic training materials', d.n_train)
++
++    def test_decoder_negatives(self):
++        tr = train_set()
++        bad = list(tr)
++        bad[1] = (bad[1][0], bad[1][1], tags('BLEND_Translucent', 'MSM_Hair'))   # registry contradicts the bytes
++        self.assertFalse(mp.Decoder(bad).ok)
++        few = mp.Decoder(tr[:10])
++        self.assertFalse(few.ok)
++        self.assertIn('need 20', few.why)
++        d = mp.Decoder(tr)
++        r = d.read(mat_blob('BLEND_Masked', 'MSM_Hair', field=2), BITS)  # enum Hair, bit field DefaultLit
++        self.assertFalse(r['readable'])
++        self.assertIn('disagrees', r['why'])
++        r = d.read(uv_blob([(3, b'\x00\x00'), (B, b'\x01'), (40, b'\x01')]), BITS)   # unknown size before ours
++        self.assertFalse(r['readable'])
++        self.assertIn('no learned size', r['why'])
++        r = d.read(uv_blob([(B, b'\x09'), (40, b'\x01')]), BITS)       # never-seen blend byte
++        self.assertFalse(r['readable'])
++        self.assertFalse(mp.Decoder([]).read(b'\x00\x01', BITS)['readable'])
++        # review #4: a row whose bytes contradict the assignment (bad nested header) is not silently skipped
++        bad = list(tr)
++        blob = bytearray(bad[1][1])
++        k = blob.find(struct.pack('<HH', 0x0300, 128))
++        blob[k:k + 2] = b'\x00\x02'
++        bad[1] = (bad[1][0], bytes(blob), bad[1][2])
++        self.assertFalse(mp.Decoder(bad).ok)
++        # review #5: a raw size tested by fewer than MIN_RAW_ROWS rows is not learned -> those rows unreadable
++        few = [t for t in tr if not t[0].endswith(('M4', 'M8', 'M16', 'M20'))]     # leaves 1 testing row (M28)
++        d2 = mp.Decoder(few)
++        self.assertTrue(d2.ok, d2.why)
++        self.assertEqual(d2.raw_learned, {})
++        self.assertFalse(d2.read(mat_blob('BLEND_Masked', 'MSM_Hair', extra=True), BITS)['readable'])
++
++        gate('negative decoder cases (assertions)', self.n)
++
++    def test_real_game_and_leon(self):
++        ctx = real()
++        rc = ctx['rc']
++        self.assertTrue(rc.full.ok, rc.full.why)
++        self.assertEqual({k: v[0] for k, v in rc.full.found.items()}, {mp.BLEND: 12, mp.MODEL: 18, mp.FIELD: 20})
++        n_read = n_bad = 0
++        for pkg, blob, tg in ctx['train']:
++            r = rc.base(pkg, blob, {pkg})                               # leave-one-out
++            if not r['readable']:
++                continue
++            n_read += 1
++            c, _ = mc.ar_class(tg, ctx['peers'].bits)
++            n_bad += (r['blend'] != tg['BlendMode'] or r['models'] != c['models'])
++        self.assertEqual(n_bad, 0)
++        self.assertGreaterEqual(n_read, 125)
++        gate('game materials read leave-one-out (0 disagreements with the registry)', n_read)
++        got = {n: rc.mod(mp.top_export_bytes(ctx['pk']['/Game/Leon/' + n])) for n in
++               ('M_Leon_Body', 'M_Leon_Skin', 'M_Leon_Hair')}
++        self.assertEqual((got['M_Leon_Body']['blend'], got['M_Leon_Body']['models']), ('BLEND_Opaque', ['MSM_DefaultLit']))
++        self.assertEqual((got['M_Leon_Skin']['blend'], got['M_Leon_Skin']['models']),
++                         ('BLEND_Opaque', ['MSM_SubsurfaceProfile']))
++        self.assertEqual((got['M_Leon_Hair']['blend'], got['M_Leon_Hair']['models']), ('BLEND_Masked', ['MSM_Hair']))
++
++
++class R02TextureLayout(Counted):
++    def test_plain_mips_synthetic(self):
++        p = FakePkg([tex_blob('PF_DXT1', 256, 256, 2)])
++        need = 256 * 256 // 2 + 128 * 128 // 2
++        self.assertTrue(tl.plain_mips(p, [need])['proven'])
++        self.assertFalse(tl.plain_mips(p, [need + 16])['proven'])                     # size mismatch
++        self.assertFalse(tl.plain_mips(p, [need // 2, need // 2])['proven'])         # two bulk chunks
++        self.assertFalse(tl.plain_mips(p, [])['proven'])                             # no bulk (virtual or inline)
++        self.assertIn('halve', tl.plain_mips(FakePkg([tex_blob('PF_DXT1', 256, 256, 2, halve=False)]), [need])['why'])
++        self.assertFalse(tl.plain_mips(FakePkg([b'no format here']), [need])['proven'])
++        self.assertFalse(tl.plain_mips(FakePkg([tex_blob('PF_XYZ', 64, 64, 1)]), [2048])['proven'])
++        gate('synthetic layout cases (assertions)', self.n)
++
++    def test_cutout_synthetic(self):
++        w = 64
++        mip0, mip1 = dxt5_blocks(256, 0.5), dxt5_blocks(64, 0.5)
++        p = FakePkg([tex_blob('PF_DXT5', w, w, 2)])
++        r = tl.cutout_alpha(p, [mip0 + mip1])
++        self.assertTrue(r['cutout'], r)
++        self.assertFalse(tl.cutout_alpha(p, [dxt5_blocks(256, 0) + dxt5_blocks(64, 0)])['cutout'])   # solid alpha
++        self.assertFalse(tl.cutout_alpha(p, [dxt5_blocks(256, 1) + dxt5_blocks(64, 1)])['cutout'])   # all clear
++        q = FakePkg([tex_blob('PF_DXT1', w, w, 2)])
++        self.assertIn('no alpha', tl.cutout_alpha(q, [b'\x00' * (2048 + 512)])['why'])
++        gate('synthetic cut-out cases (assertions)', self.n)
++
++    def test_real_leon_textures(self):
++        ctx = real()
++        toc, pk = ctx['toc'], ctx['pk']
++        bi = tl.mod_bulk_index(toc)
++        texs = [n for n in pk if n.startswith('/Game/Leon/Textures/')]
++        ok = [n for n in texs if tl.plain_mips(pk[n], [toc.offlen[r][1] for r in bi.get(T.cityhash.ue_name_hash(n), [])])['proven']]
++        self.assertEqual(len(ok), len(texs))
++        self.assertEqual(len(texs), 34)
++        gate('Leon textures proven plain mip chains', len(ok))
++        hd = '/Game/Leon/Textures/T_Leon_Hair_D'
++        rows = bi[T.cityhash.ue_name_hash(hd)]
++        r = tl.cutout_alpha(pk[hd], [toc.read_chunk(x, ctx['rd']) for x in rows])
++        self.assertTrue(r['cutout'], r)
++        self.assertGreater(r['clear'], 0.5)
++        ub = '/Game/Leon/Textures/T_Leon_UpperBody_D'
++        r = tl.cutout_alpha(pk[ub], [b'\x00' * toc.offlen[x][1] for x in bi[T.cityhash.ue_name_hash(ub)]])
++        self.assertFalse(r['cutout'])
++        self.assertIn('no alpha', r['why'])
++
++
++NV = {'VirtualTextureStreaming': 'False'}
++TG = {'/T/D': dict(NV, SRGB='True', CompressionSettings='TC_BC7'),
++      '/T/DA': dict(NV, SRGB='True', CompressionSettings='TC_BC7', HasAlphaChannel='True'),
++      '/T/DnoA': dict(NV, SRGB='True', CompressionSettings='TC_BC7', HasAlphaChannel='False'),
++      '/T/VT_D': dict(SRGB='True', CompressionSettings='TC_BC7', VirtualTextureStreaming='True'),
++      '/T/N': dict(NV, SRGB='False', CompressionSettings='TC_Normalmap'),
++      '/T/X_ORM': dict(NV, SRGB='False', CompressionSettings='TC_BC7'),
++      '/T/S/srgb_X_ORM': dict(NV, SRGB='True', CompressionSettings='TC_BC7'),
++      '/T/X_MRO': dict(NV, SRGB='False', CompressionSettings='TC_BC7'),
++      '/T/NoVT': dict(SRGB='True', CompressionSettings='TC_BC7')}
++DEF = [TG['/T/D'], TG['/T/N'], TG['/T/X_MRO']]
++MB = {'BaseColor': '/L/T_D', 'Normal': '/L/T_N', 'ORM': '/L/T_ORM'}
++FM = {'/L/T_D': 'PF_DXT5', '/L/T_N': 'PF_BC5', '/L/T_ORM': 'PF_DXT1'}
++PLAIN = {'proven': True}
++CUT = {'proven': True, 'cutout': {'cutout': True}}
++
++
++def mpar(params, names, bind, mod_tex=lambda t: PLAIN, defaults=DEF, mod_masked=False, mb=MB):
++    return pr.map_params(params, mb, FM, names, bind, TG.get, set(), mod_tex=mod_tex, defaults=defaults,
++                         mod_masked=mod_masked)
++
++
++class R03ParamRules(Counted):
++    def test_roles(self):
++        cases = {'Hair Diffuse + Alpha': 'base_color_alpha', 'BaseColor': 'base_color', 'Diffuse Alpha Strength': None,
++                 'ORM': 'packed:ORM', 'ORM - Texture': 'packed:ORM', 'IDRO Mask': None, 'Packed MRO Map': None,
++                 'Opacity': None, 'Hair Diffuse': 'base_color'}
++        for k, v in cases.items():
++            self.assertEqual(pr.role_of(k), v, k)
++        self.assertEqual(pr.name_letters('/a/T_Leon_Body_ORM'), 'ORM')
++        self.assertIsNone(pr.name_letters('/a/T_Leon_Body_N'))
++        gate('role cases', len(cases))
++
++    def test_slot_gate_negatives(self):
++        ok, lost = mpar(['BaseColor'], ['Albedo'], {'Albedo': {'/T/D'}})
++        self.assertEqual(ok['BaseColor']['to'], 'Albedo')                                     # positive control
++        _, lost = mpar(['BaseColor'], ['Albedo'], {'Albedo': {'/T/VT_D'}})
++        self.assertIn('VIRTUAL', str(lost['BaseColor']))                                     # virtual slot
++        _, lost = mpar(['BaseColor'], ['Albedo'], {'Albedo': {'/T/D', '/T/VT_D'}})
++        self.assertIn('BaseColor', lost)                                                     # one virtual binding
++        _, lost = mpar(['BaseColor'], ['Albedo'], {'Albedo': {'/T/NoVT'}})
++        self.assertIn('unknown', str(lost['BaseColor']))                                     # VT flag missing
++        _, lost = mpar(['BaseColor'], ['Albedo'], {'Albedo': {'/T/D'}}, defaults=[TG['/T/N']])
++        self.assertIn('second source', str(lost['BaseColor']))                               # no plain colour default
++        _, lost = mpar(['BaseColor'], ['Albedo'], {'Albedo': {'/T/D'}}, mod_tex=lambda t: {'proven': False, 'why': 'x'})
++        self.assertIn('not proven plain', str(lost['BaseColor']))                            # mod texture unproven
++        _, lost = mpar(['BaseColor'], ['Albedo'], {'Albedo': {'/T/D'}}, mod_tex=None)
++        self.assertIn('BaseColor', lost)                                                     # no layout reader
++        _, lost = mpar(['Normal'], ['Normal'], {'Normal': {'/T/D'}})
++        self.assertIn('class mismatch', lost['Normal'])                                      # BC5 into a colour slot
++        _, lost = mpar(['BaseColor'], ['Albedo'], {'Albedo': {'/T/D'}}, defaults=DEF + [TG['/T/VT_D']])
++        self.assertIn('VIRTUAL colour default', lost['BaseColor'])
++        self.assertIn('cannot be proven plain', str(lost['BaseColor']))                       # review #6
++        ok, _ = mpar(['BaseColor'], ['Albedo'], {'Albedo': {'/T/D'}}, defaults=DEF + [dict(TG['/T/VT_D'], SRGB='False')])
++        self.assertIn('BaseColor', ok)                                                       # a virtual LINEAR default
++        # review #3: an exact name cannot read an ORM texture through an MRO-named game texture
++        _, lost = mpar(['Mask'], ['Mask'], {'Mask': {'/T/X_MRO'}}, mb={'Mask': '/L/T_Body_ORM'})
++        self.assertIn('disagree on packed channel letters', lost['Mask'])
++        ok, _ = mpar(['Mask'], ['Mask'], {'Mask': {'/T/X_ORM'}}, mb={'Mask': '/L/T_Body_ORM'})
++        self.assertIn('Mask', ok)                                                            # same letters: kept
++        gate('slot gate cases (assertions)', self.n)
++
++    def test_packed_same_order_and_swizzle(self):
++        ok, lost = mpar(['ORM'], ['ORM - Texture'], {'ORM - Texture': {'/T/X_ORM'}})
++        self.assertEqual(ok['ORM']['to'], 'ORM - Texture')                                   # same order, renamed
++        self.assertEqual(ok['ORM']['how'], 'role:packed:ORM')
++        _, lost = mpar(['ORM'], ['MRO'], {'MRO': {'/T/X_MRO'}})
++        self.assertIn('swizzle', lost['ORM'])                                                # ORM vs MRO
++        _, lost = mpar(['ORM'], ['ORM - Texture'], {'ORM - Texture': {'/T/X_MRO'}})
++        self.assertIn('does not name the letters', str(lost['ORM']))                         # one source only
++        _, lost = mpar(['ORM'], ['ORM - Texture'], {'ORM - Texture': {'/T/X_ORM'}},
++                       mb=dict(MB, ORM='/L/T_Mask'))
++        self.assertIn('mod texture name', str(lost['ORM']))                                  # mod side one source
++        _, lost = mpar(['ORM'], ['ORM'], {'ORM': {'/T/X_MRO'}})
++        self.assertIn('same name', lost['ORM'])                                              # exact name, wrong order
++        _, lost = mpar(['ORM'], ['ORM'], {'ORM': {'/T/S/srgb_X_ORM'}})
++        self.assertIn('not linear', lost['ORM'])
++        gate('packed cases (assertions)', self.n)
++
++    def test_colour_alpha(self):
++        names, bind = ['Hair Diffuse + Alpha'], {'Hair Diffuse + Alpha': {'/T/DA'}}
++        ok, lost = mpar(['BaseColor'], names, bind, mod_tex=lambda t: CUT, mod_masked=True)
++        self.assertEqual(ok['BaseColor']['to'], 'Hair Diffuse + Alpha')                      # positive control
++        _, lost = mpar(['BaseColor'], names, {'Hair Diffuse + Alpha': {'/T/DnoA'}}, mod_tex=lambda t: CUT,
++                       mod_masked=True)
++        self.assertIn('WITHOUT an alpha channel', str(lost['BaseColor']))                    # the real Townfall case
++        _, lost = mpar(['BaseColor'], names, bind, mod_tex=lambda t: CUT, mod_masked=False)
++        self.assertIn('not masked', lost['BaseColor'])
++        _, lost = mpar(['BaseColor'], names, bind, mod_tex=lambda t: dict(CUT, cutout={'cutout': False, 'why': 'solid'}),
++                       mod_masked=True)
++        self.assertIn('not a proven cut-out', lost['BaseColor'])
++        # review #2: a mod parameter that is itself named colour+alpha gets the same gate
++        mb = {'Diffuse Alpha': '/L/T_D'}
++        _, lost = mpar(['Diffuse Alpha'], names, bind, mod_tex=lambda t: dict(CUT, cutout={'cutout': False}),
++                       mod_masked=True, mb=mb)
++        self.assertIn('not a proven cut-out', lost['Diffuse Alpha'])
++        _, lost = pr.map_params(['Diffuse Alpha'], mb, {'/L/T_D': 'PF_DXT1'}, names, bind, TG.get, set(),
++                                mod_tex=lambda t: CUT, defaults=DEF, mod_masked=True)
++        self.assertIn('PF_DXT1', lost['Diffuse Alpha'])                                       # DXT1 has no alpha
++        ok, _ = mpar(['Diffuse Alpha'], names, bind, mod_tex=lambda t: CUT, mod_masked=True, mb=mb)
++        self.assertEqual(ok['Diffuse Alpha']['to'], 'Hair Diffuse + Alpha')
++        # review #7: another bound texture named opacity/mask -> the colour alpha is not trusted as the cut-out
++        _, lost = mpar(['BaseColor', 'OpacityMask'], names, bind, mod_tex=lambda t: CUT, mod_masked=True,
++                       mb=dict(MB, OpacityMask='/L/T_O'))
++        self.assertIn('another texture named', lost['BaseColor'])
++        gate('colour+alpha cases (assertions)', self.n)
++
++
++class R04PartRoles(Counted):
++    def test_roles_and_scores(self):
++        r = part_roles.role(['MSM_SubsurfaceProfile'], '/Game/Leon/MI_Leon_Face', '/Game/Leon/M_Leon_Skin')
++        self.assertEqual((r['role'], r['strength']), ('skin', 2))
++        r = part_roles.role(['MSM_DefaultLit'], '/Game/Leon/MI_Leon_UpperBody', '/Game/Leon/M_Leon_Body')
++        self.assertIsNone(r['role'])                                                          # 'upper body': ambiguous
++        r = part_roles.role(['MSM_DefaultLit'], '/Game/Leon/MI_Leon_Pistol')
++        self.assertEqual((r['role'], r['strength']), ('hard', 1))
++        r = part_roles.role(['MSM_Hair'], '/X/MI_Jacket')
++        self.assertIsNone(r['role'])                                                          # sources disagree
++        self.assertIn('names say cloth', r['note'])
++        cloth = part_roles.role(['MSM_Cloth', 'MSM_DefaultLit'], NONVT)
++        skin = part_roles.role(['MSM_SubsurfaceProfile'], SKIN_HANDS)
++        face = part_roles.role(['MSM_SubsurfaceProfile'], '/Game/Leon/MI_Leon_Face')
++        self.assertEqual(part_roles.score(face, skin), 0)
++        self.assertEqual(part_roles.score(face, cloth), 3)
++        self.assertEqual(part_roles.score(part_roles.role(None, '/X/MI_A'), cloth), 2)
++        gate('role cases (assertions)', self.n)
++
++
++def _cand(names, group='opaque', models=('MSM_DefaultLit',), two=True, cls=mma.MATERIAL, special=None):
++    p = {'readable': True, 'domain': 'MD_Surface', 'blend': {'opaque': 'BLEND_Opaque', 'masked': 'BLEND_Masked'}.get(
++        group, 'BLEND_Translucent'), 'blend_group': group, 'lit': 'lit', 'models': list(models),
++         'special': list(special if special is not None else [m for m in models if m in mc.SPECIAL_MODELS]),
++         'models_two_source': two, 'sources': {'asset_registry': f'MD_Surface/{group}/lit',
++                                               'shader_type_peers': f'MD_Surface/{group}/lit', 'peers': 9}}
++    return {'names': list(names), 'export': 'E', 'class': cls, 'verified': 'iohash', 'skeletal_mesh_evidence': ['/S'],
++            'props': p}
++
++
++class R05PlanRules(Counted):
++    LIN = {'SRGB': 'False', 'CompressionSettings': 'TC_Default', 'VirtualTextureStreaming': 'False'}
++    NAMES = ['BaseColor', 'Normal', 'ORM', 'HairAO']
++
++    @classmethod
++    def setUpClass(cls):
++        pk, libs = T.leon()
++        ids, store = T.base()
++        cls.pk = pk
++        cls.audit = mma.audit_packages(pk, libs, T.script(), ids, store, 'SF_PS5-SP_PS5')
++
++    def ctx(self, models=None, classes=None, accept=False, field_only=False):
++        op, ma = {'readable': True, 'blend_group': 'opaque'}, {'readable': True, 'blend_group': 'masked'}
++        classes = classes or {'/Game/Leon/M_Leon_Body': op, '/Game/Leon/M_Leon_Skin': op, '/Game/Leon/M_Leon_Hair': ma}
++        models = models if models is not None else {
++            '/Game/Leon/M_Leon_Body': ('BLEND_Opaque', ['MSM_DefaultLit']),
++            '/Game/Leon/M_Leon_Skin': ('BLEND_Opaque', ['MSM_SubsurfaceProfile']),
++            '/Game/Leon/M_Leon_Hair': ('BLEND_Masked', ['MSM_Hair'])}
++
++        def mod_c(m):
++            if m not in models:
++                return {'readable': False, 'why': 'test'}
++            out = {'readable': True, 'blend': models[m][0], 'models': models[m][1], 'model_enum': models[m][1][0]}
++            if field_only:
++                out.update(field_only=True, model_enum='MSM_FromMaterialExpression')
++            return out
++        bound = {n: {'/T/' + n} for n in ('BaseColor', 'Normal', 'HairAO')}
++        return rp.Context(lambda m: classes.get(m, {'readable': False, 'why': 'test'}), lambda c: bound,
++                          lambda t: self.LIN, {}, accept, mod_c=mod_c, mod_tex=lambda t: {'proven': True},
++                          defaults=lambda c: [self.LIN])
++
++    def rows(self, cands, **kw):
++        return {r['mod_package'].rsplit('/', 1)[-1]: r for r in rp.plan(self.audit, self.pk, cands, True, ctx=self.ctx(**kw))}
++
++    def test_cross_model_hair_refused(self):
++        by = self.rows({'/B/M_HairDefaultLit': _cand(self.NAMES, 'masked')})
++        h = by['MI_Leon_Hair']
++        self.assertEqual(h['action'], 'known-checker')
++        self.assertIn('never cross', h['refused_parents']['/B/M_HairDefaultLit'])
++        self.assertIn('same', h['why'])
++        gate('plan rows', len(by))
++
++    def test_same_model_hair_and_its_negatives(self):
++        same = _cand(self.NAMES, 'masked', ('MSM_Hair',))
++        by = self.rows({'/B/M_Hair': same})
++        self.assertEqual((by['MI_Leon_Hair']['action'], by['MI_Leon_Hair']['new_parent']), ('reparent-partial', '/B/M_Hair'))
++        self.assertTrue(any('same shading model' in n for n in by['MI_Leon_Hair']['look_notes']))
++        self.assertIn('masked parent for a opaque', by['MI_Leon_UpperBody']['refused_parents']['/B/M_Hair'])
++        one = _cand(self.NAMES, 'masked', ('MSM_Hair',), two=False)                     # one-source model only
++        h = self.rows({'/B/M_Hair': one})['MI_Leon_Hair']
++        self.assertEqual(h['action'], 'known-checker')
++        self.assertIn('two sources', h['refused_parents']['/B/M_Hair'])
++        mic = _cand(self.NAMES, 'masked', ('MSM_Hair',), cls=mma.MIC)                    # instance parent
++        self.assertEqual(self.rows({'/B/MI_Hair': mic})['MI_Leon_Hair']['action'], 'known-checker')
++        both = _cand(self.NAMES, 'masked', ('MSM_Hair', 'MSM_DefaultLit'))               # superset, not the same
++        h = self.rows({'/B/M_HairMixed': both})['MI_Leon_Hair']
++        self.assertEqual(h['action'], 'known-checker')
++        # review #1: an unreadable mod model refuses EVERY parent (A/B cannot exclude a special model)
++        for cands in ({'/B/M_Hair': same}, {'/B/M_HairDefaultLit': _cand(self.NAMES, 'masked')}):
++            h = self.rows(cands, models={})['MI_Leon_Hair']
++            self.assertEqual(h['action'], 'known-checker')
++            self.assertIn('mod shading model unreadable', h['why'])
++        # review #8: a special model named only by the bit field (per-pixel enum) refuses the same-model route
++        h = self.rows({'/B/M_Hair': same}, field_only=True)['MI_Leon_Hair']
++        self.assertEqual(h['action'], 'known-checker')
++        self.assertIn('bit field', h['why'])
++        # a non-special (opaque DefaultLit) instance never takes an opaque special parent
++        eye = _cand(self.NAMES, 'opaque', ('MSM_Eye',))
++        up = self.rows({'/B/M_Eye': eye})['MI_Leon_UpperBody']
++        self.assertEqual(up['action'], 'known-checker')
++        self.assertIn('never cross', up['refused_parents']['/B/M_Eye'])
++        gate('same-model cases (assertions)', self.n)
++
++    def test_translucent_never_for_opaque(self):
++        by = self.rows({'/B/M_Glass': _cand(self.NAMES, 'translucent')})
++        self.assertEqual(by['MI_Leon_UpperBody']['action'], 'known-checker')
++        self.assertIn('translucent parent for a opaque', by['MI_Leon_UpperBody']['refused_parents']['/B/M_Glass'])
++        gate('translucent cases (assertions)', self.n)
++
++    def test_role_and_model_ranking(self):
++        cands = {'/B/M_Skin': _cand(self.NAMES, 'opaque', ('MSM_SubsurfaceProfile',)),
++                 '/B/M_Cloth': _cand(self.NAMES, 'opaque', ('MSM_Cloth', 'MSM_DefaultLit'))}
++        by = self.rows(cands)
++        self.assertEqual(by['MI_Leon_Face']['new_parent'], '/B/M_Skin')                     # skin part -> skin parent
++        self.assertEqual(by['MI_Leon_Face']['ranking']['role_score'], 0)
++        self.assertEqual(by['MI_Leon_UpperBody']['new_parent'], '/B/M_Cloth')               # no role: model decides
++        self.assertEqual(by['MI_Leon_UpperBody']['ranking']['model_score'], 1)
++        self.assertEqual(by['MI_Leon_Pistol']['new_parent'], '/B/M_Cloth')
++        self.assertTrue(any('role mismatch' in n for n in by['MI_Leon_Pistol']['look_notes']))
++        # coverage first: a skin part goes to the cloth parent when that maps MORE (role only breaks ties)
++        cands['/B/M_Skin'] = _cand(['BaseColor', 'ORM'], 'opaque', ('MSM_SubsurfaceProfile',))     # maps 1
++        cands['/B/M_Cloth'] = _cand(['BaseColor', 'Normal', 'ORM'], 'opaque', ('MSM_Cloth', 'MSM_DefaultLit'))  # 2
++        face = self.rows(cands)['MI_Leon_Face']
++        self.assertEqual(face['new_parent'], '/B/M_Cloth')
++        self.assertEqual(face['ranking']['role_score'], 3)
++        self.assertTrue(any('role mismatch' in n for n in face['look_notes']))
++        gate('ranking cases (assertions)', self.n)
++
++    def test_reader_c_contradictions(self):
++        cand = {'/B/M': _cand(self.NAMES)}
++        models = {'/Game/Leon/M_Leon_Body': ('BLEND_Masked', ['MSM_DefaultLit'])}
++        up = self.rows(cand, models=models)['MI_Leon_UpperBody']
++        self.assertEqual(up['action'], 'known-checker')
++        self.assertIn('mod readers disagree', up['why'])
++        un = {'readable': False, 'unproven_opaque': True, 'why': 'opaque vs masked not provable'}
++        cls = {'/Game/Leon/M_Leon_Body': un}
++        up = self.rows(cand, models=models, classes=cls, accept=True)['MI_Leon_UpperBody']
++        self.assertEqual(up['action'], 'known-checker')
++        self.assertIn('user decision refused', up['why'])
++        up = self.rows(cand, classes=cls, accept=True)['MI_Leon_UpperBody']                  # C agrees: accepted
++        self.assertEqual(up['action'], 'reparent-partial')
++        self.assertTrue(any('also reads opaque' in n for n in up['look_notes']))
++        gate('reader C contradiction cases (assertions)', self.n)
++
++    def test_rank_backward_compatible(self):
++        o = {'mapped': 2, 'exact': 1, 'is_mic': False, 'names': 3}
++        self.assertEqual(rp.rank('/x', o)[:3], (-2, 2, 2))
++        gate('rank keys (assertions)', self.n)
++
++
++def real():
++    if 'real' in _c:
++        return _c['real']
++    store = {}
++    for hp in T.ALL_CH:
++        store.update(T.container_header.parse(T.rfile(hp))[1])
++    checked = [r for p in T.CHECKED3 for r in T.jload(p)['checked'] if 'verified' in r]
++    headers = {r['package']: r for r in checked}
++    reg = T.registry()
++    ti = rp.load_type_index(T.LIBS, T.STINFO, store)
++    peers = mc.Peers(reg, ti)
++    whole = rp.fetched_packages([T.FETCHED + d for d in ('/headers-r1', '/headers-r2', '/headers-r3')], checked)
++    train = mp.training_set(whole, reg, mc.MATERIAL_AR_CLASS)
++    pk, _ = T.leon()
++    toc = utoc.load(T.LEON_TOC)
++    rd = mma.reader(T.LEON_CAS)
++    rc = mp.ReaderC(train, peers.bits)
++    ctx = rp.build_context(reg, peers, pk, whole, headers, True, reader_c=rc, mod_toc=toc, mod_read=rd)
++    _c['real'] = dict(store=store, checked=checked, headers=headers, reg=reg, peers=peers, whole=whole, train=train,
++                      pk=pk, toc=toc, rd=rd, rc=rc, ctx=ctx)
++    return _c['real']
++
++
++class R06RealPlan(Counted):
++    @classmethod
++    def setUpClass(cls):
++        cls.tmp = tempfile.mkdtemp()
++        cls.out = {}
++        for key, flags in (('full', ['--allow-partial', '--accept-unproven-opaque']), ('default', [])):
++            r = subprocess.run(T._plan_args(cls.tmp, flags), capture_output=True, text=True)
++            assert r.returncode == 0, r.stdout + r.stderr
++            cls.out[key] = (T.jload(os.path.join(cls.tmp, 'plan.json')), r.stdout)
++
++    def test_per_part_outcome(self):
++        plan, stdout = self.out['full']
++        self.assertIn('reader C trained on', stdout)
++        self.assertIn('candidates have a two-source shading model', stdout)
++        by = {r['mod_package'].rsplit('/', 1)[-1]: r for r in plan['rows']}
++        fixed = [n for n in LEON_MI if by['MI_Leon_' + n]['action'] == 'reparent-partial']
++        self.assertEqual(sorted(fixed), sorted(n for n in LEON_MI if n != 'Hair'))
++        reg = T.registry()
++        bind = real()['ctx'].base_bind(NONVT)
++        n_slots = 0
++        for n in fixed:
++            r = by['MI_Leon_' + n]
++            self.assertEqual(r['new_parent'], NONVT)
++            self.assertEqual(r['param_renames'], {'BaseColor': 'BaseColour'})
++            self.assertIn('swizzle', r['lost_params']['ORM'])
++            self.assertTrue(r['parent_class']['models_two_source'])
++            self.assertTrue(r['mod_model']['readable'])
++            for _p, v in r['param_map'].items():                       # no Leon texture lands in a virtual slot
++                self.assertTrue(bind[v['to']])
++                self.assertTrue(all(reg.asset(t)['tags']['VirtualTextureStreaming'] == 'False' for t in bind[v['to']]))
++                n_slots += 1
++        self.assertEqual(n_slots, 20)
++        gate('mapped Leon slots on non-virtual game slots', n_slots)
++        for n in ('Face', 'Mouth'):
++            self.assertEqual(by['MI_Leon_' + n]['part_role']['role'], 'skin')
++            self.assertTrue(any('role mismatch' in x for x in by['MI_Leon_' + n]['look_notes']))
++
++    def test_hair_same_model_route_fails_closed_with_reason(self):
++        plan, _ = self.out['full']
++        h = {r['mod_package']: r for r in plan['rows']}['/Game/Leon/MI_Leon_Hair']
++        self.assertEqual(h['action'], 'known-checker')
++        self.assertEqual(h['mod_model']['models'], ['MSM_Hair'])
++        self.assertIn(HAIR, h['why'])
++        self.assertIn('WITHOUT an alpha channel', h['why'])
++        c = {x['parent']: x for x in h['considered']}
++        self.assertEqual(list(c), [HAIR])                                   # the ONLY allowed parent: same model
++        self.assertEqual((c[HAIR]['model_score'], c[HAIR]['role_score']), (0, 0))
++        self.assertIn('never cross', h['refused_parents'][HAIR_BEARD])
++        cand = plan['candidates'][HAIR]['props']
++        self.assertEqual(cand['reader_c']['models'], ['MSM_Hair'])
++        self.assertTrue(cand['models_two_source'])
++        gate('hair parents considered', len(c))
++
++    def test_skin_hands_lost_on_virtual_slots(self):
++        R = real()
++        ctx = R['ctx']
++        pk = R['pk']['/Game/Leon/MI_Leon_Face']
++        bind, _ = pr.texture_bindings(pk)
++        names = [r for r in R['checked'] if r['package'] == SKIN_HANDS][0]['names']
++        m, lost = pr.map_params(['BaseColor', 'Normal', 'ORM'], bind, ctx.mod_formats, names, ctx.base_bind(SKIN_HANDS),
++                                ctx.tex_tags, set(pk.names), mod_tex=ctx.mod_tex, defaults=ctx.defaults(SKIN_HANDS))
++        self.assertEqual(m, {})
++        self.assertIn('VIRTUAL', str(lost['BaseColor']))
++        self.assertIn('VIRTUAL', lost['Normal'])
++        gate('round-3 parent lost on virtual slots', len(lost))
++
++    def test_default_flags_fail_closed(self):
++        plan, _ = self.out['default']
++        acts = {r['action'] for r in plan['rows']}
++        self.assertEqual(acts, {'known-checker'})
++        gate('default-flag rows', len(plan['rows']))
++
++    def test_derived_package_applies_to_new_parent(self):
++        plan, _ = self.out['full']
++        up = {r['mod_package']: r for r in plan['rows']}['/Game/Leon/MI_Leon_UpperBody']
++        pk = real()['pk']
++        out, rec = mic_reparent.reparent(pk[up['mod_package']].data, up['old_parent'], up['new_parent'],
++                                         up['new_export'], up['param_renames'],
++                                         base_header=T.rfile(T.fetched_file(up['new_parent'])))
++        self.assertTrue(rec['export_bytes_identical'])
++        self.assertIn('two sources', rec['new_public_hash_source'])
++        b, _ = pr.texture_bindings(zen.ZenPackage(out))
++        self.assertEqual(sorted(b), ['BaseColour', 'Normal', 'ORM'])
++        self.assertEqual(b['BaseColour'], '/Game/Leon/Textures/T_Leon_UpperBody_D')      # Leon's own texture kept
++        gate('derived package bindings', len(b))
++
++
++class R07FetchPlan(Counted):
++    def _run(self, extra):
++        tmp = tempfile.mkdtemp()
++        out = os.path.join(tmp, 'r4.json')
++        r = subprocess.run(T.PY + [os.path.join(HERE, 'master_fetch_plan.py'), '--asset-registry', T.AR_BIN,
++                                   '--library'] + T.LIBS + ['--stinfo'] + T.STINFO + ['--base-header'] + T.ALL_CH +
++                           ['--toc'] + T.BASE + ['--checked-headers'] + T.CHECKED3 +
++                           ['--mod-utoc', T.LEON_TOC, '--mod-ucas', T.LEON_CAS, '--child-instances', '4', '--out', out]
++                           + extra, capture_output=True, text=True)
++        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
++        return T.jload(out)
++
++    def test_same_model_special_rows(self):
++        with_sp, without = self._run(['--same-model-special']), self._run([])
++        pk = {r['package'] for r in with_sp['rows']}
++        hair_kids = {'/Game/Townfall/Characters/Richard/Materials/MI_Richard_Eyebrows',
++                     '/Game/Townfall/Characters/Zoe/Materials/MI_Zoe_Eyelashes'}
++        self.assertTrue(hair_kids <= pk)
++        self.assertFalse(hair_kids & {r['package'] for r in without['rows']})
++        fetched = {r['package'] for r in real()['checked']}
++        for x in with_sp['rows']:
++            for k in ('remote_file', 'pieces', 'local_name', 'priority', 'length', 'whole_chunk'):
++                self.assertIn(k, x)
++            self.assertEqual(sum(n for _o, n in x['pieces']), x['length'])
++            self.assertTrue(x['whole_chunk'])
++            self.assertNotIn(x['package'], fetched)
++        self.assertEqual(len({x['local_name'] for x in with_sp['rows']}), len(with_sp['rows']))
++        self.assertEqual(sum(x['priority'] == 1 for x in without['rows']), 0)   # no skinned master left unfetched
++        gate('round-4 fetch rows', len(with_sp['rows']))
++
++
++if __name__ == '__main__':
++    unittest.main(verbosity=2)
+diff -ruN -x _ tools-orig/texture_layout.py tools/texture_layout.py
+--- tools-orig/texture_layout.py	1969-12-31 18:00:00
++++ tools/texture_layout.py	2026-10-13 10:17:12
+@@ -0,0 +1,144 @@
++#!/usr/bin/env python3
++"""Mod texture layout facts read from the mod's OWN texture bytes (Mac-only,
++read-only, generic; no game, mod or asset names). Texture bytes are never changed.
++
++plain_mips(pkg, bulk_sizes) -> proof that a cooked texture is a plain (non
++  virtual-texture) mip chain, from two checks of the same texture:
++    1 its export holds exactly one 'PF_*' pixel-format token followed by
++      u32 0, u32 mip count, then per streamed mip (u32 index, u32 x, u32 y, u32 1)
++      with x, y halving (layout read from the data; every row must fit),
++    2 the size of its separate BulkData chunk equals EXACTLY the byte size of
++      those streamed mips for that pixel format (4x4 block sizes below).
++  A virtual texture stores tiles, not this mip chain, so both checks fail for it
++  (fail closed: anything else is 'not proven').
++
++cutout_alpha(...) -> whether the texture's alpha channel is a cut-out mask
++  (used as opacity by a masked material), from its smallest streamed mip:
++    1 the pixel format carries alpha (DXT5 or 8-bit BGRA/RGBA; DXT1/BC5 do not),
++    2 decoded texels: at least CUT_CLEAR of them are clear (alpha < 32/255) AND at
++      least CUT_SOLID are solid enough to survive a cut (alpha >= 96/255).
++  This is a data heuristic (disclosed in every row that uses it), not a proof
++  that the mod material wires alpha to opacity.
++"""
++import struct
++
++BLOCK_BYTES = {'PF_DXT1': 8, 'PF_BC4': 8, 'PF_DXT3': 16, 'PF_DXT5': 16, 'PF_BC5': 16, 'PF_BC7': 16}
++PIXEL_BYTES = {'PF_B8G8R8A8': 4, 'PF_R8G8B8A8': 4}
++ALPHA_FORMATS = {'PF_DXT5', 'PF_B8G8R8A8', 'PF_R8G8B8A8'}
++CUT_CLEAR = 0.10
++CUT_SOLID = 0.05
++
++
++def mip_bytes(fmt, x, y):
++    if fmt in BLOCK_BYTES:
++        return max(1, (x + 3) // 4) * max(1, (y + 3) // 4) * BLOCK_BYTES[fmt]
++    if fmt in PIXEL_BYTES:
++        return x * y * PIXEL_BYTES[fmt]
++    return None
++
++
++def streamed_mips(pkg):
++    """-> (pixel format, [(x, y), ...]) or (None, why)."""
++    if len(pkg.exports) < 1:
++        return None, 'no export'
++    blobs = [pkg.export_bytes(e) or b'' for e in pkg.exports]
++    hits = [(k, b.find(b'PF_')) for k, b in enumerate(blobs) if b.count(b'PF_') == 1]
++    if len(hits) != 1 or sum(b.count(b'PF_') for b in blobs) != 1:
++        return None, 'not exactly one pixel-format token'
++    k, i = hits[0]
++    b = blobs[k]
++    j = b.find(b'\x00', i)
++    if j < 0:
++        return None, 'unterminated pixel-format token'
++    fmt = b[i:j].decode('ascii', 'replace')
++    q = j + 1
++    if q + 8 > len(b):
++        return None, 'mip table truncated'
++    zero, n = struct.unpack_from('<II', b, q)
++    if zero != 0 or not 1 <= n <= 16:
++        return None, 'unexpected mip table header'
++    q += 8
++    mips = []
++    for idx in range(n):
++        if q + 16 > len(b):
++            break
++        e = struct.unpack_from('<IIII', b, q)
++        if e[0] != idx or e[3] != 1 or not (1 <= e[1] <= 16384 and 1 <= e[2] <= 16384):
++            break
++        if mips and (e[1] != max(1, mips[-1][0] // 2) or e[2] != max(1, mips[-1][1] // 2)):
++            return None, 'mip sizes do not halve'
++        mips.append((e[1], e[2]))
++        q += 16
++    if not mips:
++        return None, 'no streamed mip rows'
++    return fmt, mips
++
++
++def plain_mips(pkg, bulk_sizes):
++    """bulk_sizes: list of this package's BulkData chunk sizes (uncompressed)."""
++    fmt, mips = streamed_mips(pkg)
++    if fmt is None:
++        return {'proven': False, 'why': mips}
++    per = [mip_bytes(fmt, x, y) for x, y in mips]
++    if None in per:
++        return {'proven': False, 'why': f'pixel format {fmt} has no known block size'}
++    if len(bulk_sizes) != 1:
++        return {'proven': False, 'why': f'{len(bulk_sizes)} bulk-data chunks (need exactly 1)'}
++    if sum(per) != bulk_sizes[0]:
++        return {'proven': False, 'why': f'bulk chunk is {bulk_sizes[0]} bytes, streamed mips need {sum(per)}'}
++    return {'proven': True, 'format': fmt, 'size': list(mips[0]), 'streamed_mips': len(mips),
++            'sources': ['export mip table', 'bulk chunk size == mip-chain size']}
++
++
++def _dxt5_alpha(block):
++    a0, a1 = block[0], block[1]
++    bits = int.from_bytes(block[2:8], 'little')
++    pal = [a0, a1]
++    if a0 > a1:
++        pal += [((7 - i) * a0 + i * a1) // 7 for i in range(1, 7)]
++    else:
++        pal += [((5 - i) * a0 + i * a1) // 5 for i in range(1, 5)] + [0, 255]
++    return [pal[(bits >> (3 * k)) & 7] for k in range(16)]
++
++
++def alpha_values(fmt, data):
++    if fmt == 'PF_DXT5':
++        out = []
++        for o in range(0, len(data) - 15, 16):
++            out += _dxt5_alpha(data[o:o + 16])
++        return out
++    if fmt in PIXEL_BYTES:
++        return list(data[3::4])
++    return None
++
++
++def cutout_alpha(pkg, bulk):
++    """bulk: [bytes] of this package's BulkData chunks."""
++    lay = plain_mips(pkg, [len(x) for x in bulk])
++    if not lay['proven']:
++        return {'cutout': False, 'why': 'layout not proven: ' + lay['why']}
++    fmt = lay['format']
++    if fmt not in ALPHA_FORMATS:
++        return {'cutout': False, 'why': f'{fmt} has no alpha channel'}
++    _f, mips = streamed_mips(pkg)
++    per = [mip_bytes(fmt, x, y) for x, y in mips]
++    last = bulk[0][sum(per[:-1]):]
++    vals = alpha_values(fmt, last)
++    if not vals:
++        return {'cutout': False, 'why': 'no alpha texels decoded'}
++    clear = sum(v < 32 for v in vals) / len(vals)
++    solid = sum(v >= 96 for v in vals) / len(vals)
++    ok = clear >= CUT_CLEAR and solid >= CUT_SOLID
++    return {'cutout': ok, 'format': fmt, 'texels': len(vals), 'clear': round(clear, 3), 'solid': round(solid, 3),
++            'sources': ['pixel format carries alpha', f'texels: clear {clear:.2f} >= {CUT_CLEAR}, '
++                        f'solid {solid:.2f} >= {CUT_SOLID}'] if ok else None,
++            'why': None if ok else f'alpha is not a cut-out (clear {clear:.2f}, solid {solid:.2f})'}
++
++
++def mod_bulk_index(toc):
++    """{package id: [row, ...]} of BulkData (type 2) chunks in a mod .utoc."""
++    out = {}
++    for i, cid in enumerate(toc.chunk_ids):
++        if cid[11] == 2:
++            out.setdefault(int.from_bytes(cid[:8], 'little'), []).append(i)
++    return out

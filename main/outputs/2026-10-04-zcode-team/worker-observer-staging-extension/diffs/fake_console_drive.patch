@@ -1,0 +1,208 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-observer-staging-extension/diffs/fake_console_drive.py.asfound	2026-10-04 22:24:28
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-console-batch-runner/tests/fake_console_drive.py	2026-10-04 22:44:07
+@@ -185,6 +185,20 @@
+         self.stor = {}
+         self.reset_deletes = []
+         self.serve_8fam = False      # results-file mode: False = 7fam transcript, True = 8fam
++        self.sht_law = False         # PRX readback channel mode: False = legacy full-identity
++                                     # channel (stage-qdrv1 as delivered); True = ftpsrv SHT-strip
++                                     # law channel (STAGE-PLAN-COMBINED §3: readback ==
++                                     # segment-covered prefix of the bare-sdk ELF, e_shnum zeroed)
++        self.prx_stors = []          # every PRX STOR URL, in order (exactly-once evidence)
++        self.prx_readback_corruptor = None  # optional fn(d) -> bytes to serve instead
++
++    def law_readback(self, d):
++        """Simulate the ftpsrv channel: the segment-covered prefix of the bare-sdk
++        ELF with e_shnum zeroed in the embedded header (make_fself law)."""
++        bare = open(d["bare"], "rb").read()
++        rb = bytearray(bare[:d["readback_bytes"]])
++        rb[60:62] = b"\x00\x00"
++        return bytes(rb)
+ 
+     def handle_curl(self, argv):
+         """Return (rc, stdout) for a curl argv; -o targets are written directly."""
+@@ -305,10 +319,27 @@
+                     return 0, ""
+                 return 8, ""  # no prior ini
+             return 0, self.stor.get(cb.QDRV1["ini"], "")
++        if "modbridge_runtime_aligned_observer.prx" in joined:
++            # observer ridealong PRX (STAGE-PLAN-COMBINED): readback follows the
++            # SHT-strip channel law whenever the sim is in law mode
++            if data_target:
++                self.prx_stors.append(joined.split()[-1])
++                return 0, ""
++            content = (self.prx_readback_corruptor(cb.OBS) if self.prx_readback_corruptor
++                       else self.law_readback(cb.OBS) if self.sht_law
++                       else open(cb.OBS["prx"], "rb").read())
++            if out_target:
++                with open(out_target, "wb") as f:
++                    f.write(content)
++                return 0, ""
++            return 0, content.decode("utf-8", "replace")
+         if "modbridge_qh_driver.prx" in joined:
+             if data_target:
++                self.prx_stors.append(joined.split()[-1])
+                 return 0, ""
+-            content = open(cb.QDRV1["prx"], "rb").read()
++            content = (self.prx_readback_corruptor(cb.QDRV1) if self.prx_readback_corruptor
++                       else self.law_readback(cb.QDRV1) if self.sht_law
++                       else open(cb.QDRV1["prx"], "rb").read())
+             if out_target:
+                 with open(out_target, "wb") as f:
+                     f.write(content)
+@@ -434,7 +465,155 @@
+ new_ini = open(os.path.join(ctx.run_dir, "ploader.ini.new")).read()
+ check("qdrv1 ini has =2 qdrv1 entry", "2=%s" % cb.QDRV1["module_line"] in new_ini, new_ini)
+ check("qdrv1 PRX readback verified against pinned sha", True)
++
++# ---------------------------------------------------------------------------
++# Combined ridealong staging (STAGE-PLAN-COMBINED) — the fake console switches
++# to the SHT-strip law channel (readback = segment-covered prefix of the
++# bare-sdk ELF, e_shnum zeroed) for the new flows. The legacy stage-qdrv1
++# section above keeps the full-identity channel it was delivered with.
++# ---------------------------------------------------------------------------
++
++INI_URL = "ftp://ps5-host-not-configured.invalid:2121" + cb.QDRV1["ini"]
++E_LINE = "/data/plugins/modbridge_runtime_aligned_entry.prx"
++P_LINE = "/data/plugins/modbridge_path_test.prx"
++I_LINE = "/data/plugins/modbridge_ingame_facts.prx"
++C_LINE = cb.COMBINED_INI["anchor"]
++Q_LINE = cb.QDRV1["module_line"]
++O_LINE = cb.OBS["module_line"]
++PRE4 = "[PPSA33286]\n%s = 2\n%s = 2\n%s = 0\n%s = 2\n" % (E_LINE, P_LINE, I_LINE, C_LINE)
++PRE5Q = PRE4 + "%s = 2\n" % Q_LINE
++OBS_STOR_URL = "ftp://ps5-host-not-configured.invalid:2121" + cb.OBS["target_prx"]
++Q_STOR_URL = "ftp://ps5-host-not-configured.invalid:2121" + cb.QDRV1["target_prx"]
+ 
++
++def seed_ini(text):
++    fc.stor[INI_URL] = text
++
++
++def stored_ini():
++    return fc.stor[INI_URL]
++
++
++fc.sht_law = True
++
++print("== fake-console drive: stage-observer (COORDINATION: qdrv1 line already staged) ==")
++seed_ini(PRE5Q)
++fc.prx_stors = []
++ctx = cb.Ctx(run_dir=fresh("observer-coord"), dry=False, assume_yes=True)
++res = cb.build_stage_observer().run(ctx)
++bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
++check("stage-observer all steps PASS (qdrv1 line already present)", not bad, str(bad))
++EXPECTED_INI = PRE5Q + "%s = 2\n" % O_LINE
++check("observer appended ONLY its own line to the current state", stored_ini() == EXPECTED_INI,
++      repr(stored_ini()))
++check("combined end-state on the fake console: 6 entries, 5 registered",
++      cb.ridealong_verify_endstate(stored_ini(), required=[Q_LINE, O_LINE]) == [])
++check("observer PRX STORed exactly once, to its FINAL name", fc.prx_stors == [OBS_STOR_URL],
++      str(fc.prx_stors))
++check("qdrv1 PRX NOT re-uploaded by the observer flow",
++      all("qh_driver" not in u for u in fc.prx_stors))
++check("observer readback law verdict recorded OK (30143976 / 3f89a5b6…)",
++      json.load(open(os.path.join(ctx.run_dir, "observer-readback-verdict.json")))["ok"] is True)
++n_stors_after_first = len(fc.prx_stors)
++
++print("== fake-console drive: stage-observer re-run is a full no-op ==")
++ctx = cb.Ctx(run_dir=fresh("observer-noop"), dry=False, assume_yes=True)
++res = cb.build_stage_observer().run(ctx)
++bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
++check("stage-observer re-run all steps PASS", not bad, str(bad))
++check("re-run changes NOTHING on the console ini", stored_ini() == EXPECTED_INI)
++check("re-run uploads NO PRX (STOR skipped on the no-op decision)",
++      len(fc.prx_stors) == n_stors_after_first, str(fc.prx_stors))
++check("re-run still verifies the on-console artifact against the law",
++      json.load(open(os.path.join(ctx.run_dir, "observer-readback-verdict.json")))["stor_skipped_noop"] is True)
++
++print("== fake-console drive: stage-observer fresh (no qdrv1 line) appends ONLY observer ==")
++seed_ini(PRE4)
++fc.prx_stors = []
++ctx = cb.Ctx(run_dir=fresh("observer-fresh"), dry=False, assume_yes=True)
++res = cb.build_stage_observer().run(ctx)
++bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
++check("stage-observer fresh all steps PASS", not bad, str(bad))
++check("fresh ini gains ONLY the observer line (qdrv1 NOT added by this flow)",
++      stored_ini() == PRE4 + "%s = 2\n" % O_LINE, repr(stored_ini()))
++
++print("== fake-console drive: stage-observer duplicate-hazard STOP (no upload, no store) ==")
++DUP_SEED = PRE4.replace(C_LINE + " = 2", C_LINE + " = 2\n" + O_LINE + " = 2", 1) \
++    + "%s = 2\n" % O_LINE
++seed_ini(DUP_SEED)
++fc.prx_stors = []
++ctx = cb.Ctx(run_dir=fresh("observer-dup"), dry=False, assume_yes=True)
++res = cb.build_stage_observer().run(ctx)
++statuses = dict(res)
++check("obs.2 FAILS on a duplicate observer line", statuses.get("obs.2") == "FAIL", statuses.get("obs.2"))
++check("later steps SKIPPED after the halt",
++      statuses.get("obs.3") == "SKIPPED_HALT" and statuses.get("obs.4") == "SKIPPED_HALT",
++      str(statuses))
++check("duplicate scenario uploads NOTHING and stores NOTHING",
++      fc.prx_stors == [] and stored_ini() == DUP_SEED)
++
++print("== fake-console drive: readback law negative — divergent readback aborts after ONE re-STOR ==")
++seed_ini(PRE5Q)
++fc.prx_stors = []
++
++
++def truncated_readback(d):
++    return fc.law_readback(d)[:-1024]  # wrong length -> law FAIL both attempts
++
++
++fc.prx_readback_corruptor = truncated_readback
++ctx = cb.Ctx(run_dir=fresh("observer-badlaw"), dry=False, assume_yes=True)
++res = cb.build_stage_observer().run(ctx)
++statuses = dict(res)
++check("obs.3 FAILS on a law-divergent readback (truncated)", statuses.get("obs.3") == "FAIL",
++      statuses.get("obs.3"))
++check("exactly ONE re-STOR attempted, then abort (2 STORs total)",
++      len(fc.prx_stors) == 2, str(fc.prx_stors))
++check("halting law failure stores NO ini (obs.4 skipped, console ini untouched)",
++      statuses.get("obs.4") == "SKIPPED_HALT" and stored_ini() == PRE5Q)
++fc.prx_readback_corruptor = None
++
++print("== fake-console drive: stage-ridealongs (combined SC-0..SC-7, law channel) ==")
++seed_ini(PRE4)
++fc.prx_stors = []
++ctx = cb.Ctx(run_dir=fresh("ridealongs"), dry=False, assume_yes=True)
++res = cb.build_stage_ridealongs().run(ctx)
++bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
++check("stage-ridealongs all steps PASS (both PRXs, law readbacks, combined ini)", not bad, str(bad))
++statuses = dict(res)
++check("ride.1 §3 constants cross-check PASS", statuses.get("ride.1") == "PASS", statuses.get("ride.1"))
++check("combined end-state on the fake console (6 entries, 5 registered)",
++      cb.ridealong_verify_endstate(stored_ini(), required=[Q_LINE, O_LINE]) == [],
++      repr(stored_ini()))
++check("each PRX STORed exactly once, qdrv1 first (SC-1 before SC-3)",
++      fc.prx_stors == [Q_STOR_URL, OBS_STOR_URL], str(fc.prx_stors))
++check("qdrv1 SHT-strip law verdict OK (87112 / 71406d3c…)",
++      json.load(open(os.path.join(ctx.run_dir, "qdrv1-readback-verdict.json")))["ok"] is True)
++check("observer SHT-strip law verdict OK (30143976 / 3f89a5b6…)",
++      json.load(open(os.path.join(ctx.run_dir, "observer-readback-verdict.json")))["ok"] is True)
++check("SC-0 baselines step recorded the freshness baselines",
++      statuses.get("ride.3") == "PASS" and os.path.exists(os.path.join(ctx.run_dir, "baseline-UE4SS.log")))
++
++print("== fake-console drive: rollback-ridealongs (§7 single-character flips) ==")
++ctx = cb.Ctx(run_dir=fresh("rollback"), dry=False, assume_yes=True)
++res = cb.build_rollback_ridealongs().run(ctx)
++bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
++check("rollback-ridealongs all steps PASS", not bad, str(bad))
++COMBINED = PRE4 + "%s = 2\n" % Q_LINE + "%s = 2\n" % O_LINE
++ROLLED = COMBINED.replace(Q_LINE + " = 2", Q_LINE + " = 0").replace(O_LINE + " = 2", O_LINE + " = 0")
++check("rolled-back ini: BOTH ridealong lines at = 0, every other byte identical",
++      stored_ini() == ROLLED, repr(stored_ini()))
++check("staging end-state gate rightly refuses the rolled-back ini as a staging state",
++      cb.ridealong_verify_endstate(stored_ini(), required=[]) != [])
++ctx = cb.Ctx(run_dir=fresh("rollback-noop"), dry=False, assume_yes=True)
++res = cb.build_rollback_ridealongs().run(ctx)
++bad = [(i, s) for i, s in res if s not in ("PASS", "WARN")]
++check("rollback re-run is an honest no-op (nothing staged at = 2)", not bad, str(bad))
++check("rollback re-run leaves the console untouched", stored_ini() == ROLLED)
++
++fc.sht_law = False
++fc.prx_stors = []
++
+ print("== fake-console drive: game-evidence ==")
+ ctx = cb.Ctx(run_dir=fresh("game"), dry=False, assume_yes=True)
+ l_fetch_n["n"] = 0

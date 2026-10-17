@@ -1,0 +1,13 @@
+# #8 Asset/material identity and fallback — Mac-only
+
+38 scoped tests pass:21 main gate/Zen tests,4 ScriptObjects tests,3 base-import tests and10 whole-chunk intake tests. Gate remains REVIEW_REQUIRED with0 actionable directives. No base export compatibility, visual fallback or native shader result is admitted.
+
+Source-hash/IoHash-verified original Leon metadata identifies three exports and public hashes. Captured ScriptObjects resolves their exact classes to MaterialInstanceConstant, Material and SkeletalMesh. Nine import-map ScriptImport slots resolve to captured class/CDO/package names. One package/public-hash edge closes Deluxe material→M_Invisible; this metadata match does not prove a material-parent property or runtime compatibility.
+
+Base-identity-audit independently validates captured chunk0 store against its TOC IoHash. Mesh dependency953039a7b296b2ee imports three stored leaves (34e14272697a3b6a,9f5b09b4cf73717a,a472dfe5d5bd43b7) with empty package-store import arrays. Their export identities remain absent. Exact missing-input receipt gives source TOC hashes, chunk IDs/rows, expected IoHashes and physical block geometry for selected base exports, external targets/downstream leaves and416B chunk10 store. Two partial external-header captures remain quarantined: saved atomic/range-completion provenance is incomplete. Captured owner absence is not global absence.
+
+Root replay confirms one mod-local hash edge,9 script slots and718,890 aggregate TOC metadata-range bytes; five original TOC and small-input before/after hashes match. No base/mod asset UCAS read; only previously bound3.4MB global metadata replayed. Retained ScriptObjects decoder attribution remains independently unverified. Overall127-package stores/import/intent scope remains incomplete. Originals unchanged, no payload copy or runtime directive promoted.
+
+New base-payload-intake/ is ready for already-local complete decoded chunks: exact audited owner/row/ID plus source SHA/length/whole IoHash before parsing; type1 exports require the exact verified owner store. Real retained chunk0 store replay checks38,439 entries and projects four relevant rows; it does not supply any missing export or copy payloads. Nonempty target/source counts are emitted; originals rehashed before output.
+
+Next: use base-identity-audit/base-input-audit.json to obtain provenance-complete base chunks/store, decode actual export/class/public-hash/import identities and compare with verified mod metadata. Console proof follows #7: expected Leon materials, disclosed visual loss and untouched originals. Textures stay paused until an actual failure requires conversion. No console contact/build/live runtime edit.

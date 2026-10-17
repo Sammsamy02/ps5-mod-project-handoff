@@ -1,0 +1,56 @@
+{
+  "worker": "worker-r3-diffs-authoring",
+  "date": "2026-10-04",
+  "mode": "DIFF AUTHORING + HOST VERIFICATION ONLY. No console contact, no nested subagents, nothing staged into the composition, nothing executed in-game. Diffs are proposals under this worker's directory.",
+  "read_order_contract": "TEAM:worker-r3-zerosyscall-tier/R3-TIER-DESIGN.md read in full first; then TEAM:worker-r3-carrier-prep (CARRIER-CANDIDATES.md/REPORT.md), TEAM:worker-no-exec-mode-gate (constexpr gate pattern), TEAM:worker-query-s2-arm/staging/UnrealInitializer.cpp (DIFF 2 base), SRC:port/ue4ss/src/Mod/LuaMod.cpp + SRC:port/ue4ss/include/SettingsManager.hpp (DIFF 1 bases), SRC:port/unreal/src/UFunction.cpp + include/Unreal/UFunctionStructs.hpp (registration surface), ue4ss-native-game-thread-1/include/Unreal/Platform/NativeGameThreadIdentity.hpp (publication semantics), LAUNCH10-MATRIX.md (R8/R9).",
+  "task": "Author the BOTH_FAIL-branch diff pair of R3-TIER-DESIGN: DIFF 1 (luamod: the calibration-selected carrier's RegisterPostHook drain, parameterized by the carrier's FName id, exact hook registration per UFunction.cpp:78-89) + DIFF 2 (staged initializer: marshal route of game-thread identity publication + query-harness dispatch, skips of the fatal EngineTick/FName-detour registrations under an R3-mode constexpr); host-verify both against the composition unit argvs; deliver arm/disarm procedure + matrix-row note.",
+  "base_pins_verified_this_session": {
+    "DIFF1_base_LuaMod.cpp": {
+      "path": "SRC:port/ue4ss/src/Mod/LuaMod.cpp",
+      "sha256": "a2d07f7c233a59d05f35779ece3a05b7068475b2ee9ab8a1709b72113f2cc4ae",
+      "matches_RECIPE_luamod_source_sha256": true
+    },
+    "DIFF1_base_SettingsManager.hpp": {
+      "path": "SRC:port/ue4ss/include/SettingsManager.hpp",
+      "sha256": "a9b4abbe26f0cc1c9ec71029cb009e721dd88839395a72786dcbeda8f8b5aa2e"
+    },
+    "DIFF2_base_staged_initializer": {
+      "path": "TEAM:worker-query-s2-arm/staging/UnrealInitializer.cpp",
+      "sha256": "933d08a2f3e4dea1f80d216bd99779871b6e5b3ae1f26028d357d824051e2542",
+      "note": "Same staged-bytes hash composition-4 attested as its replacement source (SINI)."
+    }
+  },
+  "claims": [
+    {
+      "id": "RDA-1",
+      "claim": "DIFF 1 (r3-luamod-funcptr-marshal.diff) authors, on the RECIPE-pinned LuaMod.cpp + SettingsManager.hpp bases: (a) GameThreadExecutionMethod::FuncPtrMarshal appended last (existing integer values unchanged) and its EGameThreadMethod Lua table entry; (b) file-scope marshal state + is_funcptr_marshal_armed(); (c) r3_marshal_carrier_precheck implementing R3D \u00a74.3 identity pre-check verbatim (non-null GetFuncPtr, != UObject::ProcessInternalInternal.get_function_address(), FUNC_Native) with loud refusal and no store; (d) arm_funcptr_marshal_drain(carrier UFunction*, carrier FName id) performing the exact UFunction.cpp:78-89 registration via RegisterPostHook (GetFunctionHookData saves the original then SetFuncPtr(&UnrealScriptFunctionHook) \u2014 one aligned heap pointer store, zero syscalls) and recording callback id + carrier FName; (e) funcptr_marshal_hook drain body with ORDER THAT MATTERS (corrected during host-mock verification): under BOTH_FAIL nothing else publishes, so publication runs FIRST via the DIFF 2 bridge (publish_current is mutex-arbitrated; the winning thread BECOMES the game thread, per R3D 4.3 and calibration criterion C-4), and only then does the IsInGameThreadRaw() raw gate refuse worker threads - gating on the raw predicate before publication would deadlock the pump forever (IsInGameThreadRaw is false for every thread until something publishes) + NativeLuaActionDispatchScope + the identical m_game_thread_actions drain block with process_delayed_actions<FuncPtrMarshal>; (f) three-state ladder rungs (EngineTick -> ProcessEvent -> FuncPtrMarshal -> throw) in ExecuteInGameThread/ExecuteInGameThreadWithDelay/RetriggerableExecuteInGameThreadWithDelay/LoopInGameThreadWithDelay, all new fallthroughs under #if defined(__PROSPERO__) so non-PROSPERO behavior is unchanged; (g) the FuncPtrMarshal executor filter in process_delayed_actions so the marshal drains only marshal-tagged delayed actions."
+    },
+    {
+      "id": "RDA-2",
+      "claim": "DIFF 2 (r3-initializer-r3-marshal-mode.diff) authors, on the staged initializer base (SINI): (a) UE4SS_R3_MARSHAL_MODE build define with in-file fallback default 0 + constexpr R3MarshalGate (mirroring TEAM:worker-no-exec-mode-gate; fallback 0 = byte-behavior identical to the staged unit); (b) under kR3MarshalMode only, inside #ifdef __PROSPERO__: the FName-ctor verification detour registration is compiled out (data-side address override binding kept; the blocking verification wait settled by setting FNameVerificationStatus so no deadlock; loud [R3] refusal line; verification honestly labeled NOT-performed, delegated to the FC-1 read-only validator VSD \u00a75 C1), and the two RegisterEngineTickPreCallback registrations are compiled out with the literal deferral line '[R3] EngineTick detour unavailable; deferring game-thread pump to R3 marshal' + R3MarshalGate::pump_pending set (the pending-pump state DIFF 1 consumes) + refused_site_count += 2; (c) exported bridges R3MarshalPublishGameThreadIdentity() -> bool / R3MarshalQueryHarnessDispatch() -> void / R3MarshalPumpPending() -> bool defined at the RC::Unreal tail under __PROSPERO__, reusing HookedEngineTick's publication logic (StartupWait cancellation check, publish_current idempotence, first-publication immutability, Unavailable/DifferentThread refusal) and QueryHarnessEngineTickDispatch's body unchanged; (d) [[maybe_unused]] added to HookedEngineTick/QueryHarnessEngineTickDispatch definitions per the documented no-exec-gate precedent so mode=1 compiles without new warnings."
+    },
+    {
+      "id": "RDA-3",
+      "claim": "Host verification performed THIS session with the real composition toolchain (prospero-clang++ wrapper from outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk over LLVM-21.1.8-macOS-ARM64, Target: x86_64-sie-ps5) under the composition unit argvs (RECIPE luamod argv; RECIPE unreal-unrealinitializer argv + the composition-5 W_INCLUDE staging include roots, source redirected to this worker's patched copies, -c to .o). HONEST -Werror FINDING: the PINNED BASELINES THEMSELVES do not pass -Werror (22 pre-existing promoted diagnostics on luamod, 5 on the initializer), so a literal patched-only -Werror pass is impossible without touching pinned code; the delivered gate is exact KIND-PARITY under -Werror (patched, and patched+armed -DUE4SS_R3_MARSHAL_MODE=1, add ZERO new diagnostics and lose NONE vs baseline) plus exit-0 clean compiles of all patched variants with objects produced. Anchored apply script verified every anchor unique before replacement; base pins verified by sha256 before diffing; both diffs re-apply cleanly via standard patch -p1 --dry-run and the patch-applied output hash-matches the anchored patched copies; drain/pre-check/ladder/mode-fold logic additionally host-tested (clang++ -Wall -Wextra -Werror standalone mock, 24 programmatic checks PASS) - the mock CAUGHT a real ordering bug in the first drain draft (raw-gate-before-publication deadlock) which was fixed and re-verified.",
+      "evidence": "receipts/compile-gate.json, receipts/compile-gate-run.txt, receipts/apply-anchors.json, receipts/diff-hashes.json, receipts/patch-dryrun.txt, host-tests/ (build.stderr, run-output.txt, test_r3_marshal_mock.cpp)",
+      "status": "verified in-session before final REPORT; any failed compile would be recorded and the diff revised, never force-patched"
+    },
+    {
+      "id": "RDA-4",
+      "claim": "R3-mode arm/disarm procedure (ARM-DISARM.md): arm = set UE4SS_R3_MARSHAL_MODE=1 (build define recorded in the run manifest, or the in-file fallback define) on the replaced initializer unit; LuaMod side needs no flag (the marshal arms only when the calibration owner calls arm_funcptr_marshal_drain with the selected carrier). Disarm = compile with 0 (or omit the define); the initializer is then behavior-identical to the staged unit and the bridges refuse loudly if ever called. No runtime re-arm path exists by design. Both directions require receipt re-pinning (regen with --program-source at the new staging dir + --verify-only) per the no-exec-gate receipt discipline."
+    },
+    {
+      "id": "RDA-5",
+      "claim": "Matrix-row note delivered (MATRIX-ROW-NOTE.md): when disarmed (default 0) both diffs leave the launch10 R8/R9 flows byte-unchanged (R8's fc1 pool-refusal path never reaches composition; R9's data-side fallback composition is unaffected); when armed for R9's BOTH_FAIL fallback, three new evidence strings ([R3] refused: ..., [R3] EngineTick detour unavailable; deferring game-thread pump to R3 marshal, [R3] FuncPtr-marshal armed on carrier ...) enter the log stream and must be added to the matrix box-2 parser list in the next revision; query-harness observations under the marshal are CARRIER INVOCATIONS, not ticks (R3D \u00a74.4b) so rung instruments must be relabeled before comparison."
+    }
+  ],
+  "non_claims": [
+    "No claim any SetFuncPtr hook, marshal, calibration, or bridge has run in-game; F-1 (carrier exists with game-thread cadence) remains OPEN exactly as R3D \u00a77 states.",
+    "No claim the calibration service (R3D \u00a75.2 item 4: candidate enumeration, trial hooks, counters, selection) is implemented here \u2014 DIFF 1 delivers the drain + registration + readiness that the calibration owner calls; the boundary is arm_funcptr_marshal_drain's signature.",
+    "No claim the FC-1 read-only FName validator exists \u2014 DIFF 2 only compiles out the fatal detour and settles the wait; the loud log says verification is NOT performed.",
+    "No claim link-stage or full-runtime composition: this session compiles (-c) the two patched units; cross-TU link and a composed boot are the next composition-order task.",
+    "No claim about in-game logging behavior of Output::send under any console; strings are authored, not observed.",
+    "Nothing staged, nothing executed on any console, no console contact, no nested subagents."
+  ],
+  "claims_verified_at": "2026-10-04 (this session; all verifications completed before REPORT)"
+}

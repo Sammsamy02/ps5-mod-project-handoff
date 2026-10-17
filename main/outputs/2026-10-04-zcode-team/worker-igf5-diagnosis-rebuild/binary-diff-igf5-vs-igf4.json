@@ -1,0 +1,109 @@
+{
+  "marker": "modbridge.ingamefacts.binary-diff",
+  "schema": 1,
+  "worker": "worker-igf5-diagnosis-rebuild",
+  "date": "2026-10-04",
+  "question": "Why did igf5 (zero records, correlated console+game crashes) fail while igf4 loaded and produced records?",
+  "inputs": {
+    "igf5_outer_prx": "outputs/2026-10-04-zcode-team/worker-code-anchor-reads/modbridge_ingame_facts.prx",
+    "igf5_outer_sha256": "486845b7e121d5993febdf812ac55815cc974fc1e2a062ebb4ac60fc5b8f8dfa",
+    "igf5_outer_bytes": 25981,
+    "igf5_inner_elf": "outputs/2026-10-04-zcode-team/worker-code-anchor-reads/determinism/run1/bare-sdk/modbridge_ingame_facts.prx",
+    "igf5_inner_bytes": 85472,
+    "igf4_outer_prx": "outputs/2026-10-04-zcode-team/worker-anchor-validation/modbridge_ingame_facts.prx",
+    "igf4_outer_sha256": "4aa624cc4cc045c6c137b07b2283f458ad2e41a576273444d0fc75e1e9762756",
+    "igf4_outer_bytes": 26077,
+    "igf4_inner_elf": "outputs/2026-10-04-zcode-team/worker-anchor-validation/determinism/run1/bare-sdk/modbridge_ingame_facts.prx",
+    "igf4_inner_bytes": 85536,
+    "tools": "LLVM 21.1.8 llvm-readelf/llvm-objdump (workspace-pinned), xxd, python struct",
+    "method": "static only; nothing native executed"
+  },
+  "findings": {
+    "a_dynamic_symbols": {
+      "same_import_count": true,
+      "igf5_strong_und": 7,
+      "igf4_strong_und": 7,
+      "igf5_weak": 0,
+      "igf4_weak": 0,
+      "new_symbols": [],
+      "removed_symbols": [],
+      "export_delta": [
+        "BaOKcng8g88#C#A: igf5 0x1e10 size 574 / igf4 0x1d60 size 574 (same name+size, address moved)",
+        "KpDMrPHvt3Q#C#A: igf5 0x2050 size 128 / igf4 0x1fa0 size 128 (same name+size, address moved)"
+      ],
+      "verdict": "IDENTICAL import interface; the mprotect shim introduced NO import (as designed)"
+    },
+    "b_program_headers": {
+      "same_count_and_types": true,
+      "igf5_exec_load_filesz": "0x45e7",
+      "igf4_exec_load_filesz": "0x47a7",
+      "igf5_rodata_load_filesz": "0x9e4",
+      "igf4_rodata_load_filesz": "0x888",
+      "igf5_bss_memsz": "0x478080",
+      "igf4_bss_memsz": "0x4c00b4",
+      "alignment": "0x4000 all LOADs in both",
+      "flags": "E / R / RW / flags-0 auxiliary LOAD present in BOTH",
+      "verdict": "structurally identical segment set; only size/addr fields differ (content size consequence)"
+    },
+    "c_relocations": {
+      "rela_entries": "23 in BOTH (RELASZ 552, RELAENT 24, RELACOUNT 10)",
+      "plt_relocs": "JMPREL==RELA, PLTRELSZ 0 in BOTH (no PLT)",
+      "new_reloc_types": [],
+      "delta": "only the two init/fini-array entries' targets moved with INIT/FINI (0x1df0/0x1e00 vs 0x1d40/0x1d50 addends)",
+      "verdict": "same relocation schema; nothing new for the loader to process"
+    },
+    "d_section_layout": {
+      "sections_igf5": [".text 0x458c", ".rodata 0x9e4", ".data.rel.ro 0x38", ".init_array 8", ".fini_array 8", ".bss 0x478080"],
+      "sections_igf4": [".text 0x474c", ".rodata 0x888", ".data.rel.ro 0x38", ".init_array 8", ".fini_array 8", ".bss 0x4c00b4"],
+      "delta": "igf5 .text -0x1c0 (igf4's uncorrected predicate TU removed, igf5 probe+shim added), .rodata +0x15c (igf5 strings), BSS -0x48034 (igf4 static cfgL span tables gone)",
+      "verdict": "same section set; sizes are source-set consequences"
+    },
+    "e_init_fini_arrays": {
+      "init_array_slots_igf5": 1,
+      "init_array_slots_igf4": 1,
+      "fini_array_slots_igf5": 1,
+      "fini_array_slots_igf4": 1,
+      "dt_init": "BaOKcng8g88 in both (574 B, same code: vendored boundaries/sentinels lineage)",
+      "dt_fini": "KpDMrPHvt3Q in both (128 B)",
+      "verdict": "IDENTICAL constructor/destructor topology; ctor code is byte-identical vendored sources (sentinels.c/boundaries.S sha-verified)"
+    },
+    "f_syscall_instruction": {
+      "igf5_sites": 2,
+      "igf4_sites": 0,
+      "igf6_sites": 0,
+      "igf5_locations": ["vaddr 0x28c9 (mprotect #1: eax=0x4A, rdi=page, rsi=len, edx=0x5 PROT_READ|EXEC)", "vaddr 0x2a1b (mprotect #2 restore: eax=0x4A, edx=orig_prot)"],
+      "syscall_number": "0x4A = 74 = SYS_mprotect parsed at build time from pinned SDK target/include/sys/syscall.h:82",
+      "containing_function": "local (visibility-hidden) anchor-read helper inside the igf5 probe TU; called only from ig_run_code_anchor_probe <- module_start",
+      "load_path_hot": false,
+      "first_execution_point": "seq 4 of the probe — AFTER records seq 1 (entry), 2 (startup), 3 (mapscan) have been written via write-through sceKernelWrite",
+      "on_host_verifiability": "NONE: kernel syscall number 74 semantics cannot be verified on this host; only getpid(20)/sysctl(202) are console-proven by the lineage",
+      "verdict": "the ONLY execution-relevant functional delta between igf5 and igf4; NOT in a load-time hot path"
+    },
+    "g_fself_wrapper": {
+      "magic": "0x1D3D154F identical",
+      "field_layout": "identical",
+      "differing_fields": [
+        {"offset": "0x10", "igf5": "0x6540", "igf4": "0x65a0", "meaning": "payload size (outer bytes - 61 in both)"},
+        {"offset": "0x50", "igf5": "0x45e7", "igf4": "0x47a7", "meaning": "exec segment size"},
+        {"offset": "0x58", "igf5": "0x45e7", "igf4": "0x47a7", "meaning": "exec segment size (dup)"},
+        {"offset": "0x68", "igf5": "0x5070", "igf4": "0x5230", "meaning": "size-derived field"}
+      ],
+      "wrapper_overhead_bytes": "61 in BOTH",
+      "trailer": "byte-identical tail structure (crt1 + libkernel.prx dependency metadata, SDK 0x11000000 stamps)",
+      "sdk_json": "same structure/counts; only offsets and input/output sha differ (size consequence)",
+      "elf_notes": "same note set; Build ID differs (content-derived digest)",
+      "verdict": "packaging recipe applied identically; no packaging defect found"
+    }
+  },
+  "code_content_delta_summary": [
+    "igf5 REMOVED igf4's townfall_layout_probes.cpp (uncorrected predicate) — GUA branch compiled out (IG_PRED_GC_FIX_PRESENT=0, GUA memory untouched)",
+    "igf5 ADDED: inline mprotect syscall shim (sys_mprotect_shim.h, 2 raw syscall sites), anchor_pages.c (pure arithmetic), code_anchor_probe.cpp mission logic",
+    "all 11 shared vendored sources byte-identical (sha-verified by igf5's own build vs igf4, re-verified by this worker)"
+  ],
+  "diagnosis": {
+    "load_stage_structural_rejection": "EXCLUDED by this diff: every loader-parsed structure (fself fields, ELF header, program headers, sections, dynamic table, dynsym, relocations, init/fini arrays, notes) is field-wise equivalent or size-consequence-only",
+    "zero_records_reconciliation": "record_sink.c opens O_WRONLY|O_CREAT|O_APPEND|O_NOFOLLOW (no O_SYNC, no fsync) and every record is a synchronous sceKernelWrite; the igf5 flow writes seq 1-3 BEFORE the first mprotect. Hence a plain userspace crash after module_start would have left records 1-3 on disk. Zero records + console crash therefore points to (i) LEADING: a kernel-level fault from the unverified raw syscall 74 on this kernel (unexpected sysent semantics -> kernel panic), losing unsynced page-cache writes and taking down console+game; or (ii) module_start never ran (load-stage event outside the parsed structures, e.g. content-derived console validation) — made unlikely by (a)-(g) but not strictly excludable on host",
+    "confirmed_caveat": "per task instruction the syscall is NOT declared the proven cause; it is the sole execution-relevant binary delta and the first igf5-only instruction that would ever execute. Static analysis cannot distinguish (i) from (ii) on this host; only a user-coordinated launch of a syscall-free build can",
+    "igf6_response": "remove the entire mechanism (no mprotect import, no shim, no raw syscall, no permission gate) and direct-read the anchors: x86-64 NX gates execute, not read; VMMAP prot=0x4 is kernel policy; igf4's refusal was the GATE refusing (policy), never the hardware faulting"
+  }
+}

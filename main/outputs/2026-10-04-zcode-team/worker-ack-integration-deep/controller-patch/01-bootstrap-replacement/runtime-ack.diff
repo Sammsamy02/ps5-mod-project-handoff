@@ -1,0 +1,339 @@
+--- a/outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/runtime_owner.hpp
++++ b/outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/runtime_owner.hpp
+@@ -1,7 +1,10 @@
+ #pragma once
+ 
++#include <cstdint>
++#include <filesystem>
+ #include <functional>
+ #include <memory>
++#include <modforge_activation.h>
+ #include <mutex>
+ #include <string>
+ #include <thread>
+@@ -15,6 +18,52 @@
+     std::string error;
+ };
+ 
++// Configuration for the runtime acknowledgment file (RUNTIME-ACK.md): the mod
++// root that owns <root>/runtime-status.txt plus the session facts recorded at
++// open. Supplied by the module_start composition through the same
++// caller-owned injection pattern as NativeProgramContext::mod_source; an empty
++// status_root leaves every acknowledgment a no-op. Never a global.
++struct RuntimeAckConfig
++{
++    std::filesystem::path status_root;
++    long pid{0};
++    std::uint64_t now_ms{0};
++};
++
++// One session's append-only runtime acknowledgment channel. mfa_status_open
++// replaces the status file (fresh-session semantics) during module_start while
++// /data is still reachable; mfa_status_write then appends whole state lines
++// through the retained descriptor for the whole process lifetime. Every
++// method is nonthrowing and records write failures internally: an
++// acknowledgment that cannot be written must never fail or delay engine
++// startup (record, continue).
++class RuntimeAckSink final
++{
++public:
++    // Default-constructed sinks are inert (no descriptor); prefer Open().
++    RuntimeAckSink() = default;
++    RuntimeAckSink(const RuntimeAckSink&) = delete;
++    RuntimeAckSink& operator=(const RuntimeAckSink&) = delete;
++    // Opens (or fails to open) the status file; never throws. An open failure
++    // yields an inert sink with the reason in last_error(), so startup
++    // continues unacknowledged rather than failing. Returns null only when
++    // allocation itself failed.
++    static std::shared_ptr<RuntimeAckSink> Open(const RuntimeAckConfig& config) noexcept;
++    void activated() noexcept;  // RUNTIME-ACK point 1: activation consumed, no engine work yet
++    void engine_ready() noexcept; // point 2: real on_engine_initialized callback fired
++    void mods_started() noexcept; // point 3: deferred mod startup from the activation views
++    void failed(int code, const char* detail) noexcept; // point 4: startup failure (code != 0)
++    void stopped() noexcept;    // point 5: stop() joined the init thread
++    void close() noexcept;      // point 5: release the retained descriptor
++    const std::string& last_error() const noexcept { return last_error_; }
++private:
++    void emit(const char* state, int code, const char* detail) noexcept;
++    mfa_status status_{-1, 0};
++    std::mutex mutex_;
++    std::string last_error_;
++    bool stopped_written_{false};
++};
++
+ // initialize blocks until shutdown. ready is called only after actual engine
+ // initialization. request_stop must be thread safe and nonthrowing. Backend
+ // destruction requires engine-hook quiescence separately established by loader.
+@@ -32,7 +81,10 @@
+ class RuntimeOwner final
+ {
+ public:
+-    explicit RuntimeOwner(std::unique_ptr<RuntimeBackend> backend);
++    // ack is the optional RUNTIME-ACK emission sink; absent (null) leaves the
++    // owner's behavior byte-for-byte unchanged.
++    explicit RuntimeOwner(std::unique_ptr<RuntimeBackend> backend,
++                          std::shared_ptr<RuntimeAckSink> ack = nullptr);
+     ~RuntimeOwner();
+     RuntimeOwner(const RuntimeOwner&) = delete;
+     RuntimeOwner& operator=(const RuntimeOwner&) = delete;
+@@ -46,6 +98,7 @@
+     struct Signals;
+     std::unique_ptr<RuntimeBackend> backend_;
+     std::shared_ptr<Signals> signals_;
++    std::shared_ptr<RuntimeAckSink> ack_;
+     std::mutex operations_;
+     std::thread thread_;
+     void initialize() noexcept;
+--- a/outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/runtime_owner.cpp
++++ b/outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/runtime_owner.cpp
+@@ -9,8 +9,8 @@
+     RuntimeStatus status;
+     std::thread::id initializer;
+ };
+-RuntimeOwner::RuntimeOwner(std::unique_ptr<RuntimeBackend> backend)
+-    : backend_(std::move(backend)), signals_(std::make_shared<Signals>())
++RuntimeOwner::RuntimeOwner(std::unique_ptr<RuntimeBackend> backend, std::shared_ptr<RuntimeAckSink> ack)
++    : backend_(std::move(backend)), signals_(std::make_shared<Signals>()), ack_(std::move(ack))
+ {
+     if (!backend_) throw std::invalid_argument("Native runtime backend is required");
+ }
+@@ -33,6 +33,9 @@
+     {
+         std::lock_guard lock(signals_->mutex);
+         signals_->status = {RuntimeState::Failed, error.what()};
++        // RUNTIME-ACK point 4: the session failed before any engine work;
++        // record and continue, never propagate from the acknowledgment.
++        if (ack_) ack_->failed(1, error.what());
+         return false;
+     }
+     return true;
+@@ -59,6 +62,17 @@
+         signals_->initializer = {};
+         if (signals_->status.state != RuntimeState::Failed)
+             signals_->status.state = RuntimeState::Stopped;
++        // RUNTIME-ACK point 5: after stop() has joined the init thread, the
++        // cooperative stop is the session's final acknowledged state; only
++        // then is the retained descriptor released. The sink emits stopped
++        // at most once per session (the init thread may complete the
++        // Stopping->Stopped transition first; repeated stop adds nothing),
++        // and a failed session keeps its failed line last.
++        if (ack_ && signals_->status.state == RuntimeState::Stopped)
++        {
++            ack_->stopped();
++            ack_->close();
++        }
+     }
+     return true;
+ }
+@@ -88,20 +102,103 @@
+         if (signals_->status.state == RuntimeState::Stopping)
+             signals_->status.state = RuntimeState::Stopped;
+         else
++        {
+             signals_->status = {RuntimeState::Failed, "Native runtime init returned without a stop request"};
++            // RUNTIME-ACK point 4: init returned on its own without readiness.
++            if (ack_) ack_->failed(1, "Native runtime init returned without a stop request");
++        }
+     }
+     catch (const std::exception& error)
+     {
+         std::lock_guard lock(signals_->mutex);
+         signals_->status = {RuntimeState::Failed, error.what()};
++        // RUNTIME-ACK point 4: genuine startup error, including a typed
++        // deadline/cancellation converted to an error by the backend.
++        if (ack_) ack_->failed(1, error.what());
+     }
+     catch (...)
+     {
+         std::lock_guard lock(signals_->mutex);
+         signals_->status = {RuntimeState::Failed, "Native runtime initialization failed with an unknown exception"};
++        if (ack_) ack_->failed(1, "Native runtime initialization failed with an unknown exception");
+     }
+     // Completed thread IDs may later be reused by an unrelated caller.
+     std::lock_guard lock(signals_->mutex);
+     signals_->initializer = {};
+ }
++
++std::shared_ptr<RuntimeAckSink> RuntimeAckSink::Open(const RuntimeAckConfig& config) noexcept
++{
++    try
++    {
++        auto sink = std::make_shared<RuntimeAckSink>();
++        if (config.status_root.empty())
++        {
++            sink->last_error_ = "runtime ack root is not configured";
++            return sink;
++        }
++        const std::string root = config.status_root.string();
++        if (const int rc = mfa_status_open(&sink->status_, root.c_str(), config.pid, config.now_ms))
++        {
++            sink->status_.fd = -1;
++            sink->last_error_ = "mfa_status_open failed: " + std::to_string(-rc);
++            return sink; // Inert: fd < 0, every emit becomes a recorded no-op.
++        }
++        return sink;
++    }
++    catch (...) // Allocation failure: run unacknowledged, never fail startup.
++    {
++        return nullptr;
++    }
+ }
++void RuntimeAckSink::emit(const char* state, int code, const char* detail) noexcept
++{
++    try
++    {
++        std::lock_guard lock(mutex_);
++        if (status_.fd < 0)
++        {
++            if (last_error_.empty()) last_error_ = "ack sink has no open status file";
++            return;
++        }
++        if (const int rc = mfa_status_write(&status_, state, code, detail ? detail : ""))
++            last_error_ = std::string("mfa_status_write(") + state + ") failed: " + std::to_string(-rc);
++    }
++    catch (...) // Recording a diagnostic must never take down startup.
++    {
++    }
++}
++void RuntimeAckSink::activated() noexcept { emit("activated", 0, ""); }
++void RuntimeAckSink::engine_ready() noexcept { emit("engine-ready", 0, ""); }
++void RuntimeAckSink::mods_started() noexcept { emit("mods-started", 0, ""); }
++void RuntimeAckSink::failed(int code, const char* detail) noexcept
++{
++    emit("failed", code != 0 ? code : 1, detail ? detail : "");
++}
++void RuntimeAckSink::stopped() noexcept
++{
++    try
++    {
++        {
++            std::lock_guard lock(mutex_);
++            if (stopped_written_) return; // one stopped line per session
++            stopped_written_ = true;
++        }
++        emit("stopped", 0, "");
++    }
++    catch (...)
++    {
++    }
++}
++void RuntimeAckSink::close() noexcept
++{
++    try
++    {
++        std::lock_guard lock(mutex_);
++        mfa_status_close(&status_);
++    }
++    catch (...)
++    {
++    }
++}
++}
+--- a/outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/ue4ss_backend.hpp
++++ b/outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/ue4ss_backend.hpp
+@@ -19,7 +19,11 @@
+ // and resolved eagerly and use the existing pre-Unreal start_mod lifecycle.
+ // Their exact installation root is required only when native entries are listed.
+ // Both factories require a genuine game context; no other framework ABI is admitted.
++// runtime_ack (RUNTIME-ACK.md) optionally opens <status_root>/runtime-status.txt
++// during module_start and records the session states the installer reads; an
++// empty status_root changes nothing.
+ std::unique_ptr<RuntimeOwner> PrepareActivatedUE4SSRuntime(
+     RC::Platform::NativeProgramContext context, ActivatedMods activation,
+-    std::string_view expected_title, const std::filesystem::path& activation_root = {});
++    std::string_view expected_title, const std::filesystem::path& activation_root = {},
++    const RuntimeAckConfig& runtime_ack = {});
+ }
+--- a/outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/ue4ss_backend.cpp
++++ b/outputs/ps5-mod-bridge/native-runtime-startup/bootstrap/ue4ss_backend.cpp
+@@ -14,8 +14,12 @@
+ {
+     std::shared_ptr<EngineSignal> signal_{std::make_shared<EngineSignal>()};
+     std::unique_ptr<RC::UE4SSProgram> program_;
++    std::shared_ptr<RuntimeAckSink> ack_;
++    bool mods_startup_verified_{false};
+ public:
+-    explicit UE4SSBackend(RC::Platform::NativeProgramContext context, bool enable_buffered_mods = false)
++    explicit UE4SSBackend(RC::Platform::NativeProgramContext context, bool enable_buffered_mods = false,
++                          std::shared_ptr<RuntimeAckSink> ack = nullptr)
++        : ack_(std::move(ack))
+     {
+         RC::Platform::ValidateNativeProgramContext(context);
+         if (enable_buffered_mods && context.mod_source)
+@@ -23,9 +27,22 @@
+         context.mod_startup_policy = RC::Platform::NativeModStartupPolicy::Deferred;
+         auto previous_callback = std::move(context.on_engine_initialized);
+         // The program and backend both retain signal_; it owns neither one.
+-        context.on_engine_initialized = [signal = signal_, previous = std::move(previous_callback)] {
++        // The ack is emitted only from inside this chain, which the program
++        // invokes solely from its real on_engine_initialized site after
++        // Unreal setup, properties and Lua sharing (deferred-startup policy).
++        context.on_engine_initialized = [this, signal = signal_, previous = std::move(previous_callback)] {
+             if (previous) previous();
+             if (signal->ready) signal->ready();
++            // RUNTIME-ACK points 2+3: engine-ready first, then mods-started,
++            // so the last complete state line makes running observable exactly
++            // when the engine callback ran AND the deferred mod startup from
++            // the activation views had already completed (constructor
++            // start_native_mods; mods_startup_verified_).
++            if (ack_)
++            {
++                ack_->engine_ready();
++                if (mods_startup_verified_) ack_->mods_started();
++            }
+         };
+         program_ = std::make_unique<RC::UE4SSProgram>(std::move(context),
+             std::initializer_list<RC::MProgram::BinaryOptions>{});
+@@ -36,6 +53,7 @@
+             program_->start_native_mods();
+             if (const auto error = program_->native_startup_error_message())
+                 throw std::runtime_error(std::string("Native UE4SS inventory rejected: ") + error);
++            mods_startup_verified_ = true;
+         }
+     }
+     void initialize(std::function<void()> ready) override
+@@ -65,7 +83,8 @@
+ 
+ std::unique_ptr<RuntimeOwner> PrepareActivatedUE4SSRuntime(
+     RC::Platform::NativeProgramContext context, ActivatedMods activation,
+-    std::string_view expected_title, const std::filesystem::path& activation_root)
++    std::string_view expected_title, const std::filesystem::path& activation_root,
++    const RuntimeAckConfig& runtime_ack)
+ {
+     if (context.mod_source)
+         throw std::invalid_argument("Native UE4SS context already has a mod source");
+@@ -73,6 +92,33 @@
+     // run. Actual initialization still happens only through RuntimeOwner.start.
+     RC::Platform::ValidateNativeProgramContext(context);
+     context.mod_source = MakeActivatedUE4SSModSource(std::move(activation), expected_title, activation_root);
+-    return std::make_unique<RuntimeOwner>(std::make_unique<UE4SSBackend>(std::move(context), true));
++    // RUNTIME-ACK point 1: only now has the activation actually been consumed
++    // (title matched, unreal/ue4ss-ps5 declared, every startup file preloaded),
++    // so the session status file is opened here, during module_start, while
++    // /data is still reachable, and activated is written once the buffered
++    // inventory (deferred native mod startup included) also succeeded.
++    auto ack = runtime_ack.status_root.empty()
++        ? std::shared_ptr<RuntimeAckSink>{}
++        : RuntimeAckSink::Open(runtime_ack);
++    std::unique_ptr<RuntimeOwner> owner;
++    try
++    {
++        auto backend = std::make_unique<UE4SSBackend>(std::move(context), true, ack);
++        if (ack) ack->activated();
++        owner = std::make_unique<RuntimeOwner>(std::move(backend), std::move(ack));
++    }
++    catch (const std::exception& error)
++    {
++        // RUNTIME-ACK point 4 (preparation-time failure): acknowledge, then
++        // let the original error fly; the ack must never mask or replace it.
++        if (ack) ack->failed(1, error.what());
++        throw;
++    }
++    catch (...)
++    {
++        if (ack) ack->failed(1, "Native UE4SS preparation failed with an unknown exception");
++        throw;
++    }
++    return owner;
+ }
+ }

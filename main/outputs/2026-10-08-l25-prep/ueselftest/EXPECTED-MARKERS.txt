@@ -1,0 +1,82 @@
+EXPECTED-MARKERS -- ueselftest v1 (agent GB). Grep with -a (mixed encodings).
+Boot line (script load, UE4SS.log):
+  [ST2] boot v1 M=168 armed=true pf=true|false
+    No boot line at all = main.lua errored at load (the arm registers
+    Key.F12 directly, zzdiag-v10/v11 pattern; a load-time throw is the
+    loud failure -- check the mod's Lua error line above it).
+    pf=false = io.open/paths unavailable in the mod folder -> resume disabled;
+      the run still completes; treat as a P0 io finding, not a self-test failure.
+
+Arm press (pad chord L1+R1 -> F12):
+  [ST2] K1 f12        (immediate; pad->keybind->callback chain alive)
+  [ST2] K2 q          (callback returned without hang)
+
+Run start (per run):
+  [ST2] RUN start 1..168   (agent IC, Claude round-8 item 3: FIRST line
+    after K1 — busy-guard passed, RUN entered; prints before the part
+    load lines and long before idx 1. K1 present WITHOUT this line =
+    ExecuteInGameThread queue not drained, or a spurious 'busy' —
+    read the next [ST2] lines to tell which. A second combo press
+    after a completed run prints it again.)
+  [ST2] part2 loaded 21   (+ one line per further part; LOAD-FAIL = deploy gap)
+  [ST2] WARN count N expected M    (only if a part loaded with the wrong count)
+
+Per numbered call (ONE line each, 168 total):
+  [ST2] <idx>/<M> <name> PASS <detail-40>
+  [ST2] <idx>/<M> <name> FAIL <error-tail-40>
+  [ST2] <idx>/<M> <name> SKIP <reason>     (runtime-conditional only)
+
+Run end (the LAST numbered call is the static-skip accounting):
+  [ST2] 168/168 skip-class-list PASS 27-skips
+  [ST2] SKIP <API> <CLASS> <cite> (<reason>)   x27 static-skip lines, unnumbered
+  [ST2] SUMMARY <N> of 168 PASS
+  [ST2] done
+
+Resume (only after a real crash mid-run):
+  [ST2] <idx>/<M> <name> CRASH (resumed)   (the about-to-run marker names the crasher)
+
+Operator check: the io-roundtrip line must read PASS rw roundtrip.
+  'w-only open-r-miss' on console = io write path alive but read-back broken
+  (P0 finding, FS parity-table sections 4/5); SKIP open-w-failed = mod folder
+  not writable. ('w-only open-r-miss' is only the EXPECTED shape on the Mac
+  host harness, where writes are virtualized by the GA path shim.)
+
+Acceptance (full pass): SUMMARY 168 of 168 PASS, zero FAIL lines, 'done' present,
+clean game exit afterwards. Any FAIL line names the broken API (see
+CALL-SHEET.md for per-call interpretation). SKIP lines with reason
+'no-valid-pc' mean the run fired before the player was in-world;
+re-press the combo once in-world -- do NOT count that as a failure.
+NEVER force-kill the game to test resume (no-rapid-launch law); the
+CRASH-resume path is validated opportunistically if a real crash occurs.
+
+## IK addendum 2026-10-11 — call 166 'UEHelpers.GetWorld' (Claude round-8 item 4, IF audit)
+
+- M IS NOW 168 (was 167): part11 gained a 6th entry (LP(11,6)),
+  inserted between io-roundtrip (165) and hygiene-audit (167);
+  UEHelpers.GetWorld is entry 166, skip-class-list is now 168/168.
+  main.lua stays 3987 bytes, part11.lua now 2712 (both < 4096).
+- CODE (part11 entry 5): ONE pcall'd require("UEHelpers") (the
+  spawner's lazy-require shape), then ONE pcall'd U.GetWorld(), with
+  SKIP-on-missing semantics: SKIP no-uehelpers (require failed),
+  SKIP no-getworld (lib has no GetWorld export), SKIP nil-world,
+  SKIP invalid-world (UEHelpers CreateInvalidObject fallback — the
+  menu-phase shape: PC arms AND FindFirstOf("GameInstance") both
+  missed). FAIL only when GetWorld itself threw.
+  - FAIL tail "Virtual UObject::GetWorld is unavailable" -> CONFIRMS
+    the IF §1.2 blocker (no [UObject] GetWorld vtable entry in the
+    staged layout pair) — PREDICTED on the frozen round-4 build.
+  - PASS "ok <world-tostring-40>" -> 02b outer-chain fallback (or a
+    future audited vtable entry) delivered a World wrapper.
+  - S.v/IsValid gate + S.hyd.gw = true feeds hygiene-audit (now
+    all-6 when io+gw both healthy).
+- HOST VALIDATION (agent IK): validate.lua stages a host-only
+  UEHelpers.lua stub under STAGE (FindFirstOf("World") shape; never
+  deployed) so the entry follows the same pcall/require path;
+  S1 = SUMMARY 168 of 168 PASS, zero numbered FAIL/SKIP; S2 resume
+  arithmetic holds (M-5); S3 holds (M-2-1, exactly the 2 os.* FAILs +
+  1 io SKIP). KNOWN PRE-EXISTING (NOT from this change, verified on a
+  reverted baseline): the validator's own 'S1 io-roundtrip host shape
+  (w-only open-r-miss)' check fails on this Mac because the real host
+  io now round-trips ('PASS rw roundtrip rm=true') — environment
+  drift vs the GA-shim era; the mod-side marker + the operator check
+  line above ('PASS rw roundtrip') are the console authorities.

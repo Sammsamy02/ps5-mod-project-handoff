@@ -1,0 +1,71 @@
+0xb8f20 file0xbcf20 55 push rbp
+0xb8f21 file0xbcf21 4889e5 mov rbp, rsp
+0xb8f24 file0xbcf24 4157 push r15
+0xb8f26 file0xbcf26 4156 push r14
+0xb8f28 file0xbcf28 53 push rbx
+0xb8f29 file0xbcf29 4881ec88000000 sub rsp, 0x88
+0xb8f30 file0xbcf30 4c8b35d18f0709 mov r14, qword ptr [rip + 0x9078fd1] rip->0x9131f08
+0xb8f37 file0xbcf37 488d0d66fb2909 lea rcx, [rip + 0x929fb66] rip->0x9358aa4
+0xb8f3e file0xbcf3e 4889fb mov rbx, rdi
+0xb8f41 file0xbcf41 498b06 mov rax, qword ptr [r14]
+0xb8f44 file0xbcf44 488945e0 mov qword ptr [rbp - 0x20], rax
+0xb8f48 file0xbcf48 803901 cmp byte ptr [rcx], 1
+0xb8f4b file0xbcf4b 7544 jne 0xb8f91
+0xb8f4d file0xbcf4d 66666664488b042500000000 mov rax, qword ptr fs:[0]
+0xb8f59 file0xbcf59 8b8040ecffff mov eax, dword ptr [rax - 0x13c0]
+0xb8f5f file0xbcf5f 83f802 cmp eax, 2
+0xb8f62 file0xbcf62 742d je 0xb8f91
+0xb8f64 file0xbcf64 83f801 cmp eax, 1
+0xb8f67 file0xbcf67 0f85ce000000 jne 0xb903b
+0xb8f6d file0xbcf6d 0fb605dc152709 movzx eax, byte ptr [rip + 0x92715dc] rip->0x932a550
+0xb8f74 file0xbcf74 84c0 test al, al
+0xb8f76 file0xbcf76 0f84d7000000 je 0xb9053
+0xb8f7c file0xbcf7c 448b3dc5152709 mov r15d, dword ptr [rip + 0x92715c5] rip->0x932a548
+0xb8f83 file0xbcf83 e818943b07 call 0x74723a0
+0xb8f88 file0xbcf88 4139c7 cmp r15d, eax
+0xb8f8b file0xbcf8b 0f85aa000000 jne 0xb903b
+0xb8f91 file0xbcf91 488d05e0fa2909 lea rax, [rip + 0x929fae0] rip->0x9358a78
+0xb8f98 file0xbcf98 488b00 mov rax, qword ptr [rax]
+0xb8f9b file0xbcf9b 483b05ee322209 cmp rax, qword ptr [rip + 0x92232ee] rip->0x92dc290
+0xb8fa2 file0xbcfa2 744a je 0xb8fee
+0xb8fa4 file0xbcfa4 488dbd68ffffff lea rdi, [rbp - 0x98]
+0xb8fab file0xbcfab 488905de322209 mov qword ptr [rip + 0x92232de], rax rip->0x92dc290
+0xb8fb2 file0xbcfb2 e8392cf5ff call 0xbbf0
+0xb8fb7 file0xbcfb7 c5fc108568ffffff vmovups ymm0, ymmword ptr [rbp - 0x98]
+0xb8fbf file0xbcfbf c5fc104d88 vmovups ymm1, ymmword ptr [rbp - 0x78]
+0xb8fc4 file0xbcfc4 c5fc105dc0 vmovups ymm3, ymmword ptr [rbp - 0x40]
+0xb8fc9 file0xbcfc9 c5fc1055a8 vmovups ymm2, ymmword ptr [rbp - 0x58]
+0xb8fce file0xbcfce c5fc111dc2142709 vmovups ymmword ptr [rip + 0x92714c2], ymm3 rip->0x932a498
+0xb8fd6 file0xbcfd6 c5fc1115a2142709 vmovups ymmword ptr [rip + 0x92714a2], ymm2 rip->0x932a480
+0xb8fde file0xbcfde c5fc110d7a142709 vmovups ymmword ptr [rip + 0x927147a], ymm1 rip->0x932a460
+0xb8fe6 file0xbcfe6 c5fc110552142709 vmovups ymmword ptr [rip + 0x9271452], ymm0 rip->0x932a440
+0xb8fee file0xbcfee c5fc1005a2142709 vmovups ymm0, ymmword ptr [rip + 0x92714a2] rip->0x932a498
+0xb8ff6 file0xbcff6 c5fc100d82142709 vmovups ymm1, ymmword ptr [rip + 0x9271482] rip->0x932a480
+0xb8ffe file0xbcffe c5fc10155a142709 vmovups ymm2, ymmword ptr [rip + 0x927145a] rip->0x932a460
+0xb9006 file0xbd006 c5fc114358 vmovups ymmword ptr [rbx + 0x58], ymm0
+0xb900b file0xbd00b c5fc114b40 vmovups ymmword ptr [rbx + 0x40], ymm1
+0xb9010 file0xbd010 c5fc100d28142709 vmovups ymm1, ymmword ptr [rip + 0x9271428] rip->0x932a440
+0xb9018 file0xbd018 c5fc115320 vmovups ymmword ptr [rbx + 0x20], ymm2
+0xb901d file0xbd01d c5fc110b vmovups ymmword ptr [rbx], ymm1
+0xb9021 file0xbd021 498b06 mov rax, qword ptr [r14]
+0xb9024 file0xbd024 483b45e0 cmp rax, qword ptr [rbp - 0x20]
+0xb9028 file0xbd028 7522 jne 0xb904c
+0xb902a file0xbd02a 4889d8 mov rax, rbx
+0xb902d file0xbd02d 4881c488000000 add rsp, 0x88
+0xb9034 file0xbd034 5b pop rbx
+0xb9035 file0xbd035 415e pop r14
+0xb9037 file0xbd037 415f pop r15
+0xb9039 file0xbd039 5d pop rbp
+0xb903a file0xbd03a c3 ret 
+0xb903b file0xbd03b 4889df mov rdi, rbx
+0xb903e file0xbd03e e8ad2bf5ff call 0xbbf0
+0xb9043 file0xbd043 498b06 mov rax, qword ptr [r14]
+0xb9046 file0xbd046 483b45e0 cmp rax, qword ptr [rbp - 0x20]
+0xb904a file0xbd04a 74de je 0xb902a
+0xb904c file0xbd04c e80f8e3b07 call 0x7471e60
+0xb9051 file0xbd051 0f0b ud2 
+0xb9053 file0xbd053 488d3df6142709 lea rdi, [rip + 0x92714f6] rip->0x932a550
+0xb905a file0xbd05a e8518e3b07 call 0x7471eb0
+0xb905f file0xbd05f 85c0 test eax, eax
+0xb9061 file0xbd061 0f8415ffffff je 0xb8f7c
+0xb9067 file0xbd067 e834933b07 call 0x74723a0

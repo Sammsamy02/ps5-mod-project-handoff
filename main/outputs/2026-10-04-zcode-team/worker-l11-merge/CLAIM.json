@@ -1,0 +1,110 @@
+{
+  "worker": "worker-l11-merge",
+  "date": "2026-10-05",
+  "gate": "M-0 / step P-1 (LAUNCH11-PLAN §0 P-1, §2 M-0, §6 U-1): merge the two parallel luamod deltas into ONE staged source",
+  "scope": "LOCAL ONLY: this worker dir + owned staging. No composition run, no packaging, no gate v2, no determinism pass, no console contact, nothing in-game.",
+  "inputs": {
+    "base": {
+      "path": "worker-l11-marshal-integration/staging/luamod-l11-marshal-consumer/LuaMod.cpp",
+      "sha256": "04c9d91664dd82c7831cfc7eff79b6c20c62df9e6fd6eced60d419310966ad9f",
+      "verified": true
+    },
+    "delta_A_enqueue_ladder": {
+      "path": "worker-l11-enqueue-ladder/diffs/l11-enqueue-ladder.diff",
+      "sha256": "3b19068a194ec82dd58fecac1a1d53051a05aa2965558d706db7de68bc3c4a04",
+      "hunks_old_file_lines": [[5004, 5010], [5021, 5027], [5033, 5039], [5050, 5056], [5100, 5105]],
+      "verified": true
+    },
+    "delta_B_loadmap_defer_r2": {
+      "path": "worker-l11-loadmap-guard/diffs/l11-loadmap-defer-r2.diff",
+      "sha256": "d2ad2818db4b73383003097ab13d0aef0e6bc0d3b45a1e3347d9eee664dfcbb7",
+      "hunks_old_file_lines": [[7321, 7326], [8100, 8105]],
+      "verified": true
+    },
+    "hunk_disjointness": "max(delta A extent)=5105 < min(delta B extent)=7321; gap ~2216 lines; no shared context; both __PROSPERO__-guarded"
+  },
+  "merge": {
+    "staged_source": "staging/luamod-l11-merged/LuaMod.cpp",
+    "sha256": "dc68760253ec141f2eec4696050b8a2dd9f01b7f2894829d5f543516fb44f7f4",
+    "lines": 8327,
+    "line_arithmetic": "8207 (base) + 69 (delta A net) + 51 (delta B net)",
+    "order_independence": "A-then-B (work/merge-AB) and B-then-A (work/merge-BA) both patch rc=0, no fuzz/offsets/rej, and produce BYTE-IDENTICAL results (cmp clean); zero conflict resolution performed",
+    "round_trip": "patch -R delta B then patch -R delta A on the merged source reproduces base 04c9d916... BYTE-IDENTICALLY (work/roundtrip, cmp clean)",
+    "cross_proofs": {
+      "el_staging_f50976ae_to_merged": "changed-line set == delta B exactly (51 lines; work/el-vs-merged.diff)",
+      "lg_r2_staging_9a7a37d6_to_merged": "changed-line set == delta A exactly (73 lines; work/lg-vs-merged.diff)",
+      "vs_base_unified_diff": "receipts/merged-vs-base.diff, 7 hunks, sha256 46f2735b329e02d91de8c6bcc490ba89003d1d68c200bfda209d2e293e414123"
+    }
+  },
+  "compile_gate": {
+    "argv_source": "worker-luamod-l11-dryrun/scratch/staging/luamod-argv.json (172 tokens, verbatim)",
+    "argv_drift": "tokens 165 (source), 168 (-o), 171 (-MF) ONLY; token count 172 before and after; my argv receipts work/argv-control.json + work/argv-merged.json",
+    "compiler": "outputs/ps5-mod-bridge/native-host/build/sdk-v0.43/ps5-payload-sdk/bin/prospero-clang++",
+    "llvm_config": "outputs/ps5-mod-bridge/native-probe/build/deps/llvm/LLVM-21.1.8-macOS-ARM64/bin/llvm-config",
+    "control": {
+      "source_sha256": "04c9d91664dd82c7831cfc7eff79b6c20c62df9e6fd6eced60d419310966ad9f",
+      "object": "work/control-luamod.o",
+      "object_sha256": "854a476bdd4f998581f206af9faaa10b64eba8814fc590350c9565dce47f9565",
+      "bytes": 7034504,
+      "exit": 0,
+      "BYTE_MATCHES": "MI consumer object 854a476bdd4f9985... (frozen-argv path-independence re-proven)"
+    },
+    "merged": {
+      "source_sha256": "dc68760253ec141f2eec4696050b8a2dd9f01b7f2894829d5f543516fb44f7f4",
+      "object": "work/merged-luamod.o",
+      "object_sha256": "813b249d0ba3c16a641db53c3c4dc04b52442cccc553b88369d0ca50eb96f4a9",
+      "bytes": 7039032,
+      "exit": 0,
+      "ROLE": "THE M-0 COMPARATOR 'NEW' — to be pinned by the controller for compose (plan §2 step 3: luamod.o == 813b249d0ba3c16a...)"
+    },
+    "warnings": "23 warnings / 13 kinds on BOTH sides; warn-kind receipts byte-identical (diff of gate-control.warn-kinds.txt vs gate-merged.warn-kinds.txt is EMPTY); 0 errors both; stdout empty both"
+  },
+  "symbol_und_proof": {
+    "control_und_count": 568,
+    "merged_und_count": 568,
+    "added_merged_vs_control": [],
+    "removed_control_vs_merged": [],
+    "three_declared_bridge_UNDs_present_in_BOTH": [
+      "_ZN2RC6Unreal20R3MarshalPumpPendingEv",
+      "_ZN2RC6Unreal34R3MarshalPublishGameThreadIdentityEv",
+      "_ZN2RC6Unreal9UFunction10GetFuncPtrEv"
+    ],
+    "interpretation": "satisfies delta B's claim (r2 adds zero UNDs, holds through merge) AND delta A's symbol obligation (all its new calls bind to symbols already in the control set — the empty added set IS the proof); no UND beyond the three declared (plan §2 M-0 law)",
+    "defined_shape_preserved": [
+      "_ZN2RCL25arm_funcptr_marshal_drainEPNS_6Unreal9UFunctionERKNS0_5FNameE",
+      "_ZN2RCL20funcptr_marshal_hookERNS_6Unreal35UnrealScriptFunctionCallableContextEPv",
+      "_ZN2RCL27r3_marshal_carrier_precheckEPNS_6Unreal9UFunctionE",
+      "_ZN2RCL31r3_marshal_calibration_consumerEv",
+      "_ZZN2RCL31r3_marshal_calibration_consumerEvE31k_r3_marshal_carrier_candidates"
+    ],
+    "marker_strings_in_merged_object_only": {
+      "delta_A_stall_log": "utf16le hit 1 (control 0)",
+      "delta_B_deferral_log": "utf16le hit 1 (control 0)"
+    },
+    "receipts": ["receipts/undefined-control.txt", "receipts/undefined-merged.txt"]
+  },
+  "host_suites": {
+    "enqueue_ladder_suite": {
+      "expected": "control 14/14 + fixed 23/23",
+      "observed": "control 14/14 checks passed 0 failed (exit 0); MERGED world 23/23 checks passed 0 failed (exit 0)",
+      "method": "suite copied byte-for-byte to work/el-host-test (only hard-coded HT output-root re-pointed); regions re-extracted from base+merged by the suite's own extract_regions.py; ALL 12 region files byte-identical to the suite originals; fresh build + run; stdout receipts byte-identical to the EL suite's recorded run",
+      "pass_receipt": "receipts/el-host-merged-PASS-receipt.txt"
+    },
+    "loadmap_guard_5phase_suite": {
+      "expected": "5/5",
+      "observed": "5/5 phases PASS, exit 0, ASan/UBSan log 0 bytes; stdout byte-identical to LG's recorded run-r2.stdout",
+      "method": "suite copied byte-for-byte to work/lg-worker/host-test (only W= output-root re-pointed; test source sha b761074987aff6e5... verified); all 11 sha-gated units rebuilt fresh",
+      "luaMod_independence": "this suite exercises the composed polyhook owned-memory detour layer directly; the merged unit's linkage is the compile-gated delta-B gate plus the lg-staging->merged cross-diff == delta A exactly",
+      "pass_receipt": "receipts/lg-host-merged-PASS-receipt.txt"
+    }
+  },
+  "honest_bounds": [
+    "No composition run (controller owns B5): the composed-object comparator for the launch-11 candidate is NOT measured here and is NOT 633a8c82... — the controller measures it; this gate's contribution is merged source dc687602... and unit object 813b249d0ba3c16a... to be pinned.",
+    "No packaging, no gate v2 15/15, no determinism double-pass, no chain-symbols check, no console contact, no in-game behavior claim of any kind.",
+    "The incremental chain steps +EL->8593884e / +LG->3eeba02f were NOT re-compiled by this worker (EL/LG own those objects); their consistency with my staging is proven at the TEXT level (cross-diffs), not re-measured at object level.",
+    "Host suites shim the PS5 platform surface (declared knobs); they are behavioral host evidence only and never console evidence."
+  ],
+  "disclosure": [
+    "First EL-suite build invocation wrote into worker-l11-enqueue-ladder/host-test/build/ because build_host_test.sh hard-codes HT at the EL dir; EL's receipts (stdout/stderr/PASS-receipt.txt) were NOT touched; the overwritten build artifacts were rebuilt from byte-identical inputs (identical regions/sources/flags). My authoritative run used worker-l11-merge/work/el-host-test/build/. No LG-dir write occurred (caught on the first run there)."
+  ]
+}

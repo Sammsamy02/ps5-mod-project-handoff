@@ -1,0 +1,58 @@
+STAGED DIFF — NOT APPLIED (composition-time hook, worker-insession-diag 2026-10-05)
+
+Target TU: the composed program lineage, exact staging copy
+  outputs/2026-10-04-zcode-team/worker-pad-defer/staging/program-wpd1/UE4SSProgram.cpp
+  (sha256 cb6cb14aa044124f17cf8d2115b4962a7d91daa686f6e80a0631061b51b8c8af)
+
+Two hunks, +5/-0 lines total. The new files
+  insession_cmd_core.{h,c} and insession_cmd_poll.{h,cpp}
+are ADDED UNITS of this worker (staging/); this diff only wires the one call.
+
+--- a/UE4SSProgram.cpp
++++ b/UE4SSProgram.cpp
+@@ (include block; alongside the other project-local includes) @@
+ #include <DynamicOutput/Output.hpp>
+ #include <DynamicOutput/FileDevice.hpp>
+ #include <DynamicOutput/NewFileDevice.hpp>
++#include "insession_cmd_poll.h" // worker-insession-diag: bounded in-session intake (v1: diag/noop)
+ 
+ (existing includes continue)
+@@ the PROSPERO event-loop body, between the watcher #ifndef block and the
+@@ 5ms sleep (wpd1 lines 1746-1754) @@
+ #ifndef __PROSPERO__
+             if (settings_manager.General.EnableAutoReloadingLuaMods)
+             {
+                 // Process any mod file changes, and wait until done.
+                 process_sync_request(filesystem_watcher.get_thread_state());
+             }
+ 
+ #endif
++#ifdef __PROSPERO__
++            // worker-insession-diag: bounded in-session command intake.
++            // Loop-thread-only, internally throttled (1 cheap open-try per
++            // ~100 ticks), never throws, diag/noop effects only in v1.
++            insession_cmd_poll();
++#endif
+             std::this_thread::sleep_for(std::chrono::milliseconds(5));
+             ProfilerFrameMark();
+
+PLACEMENT LAW (why here):
+- After the Unreal-init gate (:1661-1665) and the pause gate (:1667-1671):
+  paused/unhealthy ticks never poll.
+- After mod fire_update (:1734-1744): Lua mod update work is never starved
+  by the intake.
+- Before the 5ms sleep (:1754): the poll cannot lengthen any engine step.
+- Same thread as the PROSPERO event-batch executor (:1677-1707) and
+  fire_update: no new thread, no lock, no queue interaction. The poll never
+  calls queue_event/queue_* (nothing marshals back into the loop in v1).
+
+COMPOSITION NOTES (for the integrating worker, not this one):
+- The two new .c/.cpp units compile like the existing bootstrap units
+  (insession_cmd_core.c is C, like diagnostic.c; the poll TU is C++).
+- The poll TU's console branch includes <DynamicOutput/Output.hpp> and
+  <UE4SSProgram.hpp> (both already in the composition's include set:
+  UE4SSProgram.cpp:30 and ue4ss_backend.cpp:3).
+- Per-build import audit stays mandatory (PLOADER-IMPORT-ANALYSIS.md §4):
+  the new TUs add references to EXISTING contract members only
+  (sceKernelOpen/sceKernelClose/read/rename/strcmp/strlen), so the derived
+  contract must come out at exactly 196 strong again — any drift is a stop.

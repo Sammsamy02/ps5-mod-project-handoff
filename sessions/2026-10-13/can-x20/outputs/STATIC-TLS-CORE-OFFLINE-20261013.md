@@ -1,0 +1,14 @@
+# Static PE TLS core: Mac-only continuation
+
+**Status:** Isolated platform-neutral state core, not yet wired into the PE loader or any PS5 guest thread. It advances the unchanged-DLL route but does not make real-TLS DLLs executable.
+
+The [Microsoft PE format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format) defines an initialized TLS template, zero fill, a loader-assigned module index, a per-thread array of module-block pointers, and callbacks for process/thread attachment. The existing loader refuses real static TLS because guest Windows `GS` access and callbacks are unsupported. Its dynamic `TlsAlloc` shim is a different mechanism.
+
+An isolated `cg-static-tls-core-20261013-09` stage now contains:
+
+- `StaticTlsBank`: assigns monotonic module indices, makes a distinct template copy for each attached thread, preserves each thread's mutations across late module registration, and returns an owned pointer-array snapshot for a future guest TEB backend. Retained modules never reuse indices.
+- `register_mapped_static_tls`: validates a relocated mapped image's TLS template, 32-bit index target, and null-terminated callback table. On success it snapshots the template, registers the module, writes the assigned index into the mapped image, and returns callback addresses. Malformed pointer ranges refuse before registration or index mutation.
+
+Mac x86-64 host verification: **19/19 focused checks** across template/zero-fill, two-thread isolation, late registration, independent banks, size overflow, valid mapped-image index/callback extraction, and malformed index/template/callback ranges. A partially valid callback table now refuses without returning any earlier callback address or assigned index. The test runner builds with `-Wall -Wextra -Werror` and executes through `arch -x86_64`. The [incremental source patch](static-tls-core-increment-20261013.patch) applies only after the [guarded loader stage](pe-loader-gs-guard-increment-20261013.patch); its [manifest](static-tls-core-manifest-20261013.json) pins the exact base and staged hashes. The patch was applied to a scratch copy and produced byte-identical staged files. [Evidence ZIP](static-tls-core-evidence-20261013.zip).
+
+**Remaining offline integration:** call registration after mapping and relocations but before guest entry; verify the index target's section is writable and callback targets are executable; publish a stable Windows TEB/TLS-array view for every guest thread; bridge and order TLS callbacks with DLL entry notifications; handle thread exit and late DLL loads; validate this on unchanged DLLs and the required CRT/UE4SS path. The current loader still refuses real TLS. The console is required later to verify any PS5 `GS`/thread mechanism, and a Mac test cannot establish intended gameplay behavior.

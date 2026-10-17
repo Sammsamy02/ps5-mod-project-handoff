@@ -1,0 +1,87 @@
+--- /LOCAL_SCRATCH	2026-10-12 13:15:50
++++ ../2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp	2026-10-12 13:34:44
+@@ -5286,6 +5286,11 @@
+                     continue;
+                 }
+ 
++                // [R9-NOTIFY] contain each callback: a Lua error in one mod's NotifyOnNewObject callback
++                // (TRY re-raises it as a C++ exception here, outside any Lua frame) must not drop the
++                // remaining callbacks or the rest of this pump (launch 7: 58 contained at the hook guard).
++                try
++                {
+                 TRY([&]() {
+                     get_function_ref_cxx(*exec.lua, exec.lua_callback_function_ref);
+                     LuaType::auto_construct_object(*exec.lua, exec.constructed_object);
+@@ -5307,6 +5312,19 @@
+                         lua_pop(exec.lua->get_lua_state(), 1);
+                     }
+                 });
++                }
++                catch (const std::exception& e)
++                {
++                    static uint32_t s_notify_errors{0};
++                    if (++s_notify_errors <= 20)
++                    {
++                        try { Output::send<LogLevel::Error>(STR("[R9-NOTIFY] NotifyOnNewObject callback error (#{}): {}\n"), s_notify_errors, ensure_str(e.what())); } catch (...) {}
++                    }
++                }
++                catch (...)
++                {
++                    try { Output::send<LogLevel::Error>(STR("[R9-NOTIFY] NotifyOnNewObject callback threw a non-standard exception\n")); } catch (...) {}
++                }
+             }
+ 
+             if (!thread_refs_to_unref.empty())
+@@ -5546,6 +5564,10 @@
+                     LuaMod::m_pending_delayed_game_thread_actions.clear();
+                 }
+             }
++        }
++        catch (const std::exception& e)
++        {
++            try { Output::send<LogLevel::Error>(STR("[R9-GUARD] game-thread hook contained an exception: {}\n"), ensure_str(e.what())); } catch (...) {}
+         }
+         catch (...)
+         {
+@@ -6014,6 +6036,10 @@
+                 }
+             }
+         }
++        catch (const std::exception& e)
++        {
++            try { Output::send<LogLevel::Error>(STR("[R9-GUARD] game-thread hook contained an exception: {}\n"), ensure_str(e.what())); } catch (...) {}
++        }
+         catch (...)
+         {
+             try { Output::send<LogLevel::Error>(STR("[R9-GUARD] game-thread hook contained an exception\n")); } catch (...) {}
+@@ -6124,6 +6150,10 @@
+                     // The hook body (drive_tick) already isolated this drain; a
+                     // drain failure never propagates into the engine Tick path.
+                 }
++            }
++            catch (const std::exception& e)
++            {
++                try { Output::send<LogLevel::Error>(STR("[R9-GUARD] game-thread hook contained an exception: {}\n"), ensure_str(e.what())); } catch (...) {}
+             }
+             catch (...)
+             {
+@@ -6183,6 +6213,10 @@
+                     LuaMod::m_pending_delayed_game_thread_actions.clear();
+                 }
+             }
++        }
++        catch (const std::exception& e)
++        {
++            try { Output::send<LogLevel::Error>(STR("[R9-GUARD] game-thread hook contained an exception: {}\n"), ensure_str(e.what())); } catch (...) {}
+         }
+         catch (...)
+         {
+@@ -10310,7 +10344,7 @@
+                 if (async_perf_window_start_ns == 0) { async_perf_window_start_ns = async_t1; }
+                 if (async_t1 - async_perf_window_start_ns >= 1'000'000'000)
+                 {
+-                    if (async_perf_ns >= 1'000'000)
++                    if (async_perf_ns >= 5'000'000) // only mods that took >= 5 ms this second
+                     {
+                         try { Output::send(STR("[PERF-ASYNC] mod={} ms={:.1f}\n"), m_mod_name, async_perf_ns / 1e6); } catch (...) {}
+                     }

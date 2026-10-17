@@ -1,0 +1,20 @@
+# Actual ImGui → UMG gaps
+
+Mac-only source inspection. Full method list/counts: ACTUAL-IMGUI-INVENTORY.md; exact source line references and hashes: ../cap09/SOURCE-RECEIPT.json. Current toolkit source is `outputs/2026-10-08-l25-prep/osd-toolkit/toolkit.lua`; its public BeginWindow/Text/Button/EndWindow names are toolkit APIs, not link-compatible ImGui symbols.
+
+| Actual API family in selected mods | Possible engine-owned UI mapping | Current gap / verdict |
+|---|---|---|
+| Host `register_tab`, `UE4SS_ENABLE_IMGUI`; both mods | Native GUI host schedules render callback, uses one shared context; UMG hosts resulting visible content | No working shared context/backend, register_tab throws in port. Blocked before any ImGui draw call. |
+| `Text`, `Button` (Kismet); `Text`, button controls in EventViewer client | TextBlock plus Border/button rows; queued activation consumed once by caller | Toolkit primitive analogue exists. No C++ ABI/formatting bridge or ImGui return/event semantics. |
+| `BeginChild`/`EndChild`, `SameLine`, `BeginGroup`/`EndGroup`, cursor position/available geometry calls | CanvasPanel/HorizontalBox/VerticalBox/ScrollBox slots with measured geometry | Toolkit windows use fixed simple layout. Nested clipping, scroll, layout queries and item geometry semantics absent. |
+| `Checkbox`, `InputScalar`, `TreeNode`/`TreePop` (EventViewer); `Selectable`, `CollapsingHeader` (Kismet) | Toggle/editable/selectable rows with retained state keyed by ImGui ID | Toolkit has only button activation. Need edit value round-trip, focus, selection and tree openness. No equivalent implemented. |
+| `InputText`, item active/activated/focus queries (both clients) | EditableTextBox + gamepad text entry + explicit edit state | No text entry toolkit API or keyboard implementation; engine IME presence unproved. Need std::string buffer/write and edit-event semantics. |
+| Popup/context/tooltip/menu APIs; `OpenPopup`, `BeginPopup`, `BeginPopupContextItem`, `MenuItem` | Layered retained popups/tooltips, focus/modal capture | Absent. Right-click translation, modal ownership and dismiss/close ordering matter. Refuse unsupported features instead of no-op. |
+| `BeginTable`/`EndTable`, `TableNextRow`, `TableSetColumnIndex` (EventViewer client/renderers) | Scrollable rows/columns with stable ordering | Absent. Cannot substitute flat text and call it the original viewer. |
+| `PushStyleColor`/`PopStyleColor`, style variables, `BeginDisabled`/`EndDisabled` | Widget property diff plus nested style/disabled stacks | Toolkit focus brush only. No stack semantics, inherited disabled state or ImGui style query implementation. |
+| `PushID`/`PopID`, `IsItemHovered`, `GetWindowDrawList`, `GetCursorScreenPos` | Stable ID mapping, hit-testing/navigation and bounded draw surface | Full ID scoping, hovered/active lifecycle and custom draw semantics not present. Inventory is lexical and includes helpers; inspect associated types too. |
+| `SetClipboardText` (Kismet); `LogToClipboard`/`LogRenderedText`/`LogFinish` (EventViewer) | Explicit approved host clipboard abstraction or unsupported response | No console clipboard API established. Fail clearly; do not pretend copying succeeded. |
+
+Two viable future implementations need independent proof: (1) a bounded native ImGui-shaped facade that translates all required semantics to retained widgets, or (2) real Dear ImGui plus an engine-owned rendering backend. The existing Lua toolkit alone supplies neither. Texture uploads/custom Slate vertices are only ideas in the old design, with unresolved target seams; this prep invents no ABI or offsets.
+
+A small Lua OSD test can establish current UMG behavior while native work is missing. Label that subset honestly and keep full #11 unpassed until an actual UE4SS C++ GUI callback works. #9 source recompilation and verified native lifecycle are prerequisites to that complete verdict. EventViewer global hooks and Kismet GNatives/pause behavior are separate #9 risks; a visible window must not enable unsafe controls merely for a screenshot.

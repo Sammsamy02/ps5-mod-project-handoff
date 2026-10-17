@@ -1,0 +1,64 @@
+--- a/polyhook2/PolyHookOs.hpp
++++ b/polyhook2/PolyHookOs.hpp
+@@ -1,7 +1,14 @@
+ #ifndef POLYHOOK_2_OS_HPP
+ #define POLYHOOK_2_OS_HPP
+ 
+-#if defined(WIN64) || defined(_WIN64) || defined(__MINGW64__)
++#if defined(__PROSPERO__)
++#if !defined(__x86_64__)
++#error PolyHook Prospero header support requires the x86_64 SDK target.
++#endif
++#define POLYHOOK2_OS_PROSPERO
++#define POLYHOOK2_ARCH_X64
++
++#elif defined(WIN64) || defined(_WIN64) || defined(__MINGW64__)
+ #define POLYHOOK2_OS_WINDOWS
+ #define POLYHOOK2_ARCH_X64
+ 
+--- a/polyhook2/PolyHookOsIncludes.hpp
++++ b/polyhook2/PolyHookOsIncludes.hpp
+@@ -14,6 +14,13 @@
+ #endif
+ #include <windows.h>
+ 
++#elif defined(POLYHOOK2_OS_PROSPERO)
++
++// SDK declarations only. Memory protection and executable allocation backends
++// require separate Prospero implementations; the Linux backend is not selected.
++#include <sys/mman.h>
++#include <unistd.h>
++
+ #elif defined(POLYHOOK2_OS_LINUX)
+ 
+ #include <sys/mman.h>
+@@ -28,4 +35,4 @@
+ 
+ #endif
+ 
+-#endif+#endif
+--- a/polyhook2/IHook.hpp
++++ b/polyhook2/IHook.hpp
+@@ -118,6 +118,13 @@
+     using return_type = Ret; \
+ };
+ 
++#if defined(POLYHOOK2_OS_PROSPERO)
++// The x86_64 SDK uses its native SysV function ABI. Member callbacks receive an
++// explicit Class*; Windows calling-convention attributes do not apply here.
++MAKE_CALLBACK_IMPL(, )
++MAKE_CALLBACK_CLASS_IMPL(, )
++#else
++
+ #ifndef _MSC_VER
+ #define __cdecl __attribute__((__cdecl__))
+ #define __fastcall __attribute__((__fastcall__))
+@@ -137,6 +144,8 @@
+ 
+ MAKE_CALLBACK_IMPL(__fastcall, __fastcall)
+ MAKE_CALLBACK_CLASS_IMPL(__fastcall, __fastcall)
++
++#endif // POLYHOOK2_OS_PROSPERO
+ 
+ template <int I, class... Ts>
+ decltype(auto) get_pack_idx(Ts&&... ts) {

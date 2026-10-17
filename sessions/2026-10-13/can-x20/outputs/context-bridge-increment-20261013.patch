@@ -1,0 +1,365 @@
+--- a/loader/src/win64_bridge.S
++++ b/loader/src/win64_bridge.S
+@@ -188,6 +188,83 @@
+ GLOBALFN(cap13_g2h_thunk4s4)
+     G2H_THUNK 4
+ 
++// Context-bound guest -> host thunks. The trampoline supplies r10=context
++// and r11=SysV target. The Win64 guest arguments are shifted one SysV slot
++// right so the target sees context as its first parameter. Guest arguments
++// 6..8 occupy SysV stack slots; the frame reserves three such slots.
++.macro G2H_CONTEXT_THUNK n_guest
++    sub  rsp, 0xE8
++    movups [rsp + 0x030], xmm6
++    movups [rsp + 0x040], xmm7
++    movups [rsp + 0x050], xmm8
++    movups [rsp + 0x060], xmm9
++    movups [rsp + 0x070], xmm10
++    movups [rsp + 0x080], xmm11
++    movups [rsp + 0x090], xmm12
++    movups [rsp + 0x0A0], xmm13
++    movups [rsp + 0x0B0], xmm14
++    movups [rsp + 0x0C0], xmm15
++    mov  [rsp + 0x0D0], rsi
++    mov  [rsp + 0x0D8], rdi
++    mov  [rsp + 0x020], r10     // context lives in frame padding
++
++.if \n_guest > 5
++    mov  r10, [rsp + 0x118]     // guest a6 -> SysV stack arg 7
++    mov  [rsp + 0x000], r10
++.endif
++.if \n_guest > 6
++    mov  r10, [rsp + 0x120]     // guest a7 -> SysV stack arg 8
++    mov  [rsp + 0x008], r10
++.endif
++.if \n_guest > 7
++    mov  r10, [rsp + 0x128]     // guest a8 -> SysV stack arg 9
++    mov  [rsp + 0x010], r10
++.endif
++
++    mov  rsi, rcx               // SysV a2 = guest a1
++    mov  rcx, r8                // SysV a4 = guest a3
++    mov  r8,  r9                // SysV a5 = guest a4
++.if \n_guest > 4
++    mov  r9, [rsp + 0x110]     // SysV a6 = guest stack a5
++.endif
++    mov  rdi, [rsp + 0x020]     // SysV a1 = context; rdx already guest a2
++    call r11
++
++    movups xmm6,  [rsp + 0x030]
++    movups xmm7,  [rsp + 0x040]
++    movups xmm8,  [rsp + 0x050]
++    movups xmm9,  [rsp + 0x060]
++    movups xmm10, [rsp + 0x070]
++    movups xmm11, [rsp + 0x080]
++    movups xmm12, [rsp + 0x090]
++    movups xmm13, [rsp + 0x0A0]
++    movups xmm14, [rsp + 0x0B0]
++    movups xmm15, [rsp + 0x0C0]
++    mov  rsi, [rsp + 0x0D0]
++    mov  rdi, [rsp + 0x0D8]
++    add  rsp, 0xE8
++    ret
++.endm
++
++GLOBALFN(cap13_g2h_context_thunk0)
++    G2H_CONTEXT_THUNK 0
++GLOBALFN(cap13_g2h_context_thunk1)
++    G2H_CONTEXT_THUNK 1
++GLOBALFN(cap13_g2h_context_thunk2)
++    G2H_CONTEXT_THUNK 2
++GLOBALFN(cap13_g2h_context_thunk3)
++    G2H_CONTEXT_THUNK 3
++GLOBALFN(cap13_g2h_context_thunk4)
++    G2H_CONTEXT_THUNK 4
++GLOBALFN(cap13_g2h_context_thunk5)
++    G2H_CONTEXT_THUNK 5
++GLOBALFN(cap13_g2h_context_thunk6)
++    G2H_CONTEXT_THUNK 6
++GLOBALFN(cap13_g2h_context_thunk7)
++    G2H_CONTEXT_THUNK 7
++GLOBALFN(cap13_g2h_context_thunk8)
++    G2H_CONTEXT_THUNK 8
++
+ // NOTE (honest scope): mixed int/float signatures are NOT covered here --
+ // Win64 and SysV assign XMM registers differently for mixed argument lists.
+ // The M1 generator emits per-signature thunks from the descriptor table;
+--- a/loader/src/win64_bridge.h
++++ b/loader/src/win64_bridge.h
+@@ -47,6 +47,19 @@
+ void cap13_g2h_thunk4s3();
+ void cap13_g2h_thunk4s4();
+ 
++// Guest -> host with a per-export context prepended as SysV argument 1.
++// These handle only integer/pointer guest arguments and integer/pointer
++// returns. The caller must refuse unsupported signature classes.
++void cap13_g2h_context_thunk0();
++void cap13_g2h_context_thunk1();
++void cap13_g2h_context_thunk2();
++void cap13_g2h_context_thunk3();
++void cap13_g2h_context_thunk4();
++void cap13_g2h_context_thunk5();
++void cap13_g2h_context_thunk6();
++void cap13_g2h_context_thunk7();
++void cap13_g2h_context_thunk8();
++
+ } // extern "C"
+ 
+ namespace cap13 {
+@@ -94,6 +107,48 @@
+     }
+ }
+ 
++// A context-bound per-export trampoline. It is stamped in writable memory,
++// then the caller must make that memory executable before publication.
++struct ContextBridgeTramp
++{
++    uint8_t bytes[32];
++};
++static_assert(sizeof(ContextBridgeTramp) == 32, "context trampoline must stay 32 bytes");
++
++// movabs r10, context; movabs r11, SysV target; movabs rax, thunk; jmp rax.
++inline void bridge_stamp_context_tramp(void* dst_writable, void* context,
++                                       void* sysv_target, const void* shared_thunk)
++{
++    uint8_t t[32] = {0x49, 0xBA, 0, 0, 0, 0, 0, 0, 0, 0,
++                     0x49, 0xBB, 0, 0, 0, 0, 0, 0, 0, 0,
++                     0x48, 0xB8, 0, 0, 0, 0, 0, 0, 0, 0,
++                     0xFF, 0xE0};
++    const uint64_t ctx = reinterpret_cast<uint64_t>(context);
++    const uint64_t tgt = reinterpret_cast<uint64_t>(sysv_target);
++    const uint64_t thk = reinterpret_cast<uint64_t>(shared_thunk);
++    std::memcpy(t + 2, &ctx, 8);
++    std::memcpy(t + 12, &tgt, 8);
++    std::memcpy(t + 22, &thk, 8);
++    std::memcpy(dst_writable, t, sizeof(t));
++}
++
++inline const void* bridge_select_context_thunk(uint32_t guest_integer_args)
++{
++    switch (guest_integer_args)
++    {
++        case 0: return reinterpret_cast<const void*>(&cap13_g2h_context_thunk0);
++        case 1: return reinterpret_cast<const void*>(&cap13_g2h_context_thunk1);
++        case 2: return reinterpret_cast<const void*>(&cap13_g2h_context_thunk2);
++        case 3: return reinterpret_cast<const void*>(&cap13_g2h_context_thunk3);
++        case 4: return reinterpret_cast<const void*>(&cap13_g2h_context_thunk4);
++        case 5: return reinterpret_cast<const void*>(&cap13_g2h_context_thunk5);
++        case 6: return reinterpret_cast<const void*>(&cap13_g2h_context_thunk6);
++        case 7: return reinterpret_cast<const void*>(&cap13_g2h_context_thunk7);
++        case 8: return reinterpret_cast<const void*>(&cap13_g2h_context_thunk8);
++        default: return nullptr;
++    }
++}
++
+ } // namespace cap13
+ 
+ #endif // CAP13_WIN64_BRIDGE_H
+--- /dev/null
++++ b/loader/tests/context_bridge_test.cpp
+@@ -0,0 +1,122 @@
++#include "win64_bridge.h"
++
++#include <array>
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <sys/mman.h>
++#include <unistd.h>
++
++static std::array<uint64_t, 9> observed;
++static int context_anchor = 0x42;
++static int failures = 0;
++static constexpr uint64_t kReturn = 0xA13B5C7D9E2468F0ull;
++
++extern "C" uint64_t cap13_test_context_nonvolatiles(void* win64_entry);
++extern "C" uint64_t cap13_hostile_sysv_target(void* context);
++extern "C" uint64_t cap13_sysv_alignment_target(void* context);
++
++static void* context() { return &context_anchor; }
++static void record0(void* c) { observed[0] = reinterpret_cast<uint64_t>(c); }
++static uint64_t body0(void* c) { record0(c); return kReturn; }
++static uint64_t body1(void* c, uint64_t a) { record0(c); observed[1]=a; return kReturn; }
++static uint64_t body2(void* c, uint64_t a, uint64_t b) { record0(c); observed[1]=a; observed[2]=b; return kReturn; }
++static uint64_t body3(void* c, uint64_t a, uint64_t b, uint64_t d) { record0(c); observed[1]=a; observed[2]=b; observed[3]=d; return kReturn; }
++static uint64_t body4(void* c, uint64_t a, uint64_t b, uint64_t d, uint64_t e) { record0(c); observed[1]=a; observed[2]=b; observed[3]=d; observed[4]=e; return kReturn; }
++static uint64_t body5(void* c, uint64_t a, uint64_t b, uint64_t d, uint64_t e, uint64_t f) { record0(c); observed[1]=a; observed[2]=b; observed[3]=d; observed[4]=e; observed[5]=f; return kReturn; }
++static uint64_t body6(void* c, uint64_t a, uint64_t b, uint64_t d, uint64_t e, uint64_t f, uint64_t g) { record0(c); observed[1]=a; observed[2]=b; observed[3]=d; observed[4]=e; observed[5]=f; observed[6]=g; return kReturn; }
++static uint64_t body7(void* c, uint64_t a, uint64_t b, uint64_t d, uint64_t e, uint64_t f, uint64_t g, uint64_t h) { record0(c); observed[1]=a; observed[2]=b; observed[3]=d; observed[4]=e; observed[5]=f; observed[6]=g; observed[7]=h; return kReturn; }
++static uint64_t body8(void* c, uint64_t a, uint64_t b, uint64_t d, uint64_t e, uint64_t f, uint64_t g, uint64_t h, uint64_t i) { record0(c); observed[1]=a; observed[2]=b; observed[3]=d; observed[4]=e; observed[5]=f; observed[6]=g; observed[7]=h; observed[8]=i; return kReturn; }
++
++using Win0 = uint64_t(__attribute__((ms_abi)) *)();
++using Win1 = uint64_t(__attribute__((ms_abi)) *)(uint64_t);
++using Win2 = uint64_t(__attribute__((ms_abi)) *)(uint64_t,uint64_t);
++using Win3 = uint64_t(__attribute__((ms_abi)) *)(uint64_t,uint64_t,uint64_t);
++using Win4 = uint64_t(__attribute__((ms_abi)) *)(uint64_t,uint64_t,uint64_t,uint64_t);
++using Win5 = uint64_t(__attribute__((ms_abi)) *)(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
++using Win6 = uint64_t(__attribute__((ms_abi)) *)(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
++using Win7 = uint64_t(__attribute__((ms_abi)) *)(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
++using Win8 = uint64_t(__attribute__((ms_abi)) *)(uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
++
++static void check(bool good, const char* name)
++{
++    std::printf("%s %s\n", good ? "PASS" : "FAIL", name);
++    if (!good) ++failures;
++}
++
++static bool args_match(unsigned count, uint64_t returned)
++{
++    constexpr uint64_t values[8] = {0x101, 0x202, 0x303, 0x404,
++                                    0x505, 0x606, 0x707, 0x808};
++    if (returned != kReturn || observed[0] != reinterpret_cast<uint64_t>(context()))
++        return false;
++    for (unsigned i=0; i<8; ++i)
++        if (observed[i+1] != (i<count ? values[i] : UINT64_MAX)) return false;
++    return true;
++}
++
++int main()
++{
++    using cap13::ContextBridgeTramp;
++    const long host_page = sysconf(_SC_PAGESIZE);
++    if (host_page < 4096) return 2;
++    auto* page = static_cast<uint8_t*>(mmap(nullptr, static_cast<size_t>(host_page),
++                                           PROT_READ | PROT_WRITE,
++                                           MAP_PRIVATE | MAP_ANON, -1, 0));
++    if (page == MAP_FAILED) return 2;
++    std::memset(page, 0xCC, static_cast<size_t>(host_page));
++    void* targets[9] = {reinterpret_cast<void*>(&body0), reinterpret_cast<void*>(&body1),
++                        reinterpret_cast<void*>(&body2), reinterpret_cast<void*>(&body3),
++                        reinterpret_cast<void*>(&body4), reinterpret_cast<void*>(&body5),
++                        reinterpret_cast<void*>(&body6), reinterpret_cast<void*>(&body7),
++                        reinterpret_cast<void*>(&body8)};
++    bool bounds_ok = true;
++    for (unsigned n=0; n<=8; ++n)
++    {
++        auto* slot = page + n*sizeof(ContextBridgeTramp);
++        const void* thunk = cap13::bridge_select_context_thunk(n);
++        if (!thunk) return 2;
++        cap13::bridge_stamp_context_tramp(slot, context(), targets[n], thunk);
++        bounds_ok &= slot[sizeof(ContextBridgeTramp)] == 0xCC;
++    }
++    cap13::bridge_stamp_context_tramp(
++        page + 9*sizeof(ContextBridgeTramp), context(),
++        reinterpret_cast<void*>(&cap13_hostile_sysv_target),
++        cap13::bridge_select_context_thunk(0));
++    cap13::bridge_stamp_context_tramp(
++        page + 10*sizeof(ContextBridgeTramp), context(),
++        reinterpret_cast<void*>(&cap13_sysv_alignment_target),
++        cap13::bridge_select_context_thunk(0));
++    check(bounds_ok && sizeof(ContextBridgeTramp) == 32,
++          "each stamped context trampoline stays in its 32-byte slot");
++    check(cap13::bridge_select_context_thunk(9) == nullptr,
++          "ninth guest integer argument is refused");
++    if (mprotect(page, static_cast<size_t>(host_page), PROT_READ | PROT_EXEC) != 0)
++        return 2;
++
++#define CASE(N, CALL) do { \
++    observed.fill(UINT64_MAX); \
++    const uint64_t result = (CALL); \
++    char label[100]; \
++    std::snprintf(label, sizeof(label), "context and %u Win64 integer args reach SysV target", N); \
++    check(args_match(N, result), label); \
++} while (0)
++    CASE(0, reinterpret_cast<Win0>(page + 0*sizeof(ContextBridgeTramp))());
++    CASE(1, reinterpret_cast<Win1>(page + 1*sizeof(ContextBridgeTramp))(0x101));
++    CASE(2, reinterpret_cast<Win2>(page + 2*sizeof(ContextBridgeTramp))(0x101,0x202));
++    CASE(3, reinterpret_cast<Win3>(page + 3*sizeof(ContextBridgeTramp))(0x101,0x202,0x303));
++    CASE(4, reinterpret_cast<Win4>(page + 4*sizeof(ContextBridgeTramp))(0x101,0x202,0x303,0x404));
++    CASE(5, reinterpret_cast<Win5>(page + 5*sizeof(ContextBridgeTramp))(0x101,0x202,0x303,0x404,0x505));
++    CASE(6, reinterpret_cast<Win6>(page + 6*sizeof(ContextBridgeTramp))(0x101,0x202,0x303,0x404,0x505,0x606));
++    CASE(7, reinterpret_cast<Win7>(page + 7*sizeof(ContextBridgeTramp))(0x101,0x202,0x303,0x404,0x505,0x606,0x707));
++    CASE(8, reinterpret_cast<Win8>(page + 8*sizeof(ContextBridgeTramp))(0x101,0x202,0x303,0x404,0x505,0x606,0x707,0x808));
++#undef CASE
++    check(cap13_test_context_nonvolatiles(page + 9*sizeof(ContextBridgeTramp)) == 0x1F,
++          "SysV target clobbers do not escape through Win64 nonvolatile registers");
++    check(reinterpret_cast<Win0>(page + 10*sizeof(ContextBridgeTramp))() == 8,
++          "SysV target receives an ABI-aligned stack");
++
++    munmap(page, static_cast<size_t>(host_page));
++    std::printf("TOTAL: %d failed\n", failures);
++    return failures ? 1 : 0;
++}
+--- /dev/null
++++ b/loader/tests/context_bridge_nonvolatiles.S
+@@ -0,0 +1,62 @@
++#ifdef __APPLE__
++#define GLOBALFN(name) .globl _##name ; _##name:
++#else
++#define GLOBALFN(name) .globl name ; name:
++#endif
++
++.intel_syntax noprefix
++.text
++
++// Legal SysV target: RSI, RDI and all XMM registers are volatile there.
++GLOBALFN(cap13_hostile_sysv_target)
++    xor rsi, rsi
++    xor rdi, rdi
++    pxor xmm6, xmm6
++    pxor xmm15, xmm15
++    mov eax, 0x5A
++    ret
++
++GLOBALFN(cap13_sysv_alignment_target)
++    mov rax, rsp
++    and eax, 0xF
++    ret
++
++// SysV test caller sets Windows nonvolatiles, then invokes a Win64 entry.
++// Return bits: 0 RSI, 1 RDI, 2 XMM6, 3 XMM15, 4 target return value.
++GLOBALFN(cap13_test_context_nonvolatiles)
++    mov r11, rdi
++    movabs rsi, 0x1122334455667788
++    movabs rdi, 0x8877665544332211
++    pcmpeqd xmm6, xmm6
++    pcmpeqd xmm15, xmm15
++    sub rsp, 0x28
++    call r11
++    add rsp, 0x28
++
++    xor r8d, r8d
++    cmp eax, 0x5A
++    jne 1f
++    or r8d, 0x10
++1:
++    movabs rdx, 0x1122334455667788
++    cmp rsi, rdx
++    jne 2f
++    or r8d, 0x01
++2:
++    movabs rdx, 0x8877665544332211
++    cmp rdi, rdx
++    jne 3f
++    or r8d, 0x02
++3:
++    pmovmskb edx, xmm6
++    cmp edx, 0xFFFF
++    jne 4f
++    or r8d, 0x04
++4:
++    pmovmskb edx, xmm15
++    cmp edx, 0xFFFF
++    jne 5f
++    or r8d, 0x08
++5:
++    mov eax, r8d
++    ret
+--- /dev/null
++++ b/loader/tests/run_context_bridge.py
+@@ -0,0 +1,15 @@
++#!/usr/bin/env python3
++"""Build and run context-bound integer ABI checks on an x86-64 host."""
++import subprocess
++from pathlib import Path
++
++root = Path(__file__).resolve().parents[1]
++out = root / 'tests/context-bridge-host'
++subprocess.run([
++    'clang++', '-arch', 'x86_64', '-std=c++17', '-O1', '-g', '-Wall',
++    '-Wextra', '-Werror', '-I' + str(root / 'src'),
++    str(root / 'tests/context_bridge_test.cpp'),
++    str(root / 'tests/context_bridge_nonvolatiles.S'),
++    str(root / 'src/win64_bridge.S'), '-o', str(out),
++], check=True, timeout=30)
++subprocess.run(['arch', '-x86_64', str(out)], check=True, timeout=20)

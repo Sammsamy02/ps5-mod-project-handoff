@@ -1,0 +1,1412 @@
+{
+ "schema": "markers-declared/1",
+ "created_by": "agent FG (pipeline hardening, 2026-10-09; Claude build-discipline items b+c after the lfb-211254 phantom build)",
+ "purpose": "Per-fix REQUIRED composition markers for the NEXT l26 PRX. verify_build.sh --manifest requires every declared marker to be composed into the PRX and exits nonzero on any miss. The 2026-10-09/10 phantom class (fix present in the tree, never composed into the PRX, caught only after a wasted console launch) is exactly what this manifest gate exists to catch before upload.",
+ "encoding_rules": {
+  "utf-16le": "PRIMARY. Wide STR()/StringType literals (UE4SS Prospero char16_t) land UTF-16LE in the binary. The phantom class was wide template literals composed out at link time.",
+  "utf-8": "Narrow char*/snprintf/fmt::format template literals and Lua chunk bytes land UTF-8.",
+  "required[].encodings": "Entry PASSES only when the text is present in EVERY listed encoding (both => both mandatory, e.g. send_narrow_diag wide-fallback + narrow-fmt pairs).",
+  "required[].either_encoding": "true => entry passes when present in at least ONE of the listed encodings; used for markers whose source has not landed yet (concurrent agents FD/FF author them now); both encodings are still checked and reported. Owner tightens encodings once the literal form lands."
+ },
+ "marker_source_note": "Every landed marker's text/encoding was read from the actual candidate sources (typescan-r4/candidate/src/*.cpp + typescan-r4/include/LuaFNameBridge.hpp); runtime-RENDERED lines (e.g. a logged '[ST] lua-ffo PASS' line) never appear contiguously in the PRX, so those markers are declared as their composable literals (template prefix + probe-name literal), all of which must be present.",
+ "markers": [
+  {
+   "id": "lua-fn-bridge-log",
+   "fix": "l26 Lua->FName one-hand bridge (agent EY; CHANGES scope_ey_lua_fname_bridge)",
+   "canonical_marker": "[LUA-FN]",
+   "required": [
+    {
+     "text": "[LUA-FN] in='",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "typescan-r4/include/LuaFNameBridge.hpp:650 (std::snprintf narrow template, first-20-uses converter log; ONE contiguous literal; compiled out under MODBRIDGE_RELEASE_DIAG_OFF \u2014 this gate runs on the default verbose build)"
+    }
+   ],
+   "note": "THE phantom-build marker: absent (both encodings 0) from 2026-10-08-l26-package-A.lfb-211254/pass-1/modbridge_supplier_composition.prx even though the bridge source was in the tree."
+  },
+  {
+   "id": "lfb-composed",
+   "fix": "l26 Lua->FName one-hand bridge composition proof (agent EY; scope_ey_lua_fname_bridge)",
+   "canonical_marker": "[LFB]",
+   "required": [
+    {
+     "text": "[LFB] lua-fname-bridge composed",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "typescan-r4/include/LuaFNameBridge.hpp:982 (Output::send(STR(...)) wide literal '... composed: hand utf8<->utf16, slot-2 ctor direct'; NOT gated by MODBRIDGE_RELEASE_DIAG_OFF \u2014 composition proof stays in release builds)"
+    }
+   ],
+   "note": "Agent EY's designated composition-grep string; wide template is exactly the literal class that got composed out in the phantom build."
+  },
+  {
+   "id": "ffo-query-fallback",
+   "fix": "FindFirstOf verified-query decode evidence (agents DA/CP; scope_l26_layer1_findxof + scope_l26_layer2_verified_query)",
+   "canonical_marker": "[FFO] query-fallback",
+   "required": [
+    {
+     "text": "[FFO] query-fallback",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "typescan-r4/candidate/src/UObjectGlobals.cpp:835 (STR wide template '[FFO] query-fallback [n:{:X} num:{} ts:'{}' qlen={} ...')"
+    }
+   ],
+   "note": "Present (UTF-16LE) in the old PRX; guards the query-decode diagnostic seam."
+  },
+  {
+   "id": "ffo2-next-round",
+   "fix": "next-round FFO seam diagnostics (declared ahead of source landing; owner: agent FD marshaling round)",
+   "canonical_marker": "[FFO2]",
+   "required": [
+    {
+     "text": "[FFO2]",
+     "encodings": [
+      "utf-8",
+      "utf-16le"
+     ],
+     "either_encoding": true,
+     "source": "not yet in tree at declaration time (2026-10-09); tighten text/encodings to the real literal once FD's source lands"
+    }
+   ],
+   "note": "Deliberately REQUIRED for the next build: the gate fails until the marker's fix both lands and composes in."
+  },
+  {
+   "id": "lfb-m-marshaling",
+   "fix": "Lua FName bridge marshaling path (agent FD; literal-strict rework agent FW)",
+   "canonical_marker": "[LFB-M]",
+   "required": [
+    {
+     "text": "[LFB-M]",
+     "encodings": [
+      "utf-8",
+      "utf-16le"
+     ],
+     "either_encoding": true,
+     "source": "typescan-r4/include/LuaFNameBridge.hpp:772-813 (agent FW: every family now emits from ONE contiguous literal \u2014 family_marker_template hpp:772-787 and family_refusal_template hpp:795-813; '[LFB-M]' is present verbatim in each, all narrow/UTF-8)"
+    }
+   ],
+   "note": "Deliberately REQUIRED for the next build (same phantom-class discipline). agent FW check (cleanup round): the generic '\"[LFB-M] %s in=...' assembled template is GONE; the marker text now lives inside the eight per-family contiguous literals (UTF-8, guaranteed composed in the default verbose build). The wide forms are runtime-widened by utf8_to_utf16 (never literals), so utf-16le is not expected; either_encoding passes via utf-8."
+  },
+  {
+   "id": "build-stamp-first-line",
+   "fix": "first-log-line build stamp consumer reading GENERATED include/GeneratedBuildStamp.hpp (agent FF; BRIDGE_BUILD_ID/BRIDGE_CHANGE_IDS/BRIDGE_SNAPSHOT_ID, __has_include fallback to the not-generated value)",
+   "canonical_marker": "[BUILD]",
+   "required": [
+    {
+     "text": "[BUILD]",
+     "encodings": [
+      "utf-8",
+      "utf-16le"
+     ],
+     "either_encoding": true,
+     "source": "not yet in tree at declaration time (2026-10-09); tighten to the real literal once FF's consumer lands"
+    }
+   ],
+   "note": "Deliberately REQUIRED for the next build: the runtime stamp proves the PRX was built by THIS driver run, not a stale artifact."
+  },
+  {
+   "id": "st-wcslen-16units",
+   "fix": "wide libc seam self-test: wcslen must count 16-bit units (agent FD wide-libc audit class)",
+   "canonical_marker": "[ST] wcslen-16units",
+   "required": [
+    {
+     "text": "[ST] wcslen-16units",
+     "encodings": [
+      "utf-8",
+      "utf-16le"
+     ],
+     "either_encoding": true,
+     "source": "not yet in tree at declaration time (2026-10-09); tighten once the self-test source lands"
+    }
+   ],
+   "note": "Deliberately REQUIRED for the next build."
+  },
+  {
+   "id": "st-wstring-rt",
+   "fix": "wide libc seam self-test: wstring round-trip (agent FD wide-libc audit class)",
+   "canonical_marker": "[ST] wstring-rt",
+   "required": [
+    {
+     "text": "[ST] wstring-rt",
+     "encodings": [
+      "utf-8",
+      "utf-16le"
+     ],
+     "either_encoding": true,
+     "source": "not yet in tree at declaration time (2026-10-09); tighten once the self-test source lands"
+    }
+   ],
+   "note": "Deliberately REQUIRED for the next build."
+  },
+  {
+   "id": "st-lua-ffo",
+   "fix": "Lua-originated seam self-test battery (agents EV/EY; scope_eu_vmt_pump_selftest lineage, LuaMod L23GameThreadProbe)",
+   "canonical_marker": "[ST] lua-ffo",
+   "required": [
+    {
+     "text": "[ST] lua-",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "typescan-r4/candidate/src/LuaMod.cpp:159 (STR wide template '[ST] lua-{} {}{}' \u2014 the battery's line prefix; also covers the :173 'lua-seam probe chunk failed' literal)"
+    },
+    {
+     "text": "ffo PlayerController",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "typescan-r4/candidate/src/LuaMod.cpp:171 (narrow probe-name literal fed through ensure_str) + the narrow k_seam_chunk literal"
+    }
+   ],
+   "note": "The runtime-rendered line '[ST] lua-ffo PASS' is composed at RUNTIME and never appears contiguously in the PRX; the composable proof is the wide template prefix PLUS the narrow probe-name/chunk literals, all required."
+  },
+  {
+   "id": "fn-tostring-pool-decoder",
+   "fix": "in-port FName pool decoder owns ToString, engine L27 bind superseded (agents EI/EQ/ER; scope_l27_engine_tostring_bind + l27_ei_stringfix)",
+   "canonical_marker": "[FN] tostring",
+   "required": [
+    {
+     "text": "[FN] tostring",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "typescan-r4/candidate/src/UnrealInitializer.cpp:1347 (STR wide literal '[FN] tostring: in-port pool decoder (L27-bind superseded)')"
+    }
+   ],
+   "note": "Startup decoder-selection line; present (UTF-16LE) in the old PRX."
+  },
+  {
+   "id": "fn-pool-decoder-verified",
+   "fix": "FName pool decoder startup verification against the pinned ByteProperty probe (agent ER; scope_er_pool_decoder)",
+   "canonical_marker": "[FN] pool-decoder verified",
+   "required": [
+    {
+     "text": "[FN] pool-decoder verified",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "typescan-r4/candidate/src/NameTypes.cpp:445 (STR wide literal '[FN] pool-decoder verified (ByteProperty)')"
+    }
+   ],
+   "note": "Carried over as CRITICAL from the previous registry; present (UTF-16LE) in the old PRX."
+  },
+  {
+   "id": "variant-c-admission",
+   "fix": "variant C engine delete-listener ops admission, Phase 6 (agents AE/BC/EE/EQ; scope_l26_variant_c_engine_listener + l26_eq_pin_admission_phase_armor)",
+   "canonical_marker": "[Seeds][L26] engine delete-listener ops admitted",
+   "required": [
+    {
+     "text": "[Seeds][L26] engine delete-listener ops admitted",
+     "encodings": [
+      "utf-16le",
+      "utf-8"
+     ],
+     "source": "typescan-r4/candidate/src/UnrealInitializer.cpp:1450-1455 (send_narrow_diag PAIR: wide STR fallback '... (image sha unavailable; narrow fallback) ...' AND narrow fmt::format template '... : add=0x{:X} remove=0x{:X} ...' \u2014 BOTH encodings must be composed in)"
+    }
+   ],
+   "note": "BOTH encodings required: the admission line exists as a wide literal and a narrow fmt template; both were present in the old PRX."
+  },
+  {
+   "id": "slot2-fname-ctor-bound",
+   "fix": "slot-2 FName ctor seed admission + behavioral ByteProperty probe (agents AA/EQ lineage; UnrealInitializer Phase 4c)",
+   "canonical_marker": "slot 2 FName ctor bound",
+   "required": [
+    {
+     "text": "slot 2 FName ctor bound",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "typescan-r4/candidate/src/UnrealInitializer.cpp:1324 (STR wide literal '[Seeds] slot 2 FName ctor bound at {} and behaviorally verified (ByteProperty probe id == pool id 0x{:X}) ...')"
+    }
+   ],
+   "note": "The bridge's slot-2 direct construction is only trustworthy if the ctor admission that binds slot 2 composed in."
+  },
+  {
+   "id": "fname-rev-userdata",
+   "fix": "round-3 reverse routing: FName userdata __tostring + push_fname_to_lua (agent FL; root round-3); literal-strict marker rework (agent FW cleanup)",
+   "canonical_marker": "[LFB-M] fname-rev",
+   "required": [
+    {
+     "text": "[LFB-M] fname-rev in='",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "typescan-r4/include/LuaFNameBridge.hpp:782 (family_marker_template Family::FNameRev \u2014 ONE contiguous narrow snprintf literal; prefix+family+fields in a single string constant)"
+    }
+   ],
+   "note": "LITERAL-STRICT again (agent FW, Claude cleanup directive b): the marker line is no longer snprintf-assembled from '[LFB-M] ' + family_name fragments; the whole format is one narrow literal per family, so '[LFB-M] fname-rev in='' is a real contiguous UTF-8 byte sequence in .rodata. The literal is #if'd out under MODBRIDGE_RELEASE_DIAG_OFF (release builds intentionally omit per-call markers; the verbose default build this gate runs on keeps them)."
+  },
+  {
+   "id": "print-widen-global",
+   "fix": "round-3: global print payload widening through the bridge hand loop (agent FL); literal-strict marker rework (agent FW cleanup)",
+   "canonical_marker": "[LFB-M] print-widen",
+   "required": [
+    {
+     "text": "[LFB-M] print-widen in='",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "typescan-r4/include/LuaFNameBridge.hpp:783 (family_marker_template Family::PrintWiden \u2014 ONE contiguous narrow snprintf literal)"
+    }
+   ],
+   "note": "LITERAL-STRICT again (agent FW): whole-literal per family, UTF-8 (the line renders narrow-first and is widened at runtime by the bridge hand loop, so no utf-16le literal exists to require). Same MODBRIDGE_RELEASE_DIAG_OFF caveat as fname-rev-userdata."
+  },
+  {
+   "id": "shim-installed",
+   "fix": "io/path logical->physical resolver + io/os write confinement (agent GA, Claude round-5 item 4; CHANGES round5_row_sync)",
+   "canonical_marker": "[SHIM]",
+   "required": [
+    {
+     "text": "[SHIM] path-resolver installed",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "typescan-r4/candidate/src/LuaPathShim.cpp:1623 (Output::send(STR(...)) wide literal \u2014 Prospero char16_t lands UTF-16LE; contiguous)"
+    }
+   ],
+   "note": "Round-5 restore: entry reconstructed from ROUND4-CONTENTS-DECLARATION.md + the set-aside TU (original JSON removed at the round-4 set-aside; literal/line re-verified against round4-setaside/LuaPathShim.cpp \u2014 line refs are POST agent-IB writable-area upgrade, 2026-10-11). One fire per mod install."
+  },
+  {
+   "id": "shim-io-open",
+   "fix": "io/path logical->physical resolver + io/os write confinement (agent GA, Claude round-5 item 4; CHANGES round5_row_sync)",
+   "canonical_marker": "[SHIM]",
+   "required": [
+    {
+     "text": "[SHIM] io-open resolved=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "typescan-r4/candidate/src/LuaPathShim.cpp:753 (Output::send(STR(...)) wide literal \u2014 Prospero char16_t lands UTF-16LE; contiguous)"
+    }
+   ],
+   "note": "Round-5 restore (see shim-installed note). Budgeted: first 10 resolves per install."
+  },
+  {
+   "id": "shim-write-rejected",
+   "fix": "io/path logical->physical resolver + io/os write confinement (agent GA, Claude round-5 item 4; CHANGES round5_row_sync)",
+   "canonical_marker": "[SHIM]",
+   "required": [
+    {
+     "text": "[SHIM] write-rejected",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "typescan-r4/candidate/src/LuaPathShim.cpp:604 (Output::send(STR(...)) wide literal \u2014 Prospero char16_t lands UTF-16LE; contiguous)"
+    }
+   ],
+   "note": "Round-5 restore (see shim-installed note). Budgeted: first 10 refusals per install; the write-confinement proof marker."
+  },
+  {
+   "id": "shim-write-area",
+   "fix": "writable-area upgrade of the io/path shim (agent IB, 2026-10-11: per-mod writable root derived from the modbridge root; write confinement target surface)",
+   "canonical_marker": "[SHIM]",
+   "required": [
+    {
+     "text": "[SHIM] write-area ",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "typescan-r4/candidate/src/LuaPathShim.cpp:1547 (Output::send(STR(\"[SHIM] write-area {} -> {}/{}\\n\")) wide literal \u2014 Prospero char16_t lands UTF-16LE; budgeted first N per install, kMaxMarkers)"
+    }
+   ],
+   "note": "Pinned from agent IB's landed stash edit (round4-setaside/LuaPathShim.cpp post-upgrade, sha 2f6d2e6d...). Fires once per mod install when a writable root is derived. NOTE the trailing space in the required text disambiguates from [SHIM] write-rejected."
+  },
+  {
+   "id": "b2-mem-line",
+   "fix": "overnight 2026-10-12 labelled build B2",
+   "canonical_marker": "[MEM]",
+   "required": [
+    {
+     "text": "[MEM] state=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp ExecuteInGameThread queue-depth block (Output::send(STR(...)) wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B2"
+  },
+  {
+   "id": "b2-lua-mem-note",
+   "fix": "overnight 2026-10-12 labelled build B2",
+   "canonical_marker": "[lua-mem:",
+   "required": [
+    {
+     "text": "[lua-mem: gc_kb=",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "candidate/src/LuaMadeSimple/LuaMadeSimple.cpp call_function LUA_ERRMEM note (fmt::format narrow literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B2"
+  },
+  {
+   "id": "b3-foreachuobject",
+   "fix": "overnight 2026-10-12 labelled build B3",
+   "canonical_marker": "[FOU]",
+   "required": [
+    {
+     "text": "[FOU] ForEachUObject: ",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp ForEachUObject (Output::send(STR(...)) wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B3"
+  },
+  {
+   "id": "b3-uenum-foreachname",
+   "fix": "overnight 2026-10-12 labelled build B3",
+   "canonical_marker": "[UEN]",
+   "required": [
+    {
+     "text": "[UEN] ForEachName: expected ",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaType/LuaUEnum.cpp ForEachName diagnostics (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B3"
+  },
+  {
+   "id": "b4-shim-write-area-dir",
+   "fix": "overnight 2026-10-12 labelled build B4",
+   "canonical_marker": "[SHIM]",
+   "required": [
+    {
+     "text": "[SHIM] write-area dir ",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaPathShim.cpp ensure_parent_dirs_once (wide literal; trailing space separates it from \"[SHIM] write-area \")"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B4"
+  },
+  {
+   "id": "b6-mem-lua-backend",
+   "fix": "overnight 2026-10-12 labelled build B6",
+   "canonical_marker": "[MEM]",
+   "required": [
+    {
+     "text": "[MEM] lua-backend=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/UE4SSProgram.cpp r9_install_lua_backing_allocator result line (wide literal, both gmalloc and libc branches)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6"
+  },
+  {
+   "id": "b6-refused-line",
+   "fix": "overnight 2026-10-12 labelled build B6",
+   "canonical_marker": "[REFUSED]",
+   "required": [
+    {
+     "text": "[REFUSED] kind=",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "candidate/src/LuaMod.cpp refused_log::emit snprintf format (narrow literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6"
+  },
+  {
+   "id": "b6-rate-construct",
+   "fix": "overnight 2026-10-12 labelled build B6",
+   "canonical_marker": "[B6-RATE]",
+   "required": [
+    {
+     "text": "[B6-RATE] StaticConstructObject constructed total=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp StaticConstructObject per-widget log rate limit (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6"
+  },
+  {
+   "id": "b6c-guard-line",
+   "fix": "overnight 2026-10-12 labelled build B6c",
+   "canonical_marker": "[R9-GUARD]",
+   "required": [
+    {
+     "text": "[R9-GUARD] game-thread hook contained an exception",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp engine-called hook catch-all (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6c"
+  },
+  {
+   "id": "b6c-mem-fail-line",
+   "fix": "overnight 2026-10-12 labelled build B6c",
+   "canonical_marker": "[MEM]",
+   "required": [
+    {
+     "text": "[MEM] FAIL mod=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp start_mod rebase failure line (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6c"
+  },
+  {
+   "id": "b6e-perf-line",
+   "fix": "overnight 2026-10-12 labelled build B6e",
+   "canonical_marker": "[PERF]",
+   "required": [
+    {
+     "text": "[PERF] win_ms=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp r9perf::emit_and_reset (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6e"
+  },
+  {
+   "id": "b6e-perf-map",
+   "fix": "overnight 2026-10-12 labelled build B6e",
+   "canonical_marker": "[PERF-MAP]",
+   "required": [
+    {
+     "text": "[PERF-MAP] mod=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp start_mod (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6e"
+  },
+  {
+   "id": "b6e-perf-async",
+   "fix": "overnight 2026-10-12 labelled build B6e",
+   "canonical_marker": "[PERF-ASYNC]",
+   "required": [
+    {
+     "text": "[PERF-ASYNC] mod=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp update_async (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6e"
+  },
+  {
+   "id": "b6g-index-active",
+   "fix": "overnight 2026-10-12 labelled build B6g",
+   "canonical_marker": "[R9-IDX]",
+   "required": [
+    {
+     "text": "[R9-IDX] object index active: built from ",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/UObjectGlobals.cpp r9idx::Query first-success line (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6g"
+  },
+  {
+   "id": "b6i-notify-line",
+   "fix": "overnight 2026-10-12 labelled build B6i",
+   "canonical_marker": "[R9-NOTIFY]",
+   "required": [
+    {
+     "text": "[R9-NOTIFY] NotifyOnNewObject delivered from the object index",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp r9_feed_notify_from_index (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6i"
+  },
+  {
+   "id": "b6i-api-ms",
+   "fix": "overnight 2026-10-12 labelled build B6i",
+   "canonical_marker": "",
+   "required": [
+    {
+     "text": " api_ms={:.1f}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp [PERF] per-API cost (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6i"
+  },
+  {
+   "id": "b6l-notify-stats",
+   "fix": "overnight 2026-10-12 labelled build B6l",
+   "canonical_marker": "[R9-NOTIFY]",
+   "required": [
+    {
+     "text": "[R9-NOTIFY] stats delivered=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp notify executor stats (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6l"
+  },
+  {
+   "id": "b6l-prop-perf",
+   "fix": "overnight 2026-10-12 labelled build B6l",
+   "canonical_marker": "",
+   "required": [
+    {
+     "text": " | prop calls={} cache_hits={}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp [PERF] property step costs (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6l"
+  },
+  {
+   "id": "b6o-direct-slots",
+   "fix": "overnight 2026-10-12 labelled build B6o",
+   "canonical_marker": "whole",
+   "required": [
+    {
+     "text": "whole array) direct-slots={}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/UObjectGlobals.cpp r9idx::Query first-success line, direct slot reads flag (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6o"
+  },
+  {
+   "id": "b6o-idx-watch",
+   "fix": "overnight 2026-10-12 labelled build B6o",
+   "canonical_marker": "",
+   "required": [
+    {
+     "text": " idx_ms={:.1f} idx_watch={}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp [PERF] watched free slots (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6o"
+  },
+  {
+   "id": "b6p-idx-cut",
+   "fix": "overnight 2026-10-12 labelled build B6p",
+   "canonical_marker": "",
+   "required": [
+    {
+     "text": " idx_watch={} idx_cut={}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp [PERF] budgeted watch passes (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build B6p"
+  },
+  {
+   "id": "b7-lua-cpp-probe-cxx",
+   "fix": "overnight 2026-10-12 labelled build R10",
+   "canonical_marker": "[LUA-CPP]",
+   "required": [
+    {
+     "text": "[LUA-CPP] mode=cxx-throw err_status=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp on_program_start B7 probe line"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R10"
+  },
+  {
+   "id": "b7-lua-cpp-probe-longjmp",
+   "fix": "overnight 2026-10-12 labelled build R10",
+   "canonical_marker": "[LUA-CPP]",
+   "required": [
+    {
+     "text": "[LUA-CPP] mode=longjmp err_status=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp B7 probe line (Lua-as-C build prints this)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R10"
+  },
+  {
+   "id": "b7-lua-cpp-probe-unknown",
+   "fix": "overnight 2026-10-12 labelled build R10",
+   "canonical_marker": "[LUA-CPP]",
+   "required": [
+    {
+     "text": "[LUA-CPP] mode=UNKNOWN ran=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp B7 probe line (mixed result)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R10"
+  },
+  {
+   "id": "b7-probe-narrow-literal",
+   "fix": "overnight 2026-10-12 labelled build R10",
+   "canonical_marker": "b7-probe-void",
+   "required": [
+    {
+     "text": "b7-probe-void",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "candidate/src/LuaMadeSimple/LuaMadeSimple.cpp lua_cpp_probe narrow literal"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R10"
+  },
+  {
+   "id": "b7-h4-boundary-contained",
+   "fix": "overnight 2026-10-12 labelled build R10",
+   "canonical_marker": "[B7-H4]",
+   "required": [
+    {
+     "text": "[B7-H4] contained a non-std exception",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/ScriptHookThunks.cpp game-boundary containment"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R10"
+  },
+  {
+   "id": "r10-name-index",
+   "fix": "overnight 2026-10-12 labelled build R10",
+   "canonical_marker": "[R9-NAME]",
+   "required": [
+    {
+     "text": "[R9-NAME] object-name index active: ",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/UObjectGlobals.cpp ISA track name index line"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R10"
+  },
+  {
+   "id": "r10-world-ev-live",
+   "fix": "overnight 2026-10-12 labelled build R10",
+   "canonical_marker": "[WORLD-EV]",
+   "required": [
+    {
+     "text": "[WORLD-EV] route live: ",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp HOOKS track route line"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R10"
+  },
+  {
+   "id": "r10-world-ev-settle",
+   "fix": "overnight 2026-10-12 labelled build R10",
+   "canonical_marker": "held={}",
+   "required": [
+    {
+     "text": "held={} settling={}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp HOOKS r3 stats line (settle FIFO)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R10"
+  },
+  {
+   "id": "r10-fields-facts",
+   "fix": "overnight 2026-10-12 labelled build R10",
+   "canonical_marker": "[FIELDS]",
+   "required": [
+    {
+     "text": "[FIELDS] staged layout facts: members=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/UnrealInitializer.cpp FIELDS track line"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R10"
+  },
+  {
+   "id": "r10-pace-stats",
+   "fix": "overnight 2026-10-12 labelled build R10",
+   "canonical_marker": "paced_skips",
+   "required": [
+    {
+     "text": "paced_skips watch/match/exec=",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp B6q R9Pacer notify stats"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R10"
+  },
+  {
+   "id": "r11-world-ev-pending",
+   "fix": "overnight 2026-10-12 labelled build R11",
+   "canonical_marker": "[WORLD-EV]",
+   "required": [
+    {
+     "text": "[WORLD-EV] route pending: object index not usable yet",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp R11-WORLD wait line"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R11"
+  },
+  {
+   "id": "r11-world-ev-waited",
+   "fix": "overnight 2026-10-12 labelled build R11",
+   "canonical_marker": "class-checked",
+   "required": [
+    {
+     "text": "class-checked (tries={}, waited_ms={})",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp R11-WORLD route-live line"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R11"
+  },
+  {
+   "id": "cap04-mods-started",
+   "fix": "overnight 2026-10-12 labelled build R13",
+   "canonical_marker": "[EARLY]",
+   "required": [
+    {
+     "text": "[EARLY] stage=mods-started t_ms={} mods={}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/UE4SSProgram.cpp [EARLY-4]"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R13"
+  },
+  {
+   "id": "cap04-loadmap-native-off",
+   "fix": "overnight 2026-10-12 labelled build R13",
+   "canonical_marker": "[EARLY]",
+   "required": [
+    {
+     "text": "[EARLY] stage=loadmap-native state=off reason=ps5-no-code-detours owner=world-ev t_ms={}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp [EARLY-4]"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R13"
+  },
+  {
+   "id": "cap04-first-pump",
+   "fix": "overnight 2026-10-12 labelled build R13",
+   "canonical_marker": "[EARLY]",
+   "required": [
+    {
+     "text": "[EARLY] stage=first-pump t_ms={} src={}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp [EARLY-4]"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R13"
+  },
+  {
+   "id": "cap04-startup-hooks",
+   "fix": "overnight 2026-10-12 labelled build R13",
+   "canonical_marker": "[EARLY]",
+   "required": [
+    {
+     "text": "[EARLY] stage=startup-hooks t_ms={} loadmap_pre={} loadmap_post={} initgamestate={} beginplay={}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp [EARLY-4]"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R13"
+  },
+  {
+   "id": "cap04-replay-request",
+   "fix": "overnight 2026-10-12 labelled build R13",
+   "canonical_marker": "[EARLY]",
+   "required": [
+    {
+     "text": "[EARLY] stage=replay-request t_ms={} startup_hooks={} replay={}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp [EARLY-4]"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R13"
+  },
+  {
+   "id": "cap04-startup-replay",
+   "fix": "overnight 2026-10-12 labelled build R13",
+   "canonical_marker": "[EARLY]",
+   "required": [
+    {
+     "text": "[EARLY] stage=startup-replay t_ms={} decision={} candidates={} baseline={} excluded_new={} gamestates={} snapshot_ms={}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp [EARLY-4]"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R13"
+  },
+  {
+   "id": "cap04-first-map-seen",
+   "fix": "overnight 2026-10-12 labelled build R13",
+   "canonical_marker": "[EARLY]",
+   "required": [
+    {
+     "text": "[EARLY] stage=first-map-seen t_ms={} src={} world='{}'",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp [EARLY-4]"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R13"
+  },
+  {
+   "id": "cap05-crashtest-line",
+   "fix": "overnight 2026-10-12 labelled build R14",
+   "canonical_marker": "[CAP05-CRASHTEST]",
+   "required": [
+    {
+     "text": "[CAP05-CRASHTEST] deliberate crash requested by a diagnostic mod",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/LuaMod.cpp cap05 ModBridgeCrashTest (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R14"
+  },
+  {
+   "id": "cap05-crashtest-global",
+   "fix": "overnight 2026-10-12 labelled build R14",
+   "canonical_marker": "ModBridgeCrashTest",
+   "required": [
+    {
+     "text": "ModBridgeCrashTest refused: wrong or missing confirmation token",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "candidate/src/LuaMod.cpp cap05 refusal text (narrow literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R14"
+  },
+  {
+   "id": "cap02-autoprofile-shadow",
+   "fix": "overnight 2026-10-12 labelled build R14",
+   "canonical_marker": "[AutoProfile]",
+   "required": [
+    {
+     "text": "[AutoProfile] shadow parsed={} verdict={} pack={}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/UE4SSProgram.cpp cap02 shadow line (wide literal)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R14"
+  },
+  {
+   "id": "cap09-nmod-loading",
+   "fix": "overnight 2026-10-12 labelled build R15",
+   "canonical_marker": "[NMOD]",
+   "required": [
+    {
+     "text": "[NMOD] loading C++ mod {} from {}/dlls (if the log stops here, the module load hung)",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/UE4SSProgram.cpp cap09 start_native_mods"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R15"
+  },
+  {
+   "id": "cap09-nmod-start-returned",
+   "fix": "overnight 2026-10-12 labelled build R15",
+   "canonical_marker": "[NMOD]",
+   "required": [
+    {
+     "text": "[NMOD] {}: start returned started={}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/UE4SSProgram.cpp cap09 start line"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R15"
+  },
+  {
+   "id": "cap09-native-refused-at-start",
+   "fix": "overnight 2026-10-12 labelled build R15",
+   "canonical_marker": "Native",
+   "required": [
+    {
+     "text": "Native C++ mod {} refused at start: {}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/Mod/CppMod.cpp cap09 ABI-v1 refusal"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R15"
+  },
+  {
+   "id": "cap11-gui-imgui-assert",
+   "fix": "overnight 2026-10-12 labelled build R15",
+   "canonical_marker": "[GUI]",
+   "required": [
+    {
+     "text": "[GUI] imgui assert (host) {} at {}:{}",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/Mod/NativeGuiEngineBackend.inc cap11 host assert line"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R15"
+  },
+  {
+   "id": "cap07s2-pakmount-call",
+   "fix": "overnight 2026-10-12 labelled build R16",
+   "canonical_marker": "[PAKMOUNT]",
+   "required": [
+    {
+     "text": "[PAKMOUNT] call=%u ret=0x%llx before=%u after=%u order=%d verdict=%u",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "cap07 step 2 RuntimePakMount result line (narrow snprintf)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R16"
+  },
+  {
+   "id": "cap07s2-pakmount-status",
+   "fix": "overnight 2026-10-12 labelled build R16",
+   "canonical_marker": "[PAKMOUNT]",
+   "required": [
+    {
+     "text": "[PAKMOUNT] status=%u call=%u ret=0x%llx",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "cap07 step 2 mount status line"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R16"
+  },
+  {
+   "id": "cap07s2-pakmount-disabled",
+   "fix": "overnight 2026-10-12 labelled build R16",
+   "canonical_marker": "[PAKMOUNT]",
+   "required": [
+    {
+     "text": "[PAKMOUNT] disabled: no pakmods directory",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "cap07 step 2 no-op when the pakmods folder is absent"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R16"
+  },
+  {
+   "id": "cap07s2-pakmount-admission",
+   "fix": "overnight 2026-10-12 labelled build R16",
+   "canonical_marker": "[PAKMOUNT]",
+   "required": [
+    {
+     "text": "[PAKMOUNT] startup admission: proofs=%u/6 extent=0x%llx",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "cap07 step 2 startup pin admission (cache open)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R16"
+  },
+  {
+   "id": "cap07s2-pakmount-precall-refuse",
+   "fix": "overnight 2026-10-12 labelled build R16",
+   "canonical_marker": "[PAKMOUNT]",
+   "required": [
+    {
+     "text": "[PAKMOUNT] pre-call refuse: ",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "cap07 step 2 refusal before any engine call"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R16"
+  },
+  {
+   "id": "cap07s2-pakmount-stopped",
+   "fix": "overnight 2026-10-12 labelled build R16",
+   "canonical_marker": "[PAKMOUNT]",
+   "required": [
+    {
+     "text": "[PAKMOUNT] stopped: ",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "cap07 step 2 stop after a possible side effect"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R16"
+  },
+  {
+   "id": "cap11fu-font-baked",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "[GUI]",
+   "required": [
+    {
+     "text": "[GUI] font baked size=",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "NativeGuiEngineBackend.inc / NativeGuiHost.hpp: sharp font bake (#11 follow-ups)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap10-stage",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "CAP10_STAGE",
+   "required": [
+    {
+     "text": "CAP10_STAGE",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "cap10/native/MonoOwner.cpp emit_result"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap10-image",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "CAP10_IMAGE",
+   "required": [
+    {
+     "text": "CAP10_IMAGE",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "MonoOwner.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap10-resolve",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "CAP10_RESOLVE",
+   "required": [
+    {
+     "text": "CAP10_RESOLVE",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "MonoOwner.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap10-run",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "CAP10_RUN",
+   "required": [
+    {
+     "text": "CAP10_RUN",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "MonoOwner.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap10-throw",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "CAP10_THROW",
+   "required": [
+    {
+     "text": "CAP10_THROW",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "MonoOwner.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap10-recover",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "CAP10_RECOVER",
+   "required": [
+    {
+     "text": "CAP10_RECOVER",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "MonoOwner.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap10-done",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "CAP10_DONE",
+   "required": [
+    {
+     "text": "CAP10_DONE",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "MonoOwner.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap10-cookie1",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "CAP10_COOKIE1",
+   "required": [
+    {
+     "text": "CAP10_COOKIE1",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "MonoOwner.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap10-cookie2",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "CAP10_COOKIE2",
+   "required": [
+    {
+     "text": "CAP10_COOKIE2",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "MonoOwner.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap10-r1",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "CAP10_R1_CALLS",
+   "required": [
+    {
+     "text": "CAP10_R1_CALLS",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "MonoOwner.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap10-r2",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "CAP10_R2_CALLS",
+   "required": [
+    {
+     "text": "CAP10_R2_CALLS",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "MonoOwner.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap10-t",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "CAP10_T_CALLS",
+   "required": [
+    {
+     "text": "CAP10_T_CALLS",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "MonoOwner.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap10-net-refused",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "CAP10_NET_REFUSED",
+   "required": [
+    {
+     "text": "CAP10_NET_REFUSED",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "cap10/native/Cap10OfflineNet.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cs-probe-requested",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "[CS]",
+   "required": [
+    {
+     "text": "[CS] C# probe requested by an enabled C# mod: starting the C# runtime",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/UE4SSProgram.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cs-not-started",
+   "fix": "overnight 2026-10-12 labelled build R17",
+   "canonical_marker": "[CS]",
+   "required": [
+    {
+     "text": "[CS] C# runtime not started: no enabled C# mod requested it",
+     "encodings": [
+      "utf-16le"
+     ],
+     "source": "candidate/src/UE4SSProgram.cpp"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17"
+  },
+  {
+   "id": "cap07s3-pakmount-source",
+   "fix": "overnight 2026-10-12 labelled build R17b",
+   "canonical_marker": "[PAKMOUNT]",
+   "required": [
+    {
+     "text": "[PAKMOUNT] source=%s dir=%s",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "NativePakMountAdapter.inl: chosen pak-mod source (configured or game-paks)"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17b"
+  },
+  {
+   "id": "cap07s3-pakmount-configured-hidden",
+   "fix": "overnight 2026-10-12 labelled build R17b",
+   "canonical_marker": "[PAKMOUNT]",
+   "required": [
+    {
+     "text": "[PAKMOUNT] configured pakmods not visible: %s (errno %d) type=%d",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "NativePakMountAdapter.inl: configured pakmods miss with errno"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17b"
+  },
+  {
+   "id": "cap07s3-pakmount-disabled-why",
+   "fix": "overnight 2026-10-12 labelled build R17b",
+   "canonical_marker": "[PAKMOUNT]",
+   "required": [
+    {
+     "text": "[PAKMOUNT] disabled: no pakmods directory (game paks: %s)",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "NativePakMountAdapter.inl: opt-out with the game-paks reason"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17b"
+  },
+  {
+   "id": "cap07s3-gamepaks-miss",
+   "fix": "overnight 2026-10-12 labelled build R17b",
+   "canonical_marker": "",
+   "required": [
+    {
+     "text": " project Content folder in ",
+     "encodings": [
+      "utf-8"
+     ],
+     "source": "PakRequestProducer.hpp game_pak_mods_directory miss reason"
+    }
+   ],
+   "note": "added by add_build_markers.py before build R17b"
+  }
+ ]
+}

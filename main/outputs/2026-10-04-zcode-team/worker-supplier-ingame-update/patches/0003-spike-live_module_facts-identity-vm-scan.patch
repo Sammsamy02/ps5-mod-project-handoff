@@ -1,0 +1,172 @@
+--- a/.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/include/live_module_facts.hpp
++++ b/.superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/include/live_module_facts.hpp
+@@ -9,27 +9,42 @@
+ // addresses, and without relabeling dlopen(NULL) (payload root) as the game
+ // executable.
+ //
++// IN-GAME UPDATE (checkpoint zcode_ingame_v1_results, 2026-10-04):
++//   * KERN_PROC_VMMAP is queried FIRST and is the PRIMARY mapping source;
++//   * image identity is derived from VMMAP spans + the in-memory ELF
++//     header/program-header scan (IdentitySource::VmScan) whenever the
++//     link-map walk yields no anchor — the observed in-game case (DT_DEBUG
++//     absent/unfilled, exec-handle raw 0, module-info domain mismatch);
++//   * on the VmScan route there is no loader name to retain, so retention is
++//     structurally degraded (kind None) — never a fake reference;
++//   * the rtld name route keeps its original stricter semantics (a failed
++//     retain still yields zero facts).
++//
+ // Layering:
+ //   live_module_facts.hpp/.cpp   generic core: validation, retention state
+ //                                machine, capability recording. NO OS calls,
+ //                                NO firmware constants, NO title names.
+ //   live_module_os_ops.hpp       host-injectable OS boundary (ops table).
+ //   live_module_os_ops_sce.cpp   the only TU that binds pinned SDK symbols.
++//   live_module_base_scan.hpp/.cpp  in-memory ELF base scan (vendored V2
++//                                logic; used by the SCE scan_image_base op).
+ //
+ // Firmware-specific facts (ABI sizes, allowances, version) arrive exclusively
+ // through LiveFirmwareProfile data supplied by the caller. Title-specific
+ // facts (which file name is the game executable) arrive exclusively through
+ // the profile's matcher or an explicit capture() name.
+ //
+-// NOTHING in this library dereferences a reported address: segment addresses
+-// and mapping ranges are treated as integers. No allocation, no exceptions,
+-// no threads. All output storage is caller-owned fixed-size POD.
++// The generic core NEVER dereferences a reported address: segment addresses
++// and mapping ranges are treated as integers (span-validated reads live
++// behind the scan_image_base op only). No allocation, no exceptions, no
++// threads in capture paths. All output storage is caller-owned fixed-size POD.
+ #ifndef LMF_LIVE_MODULE_FACTS_HPP
+ #define LMF_LIVE_MODULE_FACTS_HPP
+ 
+ #include <cstddef>
+ #include <cstdint>
+ 
++#include "live_module_base_scan.hpp"
+ #include "sce_module_abi.hpp"
+ 
+ namespace lmf {
+@@ -37,9 +52,11 @@
+ enum class Status : uint32_t {
+     Ok = 0,
+     InvalidArgument,        // null ops/callbacks/output, bad profile
+-    NoImageAnchor,          // no link-map match and no explicit image name
++    NoImageAnchor,          // no link-map match, no explicit image name, no
++                            // VMMAP scan identity (VMMAP absent or needs-base)
+     RetainFailed,           // RTLD_NOLOAD probe returned null (no fake facts)
+-    ModuleInfoNotObtained,  // degraded: no bridged handle (see capabilities)
++    ModuleInfoNotObtained,  // degraded: no bridged handle (see capabilities);
++                            // VmScan-identity captures land here too
+     ModuleInfoRejected,     // kernel returned data violating pinned ABI rules
+     NotCaptured,            // accessors called before successful capture
+     AlreadyReleased,
+@@ -53,9 +70,19 @@
+ // pinned signature; the enum value documents the future verified variant.
+ enum class RetainKind : uint8_t { None = 0, LoaderReference, HandleValidated };
+ 
++// How image identity was established for this capture.
++enum class IdentitySource : uint8_t {
++    None = 0,    // not yet captured / no identity
++    LinkMap = 1, // rtld link-map name (or caller-supplied name anchor)
++    VmScan = 2,  // VMMAP spans + in-memory ELF base scan (primary in-game)
++};
++
+ // Bounded capacities for fixed-size snapshots (data, not firmware facts).
+ static constexpr size_t kMaxLinkMapEntries = 128;
+-static constexpr size_t kMaxVmMappings = 512;
++// Raised 512 -> 1024 by the in-game update: the observed in-game VMMAP run
++// reports 1252 entries (g5); the snapshot keeps 1024 and records honest
++// truncation, exactly like the in-game probe's retained-span bound.
++static constexpr size_t kMaxVmMappings = 1024;
+ static constexpr size_t kMaxName = 256;
+ static constexpr size_t kMaxPath = 1024;
+ static constexpr size_t kMaxAnchorMappings = 8;
+@@ -73,13 +100,14 @@
+ struct CapabilitySet {
+     ProbeResult pid;                 // getpid
+     ProbeResult executable_path;     // sysctl KERN_PROC_PATHNAME
+-    ProbeResult link_map_walk;       // dlinfo(RTLD_DI_LINKMAP) enumeration
++    ProbeResult link_map_walk;       // DT_DEBUG route (refused in-game: g2)
+     ProbeResult loader_retain;       // dlopen(name, RTLD_NOLOAD)
+     ProbeResult module_info;         // sceKernelGetModuleInfo (pinned ABI)
+-    ProbeResult vmentry;             // sysctl KERN_PROC_VMMAP
++    ProbeResult vmentry;             // sysctl KERN_PROC_VMMAP (primary: g5)
+     ProbeResult exec_handle;         // sceKernelGetExecutableModuleHandle:
+-                                     // NotBound unless a verified ops slot is
+-                                     // supplied (no pinned signature; REPORT)
++                                     // explicitly-disabled (in-game g1 raw 0);
++                                     // NotBound only when the slot is null
++    ProbeResult vm_scan;             // VMMAP + in-memory ELF base scan
+     bool module_info_degraded;       // true when ModuleInfoNotObtained
+     bool vm_mappings_truncated;      // more mappings existed than capacity
+ };
+@@ -117,6 +145,20 @@
+     char retained_name[kMaxName]; // exact name passed to the retain op
+ };
+ 
++// VMMAP + in-memory ELF scan identity evidence (copied from the provider's
++// VmScanResult by the core; every field is observation, nothing guessed).
++struct VmScanFacts {
++    uint32_t candidate_count;     // candidates enumerated from the spans
++    int32_t provider_code;        // scan op return code (0 == completed)
++    bool chosen;                  // a main-image candidate was chosen
++    uint64_t chosen_base;         // span-validated ELF header address
++    uint64_t chosen_extent;       // max(p_vaddr+p_memsz) over PT_LOADs
++    uint64_t chosen_dyn_addr;     // resolved dynamic address under the mode
++    int32_t chosen_dyn_mode;      // 1 dyn@base+vaddr, 2 dyn@absolute vaddr
++    uint16_t chosen_e_type;       // raw e_type of the chosen image
++    char provenance[24];          // "v2_elf_base_scan" | "needs-base"
++};
++
+ // Final typed snapshot for the controller to convert into
+ // RC::Platform::NativeLoaderFacts (see REPORT.md contract section).
+ struct LiveModuleFactsSnapshot {
+@@ -124,11 +166,13 @@
+     int32_t provider_code;        // last nonzero OS return, else 0
+     int32_t pid;                  // 0 when probe failed
+     char executable_path[kMaxPath];  // observed sysctl path; empty if absent
+-    char image_name[kMaxName];       // anchor identity actually used
++    char image_name[kMaxName];       // anchor identity actually used (name route)
+     bool image_name_from_link_map;
+-    void *observed_base;             // rtld-reported base of the anchor image
++    void *observed_base;             // rtld-reported base OR VmScan chosen base
++    IdentitySource identity_source;  // which route produced the identity
+     RetentionFacts retention;
+     ModuleInfoFacts module_info;
++    VmScanFacts vm_scan;             // VMMAP+scan evidence (primary in-game)
+     size_t segment_correspondence_count;
+     SegmentCorrespondence segment_correspondence[4];
+     size_t anchor_mapping_count;     // mappings containing observed_base
+@@ -144,7 +188,8 @@
+     uint32_t fw_version;            // 0 == unknown (never guessed here)
+     // Whether the dynamic-loader handle may be reinterpreted as a
+     // SceKernelModule handle for sceKernelGetModuleInfo. FALSE until a real
+-    // target experiment proves the two handle domains coincide (REPORT.md).
++    // target experiment proves the two handle domains coincide (in-game g4
++    // observed 0x7FFFFFFF on list handles: still unresolved, stays false).
+     bool allow_loader_handle_as_module_handle;
+     // Suffix matcher for identifying the game executable image among rtld
+     // link-map entries, e.g. "eboot.bin". Empty suffix matches nothing; an
+@@ -168,9 +213,11 @@
+     RetainedLiveModuleFactsSupplier(RetainedLiveModuleFactsSupplier &&) noexcept;
+     RetainedLiveModuleFactsSupplier &operator=(RetainedLiveModuleFactsSupplier &&) noexcept;
+ 
+-    // One bounded capture pass. explicit_image_name (optional) overrides the
+-    // profile matcher; it must name an ALREADY LOADED object — RTLD_NOLOAD
+-    // never loads new bytes.
++    // One bounded capture pass, VMMAP-first. explicit_image_name (optional)
++    // overrides the profile matcher; it must name an ALREADY LOADED object —
++    // RTLD_NOLOAD never loads new bytes. When the link-map walk yields no
++    // anchor (in-game: refused, g2) and a scan_image_base op is bound, the
++    // identity comes from the VMMAP span + in-memory ELF scan instead.
+     Status capture(const char *explicit_image_name = nullptr) noexcept;
+ 
+     // Accessors are valid after capture(); facts().status records the outcome.
+@@ -178,6 +225,7 @@
+ 
+     // Re-probe the retained reference: a second RTLD_NOLOAD must succeed and
+     // return a consistent handle (immediately balanced with dlclose).
++    // VmScan-identity captures never own a reference: AlreadyReleased.
+     Status validate_retention() noexcept;
+ 
+     // Release the owned loader reference exactly once. Idempotent.

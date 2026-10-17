@@ -1,0 +1,85 @@
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
+@@ -2894,12 +2894,53 @@
+         });
+ 
+         lua.register_function("ForEachUObject", [](const LuaMadeSimple::Lua& lua) -> int {
++            // [FOU][IU-GROUP-B] Claude r13 item 5 / self-test call 133.
++            // The inherited loop called call_function(3, 1) and never discarded
++            // the requested result: this is a global function (no get_userdata
++            // removal happens), the callback stays at stack index 1, and the
++            // single result slot leaked per visited object. On this game's
++            // large GUObjectArray the Lua stack grows to LUAI_MAXSTACK and the
++            // whole call fails with the observed 'iterate-err' (164ms run 1 /
++            // 23ms run 2, CLAUDE-SELFTEST-RESULTS). Upstream UEnum.ForEachName
++            // already uses the discard pattern copied here. Hardening beyond
++            // parity, all bounded: lua_checkstack guard, per-object
++            // construction failures skip (first 3 logged) instead of aborting
++            // the walk, and a Lua callback returning true breaks the walk
++            // (ForEachName convention).
++            int32_t fou_construct_failures{};
++            int32_t fou_visited{};
+             Unreal::UObjectGlobals::ForEachUObject([&](void* object, int32_t chunk_index, int32_t object_index) {
+-                // Duplicate the Lua function so that we can use it in subsequent iterations of this loop (call_function pops the function from the stack)
+-                lua_pushvalue(lua.get_lua_state(), 1);
++                lua_State* fou_lua_state = lua.get_lua_state();
++                if (!lua_checkstack(fou_lua_state, 8))
++                {
++                    Output::send<LogLevel::Error>(STR("[FOU] ForEachUObject: Lua stack exhausted after {} objects; stopping walk\n"), fou_visited);
++                    return LoopAction::Break;
++                }
++                const int fou_baseline = lua_gettop(fou_lua_state);
++                // Duplicate the Lua function so that we can use it in subsequent iterations of this loop (call_function pops the function from the stack)
++                lua_pushvalue(fou_lua_state, 1);
+ 
+-                // Set the 'Object' parameter for the Lua function (P1)
+-                LuaType::auto_construct_object(lua, static_cast<Unreal::UObject*>(object));
++                bool fou_constructed{};
++                try
++                {
++                    // Set the 'Object' parameter for the Lua function (P1)
++                    LuaType::auto_construct_object(lua, static_cast<Unreal::UObject*>(object));
++                    fou_constructed = true;
++                }
++                catch (const std::exception& e)
++                {
++                    ++fou_construct_failures;
++                    if (fou_construct_failures <= 3)
++                    {
++                        Output::send<LogLevel::Warning>(STR("[FOU] ForEachUObject: object construction failed ({}); skipping object\n"), ensure_str(e.what()));
++                    }
++                }
++
++                if (!fou_constructed)
++                {
++                    lua_settop(fou_lua_state, fou_baseline);
++                    return LoopAction::Continue;
++                }
+ 
+                 // Set the 'ChunkIndex' parameter for the Lua function (P2)
+                 lua.set_integer(chunk_index);
+@@ -2908,9 +2949,24 @@
+                 lua.set_integer(object_index);
+ 
+                 lua.call_function(3, 1);
++                ++fou_visited;
+ 
++                // There's a 'nil' on the stack because we told Lua that we expect a return value.
++                // Lua will put 'nil' on the stack if the Lua function doesn't explicitly return anything.
++                // We discard it here, otherwise the Lua stack grows by one slot per object and
++                // overflows on large object arrays. Index 2: the duplicated callback is at index 1.
++                const bool fou_break = lua.is_bool(2) && lua.get_bool(2);
++                lua.discard_value(2);
++                if (fou_break)
++                {
++                    return LoopAction::Break;
++                }
+                 return LoopAction::Continue;
+             });
++            if (fou_construct_failures > 0)
++            {
++                Output::send<LogLevel::Warning>(STR("[FOU] ForEachUObject: {} object constructions failed ({} visited)\n"), fou_construct_failures, fou_visited);
++            }
+             return 0;
+         });
+ 

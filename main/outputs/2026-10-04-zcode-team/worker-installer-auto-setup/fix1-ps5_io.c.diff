@@ -1,0 +1,53 @@
+--- a/outputs/2026-10-04-zcode-team/worker-installer-ps5io/src/ps5_io.c
++++ b/outputs/2026-10-04-zcode-team/worker-installer-ps5io/src/ps5_io.c
+@@ -234,9 +234,21 @@
+ 
+ /* ---- shared semantic layer ------------------------------------------------ */
+ 
++/* Namespace-root auto-creation (console): a fresh console may not have the
++ * file I/O owner's production namespace root (PS5IO_NAMESPACE_ROOT); the
++ * console E2E run failed at stage 41 for exactly that reason and had to be
++ * repaired out-of-band (FTP MKD). The adapter therefore ensures the root
++ * exists on first open. Best-effort by design: a bootstrap failure is never
++ * forced onto an open that does not need the root (read-only opens, host
++ * tests); the real open then reports its own accurate errno. The composed
++ * installer additionally verifies/creates the root explicitly before any
++ * owner opens, so a genuine failure surfaces there with a named status. */
++static void ps5io_ensure_namespace_root(void); /* defined below ps5io_stat_path */
++
+ int ps5io_open(const char *path, unsigned flags, unsigned mode)
+ {
+     if (!path || !path[0]) return -EINVAL;
++    ps5io_ensure_namespace_root();
+     return os_open(path, (int)flags, mode);
+ }
+ 
+@@ -383,6 +395,28 @@
+     return os_stat(path, out);
+ }
+ 
++#ifndef PS5IO_HOST
++/* One-shot namespace-root bootstrap, console builds only. The installer core
++ * is single-threaded, so a plain once-flag is sufficient. Host builds get a
++ * no-op so host tests never create console namespaces on the host. */
++static void ps5io_ensure_namespace_root(void)
++{
++    static int attempted;
++    ps5io_stat st;
++    if (attempted) return;
++    attempted = 1;
++    if (ps5io_stat_path(PS5IO_NAMESPACE_ROOT, &st) == 0 && st.exists
++        && st.is_dir == 1)
++        return;
++    (void)ps5io_mkdir_p(PS5IO_NAMESPACE_ROOT, 0755);
++}
++#else
++static void ps5io_ensure_namespace_root(void)
++{
++    /* host: no-op (never create the console namespace on the host) */
++}
++#endif
++
+ int ps5io_now_ms(uint64_t *out_ms)
+ {
+     if (!out_ms) return -EINVAL;

@@ -1,0 +1,62 @@
+--- a/Handler.cpp	(baseline)
++++ b/Handler.cpp	(staged)
+@@ -7,6 +7,19 @@
+ #include <Input/PlatformInputSource.hpp>
+ #include <DynamicOutput/Output.hpp>
+ 
++// worker-input-tag: shared composition diagnostic sink (diagnostic.c), the
++// same namespace-scope extern "C" pattern the coexist PS5PadSource.cpp TU
++// already uses. The symbol is DEFINED in-link by the composition's
++// diagnostic.c bootstrap unit, so this adds NO new import and appears as no
++// new undefined symbol at the combined-supplier PRX boundary.
++extern "C" void diagnostic_event(const char* tag, unsigned int value);
++
++namespace
++{
++    // worker-input-tag: per-boot pad_key_edge tag budget (see process_event).
++    constexpr unsigned int pad_key_edge_tag_cap = 60;
++}
++
+ namespace RC::Input
+ {
+     std::unordered_map<std::string, std::shared_ptr<PlatformInputSource>> Handler::m_input_sources_store;
+@@ -98,6 +111,39 @@
+         std::vector<EventCallbackCallable> callbacks_to_call{};
+ 
+         auto events = m_platform_handler->process_event(this);
++        // worker-input-tag: bounded input-arrival evidence (acceptance gap
++        // G-AP1, dispatch half). One tag per ARRIVING key edge, value = the
++        // UE4SS Key code; the six mod keybind codes are pairwise distinct
++        // (F7=0x76 = the OPTIONS bind, RETURN=0x0D, arrows 0x25-0x28), so
++        // pad_key_edge=0x76 identifies the first OPTIONS press
++        // unambiguously. After pad_key_edge_tag_cap (60) tags per boot: ONE
++        // pad_key_edge_silent marker (value = the cap), then total silence -
++        // the diagnostic sink is append-only, so per-press tagging MUST be
++        // bounded. Deliberately BEFORE the m_allow_input gate: arrival is
++        // arrival regardless of the later dispatch gates. Function-local
++        // statics are per-boot state (the composition has exactly one
++        // Handler) and unsynchronized exactly like every other Handler
++        // mutation - the sole-processing-thread lifecycle contract. No
++        // behavior change: tagged events continue through the unchanged
++        // dispatch below even once tagging has gone silent.
++        {
++            static unsigned int pad_key_edge_tags = 0;
++            static bool pad_key_edge_silent = false;
++            if (!pad_key_edge_silent)
++            {
++                for (const auto& event : events)
++                {
++                    diagnostic_event("pad_key_edge", static_cast<unsigned int>(event.key));
++                    ++pad_key_edge_tags;
++                    if (pad_key_edge_tags >= pad_key_edge_tag_cap)
++                    {
++                        pad_key_edge_silent = true;
++                        diagnostic_event("pad_key_edge_silent", pad_key_edge_tag_cap);
++                        break;
++                    }
++                }
++            }
++        }
+         if (!m_allow_input) return;
+ 
+         {

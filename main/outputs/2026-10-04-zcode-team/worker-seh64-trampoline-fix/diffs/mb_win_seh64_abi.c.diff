@@ -1,0 +1,205 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-seh64-trampoline-fix/diffs/mb_win_seh64_abi.c.orig	2026-10-05 05:27:37
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-seh64-trampoline-fix/vendor/windows-services/mb_win_seh64_abi.c	2026-10-05 06:08:21
+@@ -5,11 +5,20 @@
+ #define WIN64 __attribute__((ms_abi))
+ 
+ /* ---------------------------------------------------- naked Win64 plane */
+-/* Guard trampoline (design H2, bounded form): invoke fn(arg) with RSP inside
+- * the establishing frame: [establisher_rsp-0x28] = return here,
+- * [establisher_rsp-0x20..-1] = Win64 shadow space. Bodies/filters that
++/* Guard trampoline (design H2, bounded form, alignment-fixed per the
++ * trampoline review F-1): invoke fn(arg) with RSP inside the establishing
++ * frame: guard rsp = establisher_rsp - 0x30, so immediately before the call
++ * rsp = establisher_rsp - 0x30 = 0 (mod 16) and the callee ENTERS at
++ * establisher_rsp - 0x38 = 8 (mod 16) as the Win64 ABI requires (for the
++ * general case establisher_rsp = 0 (mod 16); see the review's frame_rsp
++ * provenance). [establisher_rsp-0x8] = return here (the emulated call-site
++ * return-address slot, pre-stored at 0x28(%rsi)), [establisher_rsp-0x30..
++ * -0x9] = 0x28 shadow-space/pad zone, all entirely below the establisher
++ * rsp. The callee receives (arg1, arg2) in (rcx, rdx) -- filters take the
++ * exception pointers; clang __finally funclets take the establisher frame
++ * in both slots and read the PSP from rdx (F-4). Bodies/filters that
+  * address parent locals through the guard rsp are unsupported (documented);
+- * this family's fixtures exercise globals-only bodies. */
++ * fixtures exercise globals-only bodies. */
+ /* Naked trampolines take the DEFAULT (SysV-style) argument registers of both
+  * compilation routes (host Mach-O x86_64 and the freebsd9/PS5 frontend: the
+  * PS5 backend drops ms_abi on naked definitions, so win64cc entry is not
+@@ -19,21 +28,24 @@
+  * body keeps the Win64 rcx contract and the only internal caller (svc_raise)
+  * invokes it through an explicit rcx-setting asm call. */
+ __attribute__((naked, used, noinline))
+-static int32_t call_at_frame_win64(void *fn, uint64_t establisher_rsp, void *arg)
++static int32_t call_at_frame_win64(void *fn, uint64_t establisher_rsp,
++                                   void *arg, void *arg2)
+ {
+     __asm__ volatile(
+-        "movq %rdx, %r8\n\t"
++        "movq %rdx, %r8\n\t"       /* arg1 (SysV rdx) */
++        "movq %rcx, %r9\n\t"       /* arg2 (SysV rcx; F-4 PSP delivery) */
+         "movq %rsi, %rdx\n\t"
+         "movq %rdi, %rcx\n\t"
+         "pushq %rbx\n\t"
+         "pushq %rsi\n\t"
+         "movq %rsp, %rbx\n\t"
+         "movq %rdx, %rsi\n\t"
+-        "subq $0x28, %rsi\n\t"
++        "subq $0x30, %rsi\n\t"
+         "leaq 1f(%rip), %rax\n\t"
+-        "movq %rax, 0x20(%rsi)\n\t"
++        "movq %rax, 0x28(%rsi)\n\t"
+         "movq %rcx, %r10\n\t"
+-        "movq %r8, %rcx\n\t"
++        "movq %r9, %rdx\n\t"       /* win64 2nd arg = arg2 */
++        "movq %r8, %rcx\n\t"       /* win64 1st arg = arg1 */
+         "movq %rsi, %rsp\n\t"
+         "call *%r10\n\t"
+         "1:\n\t"
+@@ -76,8 +88,11 @@
+ 
+ /* RtlCaptureContext semantics: capture the CALLER of this function. At
+  * entry: [rsp] = return address (caller rip), rsp+8 = caller rsp, and the
+- * callee-saved registers hold caller values. rax/rdx/r8-r11 are caller-dead
+- * values (documented divergence: stored as found, never invented). */
++ * callee-saved registers hold caller values. Divergences (documented, never
++ * invented): stored Rax is the captured EFlags image (the pushfq value also
++ * stored at 0x44), NOT the caller's rax -- both are caller-dead by the Win64
++ * contract; Rdx/R8-R11 are caller-dead values stored as found; Rcx holds
++ * the context pointer itself. */
+ __attribute__((naked, used, noinline))
+ static void svc_capture_context(mb_win_seh64_context *c)
+ {
+@@ -104,7 +119,7 @@
+         "popq %rax\n\t"
+         "movl %eax, 0x44(%rcx)\n\t"
+         "movl $0x100007, 0x30(%rcx)\n\t"
+-        "movq %rax, 0x78(%rcx)\n\t"      /* caller rax (dead value, as found) */
++        "movq %rax, 0x78(%rcx)\n\t"      /* EFlags image (pushfq above) in Rax, NOT the caller's rax; caller-dead by contract either way */
+         "movq %rcx, 0x80(%rcx)\n\t"      /* ctx pointer itself (documented) */
+         "ret\n\t");
+ }
+@@ -114,23 +129,80 @@
+ static int live(void);
+ static void ensure_registered(void);
+ 
+-static WIN64 void svc_raise_exception(uint32_t code, uint32_t flags,
+-                                      uint32_t count, const uint64_t *args)
++/* Raise-path context fix (worker-seh64-trampoline-fix F-3): the search pass
++ * must start at the RAISE CALLER's frame -- the OS captures the raiser's
++ * call site, never RaiseException's own frame. The shipped C body captured
++ * ITS OWN frame instead (rip inside svc_raise_exception, rsp inside its
++ * compiler frame), so every search pass terminated immediately with
++ * NO_UNWIND_INFO on the family's own driver-side frame: no fixture ever
++ * caught it because the shipped fixture carried the "BISECT-1: kit only"
++ * early return that skipped every raise. A plain C frame cannot recover its
++ * own ENTRY rsp, so the exported entry is now a NAKED shim (no compiler
++ * frame, Win64 argument registers rcx/rdx/r8/r9 -- the only callers are PE
++ * IAT calls, both routes) that:
++ *   1. spills the four arguments into its own 0x28-byte guard frame,
++ *   2. calls svc_capture_context BEFORE any frame exists: the captured
++ *      NONVOLATILE registers are the raise caller's live values (volatile
++ *      fields are dead values by contract, as documented at capture), then
++ *   3. rewrites ctx.rip = [entry_rsp] (the caller's resumption point) and
++ *      ctx.rsp = entry_rsp + 8 (the caller's call-site rsp; entry rsp is
++ *      8 (mod 16) so both fixed frames keep pre-call rsp = 0 (mod 16)),
++ *   4. calls the C dispatch body (returns only unhandled) and rets to the
++ *      raise caller with its return address still in the entry slot.
++ * Boundaries: exactly one software raise in flight (the context is a
++ * static; a raise inside a filter/finally funclet would reuse it -- not
++ * exercised, not supported, documented in the family notes). */
++#if defined(__MACH__)
++#define MB_SEH64_ASMSYM(x) "_" #x /* Mach-O C symbols carry a _ prefix */
++#else
++#define MB_SEH64_ASMSYM(x) #x
++#endif
++
++static mb_win_seh64_context
++    __attribute__((used)) svc_raise_ctx; /* written by the naked shim only */
++
++__attribute__((naked, used, noinline)) static void
++svc_raise_exception(uint32_t code, uint32_t flags, uint32_t count,
++                    const uint64_t *args)
+ {
+-    mb_win_seh64_context context = {0};
++    __asm__ volatile(
++        "subq $0x28, %rsp\n\t"    /* pre-call rsp = entry-0x28 = 0 (mod 16) */
++        "movq %rcx, (%rsp)\n\t"   /* spill the four Win64 args */
++        "movq %rdx, 0x8(%rsp)\n\t"
++        "movq %r8, 0x10(%rsp)\n\t"
++        "movq %r9, 0x18(%rsp)\n\t"
++        "leaq " MB_SEH64_ASMSYM(svc_raise_ctx) "(%rip), %rcx\n\t"
++        "call " MB_SEH64_ASMSYM(svc_capture_context) "\n\t"
++        "movq 0x28(%rsp), %rax\n\t" /* [entry rsp] = raise-caller rip */
++        "leaq " MB_SEH64_ASMSYM(svc_raise_ctx) "(%rip), %rcx\n\t"
++        "movq %rax, 0xF8(%rcx)\n\t"
++        "leaq 0x30(%rsp), %rax\n\t" /* entry rsp + 8 = caller call-site rsp */
++        "movq %rax, 0x98(%rcx)\n\t"
++        "movq (%rsp), %rcx\n\t"
++        "movq 0x8(%rsp), %rdx\n\t"
++        "movq 0x10(%rsp), %r8\n\t"
++        "movq 0x18(%rsp), %r9\n\t"
++        "addq $0x28, %rsp\n\t"
++        "subq $8, %rsp\n\t"       /* pre-call rsp = entry-8 = 0 (mod 16) */
++        "call " MB_SEH64_ASMSYM(svc_raise_body) "\n\t"
++        "addq $8, %rsp\n\t"       /* rsp = entry slot, ret pops caller rip */
++        "ret\n\t");
++}
++
++__attribute__((used, noinline)) static WIN64 void
++svc_raise_body(uint32_t code, uint32_t flags, uint32_t count,
++               const uint64_t *args)
++{
++    mb_win_seh64_context *context = &svc_raise_ctx;
+     mb_win_seh64_exception_record record = {0};
+     if (!live()) return;
+     ensure_registered();
+-    {
+-        register mb_win_seh64_context *cap __asm__("rcx") = &context;
+-        __asm__ volatile("call *%1"
+-            : "+r"(cap)
+-            : "r"((void *)(uintptr_t)&svc_capture_context)
+-            : "rax", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "memory");
+-    }
++    /* The context is already captured by the naked entry shim: rip/rsp are
++     * the raise caller's call site and the nonvolatile registers are the
++     * caller's live values (volatile fields are dead values, documented). */
+     record.exception_code = code;
+     record.exception_flags = flags & ~(uint32_t)MB_WIN_SEH64_TARGET_UNWIND;
+-    record.exception_address = (void *)(uintptr_t)context.rip;
++    record.exception_address = (void *)(uintptr_t)context->rip;
+     if (count > MB_WIN_SEH64_MAX_ARGS) {
+         record.exception_flags |= MB_WIN_SEH64_NONCONTINUABLE;
+         count = 0;
+@@ -138,7 +210,7 @@
+     record.number_parameters = count;
+     for (uint32_t i = 0; i < count; ++i) record.exception_information[i] = args[i];
+     /* OS-role dispatch: search, unwind, transfer. Returns only unhandled. */
+-    (void)mb_win_seh64_dispatch(installed, &record, &context);
++    (void)mb_win_seh64_dispatch(installed, &record, context);
+ }
+ 
+ static WIN64 uint64_t svc_lookup_function_entry(uint64_t control_pc,
+@@ -236,8 +308,12 @@
+ }
+ 
+ static int control_call_at_frame(void *fn, uint64_t establisher_rsp, void *arg)
+-{ return (int)call_at_frame_win64(fn, establisher_rsp, arg); }
++{ return (int)call_at_frame_win64(fn, establisher_rsp, arg, (void *)0); }
+ 
++static int control_call_at_frame2(void *fn, uint64_t establisher_rsp,
++                                  void *arg1, void *arg2)
++{ return (int)call_at_frame_win64(fn, establisher_rsp, arg1, arg2); }
++
+ static void control_resume(const mb_win_seh64_context *context)
+ { resume_win64(context); }
+ 
+@@ -306,7 +382,8 @@
+ }
+ 
+ static const mb_win_seh64_control control = {
+-    control_call_personality, control_call_at_frame, control_resume
++    control_call_personality, control_call_at_frame, control_call_at_frame2,
++    control_resume
+ };
+ static mb_win_seh64 owner_storage;
+ 

@@ -1,0 +1,455 @@
+--- a/loader/include/guest_pe_loader.h
++++ b/loader/include/guest_pe_loader.h
+@@ -13,6 +13,7 @@
+ namespace cap13 {
+ 
+ struct GuestPeLoad;
++class WinApiShim;
+ 
+ enum class GuestCallStatus
+ {
+@@ -31,6 +32,7 @@
+   public:
+     GuestPeModule(const GuestPeModule&) = delete;
+     GuestPeModule& operator=(const GuestPeModule&) = delete;
++    ~GuestPeModule();
+ 
+     GuestNotifyStatus process_attach(GuestTebView& teb);
+     GuestNotifyStatus thread_attach(GuestTebView& teb);
+@@ -48,14 +50,22 @@
+     friend GuestPeLoad pe_prepare_guest(const void*, size_t, ImportResolver&,
+                                        const LoadOptions&, StaticTlsBank&,
+                                        GuestSegmentSwitch&);
++    friend GuestPeLoad pe_prepare_guest_with_shim(const void*, size_t,
++                                                  WinApiShim&, const LoadOptions&,
++                                                  StaticTlsBank&, GuestSegmentSwitch&);
+     GuestPeModule(LoadResult load, StaticTlsBank& bank,
+-                  GuestSegmentSwitch& segment, std::vector<uint64_t> callbacks);
++                  GuestSegmentSwitch& segment, std::vector<uint64_t> callbacks,
++                  bool has_static_tls);
++    static bool disable_thread_notifications(void* user);
+ 
+     LoadResult load_;
+     StaticTlsBank& bank_;
+     GuestSegmentSwitch& segment_;
+     GuestModuleLifecycle lifecycle_;
+     std::atomic<bool> attached_{false};
++    WinApiShim* shim_ = nullptr; // shim must outlive this retained module
++    bool has_static_tls_ = false;
++    bool policy_registered_ = false;
+ };
+ 
+ struct GuestPeLoad
+@@ -73,5 +83,13 @@
+                              ImportResolver& resolver, const LoadOptions& options,
+                              StaticTlsBank& bank, GuestSegmentSwitch& segment);
+ 
++// Runtime route: uses only reviewed WinApiShim import rows and registers the
++// mapped HMODULE's thread-notification policy before each process attach.
++// The shim and bank must outlive the module. Caller serializes notifications
++// and ensures guest threads are quiescent before destroying the module.
++GuestPeLoad pe_prepare_guest_with_shim(const void* file_bytes, size_t file_size,
++                                       WinApiShim& shim, const LoadOptions& options,
++                                       StaticTlsBank& bank, GuestSegmentSwitch& segment);
++
+ } // namespace cap13
+ #endif
+--- a/loader/src/guest_pe_loader.cpp
++++ b/loader/src/guest_pe_loader.cpp
+@@ -2,6 +2,7 @@
+ 
+ #include "pe_loader_internal.h"
+ #include "pe_tls_registration.h"
++#include "win_api_shim.h"
+ #include "win32_last_error_state.h"
+ #include "win64_bridge.h"
+ 
+@@ -17,6 +18,7 @@
+ {
+     StaticTlsBank& bank;
+     std::vector<uint64_t> callbacks;
++    bool has_static_tls = false;
+ };
+ 
+ bool file_backed_executable(uint64_t callback, void* user)
+@@ -83,6 +85,7 @@
+         reason = prepared.reason;
+         return false;
+     }
++    context.has_static_tls = true;
+     context.callbacks = std::move(prepared.callbacks);
+     return true;
+ }
+@@ -117,17 +120,43 @@
+ 
+ GuestPeModule::GuestPeModule(LoadResult load, StaticTlsBank& bank,
+                              GuestSegmentSwitch& segment,
+-                             std::vector<uint64_t> callbacks)
++                             std::vector<uint64_t> callbacks,
++                             bool has_static_tls)
+     : load_(std::move(load)),
+       bank_(bank), segment_(segment),
+       lifecycle_(bank, segment, reinterpret_cast<uint64_t>(load_.image),
+                  load_.entry_rva ? reinterpret_cast<uint64_t>(load_.image + load_.entry_rva) : 0,
+-                 std::move(callbacks)) {}
++                 std::move(callbacks)), has_static_tls_(has_static_tls) {}
++
++GuestPeModule::~GuestPeModule()
++{
++    if (policy_registered_ && shim_)
++        (void)shim_->unregister_thread_notification_policy(load_.image);
++}
++
++bool GuestPeModule::disable_thread_notifications(void* user)
++{
++    return static_cast<GuestPeModule*>(user)->lifecycle_.disable_thread_notifications();
++}
+ 
+ GuestNotifyStatus GuestPeModule::process_attach(GuestTebView& teb)
+ {
++    if (attached_) return GuestNotifyStatus::WrongState;
++    if (shim_ && !policy_registered_)
++    {
++        if (!shim_->register_thread_notification_policy(
++                load_.image, has_static_tls_,
++                disable_thread_notifications, this))
++            return GuestNotifyStatus::PolicyRegistrationFailed;
++        policy_registered_ = true;
++    }
+     const auto status = lifecycle_.process_attach(teb);
+     if (status == GuestNotifyStatus::Ok) attached_ = true;
++    else if (policy_registered_ && shim_)
++    {
++        (void)shim_->unregister_thread_notification_policy(load_.image);
++        policy_registered_ = false;
++    }
+     return status;
+ }
+ GuestNotifyStatus GuestPeModule::thread_attach(GuestTebView& teb)
+@@ -141,7 +170,15 @@
+ GuestNotifyStatus GuestPeModule::process_detach(GuestTebView& teb)
+ {
+     const auto status = lifecycle_.process_detach(teb);
+-    if (status == GuestNotifyStatus::Ok) attached_ = false;
++    if (status == GuestNotifyStatus::Ok)
++    {
++        attached_ = false;
++        if (policy_registered_ && shim_)
++        {
++            (void)shim_->unregister_thread_notification_policy(load_.image);
++            policy_registered_ = false;
++        }
++    }
+     return status;
+ }
+ 
+@@ -181,9 +218,20 @@
+         return result;
+     }
+     result.module.reset(new GuestPeModule(std::move(mapped), bank, segment,
+-                                          std::move(context.callbacks)));
++                                          std::move(context.callbacks),
++                                          context.has_static_tls));
+     result.ok = true;
+     return result;
+ }
+ 
++GuestPeLoad pe_prepare_guest_with_shim(const void* file_bytes, size_t file_size,
++                                       WinApiShim& shim, const LoadOptions& options,
++                                       StaticTlsBank& bank, GuestSegmentSwitch& segment)
++{
++    GuestPeLoad result = pe_prepare_guest(file_bytes, file_size, shim,
++                                          options, bank, segment);
++    if (result.ok) result.module->shim_ = &shim;
++    return result;
++}
++
+ } // namespace cap13
+--- a/loader/src/guest_teb_lifecycle.h
++++ b/loader/src/guest_teb_lifecycle.h
+@@ -61,6 +61,7 @@
+     WrongThreadOrBank,
+     TlsPreparationFailed,
+     BackendRefused,
++    PolicyRegistrationFailed,
+     EntryReturnedFalse
+ };
+ 
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -76,6 +76,9 @@
+     // DisableThreadLibraryCalls. A duplicate handle is rejected.
+     bool register_thread_notification_policy(WinModule module_handle,
+         bool has_static_tls, bool (*disable)(void* user), void* user);
++    // Remove a policy only after caller has quiesced all guest calls that
++    // might already have copied its callback out of the registry lock.
++    bool unregister_thread_notification_policy(WinModule module_handle);
+ 
+     // Catalog raw SysV handlers. They are NOT guest-callable and remain
+     // unresolved imports until a per-signature Win64 wrapper is published.
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -201,6 +201,13 @@
+     }
+     catch (const std::bad_alloc&) { return false; }
+     return true;
++}
++
++bool WinApiShim::unregister_thread_notification_policy(WinModule module_handle)
++{
++    if (!module_handle) return false;
++    std::lock_guard guard(m->mu);
++    return m->notification_policies.erase(module_handle) == 1;
+ }
+ 
+ // ===================== T1 implementations =====================
+--- /dev/null
++++ b/loader/tests/guarded_shim_policy_test.cpp
+@@ -0,0 +1,195 @@
++#include "guest_pe_loader.h"
++#include "pe_types.h"
++#include "win_api_shim.h"
++
++#include <cstdio>
++#include <cstring>
++#include <fstream>
++#include <iterator>
++#include <string>
++#include <sys/mman.h>
++#include <unistd.h>
++#include <vector>
++
++namespace {
++int checks = 0;
++int failures = 0;
++void check(bool ok, const char* label)
++{
++    ++checks;
++    std::printf("%s %s\n", ok ? "PASS" : "FAIL", label);
++    if (!ok) ++failures;
++}
++std::vector<uint8_t> read_file(const char* path)
++{
++    std::ifstream file(path, std::ios::binary);
++    return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
++}
++bool allocate_writable(size_t minimum, void** address, size_t* bytes, void*)
++{
++    const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
++    if (minimum > page) return false;
++    void* result = mmap(nullptr, page, PROT_READ | PROT_WRITE,
++                        MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (result == MAP_FAILED) return false;
++    *address = result;
++    *bytes = page;
++    return true;
++}
++bool seal_executable(void* address, size_t bytes, void*)
++{
++    return mprotect(address, bytes, PROT_READ | PROT_EXEC) == 0;
++}
++void release_mapping(void* address, size_t bytes, void*)
++{
++    munmap(address, bytes);
++}
++extern "C" __attribute__((ms_abi)) uint64_t ue4ss_initialized()
++{
++    return 1;
++}
++bool lookup_ue4ss(cap13::WinModule, const char* symbol, void** out)
++{
++    if (std::strcmp(symbol, "is_ue4ss_initialized") != 0) return false;
++    *out = reinterpret_cast<void*>(&ue4ss_initialized);
++    return true;
++}
++class RecordingSwitch final : public cap13::GuestSegmentSwitch
++{
++  public:
++    bool allow = true;
++    int enters = 0;
++    int leaves = 0;
++    bool enter(void* teb) override
++    {
++        ++enters;
++        return allow && teb != nullptr;
++    }
++    void leave() noexcept override { ++leaves; }
++};
++} // namespace
++
++int main(int argc, char** argv)
++{
++    if (argc != 4) return 2;
++    auto bytes = read_file(argv[1]);
++    check(!bytes.empty(), "pinned synthetic PE fixture loaded read-only");
++    if (bytes.empty()) return 2;
++
++    cap13::WinApiShim shim;
++    shim.register_builtin_exports();
++    cap13::WinApiShim::ExecutableMemoryBackend backend{};
++    backend.allocate_writable = allocate_writable;
++    backend.seal_executable = seal_executable;
++    backend.release = release_mapping;
++    check(shim.set_executable_backend(backend), "reviewed import backend configured");
++    shim.register_module("UE4SS.dll", reinterpret_cast<void*>(0x100), lookup_ue4ss);
++
++    cap13::LoadOptions options;
++    options.page_size = 0x1000;
++    options.allow_rwx_partition = true;
++    options.allow_no_relocs = true;
++    cap13::StaticTlsBank bank;
++    RecordingSwitch segment;
++    auto loaded = cap13::pe_prepare_guest_with_shim(bytes.data(), bytes.size(), shim,
++                                                     options, bank, segment);
++    check(loaded.ok && loaded.module,
++          "guarded loader resolves reviewed shim imports and registers module policy");
++    if (!loaded.ok)
++    {
++        std::printf("reason=%s\n", loaded.reason.c_str());
++        return 1;
++    }
++    cap13::GuestTebView teb(bank);
++    segment.allow = false;
++    check(loaded.module->process_attach(teb) == cap13::GuestNotifyStatus::BackendRefused &&
++          segment.enters == 1 && segment.leaves == 0,
++          "backend refusal prevents DllMain and clears provisional policy");
++    segment.allow = true;
++    check(loaded.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok &&
++          segment.enters == 2 && segment.leaves == 1,
++          "retry registers policy before real fixture DllMain");
++    check(loaded.module->thread_attach(teb) == cap13::GuestNotifyStatus::Ok &&
++          loaded.module->thread_detach(teb) == cap13::GuestNotifyStatus::Ok &&
++          segment.enters == 2 && segment.leaves == 1,
++          "DllMain DisableThreadLibraryCalls suppresses thread callbacks");
++    check(loaded.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok &&
++          segment.enters == 3 && segment.leaves == 2,
++          "process detach runs through gate and releases policy");
++    check(loaded.module->process_attach(teb) == cap13::GuestNotifyStatus::Ok &&
++          segment.enters == 4 && segment.leaves == 3,
++          "module can register policy again after clean detach");
++    check(loaded.module->process_detach(teb) == cap13::GuestNotifyStatus::Ok,
++          "second clean detach succeeds");
++
++    // Build one real static-TLS directory in the in-memory fixture's unused
++    // .idata tail. Its three VA fields have matching DIR64 relocations.
++    auto with_tls = bytes;
++    auto* dos = reinterpret_cast<cap13::PeDosHeader*>(with_tls.data());
++    auto* coff = reinterpret_cast<cap13::PeFileHeader*>(with_tls.data() + dos->e_lfanew + 4);
++    auto* opt = reinterpret_cast<cap13::PeOptionalHeader64*>(coff + 1);
++    const uint64_t base = opt->ImageBase;
++    cap13::PeTlsDirectory64 tls{};
++    tls.StartAddressOfRawData = base + 0x3140;
++    tls.EndAddressOfRawData = base + 0x3141;
++    tls.AddressOfIndex = base + 0x3150;
++    std::memcpy(with_tls.data() + 0x900, &tls, sizeof(tls));
++    with_tls[0x940] = 0x5a;
++    opt->DataDirectory[cap13::PE_DIR_TLS] = {0x3100, sizeof(tls)};
++    cap13::PeRelocBlock reloc{0x3000, 14};
++    const uint16_t targets[] = {0xa100, 0xa108, 0xa110};
++    std::memcpy(with_tls.data() + 0x980, &reloc, sizeof(reloc));
++    std::memcpy(with_tls.data() + 0x988, targets, sizeof(targets));
++    opt->DataDirectory[cap13::PE_DIR_BASERELOC] = {0x3180, 14};
++    cap13::LoadOptions tls_options = options;
++    tls_options.allow_no_relocs = false;
++    cap13::StaticTlsBank tls_bank;
++    RecordingSwitch tls_segment;
++    auto tls_loaded = cap13::pe_prepare_guest_with_shim(
++        with_tls.data(), with_tls.size(), shim, tls_options, tls_bank, tls_segment);
++    check(tls_loaded.ok && tls_loaded.module,
++          "in-memory fixture with relocated static TLS maps through reviewed shim");
++    if (!tls_loaded.ok)
++        std::printf("TLS fixture reason=%s\n", tls_loaded.reason.c_str());
++    if (tls_loaded.ok)
++    {
++        cap13::GuestTebView tls_teb(tls_bank);
++        const auto& slots = tls_teb.refresh().slots;
++        check(slots.size() == 1 && slots[0] &&
++              *static_cast<uint8_t*>(slots[0]) == 0x5a,
++              "relocated TLS template is published before DllMain");
++        check(tls_loaded.module->process_attach(tls_teb) == cap13::GuestNotifyStatus::Ok &&
++              tls_segment.enters == 1 && tls_segment.leaves == 1,
++              "static-TLS DllMain runs with registered module policy");
++        check(tls_loaded.module->thread_attach(tls_teb) == cap13::GuestNotifyStatus::Ok &&
++              tls_loaded.module->thread_detach(tls_teb) == cap13::GuestNotifyStatus::Ok &&
++              tls_segment.enters == 3 && tls_segment.leaves == 3,
++              "static TLS keeps thread notifications after DisableThreadLibraryCalls");
++        check(tls_loaded.module->process_detach(tls_teb) == cap13::GuestNotifyStatus::Ok,
++              "static-TLS policy is removed after process detach");
++    }
++
++    auto truefov = read_file(argv[2]);
++    cap13::StaticTlsBank truefov_bank;
++    auto truefov_load = cap13::pe_prepare_guest_with_shim(
++        truefov.data(), truefov.size(), shim, options, truefov_bank, segment);
++    check(!truefov_load.ok && !truefov_load.module &&
++          !truefov_load.missing.empty() &&
++          truefov_load.reason.find("unresolved imports") != std::string::npos,
++          "real gameplay DLL refuses when reviewed Windows imports are absent");
++
++    auto decorated = read_file(argv[3]);
++    cap13::StaticTlsBank decorated_bank;
++    auto decorated_load = cap13::pe_prepare_guest_with_shim(
++        decorated.data(), decorated.size(), shim, options, decorated_bank, segment);
++    bool full_long_name = false;
++    for (const auto& missing : decorated_load.missing)
++        if (missing.size() > 255 &&
++            missing.find("?get_default_devices_ref@DefaultTargets") != std::string::npos &&
++            missing.find("@@std@@XZ") != std::string::npos)
++            full_long_name = true;
++    check(!decorated_load.ok && !decorated_load.module && full_long_name,
++          "unresolved decorated import retains its full name in refusal evidence");
++    std::printf("cases=%d failed=%d\n", checks, failures);
++    return failures ? 1 : 0;
++}
+--- a/loader/tests/run_guarded_pe_activation.py
++++ b/loader/tests/run_guarded_pe_activation.py
+@@ -34,6 +34,7 @@
+     str(root / "src/pe_tls_registration.cpp"),
+     str(root / "src/static_tls_bank.cpp"),
+     str(root / "src/guest_teb_lifecycle.cpp"),
++    str(root / "src/win_api_shim.cpp"),
+     str(root / "src/win64_bridge.S"),
+     "-o", str(out),
+ ], check=True, timeout=30)
+--- /dev/null
++++ b/loader/tests/run_guarded_shim_policy.py
+@@ -0,0 +1,39 @@
++#!/usr/bin/env python3
++"""Real reviewed import and module-policy wiring in an isolated x64 fixture."""
++from pathlib import Path
++import hashlib
++import subprocess
++
++root = Path(__file__).resolve().parents[1]
++fixture = root.parents[1] / "cap13/FIXTURES/cap13-ue4ss-native-mod-FIXTURE.dll"
++expected = "acc201987edcee968a052ef889cb0e8bdcc5c5cd63fcdb4c0dda699cace51bce"
++truefov = root.parent / "third_party/TrueFOV-upstream-winmm.dll"
++truefov_hash = "5f23eee1c7479e75699d26d339ea69269eb0da0c33fc9be4cd60957ee63302a3"
++decorated = root.parents[1] / "cg-max-ready-20261013-03/cap13/upstream-inputs/ZeroCompanyMandoWardrobe-upstream-main.dll"
++decorated_hash = "821ecad6c9f7e61faa2a07b31c216475768b72c2066369d3b0b88f715b33a40c"
++before = hashlib.sha256(fixture.read_bytes()).hexdigest()
++if before != expected:
++    raise RuntimeError("synthetic fixture hash mismatch")
++if hashlib.sha256(truefov.read_bytes()).hexdigest() != truefov_hash:
++    raise RuntimeError("TrueFOV hash mismatch")
++if hashlib.sha256(decorated.read_bytes()).hexdigest() != decorated_hash:
++    raise RuntimeError("decorated import sample hash mismatch")
++out = root / "tests/guarded-shim-policy-host"
++subprocess.run([
++    "clang++", "-arch", "x86_64", "-std=c++17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-pthread",
++    "-I" + str(root / "include"), "-I" + str(root / "src"),
++    str(root / "tests/guarded_shim_policy_test.cpp"),
++    str(root / "src/guest_pe_loader.cpp"), str(root / "src/pe_loader.cpp"),
++    str(root / "src/pe_tls_registration.cpp"), str(root / "src/static_tls_bank.cpp"),
++    str(root / "src/guest_teb_lifecycle.cpp"), str(root / "src/win_api_shim.cpp"),
++    str(root / "src/win64_bridge.S"), "-o", str(out),
++], check=True, timeout=30)
++subprocess.run(["arch", "-x86_64", str(out), str(fixture), str(truefov),
++                str(decorated)], check=True, timeout=20)
++after = hashlib.sha256(fixture.read_bytes()).hexdigest()
++if after != before:
++    raise RuntimeError("synthetic fixture changed")
++if hashlib.sha256(truefov.read_bytes()).hexdigest() != truefov_hash or \
++        hashlib.sha256(decorated.read_bytes()).hexdigest() != decorated_hash:
++    raise RuntimeError("original DLL changed")
++print(f"UNCHANGED fixture sha256={after}")

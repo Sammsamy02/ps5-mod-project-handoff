@@ -1,0 +1,203 @@
+--- a/outputs/2026-10-08-l25-runtime/typescan-r4/candidate/src/UObjectArray.cpp
++++ b/outputs/2026-10-08-l25-runtime/typescan-r4/candidate/src/UObjectArray.cpp
+@@ -8,6 +8,9 @@
+ #include <cstdint>
+ #include <mutex>
+ #include <stdexcept>
++#if defined(MODBRIDGE_L25_ENGINE_ADD_LISTENER)
++#include <chrono>
++#endif
+ 
+ #if defined(__PROSPERO__)
+ // L25: shared composition diagnostic sink (diagnostic.c). Same in-link C symbol
+@@ -419,6 +422,20 @@
+     //   - explicit no-realloc/realloc/fresh-alloc path logging, because realloc swaps
+     //     the engine-owned Data buffer while the game thread may be iterating it under
+     //     the engine lock we do not hold — the residual, documented race.
++    //
++    // VARIANT C SUPERSESSION NOTE (l25, agent AE): the claim above that the
++    // engine's own AddUObjectDeleteListener is "not reachable from this build"
++    // is FACTUALLY WRONG and is retained only as the historical rationale for
++    // the #else (hand-rolled) path. Binary analysis of the pinned shipping
++    // image (sha 3b6cfad5...) located the engine functions — see the
++    // MODBRIDGE_L25_ENGINE_ADD_LISTENER block below and
++    // outputs/2026-10-08-l25-runtime/variant-c-proposal/DECISION-MEMO.md.
++    // Additional finding: the profile offsets UObjectCreateListeners=0x68 /
++    // UObjectDeleteListeners=0x78 are WRONG for this image (engine code proves
++    // create=0x58, delete=0x68, UObjectDeleteListenersCritical=0x78; 0x78 is
++    // the LOCK, not the array). The hand-rolled path below has therefore been
++    // reading the mutex+owner+count triple as {Data,Num,Max}. Do NOT build the
++    // #else path against the current profile; fix the profile first (agent AA).
+     // =====================================================================================
+     namespace
+     {
+@@ -444,6 +461,7 @@
+             // engine-owned Data buffer failed the heap-plausibility screen, so
+             // Append/Realloc is not called. Codes 1-5 keep their meanings.
+             ImplausibleDataForGrowth = 6,
++            EngineListenerCallUnavailable = 7,
+         };
+ 
+         auto l25_listener_header_sane(const void* data, int32_t num, int32_t max) -> bool
+@@ -594,7 +612,77 @@
+ #else
+             (void)tag; (void)value;
+ #endif
++        }
++
++#if defined(MODBRIDGE_L25_ENGINE_ADD_LISTENER)
++        // =====================================================================
++        // VARIANT C (Claude's proper fix): call the ENGINE'S OWN
++        // FUObjectArray::AddUObjectDeleteListener / RemoveUObjectDeleteListener
++        // instead of growing the engine's listener array ourselves.
++        //
++        // Binary ground truth (agent AE, 2026-10-08, against the sha-pinned
++        // shipping image 3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc;
++        // full disassembly receipts in variant-c-proposal/):
++        //   engine Add    @ file-image 0x4841A0 (runtime base+0x4841A0)
++        //     - prologue 55 48 89 E5 41 57 41 56 53 50 48 8D 5F 78 49 89
++        //     - void f(FUObjectArray* this /*rdi*/, FUObjectDeleteListener* /*rsi*/)
++        //     - acquires UObjectDeleteListenersCritical at this+0x78 (mutex
++        //       @+0x78, owner @+0x80, recursion count @+0x88; PS5 pthread
++        //       recursive mutex, 24 bytes) BEFORE touching the array
++        //     - appends to TArray{Data@this+0x68, Num@this+0x70, Max@this+0x74}
++        //     - growth: quantize helper 0x298A0 -> resize 0x62FC0 ->
++        //       engine FMemory::Realloc 0xBEF20 -> ENGINE GMalloc global
++        //       (file-image 0x9340950) -> virtual [vtable+0x40] — the engine's
++        //       OWN allocator, never our port's binding. Locked + engine
++        //       allocator = Claude's two requirements, proven from bytes.
++        //   engine Remove @ file-image 0x484240 (runtime base+0x484240)
++        //     - same lock; Contains scan; memmove swap-with-last; Num--;
++        //       shrink via 0x27140 -> same engine allocator chain.
++        //   Presence proof: 14 direct engine call sites register listeners at
++        //   boot (e.g. lea rdi,[GUObjectArray]; lea rsi,[static listener];
++        //   call 0x4841A0) and 69+ sites call Remove — this family is LIVE
++        //   engine code, NOT dead-stripped like the Z6 diagnostics family.
++        //
++        // Address derivation follows the seed doctrine (no naked text reads —
++        // igf6 crash class; no inline guesses): module base is recovered
++        // arithmetically from the ALREADY seed-bound GUObjectArray pointer
++        // (slot 0, file-image label 0x93BA110, session-validated against the
++        // same image by SeedArming), then base + pinned label. The two labels
++        // above are pinned to the same sha as the seed table; the session's
++        // whole-image code-cache identity check covers them. Prologue bytes
++        // are documented in comments only — this TU never dereferences
++        // engine text.
++        // =====================================================================
++        constexpr uintptr_t L25GUObjectArrayImageLabel = 0x93BA110;
++        constexpr uintptr_t L25EngineAddDeleteListenerLabel = 0x4841A0;
++        constexpr uintptr_t L25EngineRemoveDeleteListenerLabel = 0x484240;
++
++        using L25EngineListenerOp = void (*)(void* fu_object_array_this, void* listener);
++
++        auto l25_resolve_engine_listener_op(uintptr_t label, const char* name, bool is_add) -> L25EngineListenerOp
++        {
++            const uintptr_t gua = reinterpret_cast<uintptr_t>(GUObjectArray);
++            if (gua == 0)
++            {
++                Output::send(STR("[L25][DeleteListener] engine-call REFUSED: GUObjectArray is null (seeds unarmed?)\n"));
++                l25_diag("l25_dl_refused", static_cast<uint32_t>(L25RefusalCode::NullGUObjectArray));
++                return nullptr;
++            }
++            const uintptr_t module_base = gua - L25GUObjectArrayImageLabel;
++            if (module_base == 0 || (module_base & 0xFFF) != 0)
++            {
++                Output::send(STR("[L25][DeleteListener] engine-call REFUSED: derived module base 0x{:X} from GUObjectArray 0x{:X} is zero or misaligned\n"),
++                             module_base, gua);
++                l25_diag("l25_dl_refused", static_cast<uint32_t>(L25RefusalCode::EngineListenerCallUnavailable));
++                return nullptr;
++            }
++            const uintptr_t fn = module_base + label;
++            Output::send(STR("[L25][DeleteListener] engine-call resolved {} at 0x{:X} (module base 0x{:X} + label 0x{:X})\n"),
++                         ensure_str(name), fn, module_base, label);
++            l25_diag("l25_dl_engine_call", is_add ? 0u : 1u);
++            return reinterpret_cast<L25EngineListenerOp>(fn);
+         }
++#endif
+     }
+ 
+     void UObjectArray::AddUObjectCreateListener(FUObjectCreateListener* Listener)
+@@ -628,7 +716,36 @@
+                          static_cast<uint32_t>(L25RefusalCode::NullGUObjectArray));
+             l25_diag("l25_dl_refused", static_cast<uint32_t>(L25RefusalCode::NullGUObjectArray));
+             return;
++        }
++#if defined(MODBRIDGE_L25_ENGINE_ADD_LISTENER)
++        // VARIANT C: delegate registration to the engine's own locked,
++        // engine-allocator AddUObjectDeleteListener. This path performs ZERO
++        // direct access to engine listener-array state (no header reads, no
++        // Contains, no Append) — that is the entire fix. NOTE: the engine's
++        // Add has NO duplicate check (verified from its bytes); our three
++        // registration call sites register distinct listener objects exactly
++        // once per process, and the engine array tolerates duplicates anyway,
++        // so the #else-path DuplicateListener refusal is intentionally not
++        // reproduced here (semantic delta documented in DECISION-MEMO.md).
++        if (L25EngineListenerOp engine_add = l25_resolve_engine_listener_op(L25EngineAddDeleteListenerLabel, "FUObjectArray::AddUObjectDeleteListener", true))
++        {
++            const auto engine_call_start = std::chrono::steady_clock::now();
++            engine_add(reinterpret_cast<void*>(GUObjectArray), reinterpret_cast<void*>(Listener));
++            const auto engine_call_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - engine_call_start).count();
++            Output::send(STR("[L25][DeleteListener] engine-call Add returned in {}ms (listener={})\n"),
++                         static_cast<long long>(engine_call_ms), reinterpret_cast<void*>(Listener));
++            // Value semantics delta vs the hand-rolled path: post-registration
++            // Num is engine-owned under the engine lock and is deliberately
++            // NOT read here; the elapsed milliseconds are reported instead.
++            l25_diag("l25_dl_add_done", static_cast<uint32_t>(engine_call_ms));
+         }
++        else
++        {
++            Output::send(STR("[L25][DeleteListener] REFUSED ({}) : engine Add address unresolved; skipping registration and continuing init\n"),
++                         static_cast<uint32_t>(L25RefusalCode::EngineListenerCallUnavailable));
++            l25_diag("l25_dl_refused", static_cast<uint32_t>(L25RefusalCode::EngineListenerCallUnavailable));
++        }
++#else // hand-rolled path (variant A behavior; requires the CORRECTED profile offsets)
+         try
+         {
+             // NOTE: GetUObjectDeleteListeners() itself throws std::runtime_error when the
+@@ -763,6 +880,7 @@
+                          static_cast<uint32_t>(L25RefusalCode::LayoutOrAppendException));
+             l25_diag("l25_dl_refused", static_cast<uint32_t>(L25RefusalCode::LayoutOrAppendException));
+         }
++#endif // MODBRIDGE_L25_ENGINE_ADD_LISTENER
+     }
+ 
+     void UObjectArray::RemoveUObjectDeleteListener(FUObjectDeleteListener* Listener)
+@@ -778,7 +896,30 @@
+             Output::send(STR("[L25][DeleteListener] Remove REFUSED: GUObjectArray is null\n"));
+             l25_diag("l25_dl_refused", static_cast<uint32_t>(L25RefusalCode::NullGUObjectArray));
+             return;
++        }
++#if defined(MODBRIDGE_L25_ENGINE_ADD_LISTENER)
++        // VARIANT C: engine-side Remove — same locked, engine-allocator
++        // contract as Add. The engine's Remove is safe to call from
++        // OnUObjectArrayShutdown callbacks: the engine's PS5 pthread mutex is
++        // RECURSIVE (owner/count fast path verified in its bytes), so the
++        // re-entrant acquire inside the engine's own shutdown dispatch nest
++        // is legal.
++        if (L25EngineListenerOp engine_remove = l25_resolve_engine_listener_op(L25EngineRemoveDeleteListenerLabel, "FUObjectArray::RemoveUObjectDeleteListener", false))
++        {
++            const auto engine_call_start = std::chrono::steady_clock::now();
++            engine_remove(reinterpret_cast<void*>(GUObjectArray), reinterpret_cast<void*>(Listener));
++            const auto engine_call_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - engine_call_start).count();
++            Output::send(STR("[L25][DeleteListener] engine-call Remove returned in {}ms (listener={})\n"),
++                         static_cast<long long>(engine_call_ms), reinterpret_cast<void*>(Listener));
++            l25_diag("l25_dl_remove_done", static_cast<uint32_t>(engine_call_ms));
+         }
++        else
++        {
++            Output::send(STR("[L25][DeleteListener] Remove REFUSED ({}) : engine Remove address unresolved\n"),
++                         static_cast<uint32_t>(L25RefusalCode::EngineListenerCallUnavailable));
++            l25_diag("l25_dl_refused", static_cast<uint32_t>(L25RefusalCode::EngineListenerCallUnavailable));
++        }
++#else // hand-rolled path (variant A behavior; requires the CORRECTED profile offsets)
+         try
+         {
+             auto& DeleteListeners = GUObjectArray->GetUObjectDeleteListeners();
+@@ -812,6 +953,7 @@
+                          static_cast<uint32_t>(L25RefusalCode::LayoutOrAppendException));
+             l25_diag("l25_dl_refused", static_cast<uint32_t>(L25RefusalCode::LayoutOrAppendException));
+         }
++#endif // MODBRIDGE_L25_ENGINE_ADD_LISTENER
+     }
+ 
+     int32_t UObjectArray::GetNumElements()

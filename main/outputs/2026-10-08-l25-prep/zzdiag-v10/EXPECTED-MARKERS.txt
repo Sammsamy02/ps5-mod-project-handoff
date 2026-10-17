@@ -1,0 +1,191 @@
+# zzdiag v10 — EXPECTED-MARKERS.txt (agent-FI, 2026-10-08-l25-prep wave)
+# Harvest: grep the UE4SS log for each line below. All script lines ride
+# print's "[Lua] " prefix and this script's "[zz] " tag, i.e. a raw line
+# looks like: "[<timestamp>] [Lua] [zz] [DRY-1] pcs PASS n=2 iv=1 ipc=1".
+# Grep on the bracketed token itself (e.g. "\[DRY-1\]") to be robust to
+# the wide-char writer interleaving seen on some console lines.
+# Timing: T1~6s T2~12s T3~18s (probe); M-lines once ~18s+drain after mod
+# start (one-shot), again per F7 press; WD at +45s. One M-set per run.
+
+## Startup / chassis (from v9, unchanged semantics)
+
+- `[zz] Z0 v10`
+  Script top-level executed; Lua VM + mod start alive.
+  ABSENT -> script never admitted: check loadlist zzdiag row size == 4092
+  (size-exact law), then UE4SS mod-start gating.
+
+- `[DRY] Q 18s`
+  One-shot armed at load. ABSENT with Z0 present -> top-level aborted
+  mid-file (LoopAsync registration path) — read surrounding log.
+
+- `[zz] T<n> db=<t> pc=<t>`  (t one of v|n|i|e; every 6s)
+  v9 auto-probe alive: FindFirstOf("ItemDatabaseSubsystem") /
+  FindFirstOf("PlayerController") wrapper validity (v=valid wrapper,
+  n=real nil return, i=wrapper-but-IsValid-false, e=pcall error).
+  T-lines PRECEDE the M-set (T1/T2 at 6s/12s) and outlive it.
+  ALL T ABSENT -> whole Lua action pump dead (not resolution).
+  T present forever but no M-lines + WD fires -> pump alive, game-thread
+  queue not drained (see WD).
+
+- `[zz] K1 f7` / `[zz] K2 q`
+  Manual F7 rerun fired / re-enqueued. K1 without K2 or M-set -> same
+  drain question as WD.
+
+- `[DRY] WD no-drain`  (at +45s)
+  The 18s enqueue happened but the game-thread body NEVER ran
+  (ran flag unset): ExecuteInGameThread queue not drained by the
+  VMT/ProcessEvent pump. Discriminates "pump dead / queue lost" from
+  "steps ran and failed". M-lines present + WD line = stale line from an
+  earlier mod instance; ignore.
+
+## The M1..M6 dry-run ladder (one line per step, in order)
+
+Legend for verdicts: PASS / FAIL / SKIP. Error detail (when a pcall
+caught a throw) follows as an indented line `   ` + first 24 chars of
+the Lua error with its file:line prefix stripped.
+
+- `[DRY-1] pcs <V> n=<c> iv=<t> ipc=<t>`
+  M1 = FindAllOf("PlayerController") count + pcall pc:IsValid() +
+  pcall pc:IsPlayerController(). c = live instances (0 = empty table,
+  -1 = the FindAllOf call itself threw). iv: 1/0 = IsValid pcall
+  returned true/false, e = throw, s = skipped (no instance to test).
+  ipc: same encoding for the reflected IsPlayerController() call.
+  PASS (n>=1 iv=1 ipc=1) -> instance walk, wrapper construction AND the
+  reflected-call dispatch all work at the menu; the menu-path blocker is
+  NOT resolution/iteration.
+  FAIL n=0 while T pc=v -> FindFirstOf finds a PC but FindAllOf's walk
+  admits none: ITERATION problem (IsValidObjectForFindXOf over-exclusion
+  or class-name compare), not the string seam (both took the same Lua
+  literal; cross-check [FFO] add-fallback below).
+  FAIL n=-1 -> call threw; read the 24-char tail: seam-shaped if it
+  mentions FName/conversion.
+  iv=0 (n>0) -> wrapper built but remote ptr invalid: wrapper/auto_construct
+  bug, not iteration.
+  ipc=e -> reflected UFunction dispatch failed for IsPlayerController
+  (function-name resolution in wrapper __index); GATE-1-adjacent (FName
+  pool lookup of "IsPlayerController") — cross-check `[UF] nofn`.
+  ipc=0 -> call completed, returned false: object found is not a
+  PlayerController subclass; iteration detail only.
+
+- `[DRY-2] cdo <V> y|n|e`
+  M2 = StaticFindObject("/Script/UMG.Default__WidgetBlueprintLibrary")
+  (the CDO literal from Claude's spec / mod MOD:499 / v9 D3; NOT the
+  bare class name). Exercises agent-EC's console-safe long-name arm
+  (candidate/src/UObjectGlobals.cpp:377-425, FNAME_Find-only parts).
+  PASS y -> long-name path + FName pool READ both work for this literal;
+  GATE-1 read side healthy here; seam clean for this string.
+  FAIL n -> parts not pool-resident or outer-chain miss; the engine line
+  `[StaticFindObject] long-name part 'X' not in FName pool (FNAME_Find
+  miss); refusing to scan` names the exact missing part:
+    part text READABLE + expected -> GATE-1 pool admission (name not
+    interned); part text GARBLED/truncated -> STRING SEAM (Lua literal
+    corrupted before the pool compare).
+  FAIL e -> binding-level throw; tail "GetPackageNameFromLongNa..." means
+  a PRE-FIX (pre-EC) binary is still live on console — deploy drift.
+
+- `[DRY-3] uwcls <V> y|n|e`
+  M3 = StaticFindObject("/Script/UMG.UserWidget") — UserWidget CLASS via
+  a registered API only (same EC arm; UnrealInitializer.cpp:2463 self-
+  tests this exact literal at boot).
+  Same interpretation as M2. M2 PASS + M3 FAIL (or vice versa) -> PARTIAL
+  pool population (some /Script/UMG names interned, some not): GATE-1
+  admission, iteration-shaped, not a global seam.
+
+- `[DRY-4] create <V> y|n|e | SKIP no-arg`
+  M4 = reflected widgetLib:Create(pc, UserWidgetClass, pc) — 3-param
+  form proven by TownfallItemSpawner MOD:509-511 and v9 D5; rides the
+  generic reflected-call dispatch (src/LuaUObject.cpp:2413-2438,
+  C++ GetFunctionByNameInChain — never Lua-side FindFunction).
+  No dedicated UMG Lua API exists in this port; if a future build also
+  lacks the reflected path, this step degrades to FAIL e (dispatch
+  throw) — not silently SKIPped.
+  PASS y -> full marshaled-call oracle works: param push + ProcessEvent
+  + return wrap. Menu path viable end-to-end minus viewport.
+  FAIL e -> call threw at marshaling/dispatch (read tail; CI-audit
+  param-push class). With M1-M3 PASS this is a MARSHALING/iteration
+  problem, not seam/pool (names already resolved).
+  FAIL n -> returned wrapper IsValid=false (call ran, no live widget).
+  SKIP no-arg -> upstream legs did not produce a valid pc + CDO + class;
+  read M1-M3 lines for the real cause (do not re-run blindly).
+
+- `[DRY-5] sco <V> y|n|e | FAIL cls=n | SKIP no-arg`
+  M5 = StaticConstructObject(<TextBlock class>, outer, FName("zzdry10"))
+  — StaticConstructObject IS registered in this port
+  (candidate/src/LuaMod.cpp:2431, overload Class/Outer/FName#optional),
+  cited in the script header; TextBlock class resolved in-step via
+  StaticFindObject("/Script/UMG.TextBlock"); outer = M4 widget, else
+  valid pc (mod's own fallback shape, MOD:516).
+  PASS y -> a REAL engine object was constructed (engine write!): class
+  resolve + slot-4 construct path + engine ctor all live.
+  FAIL cls=n -> TextBlock class lookup invalid: same pool/seam split as
+  M2/M3 (check the long-name refusal line for the part).
+  FAIL e -> construct threw; read tail. FAIL n -> constructed wrapper
+  invalid. SKIP no-arg -> no valid outer (M4 dead AND pc invalid).
+
+- `[DRY-6] stext <V> ftext|e | SKIP no-M5`
+  M6 = SetText(FText("test")) on the M5 object ONLY (v9 D8 form: FText
+  ctor from string + TextProperty param = 2 engine Conv_StringToText
+  calls per CI audit binding #11, push_textproperty Set
+  src/LuaUObject.cpp:1851-1861).
+  PASS ftext -> Lua-string -> FText -> engine text property chain clean;
+  the string seam is clean end-to-end for a runtime-built string.
+  FAIL e -> FText ctor or the nested Conv calls threw: STRING-SEAM-
+  adjacent (the deepest string crossing in the ladder); read tail.
+  SKIP no-M5 -> M5 did not construct (upstream cause).
+
+- `[DRY] no-viewport`
+  Attestation printed at the END of every completed dry-run body:
+  AddToViewport was NEVER called (script contains no such call — header
+  LAW only). ABSENT together with some M-lines present -> the body died
+  mid-run (native crash inside an un-fenceable engine call); check klog.
+
+## Engine-side corroborating markers (same log, emitted by the PRX —
+## not by this script; collect them around the M-lines)
+
+- `[FFO] query-fallback [n:<X> num:<N> ts:'<name>' ...]`
+  A FindXOf FName query took the fallback; ts shows the name as the
+  engine saw it. ts TRUNCATED/garbled vs the script literal ->
+  STRING SEAM signature.
+
+- `[FFO] query-embedded-NUL (len=... stride-corruption signature)`
+  The wide query buffer carries interleaved NULs: definitive STRING SEAM
+  signature (stride corruption), independent of any M-verdict.
+
+- `[FFO] add-fallback [n:<X>]`
+  FNAME_Add fallback fired: the name was NOT pool-resident on read ->
+  GATE-1 pool admission read-miss (name had to be re-interned).
+
+- `[StaticFindObject] long-name part '<X>' not in FName pool (FNAME_Find miss); refusing to scan`
+  EC arm loud refusal naming the part (pairs with M2/M3/M5 FAIL n;
+  see part-text rule above for seam-vs-admission split).
+
+- `[UF] nofn [n:<X> ...]`
+  Wrapper __index missed a reflected function name (pairs with M1
+  ipc=e, M4 FAIL e, M6 FAIL e): function-name resolution miss —
+  GATE-1-adjacent.
+
+## Oracle summary (Claude's three suspects -> discriminating evidence)
+
+1. STRING SEAM (Lua literal corrupted before engine): M2/M3 FAIL with
+   garbled refusal part text; M1 n=-1 with conversion-flavored tail;
+   M6 FAIL e (Conv/StringToText); any [FFO] query-embedded-NUL or
+   query-fallback with truncated ts.
+2. GATE-1 POOL ADMISSION (names not interned / Add-dup index mismatch):
+   M2/M3/M5 FAIL n with READABLE expected part text + refusal line;
+   M1 ipc=e / M4 FAIL e paired with [UF] nofn; [FFO] add-fallback.
+3. ITERATION PROBLEM (walk/compare/exclusion/marshaling): T pc=v but
+   M1 n=0; M1 ipc=0 with healthy T-lines; M4 FAIL e with M1-M3 all PASS
+   (param marshaling, not naming); M5/M6 FAIL e after clean lookups.
+
+## Absence patterns
+
+- No `[zz]` lines at all -> admission/loadlist/size mismatch (4092) or
+  mod-start gating; nothing below is interpretable.
+- Z0 + Q only, no T, no WD -> LoopAsync actions never processed: the
+  delayed-action pump itself is dead (deeper than drain).
+- Z0 + T-lines, no M-lines, WD no-drain at 45s -> enqueue lost or game-
+  thread queue not drained: pump/drain problem, NOT resolution. One F7
+  press re-tests drain manually.
+- M-lines stop mid-sequence without SKIP lines and no no-viewport ->
+  native crash inside an engine call (pcall cannot fence it): pull klog;
+  the last printed M-line names the call that crashed.

@@ -1,0 +1,66 @@
+# OPTIONAL, apply AFTER final-b5.diff (not part of it). Sites track, "ambient pcall" residuals: native lock scopes that call
+#   registry().get_function_ref (stale-ref raise) -> RegisterKeyBind callback (2231), process_pending_notify_on_new_object_callbacks (4761),
+#   script_hook (8612), RegisterStaticConstructObjectPostCallback lambda (9007).
+# Does NOT cover auto_construct_object / RemoteUnrealParam::construct / property pushers, which also raise via PusherParams::throw_error.
+# Apply from the worktree root, after final-b5.diff: patch -p1 < optional-ambient-getfuncref.diff
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
+@@ -335,6 +335,22 @@
+         // Explicitly using the top of the stack (-1) since that's where 'getglobal' puts stuff
+         auto& lua_object = lua.get_userdata<LuaType::LuaModRef>(-1);
+         return lua_object.get_remote_cpp_object();
++    }
++
++    // [B5-opt] Registry::get_function_ref with a C++ exception instead of
++    // lua.throw_error, for NATIVE callers (not registered Lua functions) that hold
++    // LuaMod::m_thread_actions_mutex and already catch std::exception. When no Lua
++    // pcall is active, throw_error throws C++ anyway; when the caller is nested
++    // inside a Lua pcall (a hook fired from a Lua-initiated engine call) it is a
++    // longjmp over the lock guard. Same stack effect as the original
++    // (rawgeti, then discard the non-function on failure).
++    static auto get_function_ref_cxx(const LuaMadeSimple::Lua& lua, int32_t registry_index) -> void
++    {
++        if (lua.rawgeti(LUA_REGISTRYINDEX, registry_index) != LUA_TFUNCTION)
++        {
++            lua.discard_value();
++            throw std::runtime_error("[Lua::Registry::get_function_ref] Ref was not function");
++        }
+     }
+ 
+     static auto get_function_name_without_prefix(const StringType& function_full_name) -> StringType
+@@ -2251,7 +2267,7 @@
+                     std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+                     try
+                     {
+-                        lua.registry().get_function_ref(callback_register_index);
++                        get_function_ref_cxx(lua, callback_register_index);
+                         lua.call_function(0, 0);
+                     }
+                     catch (std::runtime_error& e)
+@@ -4841,7 +4857,7 @@
+                 }
+ 
+                 TRY([&]() {
+-                    exec.lua->registry().get_function_ref(exec.lua_callback_function_ref);
++                    get_function_ref_cxx(*exec.lua, exec.lua_callback_function_ref);
+                     LuaType::auto_construct_object(*exec.lua, exec.constructed_object);
+                     exec.lua->call_function(1, 1);
+ 
+@@ -8660,7 +8676,7 @@
+                     const auto stack_top_before_callback = lua_gettop(lua.get_lua_state());
+                     try
+                     {
+-                        lua.registry().get_function_ref(registry_index.lua_index);
++                        get_function_ref_cxx(lua, registry_index.lua_index);
+ 
+                         static auto s_object_property_name = Unreal::FName(STR("ObjectProperty"), Unreal::FNAME_Find);
+                         LuaType::RemoteUnrealParam::construct(lua, &Context, s_object_property_name);
+@@ -9057,7 +9073,7 @@
+                             }
+ 
+                             auto& callback_data = *callback_it;
+-                            callback_data.lua->registry().get_function_ref(callback_data.lua_callback_function_ref);
++                            get_function_ref_cxx(*callback_data.lua, callback_data.lua_callback_function_ref);
+                             LuaType::auto_construct_object(*callback_data.lua, constructed_object);
+                             callback_data.lua->call_function(1, 1);
+ 

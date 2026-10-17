@@ -1,0 +1,292 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-r5-thread-source-integration/thread/LuaMod.cpp
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l22-runtime/diagnostics/src/LuaMod.cpp
+@@ -1,3 +1,4 @@
++#include <L22Diagnostics/Logging.hpp>
+ #include "ThreadNameRuntime.hpp"
+ #define NOMINMAX
+ 
+@@ -1944,6 +1945,8 @@
+             });
+ 
+             lua.register_function("RegisterKeyBind", [](const LuaMadeSimple::Lua& lua) -> int {
++        try
++        {
+                 std::string error_overload_not_found{R"(
+ No overload found for function 'RegisterKeyBind'.
+ Overloads:
+@@ -1954,18 +1957,21 @@
+ 
+                 if (!lua.is_integer())
+                 {
+-                    lua.throw_error(error_overload_not_found);
++                    L22Diagnostics::throw_lua_error(lua, error_overload_not_found, "RegisterKeyBind");
+                 }
+ 
+                 int64_t key_from_lua = lua.get_integer();
+                 if (key_from_lua < std::numeric_limits<uint8_t>::min() || key_from_lua > std::numeric_limits<uint8_t>::max())
+                 {
+-                    lua.throw_error("Parameter #1 for function 'RegisterKeyBind' must be an integer between 0 and 255");
++                    L22Diagnostics::throw_lua_error(lua, "Parameter #1 for function 'RegisterKeyBind' must be an integer between 0 and 255", "RegisterKeyBind");
+                 }
+ 
+                 Input::Key key_to_register = static_cast<Input::Key>(key_from_lua);
+ 
+-                const auto lua_keybind_callback_lambda = [](const LuaMadeSimple::Lua& lua, const int callback_register_index) -> void {
++                const auto lua_keybind_callback_lambda = [](const LuaMadeSimple::Lua& lua, const int callback_register_index, Input::Key callback_key) -> void {
++                    L22Diagnostics::observe([&]() {
++                        Output::send(STR("[l22] keybind callback entry key={} ref={}\n"), static_cast<int>(callback_key), callback_register_index);
++                    });
+                     std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+                     try
+                     {
+@@ -1994,10 +2000,13 @@
+                     // Using a 'custom_data' of 1 to signify that this keydown event was created by a mod
+                     mod->m_program.register_keydown_event(
+                             key_to_register,
+-                            [&lua, lua_callback_registry_index, lua_keybind_callback_lambda]() {
+-                                lua_keybind_callback_lambda(lua, lua_callback_registry_index);
++                            [&lua, lua_callback_registry_index, lua_keybind_callback_lambda, key_to_register]() {
++                                lua_keybind_callback_lambda(lua, lua_callback_registry_index, key_to_register);
+                             },
+                             1, mod);
++                    L22Diagnostics::observe([&]() {
++                        Output::send(STR("[l22] RegisterKeyBind returned key={} modifiers=0 (registration call returned)\n"), static_cast<int>(key_to_register));
++                    });
+                 }
+                 else if (lua.is_table())
+                 {
+@@ -2012,13 +2021,13 @@
+                     lua.for_each_in_table([&](LuaMadeSimple::LuaTableReference table) -> bool {
+                         if (!table.value.is_integer())
+                         {
+-                            lua.throw_error("Lua function 'RegisterKeyBind', overload #2, requires a table of 1-byte large integers as the second parameter");
++                            L22Diagnostics::throw_lua_error(lua, "Lua function 'RegisterKeyBind', overload #2, requires a table of 1-byte large integers as the second parameter", "RegisterKeyBind");
+                         }
+ 
+                         int64_t full_integer = table.value.get_integer();
+                         if (full_integer < std::numeric_limits<uint8_t>::min() || full_integer > std::numeric_limits<uint8_t>::max())
+                         {
+-                            lua.throw_error("Lua function 'RegisterKeyBind', overload #2, requires a table of 1-byte large integers as the second parameter");
++                            L22Diagnostics::throw_lua_error(lua, "Lua function 'RegisterKeyBind', overload #2, requires a table of 1-byte large integers as the second parameter", "RegisterKeyBind");
+                         }
+ 
+                         modifier_keys[table_counter++] = static_cast<Input::ModifierKey>(table.value.get_integer());
+@@ -2037,8 +2046,8 @@
+                         mod->m_program.register_keydown_event(
+                                 key_to_register,
+                                 modifier_keys,
+-                                [&lua, lua_callback_registry_index, lua_keybind_callback_lambda]() {
+-                                    lua_keybind_callback_lambda(lua, lua_callback_registry_index);
++                                [&lua, lua_callback_registry_index, lua_keybind_callback_lambda, key_to_register]() {
++                                    lua_keybind_callback_lambda(lua, lua_callback_registry_index, key_to_register);
+                                 },
+                                 1, mod);
+                     }
+@@ -2046,19 +2055,36 @@
+                     {
+                         mod->m_program.register_keydown_event(
+                                 key_to_register,
+-                                [&lua, lua_callback_registry_index, lua_keybind_callback_lambda]() {
+-                                    lua_keybind_callback_lambda(lua, lua_callback_registry_index);
++                                [&lua, lua_callback_registry_index, lua_keybind_callback_lambda, key_to_register]() {
++                                    lua_keybind_callback_lambda(lua, lua_callback_registry_index, key_to_register);
+                                 },
+                                 1, mod);
+                     }
++                    L22Diagnostics::observe([&]() {
++                        Output::send(STR("[l22] RegisterKeyBind returned key={} modifiers={} (registration call returned)\n"), static_cast<int>(key_to_register), table_counter);
++                        for (uint8_t index = 0; index < table_counter; ++index)
++                            Output::send(STR("[l22] RegisterKeyBind modifier[{}]={} key={}\n"), index, static_cast<int>(modifier_keys[index]), static_cast<int>(key_to_register));
++                    });
+                 }
+                 else
+                 {
+-                    lua.throw_error(error_overload_not_found);
++                    L22Diagnostics::throw_lua_error(lua, error_overload_not_found, "RegisterKeyBind");
+                 }
+ 
+                 return 0;
+-            });
++            
++        }
++        catch (const std::exception& error)
++        {
++            L22Diagnostics::error("RegisterKeyBind", error.what());
++            throw;
++        }
++        catch (...)
++        {
++            L22Diagnostics::error("RegisterKeyBind", "non-standard C++ exception");
++            throw;
++        }
++    });
+ 
+             lua.register_function("UnregisterHook", [](const LuaMadeSimple::Lua& lua) -> int {
+                 std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+@@ -2229,6 +2255,8 @@
+         }
+ 
+         lua.register_function("StaticConstructObject", [](const LuaMadeSimple::Lua& lua) -> int {
++        try
++        {
+             std::string error_overload_not_found{R"(
+ No overload found for function 'StaticConstructObject'.
+ Overloads:
+@@ -2250,13 +2278,13 @@
+             // For now, we're assuming that if there's userdata, that userdata is of the correct underlying type
+             if (!lua.is_userdata())
+             {
+-                lua.throw_error(error_overload_not_found);
++                L22Diagnostics::throw_lua_error(lua, error_overload_not_found, "StaticConstructObject");
+             }
+             Unreal::UClass* param_class = lua.get_userdata<LuaType::UClass>().get_remote_cpp_object();
+ 
+             if (!lua.is_userdata())
+             {
+-                lua.throw_error(error_overload_not_found);
++                L22Diagnostics::throw_lua_error(lua, error_overload_not_found, "StaticConstructObject");
+             }
+             Unreal::UObject* param_outer = lua.get_userdata<LuaType::UObject>().get_remote_cpp_object();
+ 
+@@ -2332,11 +2360,34 @@
+             params.InstanceGraph = static_cast<struct RC::Unreal::FObjectInstancingGraph*>(param_instance_graph);
+             params.ExternalPackage = static_cast<class RC::Unreal::UPackage*>(param_external_package);
+             Unreal::UObject* created_object = Unreal::UObjectGlobals::StaticConstructObject(params);
++            if (created_object)
++            {
++                L22Diagnostics::observe([&]() {
++                    Output::send(STR("[l22] widget/object constructed via StaticConstructObject class={} object={} (non-null return)\n"),
++                                 static_cast<void*>(param_class), static_cast<void*>(created_object));
++                });
++            }
++            else
++            {
++                L22Diagnostics::error("StaticConstructObject Lua", "returned null; preserving invalid UObject result");
++            }
+ 
+             LuaType::UObject::construct(lua, created_object);
+ 
+             return 1;
+-        });
++        
++        }
++        catch (const std::exception& error)
++        {
++            L22Diagnostics::error("StaticConstructObject", error.what());
++            throw;
++        }
++        catch (...)
++        {
++            L22Diagnostics::error("StaticConstructObject", "non-standard C++ exception");
++            throw;
++        }
++    });
+ 
+         lua.register_function("RegisterCustomProperty", [](const LuaMadeSimple::Lua& lua) -> int {
+             std::string error_overload_not_found{R"(
+@@ -4245,7 +4296,15 @@
+             LuaMod::m_is_currently_executing_game_action = true;
+             TRY([&]() {
+                 lua_data.lua->registry().get_function_ref(lua_data.lua_action_function_ref);
++                L22Diagnostics::observe([&]() {
++                    Output::send(STR("[l22] ExecuteInGameThread drained state={} ref={} (callback entry)\n"),
++                                 static_cast<void*>(lua_data.lua->get_lua_state()), lua_data.lua_action_function_ref);
++                });
+                 lua_data.lua->call_function(0, 0);
++                L22Diagnostics::observe([&]() {
++                    Output::send(STR("[l22] ExecuteInGameThread callback returned state={} ref={}\n"),
++                                 static_cast<void*>(lua_data.lua->get_lua_state()), lua_data.lua_action_function_ref);
++                });
+             });
+             luaL_unref(lua_data.lua->get_lua_state(), LUA_REGISTRYINDEX, lua_data.lua_action_function_ref);
+             LuaMod::m_is_currently_executing_game_action = false;
+@@ -5320,6 +5379,8 @@
+         }
+ 
+         m_lua.register_function("ExecuteInGameThread", [](const LuaMadeSimple::Lua& lua) -> int {
++        try
++        {
+             std::string error_overload_not_found{R"(
+ No overload found for function 'ExecuteInGameThread'.
+ Overloads:
+@@ -5338,7 +5399,7 @@
+             }
+             else if (!lua_isfunction(L, 1))
+             {
+-                lua.throw_error(error_overload_not_found);
++                L22Diagnostics::throw_lua_error(lua, error_overload_not_found, "ExecuteInGameThread");
+             }
+ 
+             const auto mod = get_mod_ref(lua);
+@@ -5373,10 +5434,10 @@
+                     }
+                     else
+                     {
+-                        lua.throw_error("ExecuteInGameThread: EngineTick method requested but neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed");
++                        L22Diagnostics::throw_lua_error(lua, "ExecuteInGameThread: EngineTick method requested but neither EngineTick nor ProcessEvent hooks are available and the R3 FuncPtr-marshal carrier is not armed", "ExecuteInGameThread");
+                     }
+ #else
+-                    lua.throw_error("ExecuteInGameThread: EngineTick method requested but EngineTick hook is not available (AOB scan failed)");
++                    L22Diagnostics::throw_lua_error(lua, "ExecuteInGameThread: EngineTick method requested but EngineTick hook is not available (AOB scan failed)", "ExecuteInGameThread");
+ #endif
+                 }
+                 else
+@@ -5421,10 +5482,10 @@
+                     }
+                     else
+                     {
+-                        lua.throw_error("ExecuteInGameThread: ProcessEvent method requested but neither ProcessEvent nor EngineTick hooks are available and the R3 FuncPtr-marshal carrier is not armed");
++                        L22Diagnostics::throw_lua_error(lua, "ExecuteInGameThread: ProcessEvent method requested but neither ProcessEvent nor EngineTick hooks are available and the R3 FuncPtr-marshal carrier is not armed", "ExecuteInGameThread");
+                     }
+ #else
+-                    lua.throw_error("ExecuteInGameThread: ProcessEvent method requested but ProcessEvent hook is not available (AOB scan failed)");
++                    L22Diagnostics::throw_lua_error(lua, "ExecuteInGameThread: ProcessEvent method requested but ProcessEvent hook is not available (AOB scan failed)", "ExecuteInGameThread");
+ #endif
+                 }
+                 else
+@@ -5489,6 +5550,11 @@
+                     LuaMod::m_game_thread_actions.emplace_back(simpleAction);
+                 }
+             }
++
++            L22Diagnostics::observe([&]() {
++                Output::send(STR("[l22] ExecuteInGameThread queued method={} state={} ref={}\n"),
++                             static_cast<int>(method), static_cast<void*>(hook_lua->get_lua_state()), func_ref);
++            });
+ 
+ #if defined(__PROSPERO__)
+             // [R3-L11EL] THE ORDER GUARANTEE (worker-l11-enqueue-ladder; RUNBOOK
+@@ -5528,7 +5594,19 @@
+ #endif
+ 
+             return 0;
+-        });
++        
++        }
++        catch (const std::exception& error)
++        {
++            L22Diagnostics::error("ExecuteInGameThread", error.what());
++            throw;
++        }
++        catch (...)
++        {
++            L22Diagnostics::error("ExecuteInGameThread", "non-standard C++ exception");
++            throw;
++        }
++    });
+ 
+         // ExecuteInGameThreadWithDelay - executes callback after a time delay
+         // Uses default method from config, falls back to the other if unavailable
+@@ -7410,6 +7488,12 @@
+                 if (!load_and_execute_script(main_script_path))
+                 {
+                     Output::send<LogLevel::Error>(STR("Failed to execute main script: {}\n"), ensure_str(main_script_path));
++                }
++                else
++                {
++                    L22Diagnostics::observe([&]() {
++                        Output::send(STR("[l22] Lua mod started: {} (main script returned)\n"), m_mod_name);
++                    });
+                 }
+             }
+             else

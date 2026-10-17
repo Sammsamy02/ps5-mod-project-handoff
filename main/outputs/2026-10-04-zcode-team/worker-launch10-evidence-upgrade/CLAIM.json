@@ -1,0 +1,82 @@
+{
+  "worker": "worker-launch10-evidence-upgrade",
+  "date": "2026-10-04",
+  "scope": "Host-side upgrade of the launch-9 post-launch evidence tooling for the launch-10 staging run. Delivers an upgraded evidence.sh in THIS worker directory only (the worker-launch9-evidence original is preserved unmodified as labeled history): (1) baselines rebased to the controller-captured launch10-prep files (ue4ss-log-baseline.txt 7591 B edf404a5..., entry-log-baseline.txt 2343756 B 4b33b985..., runtime-status-baseline.txt 169 B 57c40d4c..., xwp-jsonl-baseline.txt 4362 B 20cff601...) as CLI-flag defaults (--baseline-ue4ss-bytes/--baseline-entry-bytes/--baseline-status-bytes/--baseline-xwp-bytes; --baseline-aligned-bytes kept as a deprecated alias), with the launch-9 dispatch baselines (UE4SS 2892 B - which was actually a 411 B error page - and aligned-entry 2210306 B) retained as labeled history only; (2) a r13/r14 marker-to-stage classification table (STAGE-TABLE.md + in-script stage chain) grounded in runtime_start_bridge_r13.cpp, worker-lease-coverage-fix runtime_start_bridge_r14.cpp, comp6-integration lmf_to_native_loader_facts.cpp, the comp6 lineage entry, path_test_entry.c, and the diagnostic-sink staging; (3) per-writer timing extraction (r4 [t=<ms>ms pid=<pid>] prefixes, PATH_TEST monotonic-ns stamps, supplier-diag jsonl t_ms events, file sequence order) with explicit never-subtract-across-writers guards; (4) the launch-10 staging runbook in --plan output (single-file PRX upload with readback byte-verify, ini NOT republished 1216aab6..., baselines re-fetch before launch, post-launch fetch order UE4SS.log -> runtime-status -> optional supplier-diag jsonl); (5) an extended fixture suite (16 cases, 84 checks) including timing two-writer cases, launch-9-terminal and hypothetical launch-10-success stage chains, and baseline-drift guards (pinned size/sha check of the baseline reference files + head-window byte compare of fetched files vs baselines). NO console contact; FTP exercised only as constructed argv in --dry-run; fixtures built from the real launch10-prep baseline bytes read-only. No nested subagents. No files outside this worker directory created or modified.",
+  "launch_config_truth": {
+    "ini": "SHORTEST 2-plugin config, sha 1216aab61236b0fc9734b1647c96e03db48beb3d333efe174ca08e97abededa0 (controller-verified; RETURN-SESSION-COMMANDS rev 2026-10-05a): modbridge_supplier_composition.prx=2 + modbridge_path_test.prx=2 only; aligned_entry and all probes incl. xwp =0",
+    "consequences": [
+      "the aligned-entry log will NOT grow; growth is a CONFIG-DRIFT warning with attribution untrusted",
+      "every modbridge module_start failed line belongs to supplier_composition (the [t= prefix exists in BOTH lineages, so the config - not the prefix - resolves the launch-9 attribution ambiguity)",
+      "primary evidence channels: /data/plugins/UE4SS.log (append-only mirror) and /data/modbridge/roots/PPSA33286/runtime-status.txt (session/pid-stamped, last-writer-wins)",
+      "supplier-diag jsonl /data/modbridge-supplier-diag.jsonl is OPTIONAL (diagnostic-sink worker, opportunistic inclusion); absence is a normal outcome"
+    ]
+  },
+  "claims": {
+    "baseline_rebase": {
+      "claim": "All four baselines are now CLI flags defaulting to the launch10-prep controller-captured values (7591/2343756/169/4362 B), verified byte-identical on this host (shasum -a 256 matches the briefing prefixes edf404a5/4b33b985/57c40d4c/20cff601). The runtime-status freshness oracle is now a pinned baseline session (273/44372083, flags --baseline-session-pid/--baseline-session-ms): a fetched status holding a DIFFERENT session is fresh; session 273 is the stale launch-9 terminal. This replaces launch-9's FRESH_MS constant, which no longer means anything post-launch-9.",
+      "evidence": [
+        "launch10-prep files hashed on this host at delivery time: ue4ss edf404a56d0a9ed85e15d2b20a00bdd07e93b189d4e70a9db988d46acd22a0ff (7591 B), entry 4b33b9852ef53d714b32e839db2c927b5c79814821d76ac383295e487941129f (2343756 B), status 57c40d4cf7e91c8ac73fd726b3a268e7b613ee3b202459d8d181db7b79f51c4b (169 B), xwp 20cff60141e356c2a30822c8e37d5225430c8cb487b9b3311e1115499339c2fe (4362 B)",
+        "fixtures not_started and l9_terminal run with --baseline-dir pointing at launch10-prep and produce ZERO drift warnings, proving defaults, pinned shas and head-window compare agree with the real files"
+      ]
+    },
+    "stage_table_grounding": {
+      "claim": "The STAGE TABLE (S0 diag-channel, S1 entry/ctors, S2 activation, S3 vmmap walk, S4 lease registration, S5 identity anchors, S6 conversion incl. derive_readable_ranges, S7 configured-roots attach, S8 context build/validation, S8B initializer/seeds/GMalloc, S9 start ack, S10 engine ladder, S11 stop) lists only markers that exist verbatim in the named sources; the launch-9 terminal (code=1 'no observed mapping interval intersects the module image extent with valid geometry' at derive_readable_ranges, lmf_to_native_loader_facts.cpp:228-231) is the anchor case, and the PLH lease throw 'Owned read range includes unregistered bytes' is treated as DORMANT in r13 (launch-8's r10 threw it) with r14 replacing it by the loud pre-lease coverage gate ('lease coverage gap: requested [... +0x...) outside registered readable spans', MRS_ERR_CONVERSION by design).",
+      "evidence": [
+        "runtime_start_bridge_r13.cpp: diagnostic_event call sites bridge_vmentry_entries/bridge_vm_walk_stop :278-279, bridge_kve_* :340-344, bridge_exepath_valid/sig :349-350, anchor_* :380-395, lmf_* :653-657, bridge_cfg_gamedir/workdir :670-671, bridge_exepath_source :426/:456/:465, bridge_lease_reg_spans/bridge_lease_reg :521-522, MRS catch structure :547-734",
+        "worker-lease-coverage-fix/runtime_start_bridge_r14.cpp: header L1-L5 (frozen-snapshot registration, true-protection bits, coverage gate, anchor ownership gate, idempotence), new tags anchor_owned_ref, bridge_lease_cap, bridge_lease_gap, bridge_lease_gap_req, bridge_lease_ref_lo/hi/len, bridge_lease_near_lo/hi/len, gap detail text built at :740-775, pre-conversion gate returns MRS_ERR_CONVERSION at :906-913/:920-927",
+        "comp6-integration/lmf_to_native_loader_facts.cpp: derive_readable_ranges :77-109 (R-bit + intersection filter), refusal :228-231, status_error strings :36-67, extent resolution :174-225",
+        "worker-comp6-driver/staging/lineage-overlay-2/lifecycle/runtime_module_entry.c: module_start sequence :330-371 (diag -22 :344, module_start_entered, ctor events via ops table, runtime_wiring_begin/mfa tags :261-303, write_ue4ss_log_line r7 prefix :184-232), proving the [t= prefix is NOT entry-only",
+        "worker-launch9-diagnostics-mine/CLAIM.json: terminal chain offsets @2274097-2276081, bridge_lease_reg_spans=0x6/bridge_lease_reg=0x6 @2270807/@2270933, lmf caps vmentry=2 vm_scan=2 linkmap=1 provider_code=0xfffff05f identity_source=2, bridge_cfg_* absent from the whole delta, F2b launch-8 ambiguity caveat"
+      ]
+    },
+    "timing_extraction": {
+      "claim": "The tool extracts per-writer timing sequences and emits a per-stage elapsed table with hard guards: (a) r4-format '[t=<ms>ms pid=<pid>]' prefixes from failure lines, sequenced per pid (deltas only within the same pid); (b) PATH_TEST '... at <ns> monotonic-ns' stamps (success and OPEN_FAILED variants, path_test_entry.c :141-170), deltas only vs previous same-writer stamp; (c) supplier-diag jsonl t_ms events (same monotonic-ms domain per diagnostic-sink source), per-event deltas; (d) runtime-status session stamp as a single point with the explicit note that state lines carry no timestamps so file sequence order is the only intra-status ordering; (e) file-level sequence order for stage chains. Cross-writer subtraction never happens and every summary carries the guard line.",
+      "evidence": [
+        "fixture timing_two_writers: two PATH_TEST stamps (ns epoch) and two failure lines from DIFFERENT pids (ms) produce four independent sequences, same-writer deltas only, no ms/ns or cross-pid arithmetic (check_absent guards)",
+        "fixture l10_success: 12 supplier-diag events produce the per-stage elapsed table (module_start_entered t=1000 first, ... runtime_start_ok t=1800 +299ms) and the chain S1->S2->S3->S4->S5->S7->S9->S11 in file-sequence order"
+      ]
+    },
+    "staging_runbook": {
+      "claim": "--plan prints the launch-10 staging runbook: single-file upload of the rebuilt supplier_composition PRX to /data/plugins/modbridge_supplier_composition.prx with fresh-RETR readback byte-verify (content law: all PT_LOADs identical, SHT-strip artifacts only), filenames unchanged; ini NOT republished (pre-image gate expects 1216aab6..., STOP on drift); baselines re-fetch BEFORE launch into the launch10-prep layout with a pre-launch NOT_STARTED/zero-warnings classification as the drift-free proof; post-launch fetch order UE4SS.log -> runtime-status.txt -> supplier-diag jsonl if the sink landed -> xwp jsonl (drift) -> entry log (history).",
+      "evidence": [
+        "RETURN-SESSION-COMMANDS rev 2026-10-05a Phase 0/2/3 and the verified staging law (:44-49)",
+        "evidence.sh --plan output (captured in receipts via the fixture harness header path)"
+      ]
+    },
+    "drift_guard": {
+      "claim": "With --baseline-dir DIR (launch10-prep layout), classify time runs two guards: (1) each on-disk baseline reference is size+sha256-checked against the pinned launch10-prep constants - drift warns that the baselines are not the pinned capture and must be re-fetched; (2) each fetched file's first min(size, baseline-bytes) bytes are compared against the baseline reference head - mismatch warns 'append-only contract violated, or the wrong file was fetched'. Disabled-channel growth (entry log, xwp jsonl) and DIAG-line plugin output in new content raise CONFIG-DRIFT warnings naming the ini pin 1216aab6....",
+      "evidence": [
+        "fixture baseline_drift: a drifted ue4ss baseline reference fires both the size and sha warnings",
+        "fixture content_drift: a same-size foreign-head UE4SS.log fires the head-window warning",
+        "fixture entry_growth / diag_drift: disabled-channel growth and DIAG output produce CONFIG-DRIFT warnings/verdict"
+      ]
+    },
+    "verdict_precedence_launch10": {
+      "claim": "Exactly one verdict per run with precedence: FETCH_FAILED (exit 4; BOTH primary channels unreachable) > SHAPE_A_SEEDS_GATE (RE-LABELED: the armed table should ship in launch-10, so this verdict now means 'the armed SeedTable did NOT ship in this fself' - staging regression, never the expected terminal) > SEEDS_REFUTED > GMALLOC_GATE > FAILED_S6_LEASEGATE (r14 gap text) > FAILED_S6_CONVERSION (incl. the launch-9 terminal string with the composition-attribution note) > FAILED_S8_CONTEXT_LEASE (dormant lease throw reappeared = rebuild lacks the r14 gate; readback-first guidance) > FAILED_S8_CONTEXT / FAILED_S0_DIAGCHANNEL / FAILED_code<N> > FAILED_STATUS (fresh failed session without a log line) > MODS_STARTED (first-time ladder; ge.5 gate opens: user tests OPTIONS only after this evidence) > ENGINE_READY > CRASH_SHAPED_SUSPECTED (fresh activated-only + LoadMap tail + no failure line) > ACTIVATED > STOPPED > CONFIG_DRIFT (disabled-plugin output without a fresh session) > UNKNOWN_NEW_LINES > NOT_STARTED.",
+      "evidence": [
+        "16-case fixture suite receipts cover every verdict branch above; LAUNCH10-MATRIX.md rows R2/R4 (seeds refuted plausible), RETURN-SESSION-COMMANDS Phase 3 (ge.5 gate law)"
+      ]
+    },
+    "host_test_coverage": {
+      "claim": "host-test/run_fixture_tests.sh generates fixtures from the REAL launch10-prep baseline bytes (read-only) plus synthetic appended lines and asserts 84 checks across 16 cases with 0 failures: not_started (stale 273 session), l9_terminal (stage chain S6 + attribution + r4 timing writer), l10_success (full success chain, lease spans 6==6, per-stage elapsed table, ladder, path_test stamp), timing_two_writers (different epochs/units, no cross-writer/cross-pid arithmetic), baseline_drift (pinned size+sha), content_drift (head-window), shape_a_regress, lease_gate_r14, lease_throw_dormant, seeds_refuted, gmalloc_gate, crash_shaped, truncation, boundary (straddle at the 7591-B cut), entry_growth, diag_drift.",
+      "evidence": [
+        "receipts/fixture-test-pass.txt: '== fixture test summary: 84 passed, 0 failed ==', evidence.sh sha256 5a034d460e642a51a7689e7cd498f9367609c9cddf64fcb31cdaed101601ba52, fixture shas listed"
+      ]
+    },
+    "bugs_found_and_fixed_during_the_pass": {
+      "claim": "Honesty record of the fixture pass: (1) 'command shasum >/dev/null' inside sha256_stdin CONSUMED the piped stdin, so every head-window compare compared empty-input hashes and could never fire - replaced with 'command -v' probes; (2) SDIAGCHAIN printed one tab so the chain landed in $2 while the reader looked at $3 - chain always empty; (3) status_summary passed the baseline session as awk FILE arguments instead of -v variables; (4) harness: run_case referenced unset $2 under set -u for no-extra-arg cases, and fresh_status shifted off $1 before using it as the output directory (stale status fixtures); (5) content_drift was first designed as 'append a foreign line' which cannot trigger a head-window guard - redesigned as same-size foreign content.",
+      "evidence": [
+        "sh -x traces captured during the pass (empty-hash e3b0c442... on both sides of the compare); final suite 84/0"
+      ]
+    }
+  },
+  "limits": [
+    "No console contact: FTP is never invoked by the fixtures; live mode is controller-only after the user confirms 'in game'.",
+    "Baselines are controller-captured launch10-prep bytes; this worker verified their sha256 on THIS host but did not re-fetch them from the console - the runbook's pre-launch re-fetch + re-pin remains the law, and --baseline-dir must point at the freshly fetched files on launch day.",
+    "The stage table classifies r13/r14 marker vocabulary read from source; the actual launch-10 fself may be r14+armed-table+GMalloc-validator - if the rebuild adds NEW tags (e.g. beyond worker-diagnostic-sink's set) they will surface as raw lines/OTHER, never silently dropped, and STAGE-TABLE.md will need a bounded revision with new ids.",
+    "The '[Seeds]' armed-path success wording remains not verbatim-pinned anywhere readable; unmatched [Seeds] lines are reported verbatim as seeds-other (honesty limit inherited from launch-9).",
+    "Timing semantics: PATH_TEST stamps and failure-line prefixes are single points per launch, not durations; the only true per-stage elapsed table comes from the supplier-diag jsonl IF the diagnostic-sink landed. The tool never fabricates durations and never subtracts across writers.",
+    "Config-drift detection is negative-evidence-based (growth where growth is forbidden): a stale ini with disabled plugins could still write nothing, which looks identical to compliance; the ini pre-image gate in the runbook is the positive check.",
+    "Classification is evidence interpretation, not acceptance: MODS_STARTED carries explicit beyond-prediction skepticism; rung advancement stays governed by FIRST-RUN-PLAYBOOK section 5 and the ge.5 gate."
+  ]
+}

@@ -1,0 +1,50 @@
+host_test_r7 receipt — worker-anchor-fallback-r7 (2026-10-04)
+
+== 1. Ladder host test (primary deliverable) ==
+ladder_test.cpp: standalone host extraction of the r7 anchor-ladder decision
+logic (same pattern as worker-module-start-wiring/host_test_r6/walk_test.cpp).
+Host shims: site_byte() registry lookup with unregistered-read counting
+(proves uncovered spans are NEVER dereferenced); diagnostic_event() capture
+for tag assertions. NOT a target artifact: no PRX, no console, host logic only.
+
+Build:  clang++ -std=c++17 -O2 -Wall -Wextra -o ladder_test ladder_test.cpp
+Run:    ./ladder_test -> exit 0, 34 PASS, RESULT: ALL PASS (0 failures)
+        (full output in run_output.txt)
+
+Cases (task-mandated + supplements):
+  1  E-ok: ladder verifies; E match; no E mm_off; A corrupt yet ignored;
+     C both-sites aggregate=1; zero unregistered reads.
+  2  E-fail-D-ok: E corrupted at off 7 -> mm_off=7, live_w0 = window head
+     (r6 semantics preserved), D and B both still match, ladder verifies.
+  3  all-fail: every gate rung corrupted -> refuse; C aggregate=0; A logged.
+  3b A-match-only still refuses (A never gates).
+  4  C-ambiguous (both occurrence sites checked): E/D/B corrupted, C1 match,
+     C2 mismatch -> anchor_C_match=0 -> refuse; 4b: C2 ok -> anchor_C_match=1
+     -> verify.
+  5  coverage-refused-then-next: E under an EXEC-ONLY span (prot=4) ->
+     anchor_E_covered=0, NO anchor_E_match emitted, E page absent from the
+     registry and zero unregistered reads (never dereferenced); ladder falls
+     through to D (+B) and verifies.
+  6  menu-like igf7 shape ([0x400000,0x787c000) prot=4 + [0x787c000,
+     0x82bc000) prot=1): A uncovered -> logged, never read, never gates;
+     C2 covered (inside data span); E verifies.
+
+Binary sha256: e8f8ae97c1a55219219b851e5042f53d2668eeaa49bafbe485d168b09ebb287c
+Source sha256: 68028aba8397d753ce26889e3250922d5e6d5973ed07c4df5920776b2fabce27
+
+== 2. Bridge r7 syntax gate (proposal compile check; stub composition headers) ==
+clang++ -std=c++17 -fsyntax-only -Wall -Wextra -DKERN_PROC_VMMAP=14
+  -I ../scratch/stub -I ../scratch ../scratch/b/runtime_start_bridge_r7.cpp
+  -> exit 0 (no errors, no warnings)
+r6 baseline under the SAME stub set -> exit 0 (gate is stub-equivalent).
+Stubs: ../scratch/stub/* + ../scratch/{lifecycle-path stubs}; documented in
+REPORT.md. This is NOT an integration build (no composed headers, no SDK).
+
+== 3. Entry r7 syntax gate + micro-test ==
+clang -std=c99 -fsyntax-only -Wall -Wextra
+  ../scratch/entry-b/runtime_module_entry_r7.c -> exit 0
+  ../scratch/entry-a/runtime_module_entry_r3.c -> exit 0 (baseline parity)
+entry_u64_test.c (includes the ACTUAL r7 file, same-TU static access):
+  log_append_u64 0 / 12345 / 2^32 / 2^64-1 exact; capacity clamp honors
+  capacity. -> ENTRY-U64 MICRO-TEST: ALL PASS, exit 0.
+  (entry_shims.c are inert link stubs; module_start is never called.)

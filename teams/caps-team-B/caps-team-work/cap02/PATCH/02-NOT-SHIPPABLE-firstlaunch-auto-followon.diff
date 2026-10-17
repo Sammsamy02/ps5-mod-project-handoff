@@ -1,0 +1,36 @@
+NOT SHIPPABLE -- DO NOT APPLY TO A BUILD.
+This follow-on diff does not compile (m_native_context.detected_engine does not exist)
+and generate() refuses the only shipped pack (not cleared for arming, review F5).
+It applies on top of PATCH/01 only, for reading/planning: patch -p1 --fuzz=0 -d <scratch copy>.
+
+--- a/src/UE4SSProgram.cpp
++++ b/src/UE4SSProgram.cpp
+@@ -1164,8 +1164,26 @@
+             const auto members = m_native_context.mod_source->read("ue4ss/MemberVariableLayout.ini");
+             const auto virtuals = m_native_context.mod_source->read("ue4ss/VTableLayout.ini");
+             if (!members || !virtuals)
+-                throw std::runtime_error("Native activation requires both member and vtable layout files");
+-            Platform::NativeLayouts::StageNativeLayoutTexts(members->bytes, virtuals->bytes);
++            {
++                // cap02 first-launch AUTO path (fail-closed). NOT SHIPPABLE: it
++                // needs m_native_context.detected_engine (does not exist yet),
++                // a profile-side generator, and a pack cleared for arming
++                // (generate() refuses every pack with single-source or
++                // config-dependent rows). See APPLY.md "PATCH/02".
++                const auto& det = m_native_context.detected_engine;
++                rc::autoprofile::EngineCell cell{det.format, det.pointer_size, det.major, det.minor,
++                                                 det.target.c_str(), det.non_shipping, det.stats};
++                rc::autoprofile::ImageIdentity id{det.engine_revision, det.build_id};
++                const auto gen = rc::autoprofile::generate(cell, id);
++                Output::send(STR("[AutoProfile] first-launch generate ok={} pack={} reason={}\n"),
++                             gen.ok ? 1 : 0, ensure_str(std::string{gen.pack ? gen.pack->id : "(none)"}),
++                             ensure_str(std::string{gen.reason}));
++                if (!gen.ok)
++                    throw std::runtime_error(std::string("[AutoProfile] first-launch refused: ") + gen.reason);
++                Platform::NativeLayouts::StageNativeLayoutTexts(gen.members, gen.vtables);
++            }
++            else
++                Platform::NativeLayouts::StageNativeLayoutTexts(members->bytes, virtuals->bytes);
+         }
+         else
+             Platform::NativeLayouts::StageNativeLayoutFiles(m_working_directory);

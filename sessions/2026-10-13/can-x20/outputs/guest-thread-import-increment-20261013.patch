@@ -1,0 +1,299 @@
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -29,6 +29,7 @@
+ namespace cap13 {
+ 
+ class GuestReadMap;
++class GuestThreadManager;
+ 
+ // A mod-visible module handle ("HMODULE"): opaque index into the registry.
+ using WinModule = void*;
+@@ -80,6 +81,9 @@
+     // Its image ranges are registered on process attach and revoked on detach.
+     bool set_guest_read_map(GuestReadMap* map);
+     bool set_guest_write_map(GuestWriteMap* map);
++    // Configure before PE preparation and retain through worker quiescence.
++    // Only default CreateThread options are currently admitted.
++    bool set_guest_thread_manager(GuestThreadManager* manager);
+     bool write_guest_bytes(void* address, const void* source, size_t bytes) const;
+     void set_mod_root(std::string utf8_root); // T2 confinement root
+ 
+@@ -158,6 +162,11 @@
+     void* resolve(const char* dll_name, const char* symbol, uint64_t ordinal) override;
+ 
+   private:
++    using CreateGuestThread = uint64_t (*)(void*, void*, size_t, void*,
++                                           void*, uint32_t, uint32_t*);
++    using CloseGuestThread = bool (*)(void*, uint64_t);
++    bool set_guest_thread_adapter(void* user, CreateGuestThread create,
++                                  CloseGuestThread close);
+     Impl* m;
+ };
+ 
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -88,8 +88,6 @@
+ constexpr uint32_t TLS_OUT_OF_INDEXES = 0xFFFFFFFFu;
+ constexpr uint32_t GENERIC_WRITE = 0x40000000u;
+ 
+-using WinThreadFn = uint32_t (*)(void*); // unsigned __stdcall, x64: Win64 call
+-
+ std::string ascii_module_key(const char* name)
+ {
+     if (!name) return {};
+@@ -124,6 +122,9 @@
+     Hooks hooks;
+     GuestReadMap* guest_read_map = nullptr;
+     GuestWriteMap* guest_write_map = nullptr;
++    void* guest_thread_user = nullptr;
++    CreateGuestThread guest_thread_create = nullptr;
++    CloseGuestThread guest_thread_close = nullptr;
+     std::string mod_root = "/data/modbridge/roots/";
+     std::mutex mu;
+     // dll-name(lowercased) -> { symbol/ordinal -> address }
+@@ -286,6 +287,21 @@
+     m->guest_write_map = map;
+     m->hooks.write_guest_bytes = GuestWriteMap::write_callback;
+     m->hooks.write_guest_user = map;
++    return true;
++}
++
++bool WinApiShim::set_guest_thread_adapter(void* user,
++                                          CreateGuestThread create,
++                                          CloseGuestThread close)
++{
++    if (!user || !create || !close) return false;
++    std::lock_guard guard(m->mu);
++    if (m->guest_thread_user) return false;
++    for (const auto& row : m->modules)
++        if (row.second.mapped_lookup) return false;
++    m->guest_thread_user = user;
++    m->guest_thread_create = create;
++    m->guest_thread_close = close;
+     return true;
+ }
+ 
+@@ -747,51 +763,38 @@
+     return true;
+ }
+ 
+-struct ThreadStartPack
+-{
+-    WinThreadFn fn;
+-    void* arg;
+-    WinApiShim::Impl* shim;
+-};
+-
+-#if CAP13_POSIX
+-static void* thread_tramp(void* p)
+-{
+-    ThreadStartPack pack = *static_cast<ThreadStartPack*>(p);
+-    delete static_cast<ThreadStartPack*>(p);
+-    // pack.fn is GUEST (Win64) code: the bridge supplies the Win64-calling
+-    // entry; here it is already the bridged pointer created at CreateThread.
+-    const uint32_t rc = pack.fn(pack.arg);
+-    return (void*)(uintptr_t)rc;
+-}
+-#endif
+-
+-static void* impl_CreateThread(WinApiShim::Impl*, void* attrs, size_t stack, WinThreadFn bridged_fn,
+-                               void* arg, uint32_t flags, uint32_t* out_tid)
+-{
+-    (void)attrs;
+-    (void)flags;
+-#if CAP13_POSIX
+-    pthread_t tid{};
+-    pthread_attr_t a;
+-    pthread_attr_init(&a);
+-    if (stack) pthread_attr_setstacksize(&a, stack);
+-    auto* pack = new ThreadStartPack{bridged_fn, arg, nullptr};
+-    if (pthread_create(&tid, &a, thread_tramp, pack) != 0)
+-    {
+-        delete pack;
+-        return nullptr;
+-    }
+-    pthread_attr_destroy(&a);
+-    if (out_tid) *out_tid = uint32_t((uintptr_t)tid); // opaque for design; M1 mints real ids
+-    return (void*)(uintptr_t)tid;
+-#else
+-    (void)stack;
+-    (void)bridged_fn;
+-    (void)arg;
+-    (void)out_tid;
+-    return nullptr;
+-#endif
++static uint64_t impl_CreateThread_managed(WinApiShim::Impl* m, void* attrs,
++                                          size_t stack, void* start,
++                                          void* argument, uint32_t flags,
++                                          uint32_t* out_tid)
++{
++    if (!m->guest_thread_create)
++    {
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return 0;
++    }
++    const uint32_t zero = 0;
++    if (out_tid && !m->owner->write_guest_bytes(out_tid, &zero, sizeof(zero)))
++    {
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return 0;
++    }
++    uint32_t id = 0;
++    const uint64_t handle = m->guest_thread_create(
++        m->guest_thread_user, attrs, stack, start, argument, flags, &id);
++    if (!handle || !id)
++    {
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return 0;
++    }
++    if (out_tid && !m->owner->write_guest_bytes(
++                       out_tid, &id, sizeof(id)))
++    {
++        m->guest_thread_close(m->guest_thread_user, handle);
++        win32_set_last_error(ERROR_INVALID_PARAMETER);
++        return 0;
++    }
++    return handle;
+ }
+ 
+ static void impl_QueryPerformanceCounter(WinApiShim::Impl*, int64_t* out)
+@@ -1103,7 +1106,7 @@
+         {"kernel32.dll", "TlsAlloc", (void*)&impl_TlsAlloc, 0, false},
+         {"kernel32.dll", "TlsGetValue", (void*)&impl_TlsGetValue, 1, false},
+         {"kernel32.dll", "TlsSetValue", (void*)&impl_TlsSetValue, 2, false},
+-        {"kernel32.dll", "CreateThread", (void*)&impl_CreateThread, 6, false},
++        {"kernel32.dll", "CreateThread", (void*)&impl_CreateThread_managed, 6, true},
+         {"kernel32.dll", "QueryPerformanceCounter", (void*)&impl_QueryPerformanceCounter, 1, false},
+         {"kernel32.dll", "GetTickCount", (void*)&impl_GetTickCount, 0, true},
+         {"kernel32.dll", "CreateFileW", (void*)&impl_CreateFileW, 7, false},
+@@ -1145,6 +1148,9 @@
+         if (raw_dll == m->raw_exports.end()) return BuiltinInstallStatus::Unsupported;
+         auto row = raw_dll->second.find(symbol);
+         if (row == raw_dll->second.end() || !row->second.reviewed_for_publication)
++            return BuiltinInstallStatus::Unsupported;
++        if (dll == "kernel32.dll" && !std::strcmp(symbol, "CreateThread") &&
++            !m->guest_thread_create)
+             return BuiltinInstallStatus::Unsupported;
+         if (needs_guest_reader(dll, symbol) && !m->hooks.read_guest_bytes)
+             return BuiltinInstallStatus::Unsupported;
+@@ -1286,6 +1292,9 @@
+                            row->second.reviewed_for_publication;
+                 if (eligible && needs_guest_reader(dll, symbol) &&
+                     !m->hooks.read_guest_bytes) eligible = false;
++                if (eligible && dll == "kernel32.dll" &&
++                    !std::strcmp(symbol, "CreateThread") &&
++                    !m->guest_thread_create) eligible = false;
+             }
+             backend = m->executable_backend;
+         }
+--- /dev/null
++++ b/loader/src/guest_thread_import.cpp
+@@ -0,0 +1,24 @@
++#include "guest_thread_manager.h"
++#include "win_api_shim.h"
++
++namespace cap13 {
++
++bool WinApiShim::set_guest_thread_manager(GuestThreadManager* manager)
++{
++    if (!manager) return false;
++    return set_guest_thread_adapter(
++        manager,
++        [](void* user, void* attributes, size_t stack_size, void* start,
++           void* argument, uint32_t flags, uint32_t* out_id) -> uint64_t {
++            const auto result = static_cast<GuestThreadManager*>(user)->create(
++                start, argument, attributes, stack_size, flags);
++            if (result.status != GuestThreadCreateStatus::Ok) return 0;
++            if (out_id) *out_id = result.thread_id;
++            return result.handle;
++        },
++        [](void* user, uint64_t handle) -> bool {
++            return static_cast<GuestThreadManager*>(user)->close(handle);
++        });
++}
++
++} // namespace cap13
+--- a/loader/tests/guest_pe_thread_test.cpp
++++ b/loader/tests/guest_pe_thread_test.cpp
+@@ -2,6 +2,7 @@
+ #include "guest_read_map.h"
+ #include "guest_thread_manager.h"
+ #include "guest_write_map.h"
++#include "win64_bridge.h"
+ #include "pe_types.h"
+ #include "win32_thread_identity.h"
+ #include "win32_last_error_state.h"
+@@ -231,6 +232,61 @@
+     void* start = shim.resolve("fixture.dll", "start_mod", 0);
+     check(start && batch.modules[0]->owns_executable_address(start),
+           "worker start is validated inside attached executable code");
++    {
++        cap13::WinApiShim thread_shim;
++        thread_shim.register_builtin_exports();
++        const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
++        void* entry = nullptr;
++        size_t allocated = 0;
++        check(allocate_writable(sizeof(cap13::ContextBridgeTramp), &entry,
++                                &allocated, nullptr) && allocated == page,
++              "thread import test has writable trampoline storage");
++        check(thread_shim.install_builtin_integer_wrapper(
++                  "kernel32.dll", "CreateThread", entry, allocated,
++                  seal_executable, nullptr) ==
++                  cap13::BuiltinInstallStatus::Unsupported,
++              "CreateThread remains unpublished without an owned manager");
++        cap13::GuestThreadManager imported(batch, bank, blocked_runner);
++        cap13::GuestWriteMap thread_writes;
++        uint32_t output_tid = 0;
++        int output_owner = 0;
++        check(thread_writes.add(&output_owner, &output_tid,
++                                sizeof(output_tid)) &&
++              thread_shim.set_guest_write_map(&thread_writes) &&
++              thread_shim.set_guest_thread_manager(&imported) &&
++              thread_shim.install_builtin_integer_wrapper(
++                  "kernel32.dll", "CreateThread", entry, allocated,
++                  seal_executable, nullptr) ==
++                  cap13::BuiltinInstallStatus::Ok,
++              "owned manager and guest output map admit sealed CreateThread");
++        blocked_started.store(false);
++        blocked_release.store(false);
++        const auto call_create = [&](uint64_t flags, uint64_t out) {
++            return cap13_win64_call6(entry, 0, 0,
++                                     reinterpret_cast<uint64_t>(start), 0,
++                                     flags, out);
++        };
++        check(call_create(0, 1) == 0 && !blocked_started.load() &&
++              call_create(4, reinterpret_cast<uint64_t>(&output_tid)) == 0 &&
++              !blocked_started.load(),
++              "invalid output and unsupported flags start no guest worker");
++        const uint64_t created = call_create(
++            0, reinterpret_cast<uint64_t>(&output_tid));
++        check(created != 0 && output_tid != 0 &&
++              imported.query(created).valid,
++              "Win64 CreateThread publishes manager handle and reserved ID");
++        while (!blocked_started.load()) std::this_thread::yield();
++        blocked_release.store(true);
++        check(imported.wait(created, 10000) ==
++                  cap13::GuestThreadWaitStatus::Object0 &&
++              imported.query(created).run.exit_code == 77 &&
++              imported.close(created) && imported.quiesce_all(),
++              "published CreateThread worker completes and quiesces");
++        release_mapping(entry, allocated, nullptr);
++        blocked_started.store(false);
++        blocked_release.store(false);
++        blocked_identity.store(0);
++    }
+     uint32_t writable_rva = 0;
+     const auto* dos = reinterpret_cast<const cap13::PeDosHeader*>(fixture.data());
+     const auto* coff = reinterpret_cast<const cap13::PeFileHeader*>(
+--- a/loader/tests/run_guest_pe_thread.py
++++ b/loader/tests/run_guest_pe_thread.py
+@@ -15,7 +15,8 @@
+               'tests/guest-pe-thread-host')
+ sources = [
+     'tests/guest_pe_thread_test.cpp',
+-    'src/guest_thread_manager.cpp', 'src/guest_pe_thread.cpp',
++    'src/guest_thread_manager.cpp', 'src/guest_thread_import.cpp',
++    'src/guest_pe_thread.cpp',
+     'src/guest_pe_batch.cpp',
+     'src/pe_import_scan.cpp', 'src/guest_pe_loader.cpp',
+     'src/pe_loader.cpp', 'src/pe_tls_registration.cpp',

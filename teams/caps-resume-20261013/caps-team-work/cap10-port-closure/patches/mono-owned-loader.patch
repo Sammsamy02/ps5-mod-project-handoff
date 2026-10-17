@@ -1,0 +1,34 @@
+--- original/mono/utils/mono-dl.c
++++ staged/mono/utils/mono-dl.c
+@@ -209,7 +209,8 @@
+ #endif
+ 
+ 	// No GC safe transition because this is called early in main.c
+-	lib = mono_dl_open_file (name, lflags);
++	/* Reserved owned names never consult the ambient OS loader. */
++	lib = (name && strstr (name, "modbridge-owned:")) ? NULL : mono_dl_open_file (name, lflags);
+ 	if (lib)
+ 		found_name = g_strdup (name);
+ 
+@@ -230,6 +231,12 @@
+ 				break;
+ 			}
+ 		}
++	}
++	/* Includes path/prefix/suffix variants constructed by the native library search. */
++	if (!lib && !dl_fallback && name && strstr (name, "modbridge-owned:")) {
++		if (error_msg) *error_msg = g_strdup ("Owned library has no registered provider");
++		g_free (module);
++		return NULL;
+ 	}
+ 	if (!lib && !dl_fallback) {
+ 		char *lname;
+@@ -467,7 +474,7 @@
+ 	if (found == NULL)
+ 		return;
+ 
+-	g_slist_remove (fallback_handlers, handler);
++	fallback_handlers = g_slist_remove (fallback_handlers, handler);
+ 	g_free (handler);
+ }
+ 

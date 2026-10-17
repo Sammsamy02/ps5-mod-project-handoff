@@ -1,0 +1,988 @@
+#pragma once
+
+// =====================================================================================
+// [LFB] LuaFNameBridge (agent-EY, 2026-10-09; Claude directive, l26 Lua->FName path):
+// ONE hand-written converter for EVERY Lua-string -> engine-name use on the
+// Lua binding path. It BYPASSES the entire string-helper/wide-libc stack for
+// this path — no std::wstring, no Helpers/String.hpp (ensure_str/to_wstring),
+// no Helpers/Utf16Utf8.hpp (Unicode::DecodeUtf8/EncodeUtf8), and no wide libc
+// (wcslen/wmemcmp/swprintf family). The helpers stay in the tree for every
+// other consumer (Claude item 9); the Lua path simply never touches them.
+//
+// Forward (Lua -> FName), Claude item 1 verbatim shape:
+//     size_t n; const char* s = lua_tolstring(L, idx, &n);
+//     ... hand UTF-8 -> UTF-16 loop into a local bounded, NUL-terminated
+//         CharType buffer (the spec's "char16_t buffer"; CharType IS the
+//         2-byte UTF-16 unit type on the -fshort-wchar Prospero target) ...
+//     ... then the slot-2 native FName ctor DIRECTLY —
+//         FName::ConstructorInternal(units, find_type), the exact
+//         FName(const WIDECHAR*, EFindName) bound at image 0x23D590 that the
+//         init self-test proves on every console run.
+//
+// Refusals mirror the FName seam's corruption discipline (non-throwing):
+// embedded NUL, invalid/incomplete/non-scalar UTF-8, and overlong
+// (> NAME_SIZE-1 units) inputs log the existing once-per-process
+// '[FN] seam refused' notice and yield NAME_None — never a silent
+// one-letter truncation through the engine's NUL-scan ABI.
+//
+// Logging (Claude item 3): the first 20 to_fname uses each log ONE line
+//     [LUA-FN] in='<utf8>' len=N id=0x{:X} decoded='<pool decode>' OK/MISMATCH
+// decoded via FNamePoolDecoder::try_tostring (the proven in-port pool decoder
+// in NameTypes.cpp); OK = decoded matches the input case-insensitively
+// (hand ASCII fold, no wcsicmp). The whole log line is rendered NARROW first
+// and widened for Output::send by this header's own hand loop — the log
+// route itself uses no banned conversion.
+//
+// Reverse (engine -> Lua), Claude item 4: pool decoder -> hand UTF-16 -> UTF-8
+// -> lua_pushlstring. FName::ToString() is owned by the pool decoder (agent
+// ER); push_fname_to_lua takes its wide result, hand-encodes UTF-8, and
+// pushes with lua_pushlstring. push_wide_to_lua does the same for arbitrary
+// engine wide text (GetFullName results). No wide libc anywhere.
+//
+// [LFB-M] agent-FD extension (2026-10-10, Claude Q1): the same one-converter
+// law now covers the FString/FText families in BOTH directions —
+// Bridge::to_fstring (Lua -> FString via FString::AppendChars, the engine
+// allocator, no Strlen/ensure_str), Bridge::to_ftext (Lua -> FText via the
+// header-inline FText(const FString&&) shape -> engine
+// Conv_StringToText), push_fstring_to_lua / push_ftext_to_lua (engine ->
+// Lua; the FText reader uses ToFString/Conv_TextToString, NEVER
+// FText::ToString's StringType ctor seam), and fname_to_narrow (engine FName
+// -> narrow UTF-8 for Lua table keys). Out-of-line definitions live in
+// candidate/src/LuaFNameBridge.cpp. Every family logs first-10-use
+// '[LFB-M] <family> in=.../len=... ok=...' markers and refuses loudly once
+// per family (empty value after the notice).
+//
+// [LFB-M] agent-FL reverse-routing round (2026-10-10, Claude directive:
+// "route every FName/FString/FText -> Lua string conversion through the
+// bridge"): (1) push_fname_to_lua / push_wide_to_lua now log a NEW
+// 'fname-rev' family through the shared out-of-line family pusher
+// push_wide_units_to_lua (FName userdata :ToString, the new FName/FText
+// __tostring metamethods, GetFullName-shaped reads); (2) the bridge's own
+// refusal logging is upgraded to FIRST-10 per family/channel, each line
+// carrying a call-site tag (low 12 bits of __builtin_return_address(0)
+// captured at the exported bridge API boundary) and the first 8 offending
+// units in hex ('units=3039,0020,...'; UTF-16 units for reverse refusals,
+// raw input bytes for forward ones). The forward channel keeps the
+// '[FN] seam refused:' prefix (bridge-local, complementing agent FK's
+// parallel first-10 upgrade of the shared NameTypes.cpp notice); family
+// refusals keep '[LFB-M] <family> refused ...'. (3) New narrow -> StringType
+// reverse filler widen_narrow_to_stringtype (LuaLibrary print payloads) logs
+// the 'print-widen' family. No wide libc anywhere on any of these paths.
+//
+// [LFB-M] agent-FW cleanup round (2026-10-10, Claude cleanup directive b+c):
+// (b) LITERAL-STRICT MARKERS — every diagnostic line is now emitted from ONE
+// CONTIGUOUS narrow literal per family (family_marker_template /
+// family_refusal_template below): prefix, family name, and fields live in a
+// single string constant passed whole to snprintf. The round-3 gate had to
+// declare '[LFB-M] fname-rev'/'print-widen' as composable fragments because
+// the line was assembled at runtime from "[LFB-M] " + family_name(f); that
+// assembly is gone and the gate is literal-strict again. The [LUA-FN]
+// first-20 line was already one contiguous literal and stays that way.
+// (c) RELEASE MODE — compile with -DMODBRIDGE_RELEASE_DIAG_OFF to compile the
+// PER-CALL diagnostics down to nothing: the [LUA-FN] first-20 uses log and
+// every '[LFB-M] <family> in=...' marker line (their literals are #if'd out
+// of the TU entirely). DELIBERATELY KEPT in release mode (safety/behavioral
+// evidence): the '[LFB] lua-fname-bridge composed' composition stamp, the
+// '[FN] seam refused:' bridge-forward first-10 refusal lines, the
+// '[LFB-M] <family> refused ...' family refusal lines (both carry the
+// call-site tag + hex units), and the narrow '[LFB] lua-fname use ...
+// (log render refused)' fallback is compiled out WITH its [LUA-FN] logger.
+// NOTE for the manifest gate: markers-declared.json per-call entries
+// ([LUA-FN], [LFB-M] family markers) are guaranteed composed only in the
+// DEFAULT VERBOSE build; a MODBRIDGE_RELEASE_DIAG_OFF build intentionally
+// omits them (refusal/composition markers remain). Default = VERBOSE.
+// [FFO2] per-call diagnostics live in candidate/src/UObjectGlobals.cpp —
+// outside this header's owners; its owner gates it against the same define.
+//
+// Stack semantics: the Bridge constructor replicates LuaMadeSimple::Lua::
+// get_string EXACTLY (lua_tolstring at idx, then lua_remove at idx) so it is
+// a drop-in replacement inside the bindings' sequential parameter parsing
+// (get_userdata/get_string REMOVE from the stack by design).
+//
+// StringType note: where a downstream engine API demands StringType
+// (e.g. get_function_name_without_prefix), bridge.string() fills it from the
+// already-converted UTF-16 units via the (ptr,count) constructor — the
+// stride-correct discipline the EV seam fix proved. That is a container fill
+// from hand-converted data, not a std::wstring conversion.
+// =====================================================================================
+
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <string>
+
+#include <lua.hpp>
+
+#include <String/StringType.hpp>
+#include <DynamicOutput/Output.hpp>
+#include <Unreal/NameTypes.hpp>
+
+// [LFB-M] agent-FD extensions (Claude Q1 items 2-4): the FString/FText
+// marshaling families. FString/FText are only forward-declared here — the
+// header stays free of <Unreal/FString.hpp>/<Unreal/FText.hpp> (the FString
+// header pulls Helpers/String.hpp; the Lua marshaling route itself never
+// calls it). Definitions live in candidate/src/LuaFNameBridge.cpp.
+namespace RC::Unreal
+{
+    class FString;
+    class FText;
+}
+
+namespace RC::LuaType::LuaFNameBridge
+{
+    using RC::CharType;
+    using RC::StringType;
+    using RC::StringViewType;
+    using Unreal::EFindName;
+    using Unreal::FName;
+
+    // NAME_SIZE (1024) units minus the terminator: the FName seam's overlong
+    // bound, kept identical so bridge and seam admit the same name lengths.
+    constexpr size_t kMaxUnits = RC::Unreal::NAME_SIZE - 1;
+    // Worst-case UTF-8 bytes for kMaxUnits code points (4 per unit).
+    constexpr size_t kMaxUtf8Bytes = kMaxUnits * 4;
+
+    static_assert(sizeof(CharType) == 2 || sizeof(CharType) == 4, "CharType must be a 2-byte UTF-16 unit (Prospero/-fshort-wchar) or 4-byte host wchar_t");
+
+    // Reverse-direction bound: full names (GetFullName) are longer than any
+    // single FName; 4096 UTF-16 units / 16 KiB of UTF-8 covers every real
+    // engine full name with margin, bounded against stack abuse.
+    constexpr size_t kMaxPushUnits = 4096;
+    constexpr size_t kMaxPushUtf8Bytes = kMaxPushUnits * 4;
+
+    // Claude item 3: log the first 20 uses, one line each.
+    constexpr int kMaxLoggedUses = 20;
+
+    // [LFB-M] family/marker + refusal channel cap (agent-FD shape; hoisted
+    // above the Bridge class by agent-FL so the bridge-local forward-refusal
+    // first-10 logger can share it).
+    constexpr int kMaxLoggedMarkers = 10;
+
+    // ---- ASCII fold (case-insensitive OK check; NO wcsicmp/towlower) ----
+    inline auto ascii_fold_unit(CharType c) -> CharType
+    {
+        const auto v = static_cast<uint32_t>(c);
+        return (v >= 'A' && v <= 'Z') ? static_cast<CharType>(v - 'A' + 'a') : c;
+    }
+
+    // =================================================================================
+    // Hand UTF-8 -> UTF-16 loop (the spec's one forward converter core).
+    // Returns the unit count written (terminator excluded), or size_t(-1) on
+    // any refusal. `At` receives the input byte offset of the refusal for the
+    // seam notice. Same validation rules as the tree codec (Unicode::
+    // DecodeUtf8): C2..DF / E0..EF / F0..F4 lead ranges, overlong minimums,
+    // scalar-value check. Code points > 0xFFFF become surrogate pairs when
+    // CharType is 2 bytes (target/short-wchar) and single units when CharType
+    // is 4 bytes (4-byte host wchar_t: code-point-per-unit, the wide host's
+    // native UTF-32 shape).
+    // =================================================================================
+    enum class Refusal : uint8_t
+    {
+        None = 0,
+        EmbeddedNul = 1,
+        InvalidUtf8 = 2,
+        IncompleteUtf8 = 3,
+        NonScalar = 4,
+        Overlong = 5,
+        Overflow = 6,
+    };
+
+    inline auto utf8_to_utf16(const char* s, size_t n, CharType* out, size_t cap, Refusal* refusal, size_t* refused_at) -> size_t
+    {
+        size_t used = 0;
+        for (size_t i = 0; i < n;)
+        {
+            const auto lead = static_cast<unsigned char>(s[i++]);
+            if (lead == 0)
+            {
+                if (refusal) { *refusal = Refusal::EmbeddedNul; }
+                if (refused_at) { *refused_at = i - 1; }
+                return static_cast<size_t>(-1);
+            }
+            uint32_t code = lead;
+            unsigned tail = 0;
+            uint32_t minimum = 0;
+            if (lead <= 0x7F) { /* ASCII */ }
+            else if (lead >= 0xC2 && lead <= 0xDF) { code &= 0x1F; tail = 1; minimum = 0x80; }
+            else if (lead >= 0xE0 && lead <= 0xEF) { code &= 0x0F; tail = 2; minimum = 0x800; }
+            else if (lead >= 0xF0 && lead <= 0xF4) { code &= 7; tail = 3; minimum = 0x10000; }
+            else
+            {
+                if (refusal) { *refusal = Refusal::InvalidUtf8; }
+                if (refused_at) { *refused_at = i - 1; }
+                return static_cast<size_t>(-1);
+            }
+            if (tail > n - i)
+            {
+                if (refusal) { *refusal = Refusal::IncompleteUtf8; }
+                if (refused_at) { *refused_at = i; }
+                return static_cast<size_t>(-1);
+            }
+            for (unsigned k = 0; k < tail; ++k)
+            {
+                const auto byte = static_cast<unsigned char>(s[i++]);
+                if ((byte & 0xC0) != 0x80)
+                {
+                    if (refusal) { *refusal = Refusal::InvalidUtf8; }
+                    if (refused_at) { *refused_at = i - 1; }
+                    return static_cast<size_t>(-1);
+                }
+                code = (code << 6) | (byte & 0x3F);
+            }
+            if (code < minimum || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF))
+            {
+                if (refusal) { *refusal = Refusal::NonScalar; }
+                if (refused_at) { *refused_at = i; }
+                return static_cast<size_t>(-1);
+            }
+            if constexpr (sizeof(CharType) == 2)
+            {
+                const size_t need = code <= 0xFFFF ? 1 : 2;
+                if (need > cap - used)
+                {
+                    if (refusal) { *refusal = Refusal::Overflow; }
+                    if (refused_at) { *refused_at = i; }
+                    return static_cast<size_t>(-1);
+                }
+                if (code <= 0xFFFF)
+                {
+                    out[used++] = static_cast<CharType>(code);
+                }
+                else
+                {
+                    code -= 0x10000;
+                    out[used++] = static_cast<CharType>(0xD800 + (code >> 10));
+                    out[used++] = static_cast<CharType>(0xDC00 + (code & 0x3FF));
+                }
+            }
+            else
+            {
+                // 4-byte host wchar_t: one code point per unit (UTF-32
+                // shape). (No static_assert here: if constexpr does not
+                // discard branches in non-template functions.)
+                if (used >= cap)
+                {
+                    if (refusal) { *refusal = Refusal::Overflow; }
+                    if (refused_at) { *refused_at = i; }
+                    return static_cast<size_t>(-1);
+                }
+                out[used++] = static_cast<CharType>(code);
+            }
+        }
+        return used;
+    }
+
+    // =================================================================================
+    // Hand UTF-16 -> UTF-8 loop (the reverse core). Returns bytes written, or
+    // size_t(-1) on invalid input (bad surrogate / non-scalar unit / overflow).
+    // =================================================================================
+    inline auto utf16_to_utf8(const CharType* units, size_t unit_count, char* out, size_t cap) -> size_t
+    {
+        size_t used = 0;
+        size_t i = 0;
+        while (i < unit_count)
+        {
+            uint32_t code;
+            if constexpr (sizeof(CharType) == 2)
+            {
+                code = static_cast<uint16_t>(units[i++]);
+                if (code >= 0xD800 && code <= 0xDBFF)
+                {
+                    if (i == unit_count) { return static_cast<size_t>(-1); }
+                    const auto low = static_cast<uint16_t>(units[i++]);
+                    if (low < 0xDC00 || low > 0xDFFF) { return static_cast<size_t>(-1); }
+                    code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                }
+                else if (code >= 0xDC00 && code <= 0xDFFF)
+                {
+                    return static_cast<size_t>(-1);
+                }
+            }
+            else
+            {
+                code = static_cast<uint32_t>(units[i++]);
+                if (code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF)) { return static_cast<size_t>(-1); }
+            }
+            const size_t need = code <= 0x7F ? 1 : code <= 0x7FF ? 2 : code <= 0xFFFF ? 3 : 4;
+            if (need > cap - used) { return static_cast<size_t>(-1); }
+            if (code <= 0x7F)
+            {
+                out[used++] = static_cast<char>(code);
+            }
+            else if (code <= 0x7FF)
+            {
+                out[used++] = static_cast<char>(0xC0 | (code >> 6));
+                out[used++] = static_cast<char>(0x80 | (code & 0x3F));
+            }
+            else if (code <= 0xFFFF)
+            {
+                out[used++] = static_cast<char>(0xE0 | (code >> 12));
+                out[used++] = static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+                out[used++] = static_cast<char>(0x80 | (code & 0x3F));
+            }
+            else
+            {
+                out[used++] = static_cast<char>(0xF0 | (code >> 18));
+                out[used++] = static_cast<char>(0x80 | ((code >> 12) & 0x3F));
+                out[used++] = static_cast<char>(0x80 | ((code >> 6) & 0x3F));
+                out[used++] = static_cast<char>(0x80 | (code & 0x3F));
+            }
+        }
+        return used;
+    }
+
+    // =================================================================================
+    // The Bridge: ONE conversion of ONE Lua stack string. Convert-then-remove
+    // at idx (default 1), byte-identical to LuaMadeSimple::Lua::get_string.
+    // =================================================================================
+    inline auto note_composed_once() -> void; // defined below (composition marker)
+    inline auto send_narrow_line(const char* line, int printed) -> void; // defined below (narrow-first widen-send)
+
+    // [LFB-M] agent-FL: call-site tag for refusal lines — low 12 bits of the
+    // return address captured AT the exported bridge API boundary (the Lua
+    // binding that called the bridge), rendered site=0xNNN.
+    inline auto refusal_site_tag() -> uintptr_t
+    {
+        return reinterpret_cast<uintptr_t>(__builtin_return_address(0)) & 0xFFFu;
+    }
+
+    // [LFB-M] agent-FL: render the first `max_units` leading units as
+    // comma-separated hex for refusal lines. unit_size==1 renders raw input
+    // bytes (%02X, forward refusals); unit_size==sizeof(CharType) renders
+    // UTF-16 units (%04X on the 2-byte target, %X on the 4-byte host wchar).
+    // Always NUL-terminates; silently truncates at cap. No libc wide API.
+    inline auto render_units_hex(const void* units, size_t unit_count, size_t unit_size, char* out, size_t cap) -> void
+    {
+        if (!out || cap == 0) { return; }
+        out[0] = '\0';
+        if (!units || unit_count == 0) { return; }
+        const size_t max_units = unit_count < 8 ? unit_count : 8;
+        size_t pos = 0;
+        for (size_t i = 0; i < max_units; ++i)
+        {
+            uint32_t value = 0;
+            const char* fmt = "%X"; // every reachable branch overwrites
+            if (unit_size == 1)
+            {
+                value = static_cast<uint32_t>(static_cast<const unsigned char*>(units)[i]);
+                fmt = i == 0 ? "%02X" : ",%02X";
+            }
+            else if (unit_size == sizeof(CharType))
+            {
+                value = static_cast<uint32_t>(static_cast<const CharType*>(units)[i]);
+                if constexpr (sizeof(CharType) == 2)
+                {
+                    fmt = i == 0 ? "%04X" : ",%04X";
+                }
+                else
+                {
+                    fmt = i == 0 ? "%X" : ",%X";
+                }
+            }
+            else
+            {
+                return;
+            }
+            if (pos >= cap) { return; }
+            const int printed = std::snprintf(out + pos, cap - pos, fmt, value);
+            if (printed <= 0 || static_cast<size_t>(printed) >= cap - pos) { return; }
+            pos += static_cast<size_t>(printed);
+        }
+    }
+
+    class Bridge
+    {
+      public:
+        Bridge(lua_State* L, int idx = 1) : lua_state_(L)
+        {
+            site_ = refusal_site_tag(); // [LFB-M] agent-FL: ctor is inlined into the Lua binding
+            note_composed_once();
+            convert_at(L, idx);
+        }
+
+        // Memory-source variant for binding sites that already consumed and
+        // stored the Lua bytes (e.g. the FindObject binding's positional
+        // std::string param): the SAME one hand loop, no stack interaction.
+        Bridge(const char* s, size_t n) : lua_state_(nullptr)
+        {
+            site_ = refusal_site_tag(); // [LFB-M] agent-FL
+            note_composed_once();
+            if (!s)
+            {
+                units_[0] = CharType(0);
+                unit_count_ = 0;
+                utf8_[0] = '\0';
+                utf8_len_ = 0;
+                ok_ = true;
+                removed_ = false;
+                return;
+            }
+            store_and_convert(s, n);
+            removed_ = false;
+        }
+
+      private:
+        auto convert_at(lua_State* L, int idx) -> void
+        {
+            size_t n = 0;
+            const char* s = lua_tolstring(L, idx, &n); // Claude item 1, verbatim
+            if (!s)
+            {
+                // Not a string (or index empty): an empty name, matching the
+                // get_string()+ensure_str behavior for empty inputs.
+                units_[0] = CharType(0);
+                unit_count_ = 0;
+                utf8_[0] = '\0';
+                utf8_len_ = 0;
+                ok_ = true;
+                removed_ = false; // nothing was converted; do not remove a non-string value
+                return;
+            }
+            store_and_convert(s, n);
+            if (!ok_)
+            {
+                lua_remove(L, idx); // consumption parity: the caller's next read sees the following parameter
+                removed_ = true;
+                return;
+            }
+            lua_remove(L, idx);
+            removed_ = true;
+        }
+
+        auto store_and_convert(const char* s, size_t n) -> void
+        {
+            // Keep the original UTF-8 bytes for the [LUA-FN] log line. A
+            // valid conversion can never exceed kMaxUtf8Bytes (<= kMaxUnits
+            // code points x <= 4 bytes), so anything longer is refused below
+            // anyway; truncate the stored copy defensively.
+            utf8_len_ = n < kMaxUtf8Bytes ? n : kMaxUtf8Bytes;
+            for (size_t i = 0; i < utf8_len_; ++i) { utf8_[i] = s[i]; }
+            utf8_[utf8_len_] = '\0';
+            input_len_ = n;
+
+            Refusal refusal = Refusal::None;
+            size_t refused_at = 0;
+            const size_t used = utf8_to_utf16(s, n, units_, kMaxUnits, &refusal, &refused_at);
+            if (used == static_cast<size_t>(-1))
+            {
+                ok_ = false;
+                reason_ = refusal;
+                refused_at_ = refused_at;
+                units_[0] = CharType(0);
+                unit_count_ = 0;
+                notify_refusal();
+                return;
+            }
+            units_[used] = CharType(0);
+            unit_count_ = used;
+            ok_ = true;
+        }
+
+      public:
+        [[nodiscard]] auto ok() const -> bool { return ok_; }
+
+        // Hand-converted UTF-16 units (NUL-terminated buffer).
+        [[nodiscard]] auto units() const -> const CharType* { return units_; }
+        [[nodiscard]] auto unit_count() const -> size_t { return unit_count_; }
+        [[nodiscard]] auto view() const -> StringViewType { return StringViewType{units_, unit_count_}; }
+
+        // StringType fill for engine APIs that take one. resize + indexed
+        // writes ONLY (the EV discipline): on short-wchar targets even the
+        // (ptr,count) basic_string ctor can resolve to the prebuilt
+        // 4-byte-wchar __init (host ASan proof in this suite's harness), so
+        // the fill never routes through a possibly-wide-libc member. This is
+        // a container fill from hand-converted data, not a conversion.
+        [[nodiscard]] auto string() const -> StringType
+        {
+            StringType out;
+            out.resize(unit_count_);
+            for (size_t i = 0; i < unit_count_; ++i) { out[i] = units_[i]; }
+            return out;
+        }
+
+        // Original Lua UTF-8 bytes (truncated to kMaxUtf8Bytes defensively).
+        [[nodiscard]] auto utf8() const -> const char* { return utf8_; }
+        [[nodiscard]] auto utf8_len() const -> size_t { return utf8_len_; }
+        [[nodiscard]] auto input_len() const -> size_t { return input_len_; }
+
+        // ONE converter, forward direction: hand UTF-16 buffer straight into
+        // the slot-2 native FName ctor (FName::ConstructorInternal — image
+        // 0x23D590). Refused inputs produce NAME_None (the seam notice has
+        // already fired). Logs the [LUA-FN] line for the first 20 uses.
+        [[nodiscard]] auto to_fname(EFindName find_type) const -> FName
+        {
+            if (!ok_) { return FName{}; } // NAME_None; refusal already logged
+            if (!FName::ConstructorInternal.is_ready())
+            {
+                Unreal::NotifyFNameCtorUnreadyOnce();
+                return FName{};
+            }
+            const FName made = FName::ConstructorInternal(units_, find_type);
+            log_use(made);
+            return made;
+        }
+
+        // [LFB-M] agent-FD (Claude Q1 item 2): Lua string -> FString. The
+        // already-converted UTF-16 units are appended into the FString's OWN
+        // CharType array via FString::AppendChars (header-inline:
+        // TArray::AddUninitialized + std::memcpy + terminator — the engine
+        // allocator with no Strlen/ensure_str/wide-libc anywhere). Refused
+        // inputs yield an empty FString after ONE loud family notice +
+        // marker. Defined in candidate/src/LuaFNameBridge.cpp.
+        [[nodiscard]] auto to_fstring() const -> Unreal::FString;
+
+        // [LFB-M] agent-FD (Claude Q1 item 3): Lua string -> FText. Fills an
+        // FString exactly like to_fstring, then the header-inline in-port
+        // FText(const FString&&) shape -> construct_with_string ->
+        // UKismetTextLibrary::Conv_StringToText (engine call), never the
+        // FText(const CharType*) FString(TCHAR*) Strlen seam and never
+        // FText::ToString's StringType ctor. Refused inputs yield an empty
+        // FText after ONE loud family notice + marker. Defined in
+        // candidate/src/LuaFNameBridge.cpp.
+        [[nodiscard]] auto to_ftext() const -> Unreal::FText;
+
+      private:
+        auto notify_refusal() const -> void
+        {
+            const char* reason = "unknown";
+            switch (reason_)
+            {
+            case Refusal::EmbeddedNul: reason = "embedded-nul"; break;
+            case Refusal::InvalidUtf8: reason = "invalid-utf8"; break;
+            case Refusal::IncompleteUtf8: reason = "incomplete-utf8"; break;
+            case Refusal::NonScalar: reason = "non-scalar"; break;
+            case Refusal::Overlong:
+            case Refusal::Overflow: reason = "overlong"; break;
+            case Refusal::None: reason = "none"; break;
+            }
+            // [LFB-M] agent-FL (refusal-logging upgrade): bridge-local
+            // FIRST-10 forward-refusal line with the '[FN] seam refused:'
+            // prefix, the Lua-binding call-site tag, and the first 8 input
+            // bytes in hex. Complements (does not replace) the shared
+            // once-per-process NameTypes.cpp notice that fires below — that
+            // one is agent FK's parallel first-10 upgrade target.
+            log_forward_refusal_site(reason);
+            Unreal::NotifyFNameSeamRefusedOnce(reason, static_cast<Unreal::uint32>(input_len_), static_cast<Unreal::uint32>(refused_at_));
+        }
+
+        // ---- '[FN] seam refused:' first-10 (agent-FL) ----
+        inline static std::atomic<int> g_forward_refusal_logs{0};
+
+        auto log_forward_refusal_site(const char* reason) const -> void
+        {
+            const int seen = g_forward_refusal_logs.load(std::memory_order_acquire);
+            if (seen >= kMaxLoggedMarkers) { return; }
+            if (g_forward_refusal_logs.fetch_add(1, std::memory_order_acq_rel) >= kMaxLoggedMarkers) { return; }
+            try
+            {
+                char units_hex[8 * 5 + 1];
+                render_units_hex(utf8_, utf8_len_, 1, units_hex, sizeof(units_hex));
+                char line[256];
+                const int printed = std::snprintf(line, sizeof(line),
+                                                  "[FN] seam refused: reason='%s' len=%llu at=%llu site=0x%03llX units=%s (bridge fwd; NAME_None produced; no wide-libc fallback)",
+                                                  reason ? reason : "unknown",
+                                                  static_cast<unsigned long long>(input_len_),
+                                                  static_cast<unsigned long long>(refused_at_),
+                                                  static_cast<unsigned long long>(site_),
+                                                  units_hex);
+                send_narrow_line(line, printed);
+            }
+            catch (...)
+            {
+                // Observational only.
+            }
+        }
+
+        // ---- [LUA-FN] first-20-uses log (Claude item 3) ----
+        // The whole line is ONE contiguous narrow snprintf literal
+        // ("[LUA-FN] in='..."), never runtime-assembled from fragments.
+        // MODBRIDGE_RELEASE_DIAG_OFF compiles this per-call logger (and its
+        // plain-literal fallback below) down to nothing.
+        inline static std::atomic<int> g_logged_uses{0};
+
+        auto log_use(const FName& made) const -> void
+        {
+#if defined(MODBRIDGE_RELEASE_DIAG_OFF)
+            // Release mode: per-call diagnostics compile to nothing.
+            static_cast<void>(made);
+            return;
+#else
+            const int seen = g_logged_uses.load(std::memory_order_acquire);
+            if (seen >= kMaxLoggedUses) { return; }
+            if (g_logged_uses.fetch_add(1, std::memory_order_acq_rel) >= kMaxLoggedUses) { return; }
+            try
+            {
+                // Decode via the proven pool decoder (NameTypes.cpp).
+                StringType decoded{};
+                const bool decoded_ok = Unreal::FNamePoolDecoder::try_tostring(made, decoded);
+
+                // Hand UTF-16 -> UTF-8 for the decoded field.
+                char decoded_utf8[kMaxUtf8Bytes + 1];
+                const char* decoded_field = "(decoder-refused)";
+                size_t decoded_bytes = static_cast<size_t>(-1);
+                if (decoded_ok)
+                {
+                    decoded_bytes = utf16_to_utf8(decoded.data(), decoded.size(), decoded_utf8, kMaxUtf8Bytes);
+                    if (decoded_bytes != static_cast<size_t>(-1)) { decoded_utf8[decoded_bytes] = '\0'; }
+                    if (decoded_bytes != static_cast<size_t>(-1)) { decoded_field = decoded_utf8; }
+                }
+
+                // OK = decoded matches the input case-insensitively (hand
+                // ASCII fold; unit counts must match exactly).
+                bool match = decoded_ok && decoded_bytes != static_cast<size_t>(-1) && decoded.size() == unit_count_;
+                if (match)
+                {
+                    for (size_t i = 0; i < unit_count_; ++i)
+                    {
+                        if (ascii_fold_unit(units_[i]) != ascii_fold_unit(decoded.data()[i]))
+                        {
+                            match = false;
+                            break;
+                        }
+                    }
+                }
+
+                // Render the whole line NARROW first, then widen it with this
+                // header's own forward loop (no banned conversion on the log
+                // route either). Payloads shown capped at 64 bytes.
+                char line[256];
+                const int printed = std::snprintf(line, sizeof(line), "[LUA-FN] in='%.*s' len=%llu id=0x%llX decoded='%.*s' %s",
+                                                  static_cast<int>(utf8_len_ < 64 ? utf8_len_ : 64), utf8_,
+                                                  static_cast<unsigned long long>(input_len_),
+                                                  static_cast<unsigned long long>(made.GetComparisonIndex().ToUnstableInt()),
+                                                  64, decoded_field,
+                                                  match ? "OK" : "MISMATCH");
+                CharType wide_line[320];
+                if (printed > 0)
+                {
+                    const size_t wide_used = utf8_to_utf16(line, static_cast<size_t>(printed), wide_line, sizeof(wide_line) / sizeof(CharType), nullptr, nullptr);
+                    if (wide_used != static_cast<size_t>(-1))
+                    {
+                        Output::send(STR("{}\n"), StringViewType{wide_line, wide_used});
+                        return;
+                    }
+                }
+                // Plain-literal fallback (narrow-first doctrine): never let a
+                // diagnostic payload failure suppress the line.
+                Output::send(STR("[LFB] lua-fname use id=0x{:X} (log render refused)\n"),
+                             static_cast<uint64_t>(made.GetComparisonIndex().ToUnstableInt()));
+            }
+            catch (...)
+            {
+                // Observational only (L22Diagnostics::observe discipline).
+            }
+#endif // !defined(MODBRIDGE_RELEASE_DIAG_OFF)
+        }
+
+        [[maybe_unused]] lua_State* lua_state_{nullptr};
+        [[maybe_unused]] bool removed_{false};
+        uintptr_t site_{0}; // [LFB-M] agent-FL: ctor call-site tag (low 12 bits)
+        bool ok_{false};
+        Refusal reason_{Refusal::None};
+        size_t refused_at_{0};
+        size_t input_len_{0};
+        size_t utf8_len_{0};
+        size_t unit_count_{0};
+        char utf8_[kMaxUtf8Bytes + 1]{};
+        CharType units_[kMaxUnits + 1]{};
+    };
+
+    // =================================================================================
+    // [LFB-M] agent-FD (Claude Q1 items 2-5): the FString/FText marshaling
+    // families plus the reverse-direction readers. Every newly routed family
+    // logs ONE marker line per use for the first 10 uses (ASCII tags):
+    //     [LFB-M] <family> in='<payload>'/len=<N> ok=<0|1>
+    // and refuses loudly ONCE per family (embedded NUL / invalid / incomplete
+    // / non-scalar UTF-8, bad surrogate pairs, overlong), then yields the
+    // empty value — never a silently interleaved wide-libc conversion. The
+    // marker/refusal lines render narrow-first and widen for Output::send
+    // through this header's own hand loops (same discipline as [LUA-FN]).
+    // [LFB-M] agent-FL: refusal notices are now FIRST-10 per family with a
+    // call-site tag + first-8 hex units (see notify_family_refused), and the
+    // family set grows 'fname-rev' (engine FName -> Lua string) and
+    // 'print-widen' (LuaLibrary print payloads narrowed->widened for the log
+    // device).
+    // [LFB-M] agent-FW (Claude cleanup directive b): every marker and refusal
+    // line is emitted from ONE CONTIGUOUS narrow literal per family — the
+    // family templates below. No '[LFB-M] ' + family string concatenation at
+    // runtime; the harvest gate is literal-strict again.
+    // =================================================================================
+    enum class Family : uint8_t
+    {
+        FStringFwd = 0, // Lua string -> FString parameter/property push
+        FTextFwd = 1,   // Lua string -> FText parameter/property push
+        FStringRev = 2, // engine FString -> Lua string return read
+        FTextRev = 3,   // engine FText -> Lua string return read
+        FNameNarrow = 4, // engine FName -> narrow UTF-8 (Lua table keys)
+        FNameParam = 5,  // Lua string -> FName parameter push (property pusher)
+        FNameRev = 6,    // engine FName / name-shaped wide text -> Lua string (agent-FL)
+        PrintWiden = 7,  // LuaLibrary print payload narrow -> wide log fill (agent-FL)
+        FamilyCount = 8,
+    };
+
+    // Family display name. Retained for debug/tooling consumers; the marker
+    // and refusal LINES no longer use it — they emit from the whole-literal
+    // family_marker_template/family_refusal_template tables (agent-FW,
+    // Claude cleanup directive b: single contiguous literal per family).
+    inline auto family_name(Family f) -> const char*
+    {
+        switch (f)
+        {
+        case Family::FStringFwd: return "fstring-fwd";
+        case Family::FTextFwd: return "ftext-fwd";
+        case Family::FStringRev: return "fstring-rev";
+        case Family::FTextRev: return "ftext-rev";
+        case Family::FNameNarrow: return "fname-narrow";
+        case Family::FNameParam: return "fname-param";
+        case Family::FNameRev: return "fname-rev";
+        case Family::PrintWiden: return "print-widen";
+        default: return "unknown-family";
+        }
+    }
+
+    inline auto refusal_reason_name(Refusal r) -> const char*
+    {
+        switch (r)
+        {
+        case Refusal::EmbeddedNul: return "embedded-nul";
+        case Refusal::InvalidUtf8: return "invalid-utf8";
+        case Refusal::IncompleteUtf8: return "incomplete-utf8";
+        case Refusal::NonScalar: return "non-scalar";
+        case Refusal::Overlong:
+        case Refusal::Overflow: return "overlong";
+        case Refusal::None: return "bad-utf16";
+        default: return "unknown-reason";
+        }
+    }
+
+#if !defined(MODBRIDGE_RELEASE_DIAG_OFF)
+    // =================================================================================
+    // [LFB-M] agent-FW (Claude cleanup directive b): the per-call family
+    // marker templates. ONE contiguous narrow literal per family — prefix,
+    // family name, and field specs all inside a single string constant that
+    // is passed WHOLE to snprintf (family_marker_template[f] is the entire
+    // format). The rendered line keeps the round-3 shape
+    //     [LFB-M] <family> in='<payload>'/len=<N> ok=<0|1>
+    // but the text now lands contiguous in .rodata, so the harvest gate is
+    // literal-strict again ('[LFB-M] fname-rev in='' etc. are real byte
+    // sequences, not runtime compositions). Compiled out entirely in
+    // MODBRIDGE_RELEASE_DIAG_OFF mode (the literals leave the TU).
+    // =================================================================================
+    inline auto family_marker_template(Family f) -> const char*
+    {
+        switch (f)
+        {
+        case Family::FStringFwd: return "[LFB-M] fstring-fwd in='%.*s'/len=%llu ok=%s";
+        case Family::FTextFwd: return "[LFB-M] ftext-fwd in='%.*s'/len=%llu ok=%s";
+        case Family::FStringRev: return "[LFB-M] fstring-rev in='%.*s'/len=%llu ok=%s";
+        case Family::FTextRev: return "[LFB-M] ftext-rev in='%.*s'/len=%llu ok=%s";
+        case Family::FNameNarrow: return "[LFB-M] fname-narrow in='%.*s'/len=%llu ok=%s";
+        case Family::FNameParam: return "[LFB-M] fname-param in='%.*s'/len=%llu ok=%s";
+        case Family::FNameRev: return "[LFB-M] fname-rev in='%.*s'/len=%llu ok=%s";
+        case Family::PrintWiden: return "[LFB-M] print-widen in='%.*s'/len=%llu ok=%s";
+        default: return "[LFB-M] unknown-family in='%.*s'/len=%llu ok=%s";
+        }
+    }
+#endif // !defined(MODBRIDGE_RELEASE_DIAG_OFF)
+
+    // =================================================================================
+    // [LFB-M] agent-FW (Claude cleanup directive b): the per-family refusal
+    // templates — same ONE-contiguous-literal law as the markers above.
+    // NOT gated by MODBRIDGE_RELEASE_DIAG_OFF: refusal/seam lines are safety
+    // evidence and stay observable in release builds.
+    // =================================================================================
+    inline auto family_refusal_template(Family f) -> const char*
+    {
+        switch (f)
+        {
+        case Family::FStringFwd: return "[LFB-M] fstring-fwd refused reason=%s len=%llu at=%llu site=0x%03llX units=%s (yielding empty; no wide-libc fallback)";
+        case Family::FTextFwd: return "[LFB-M] ftext-fwd refused reason=%s len=%llu at=%llu site=0x%03llX units=%s (yielding empty; no wide-libc fallback)";
+        case Family::FStringRev: return "[LFB-M] fstring-rev refused reason=%s len=%llu at=%llu site=0x%03llX units=%s (yielding empty; no wide-libc fallback)";
+        case Family::FTextRev: return "[LFB-M] ftext-rev refused reason=%s len=%llu at=%llu site=0x%03llX units=%s (yielding empty; no wide-libc fallback)";
+        case Family::FNameNarrow: return "[LFB-M] fname-narrow refused reason=%s len=%llu at=%llu site=0x%03llX units=%s (yielding empty; no wide-libc fallback)";
+        case Family::FNameParam: return "[LFB-M] fname-param refused reason=%s len=%llu at=%llu site=0x%03llX units=%s (yielding empty; no wide-libc fallback)";
+        case Family::FNameRev: return "[LFB-M] fname-rev refused reason=%s len=%llu at=%llu site=0x%03llX units=%s (yielding empty; no wide-libc fallback)";
+        case Family::PrintWiden: return "[LFB-M] print-widen refused reason=%s len=%llu at=%llu site=0x%03llX units=%s (yielding empty; no wide-libc fallback)";
+        default: return "[LFB-M] unknown-family refused reason=%s len=%llu at=%llu site=0x%03llX units=%s (yielding empty; no wide-libc fallback)";
+        }
+    }
+
+    // =================================================================================
+    // Reverse direction (Claude item 4): engine -> Lua.
+    // push_fname_to_lua: FName::ToString() (pool decoder first, legacy
+    // fallback inside) -> hand UTF-16 -> UTF-8 -> lua_pushlstring.
+    // [LFB-M] agent-FL: both pushers below now log the 'fname-rev' family
+    // (first-10 markers + first-10 refusals with site tag and hex units)
+    // through the shared out-of-line family pusher push_wide_units_to_lua
+    // (candidate/src/LuaFNameBridge.cpp). push_wide_to_lua serves
+    // GetFullName-shaped name text; push_fname_to_lua serves engine FNames
+    // (FName userdata :ToString, the FName/FText __tostring metamethods,
+    // name/delegate property reads).
+    // =================================================================================
+    auto push_wide_units_to_lua(lua_State* L, const CharType* units, size_t unit_count, Family family) -> void; // defined in candidate/src/LuaFNameBridge.cpp
+
+    inline auto push_wide_to_lua(lua_State* L, const CharType* units, size_t unit_count) -> void
+    {
+        push_wide_units_to_lua(L, units, unit_count, Family::FNameRev);
+    }
+
+    inline auto push_fname_to_lua(lua_State* L, const FName& name) -> void
+    {
+        StringType text = name.ToString(); // pool decoder owns ToString (agent ER)
+        push_wide_units_to_lua(L, text.data(), text.size(), Family::FNameRev);
+    }
+
+    struct FamilyLog
+    {
+        std::atomic<int> uses{0};
+        std::atomic<int> refusals{0}; // [LFB-M] agent-FL: first-10 refusal lines per family
+        std::atomic<bool> refused_notified{false}; // retained: gates the shared NameTypes-style once-notice if ever re-attached
+    };
+    inline FamilyLog g_family_logs[static_cast<size_t>(Family::FamilyCount)] = {};
+
+    // Shared narrow-first widen-send (the [LUA-FN] log route discipline).
+    inline auto send_narrow_line(const char* line, int printed) -> void
+    {
+        if (printed <= 0) { return; }
+        CharType wide_line[384];
+        const size_t wide_used = utf8_to_utf16(line, static_cast<size_t>(printed), wide_line, sizeof(wide_line) / sizeof(CharType), nullptr, nullptr);
+        if (wide_used != static_cast<size_t>(-1))
+        {
+            Output::send(STR("{}\n"), StringViewType{wide_line, wide_used});
+        }
+    }
+
+    // First-10 per-family marker line. VERBOSE (default): one contiguous
+    // literal per family via family_marker_template. MODBRIDGE_RELEASE_DIAG_
+    // OFF: compiles down to nothing (per-call diagnostics silenced).
+    inline auto log_family_marker(Family f, const char* payload, size_t payload_len, bool ok) -> void
+    {
+#if defined(MODBRIDGE_RELEASE_DIAG_OFF)
+        // Release mode: per-call diagnostics compile to nothing.
+        static_cast<void>(f);
+        static_cast<void>(payload);
+        static_cast<void>(payload_len);
+        static_cast<void>(ok);
+        return;
+#else
+        const size_t fi = static_cast<size_t>(f);
+        if (fi >= static_cast<size_t>(Family::FamilyCount)) { return; }
+        const int seen = g_family_logs[fi].uses.load(std::memory_order_acquire);
+        if (seen >= kMaxLoggedMarkers) { return; }
+        if (g_family_logs[fi].uses.fetch_add(1, std::memory_order_acq_rel) >= kMaxLoggedMarkers) { return; }
+        try
+        {
+            char line[160];
+            // agent-FW: the ENTIRE line format — prefix + family + fields —
+            // is the single contiguous literal from family_marker_template;
+            // only the runtime values are filled in.
+            const int printed = std::snprintf(line, sizeof(line), family_marker_template(f),
+                                              static_cast<int>(payload_len < 48 ? payload_len : 48),
+                                              payload ? payload : "",
+                                              static_cast<unsigned long long>(payload_len),
+                                              ok ? "1" : "0");
+            send_narrow_line(line, printed);
+        }
+        catch (...)
+        {
+            // Observational only.
+        }
+#endif // !defined(MODBRIDGE_RELEASE_DIAG_OFF)
+    }
+
+    // [LFB-M] agent-FL refusal-logging upgrade: FIRST-10 lines per family
+    // (was once-per-family), each carrying the call-site tag captured at the
+    // exported bridge API boundary and the first 8 offending units in hex
+    // (UTF-16 units for reverse refusals, raw input bytes for forward ones).
+    // Same upgrade class as agent FK's NameTypes.cpp '[FN] seam refused:'
+    // first-10; the family prefix stays '[LFB-M] <family> refused ...'.
+    // agent-FW (cleanup directive b): the line emits from ONE contiguous
+    // literal per family (family_refusal_template). NOT silenced by
+    // MODBRIDGE_RELEASE_DIAG_OFF — refusal lines are safety evidence.
+    inline auto notify_family_refused(Family f, const char* reason, size_t input_len, size_t refused_at,
+                                      uintptr_t site, const void* units, size_t unit_count, size_t unit_size) -> void
+    {
+        const size_t fi = static_cast<size_t>(f);
+        if (fi >= static_cast<size_t>(Family::FamilyCount)) { return; }
+        const int seen = g_family_logs[fi].refusals.load(std::memory_order_acquire);
+        if (seen >= kMaxLoggedMarkers) { return; }
+        if (g_family_logs[fi].refusals.fetch_add(1, std::memory_order_acq_rel) >= kMaxLoggedMarkers) { return; }
+        try
+        {
+            char units_hex[8 * 5 + 1];
+            render_units_hex(units, unit_count, unit_size, units_hex, sizeof(units_hex));
+            char line[256];
+            // agent-FW: entire line format — prefix + family + fields — is
+            // the single contiguous literal from family_refusal_template.
+            const int printed = std::snprintf(line, sizeof(line), family_refusal_template(f),
+                                              reason ? reason : "unknown-reason",
+                                              static_cast<unsigned long long>(input_len),
+                                              static_cast<unsigned long long>(refused_at),
+                                              static_cast<unsigned long long>(site),
+                                              units_hex);
+            send_narrow_line(line, printed);
+        }
+        catch (...)
+        {
+        }
+    }
+
+    // Compatibility shim for pre-upgrade call sites: captures the site at the
+    // caller and renders no units.
+    inline auto notify_family_refused_once(Family f, const char* reason, size_t input_len, size_t refused_at) -> void
+    {
+        notify_family_refused(f, reason, input_len, refused_at, refusal_site_tag(), nullptr, 0, 0);
+    }
+
+    // ---- Reverse-direction readers (Claude Q1 item 4), defined in
+    // candidate/src/LuaFNameBridge.cpp: push_fstring_to_lua /
+    // push_ftext_to_lua return engine strings to Lua via hand UTF-16 -> UTF-8
+    // + lua_pushlstring; fname_to_narrow writes the UTF-8 bytes of an engine
+    // FName into a caller buffer (for Lua table keys that need a narrow
+    // c-string), returning the byte count (0 + out[0]=0 on refusal).
+    // [LFB-M] agent-FL additions: push_wide_units_to_lua is the shared
+    // family-logging pusher for arbitrary engine wide units (the variant the
+    // userdata __tostring metamethods and GetFullName-shaped reads need);
+    // widen_narrow_to_stringtype is the narrow -> StringType reverse filler
+    // for the LuaLibrary print payloads (resize + indexed writes ONLY, the EV
+    // discipline — no (ptr,count) StringType ctor on the short-wchar
+    // target). Both log their families and refuse first-10 with site tag +
+    // hex units. ----
+    auto push_fstring_to_lua(lua_State* L, const Unreal::FString& string) -> void;
+    auto push_ftext_to_lua(lua_State* L, const Unreal::FText& text) -> void;
+    auto push_wide_units_to_lua(lua_State* L, const CharType* units, size_t unit_count, Family family) -> void;
+    auto widen_narrow_to_stringtype(const char* s, size_t n) -> StringType;
+    auto fname_to_narrow(const FName& name, char* out, size_t cap) -> size_t;
+    // [LFB-M] agent-FW (cleanup round, FL inventory §2 get_string_from_object):
+    // engine FString -> narrow std::string reverse read through the ONE hand
+    // converter (was to_utf8_string, the Helpers seam). Same hand UTF-16 ->
+    // UTF-8 core, bounded by kMaxPushUnits, logging the 'fstring-rev' family
+    // (first-10 markers, first-10 refusals with site tag + hex units) and
+    // yielding the empty string on refusal. Defined in
+    // candidate/src/LuaFNameBridge.cpp.
+    auto fstring_to_narrow_string(const Unreal::FString& string) -> std::string;
+    // Same reverse read for an arbitrary engine-name StringType payload
+    // (pool-decoder-built GetName() results, bridge-built custom-property
+    // names): hand UTF-16 -> UTF-8 into the caller's narrow buffer. Same
+    // fname-narrow family markers/refusals. Returns bytes written
+    // (terminator excluded); 0 with out[0]=0 on refusal.
+    auto wide_to_narrow(const CharType* units, size_t unit_count, char* out, size_t cap) -> size_t;
+
+    // Composition marker (Claude item 7 guard): a UTF-16LE literal in .rodata
+    // proving this header's code (and the Lua-name bridge route) was composed
+    // into the PRX. Emitted once per process on the first bridge construction.
+    inline auto note_composed_once() -> void
+    {
+        static std::atomic<bool> noted{false};
+        bool expected = false;
+        if (!noted.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) { return; }
+        try
+        {
+            Output::send(STR("[LFB] lua-fname-bridge composed: hand utf8<->utf16, slot-2 ctor direct\n"));
+        }
+        catch (...)
+        {
+        }
+    }
+} // namespace RC::LuaType::LuaFNameBridge

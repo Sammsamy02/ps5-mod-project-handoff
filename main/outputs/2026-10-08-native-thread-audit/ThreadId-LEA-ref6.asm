@@ -1,0 +1,6 @@
+0xa24190 file0xa28190 55 push rbp
+0xa24191 file0xa28191 4889e5 mov rbp, rsp
+0xa24194 file0xa28194 488d0501499308 lea rax, [rip + 0x8934901] rip->0x9358a9c
+0xa2419b file0xa2819b c70000000000 mov dword ptr [rax], 0
+0xa241a1 file0xa281a1 5d pop rbp
+0xa241a2 file0xa281a2 c3 ret 

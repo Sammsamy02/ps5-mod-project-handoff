@@ -1,0 +1,523 @@
+--- a/paktx.py
++++ b/paktx.py
+@@ -53,6 +53,18 @@
+     the manifest needs must be restated; the derived index is re-read after
+     the build (payload, IoHash, merged store, every import resolves).  Mod
+     files stay read-only; restore is unchanged (byte-exact by rename).
++    Manifest schema paktx-substitute/2 (round 5) adds DERIVED TEXTURES: a mod
++    texture package (export chunk + BulkData chunk, same path and id) in the
++    game's PS5 tile layout (ps5_tiling.py: lossless re-order, round trip
++    proven), channels kept or red and blue exchanged on its stored blocks
++    (bcn_swap.py, exact); every mod texture a shipped instance imports must be
++    such a derived copy.  paktx
++    re-derives the bytes itself with the pinned writer, re-runs the pinned
++    reference decoder proof on every texel, checks the header is byte-
++    identical, every hash with two implementations, and that every mod
++    package importing the texture either routes it (a substituted material
++    instance with the declared parameter rename) or has no shader maps of its
++    own (cannot draw with the original channel order).
+ 
+ LAWS: mod files are read-only inputs. Base .ucas files are never read
+ beyond the bytes of a mirror, never written, renamed or deleted (FTP backend
+@@ -629,6 +641,8 @@
+ # (rename of the original index back), so it stays byte-exact.
+ 
+ SUBST_SCHEMA = "paktx-substitute/1"
++SUBST_SCHEMA_TEXTURES = "paktx-substitute/2"
++TEXTURE_OPS = ("swap_rb", "keep")
+ KNOWN_DECISIONS = ("allow-partial", "accept-unproven-opaque")
+ # the reviewed derived-package writer (mod-manager/material-fallback/mic_reparent.py)
+ MIC_REPARENT_SHA256 = "520a805580a6750e9f799c8740095d4cc5d6f3e3a0a3574e6052914e82c06af5"
+@@ -641,7 +655,56 @@
+     "cityhash.py": "95955e5872a067d38e024b1f0bad74753842bc24eb79be689afb588898b5167a",
+     "blake3.py": "0613633f746a8e4f6c49baee1602f411cbdc1adbb793bf401b2a8e8c17b1355e",
+     "container_header.py": "e703f080adf49c9ff5bd90a41b13733b367dafe9f74e0b8306c1e1ddad964459",
++}
++# round 5: pinned derived-texture writer + reference decoder + layout reader (same folder)
++TEXTURE_SHA256 = {
++    "bcn_swap.py": "25e1896dbee2852e2716a1c9ca55589fa3f3801a089d82a084d6edca76ea9249",
++    "bcn_decode.py": "d5058cd77788abac42b9dd7974a1cdd97485b69aee049694fc7947d506797a54",
++    "texture_package.py": "f821b133e3e6bfe0740e0132e72381c97b54986d4fd5ce14bbf81e948e84b2be",
++    "ps5_tiling.py": "5c0148d7a4746d87df09564c223fad85850bb9bf298f1c1c6b2fa279705dbd6b",
++    "ps5_layout_census.json": "f0a958a9fb339e492a90229a3ba935a4995c35571e4f696b709322c2550fea5c",
++}
++# the manifest also names the GPU decoder source the writer ran (not executed here)
++TEXTURE_WRITER_SHA256 = dict(TEXTURE_SHA256, **{"metal_bcn_check.swift": "778791f85e34bf77f1774bc9bd2c98f27cb5e786f162895098f57d347c615286"})
++# Team B's independent de-tiler used by the writer for the round-trip proof (pak-intake/texture_tiling_probe.py)
++TILING_REFERENCE_SHA256 = {
++    "texture_tiling_probe.py": "ec0d8db08ea1ca232911b6ca6bc520b15b3bc46ad179bc9938cdf201f2185bf5",
++    "tile_reference.py": "3aa856217071c79555427765d2c56245f7a99ec0763d041a0e3df46b01250dab",
+ }
++
++
++def default_tiling_reference_path() -> str:
++    env = os.environ.get("PAKTX_TILING_REFERENCE")
++    if env:
++        return env
++    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pak-intake")
++
++
++def load_tiling_reference(path: str):
++    """Team B's probe + oracle from verified bytes (the oracle's import is served the verified probe)."""
++    out = {}
++    for fn in ("texture_tiling_probe.py", "tile_reference.py"):
++        p = os.path.join(path, fn)
++        require(os.path.isfile(p), "substitute_tiling_reference_missing", p)
++        data = open(p, "rb").read()
++        require(sha256_bytes(data) == TILING_REFERENCE_SHA256[fn], "substitute_tiling_reference_sha_mismatch",
++                "%s is %s" % (p, sha256_bytes(data)))
++        mod = types.ModuleType("paktx_oracle_" + fn[:-3])
++        mod.__file__ = p
++        saved, saved_path = sys.modules.get("texture_tiling_probe"), list(sys.path)
++        if fn == "tile_reference.py":
++            sys.modules["texture_tiling_probe"] = out["probe"]
++        try:
++            exec(compile(data, p, "exec"), mod.__dict__)
++        finally:
++            sys.path[:] = saved_path       # the oracle prepends its own folder; undo that
++            if fn == "tile_reference.py":
++                if saved is None:
++                    sys.modules.pop("texture_tiling_probe", None)
++                else:
++                    sys.modules["texture_tiling_probe"] = saved
++        out["probe" if fn.startswith("texture") else "oracle"] = mod
++    return out["probe"], out["oracle"]
+ 
+ 
+ def default_readers_path() -> str:
+@@ -652,17 +715,27 @@
+                         "mod-manager", "material-fallback")
+ 
+ 
+-def load_readers(path: str):
+-    """Exec the pinned readers from verified bytes (no import path, no cache)."""
++def load_readers(path: str, textures: bool = False):
++    """Exec the pinned readers from verified bytes (no import path, no cache).
++    textures: also the derived-texture tools (texture_package gets the
++    verified zen module injected, never an import from the path)."""
+     out = {}
+-    for fn, pinned in sorted(READER_SHA256.items()):
++    pins = dict(READER_SHA256, **(TEXTURE_SHA256 if textures else {}))
++    for fn in sorted(pins, key=lambda f: (f == "texture_package.py", f)):
++        pinned = pins[fn]
+         p = os.path.join(path, fn)
+         require(os.path.isfile(p), "substitute_reader_missing", p)
+         data = open(p, "rb").read()
+         got = sha256_bytes(data)
+         require(got == pinned, "substitute_reader_sha_mismatch", "%s is %s, pinned %s" % (p, got, pinned))
++        if fn.endswith(".json"):            # pinned data (the game layout census), not code
++            out["census"] = json.loads(data)
++            continue
+         mod = types.ModuleType("paktx_reader_" + fn[:-3])
+         mod.__file__ = p
++        if fn == "texture_package.py":
++            mod.__dict__["ZEN"] = out["zen"]
++            mod.__dict__["PS5_TILING"] = out["ps5_tiling"]
+         exec(compile(data, p, "exec"), mod.__dict__)
+         out[fn[:-3]] = mod
+     return types.SimpleNamespace(**out)
+@@ -697,7 +770,8 @@
+     row must equal exactly one plan row; the decisions come from the plan and
+     must be restated EXACTLY on the command line."""
+     doc = read_json(path)
+-    require(isinstance(doc, dict) and doc.get("schema") == SUBST_SCHEMA, "substitute_manifest_schema")
++    require(isinstance(doc, dict) and doc.get("schema") in (SUBST_SCHEMA, SUBST_SCHEMA_TEXTURES),
++            "substitute_manifest_schema")
+     require(manifest_self_sha(doc) == doc.get("manifest_sha256"), "substitute_manifest_self_hash_mismatch")
+     require(doc.get("mic_reparent_sha256") == MIC_REPARENT_SHA256, "substitute_mic_reparent_not_pinned",
+             "manifest made by mic_reparent %s, pinned %s" % (doc.get("mic_reparent_sha256"),
+@@ -748,6 +822,47 @@
+     require(set(accepted) == needed, "substitute_user_decision_not_needed",
+             "restate exactly the decisions the rows need: %s" % sorted(needed))
+     shipped = {r.get("package") for r in rows}
++    # round 5: derived textures must be exactly the ones the plan rows route
++    want = {}
++    shipped_pkgs = {r.get("package") for r in rows}
++    for pr in prows:
++        if pr.get("mod_package") not in shipped_pkgs:
++            continue            # plan rows not shipped are listed below; their derivations are not shipped either
++        for d in pr.get("texture_derivations") or []:
++            want.setdefault(d.get("texture"), set()).add(
++                (d.get("op"), d.get("channels"), d.get("from_letters"), d.get("to_letters"), d.get("format"),
++                 pr.get("mod_package"), d.get("parameter"), d.get("slot")))
++    texs = doc.get("textures")
++    if doc["schema"] == SUBST_SCHEMA:
++        require(texs is None and not want, "substitute_plan_needs_textures",
++                "the plan routes derived textures; a paktx-substitute/1 manifest cannot carry them")
++    else:
++        require(isinstance(texs, list) and texs, "substitute_manifest_has_zero_textures")
++        require(doc.get("texture_tools_sha256") == TEXTURE_WRITER_SHA256, "substitute_texture_writer_not_pinned",
++                "manifest made by texture tools %s" % doc.get("texture_tools_sha256"))
++        got = {}
++        tseen = set()
++        for t in texs:
++            tp_ = t.get("package")
++            require(tp_ not in tseen, "substitute_duplicate_texture", repr(tp_))
++            tseen.add(tp_)
++            require(t.get("op") in TEXTURE_OPS and t.get("channels") == t.get("op") and
++                    (t.get("layout") or {}).get("form") == "ps5", "substitute_texture_op_unknown", repr(t.get("op")))
++            for c in t.get("consumers") or []:
++                got.setdefault(tp_, set()).add((t.get("op"), t.get("channels"), t.get("from_letters"),
++                                                t.get("to_letters"), t.get("format"), c.get("package"),
++                                                c.get("parameter"), c.get("slot")))
++        require(got == want, "substitute_textures_disagree_with_plan",
++                "manifest textures %s, plan %s" % (sorted(got), sorted(want)))
++        by_row = {r.get("package"): r for r in rows}
++        for tp_, cons in want.items():
++            for (_op, _ch, _f, _t, _fmt, pkg, prm, slot) in cons:
++                rr = by_row.get(pkg)
++                require(rr is not None, "substitute_texture_consumer_not_shipped", "%s routes %s" % (pkg, tp_))
++                if slot and slot != prm:
++                    require([prm, slot] in [list(x) for x in
++                                            (rr.get("reparent") or {}).get("renamed_parameters", [])],
++                            "substitute_texture_consumer_rename_missing", "%s: %s -> %s" % (pkg, prm, slot))
+     doc["_plan_rows_not_shipped"] = sorted(
+         ({"package": r.get("mod_package"), "action": r.get("action"),
+           "needs": plan_decisions(r)} for r in prows if r.get("mod_package") not in shipped),
+@@ -912,6 +1027,221 @@
+     require(der[hd:] == orig[ho:], "substitute_payload_after_header_changed")
+     return {"name_map_delta": delta, "header_delta": hd - ho, "names_checked": len(n_o) + len(p_o),
+             "identical_map_bytes": len(a) - 8}
++
++
++def _raw_bulk_map_region(d: bytes):
++    """(start, end) of the bulk-data map entries of a zen header, read with struct only."""
++    iph = struct.unpack_from("<i", d, 24)[0]
++    _n, _h, e = _raw_name_batch(d, 60, iph)
++    require(e + 8 <= iph, "substitute_raw_bulk_map_truncated")
++    pad = struct.unpack_from("<Q", d, e)[0]
++    require(pad < 8 and not any(d[e + 8:e + 8 + pad]), "substitute_raw_padding")
++    bpos = e + 8 + pad
++    size = struct.unpack_from("<q", d, bpos)[0]
++    require(size >= 0 and size % 32 == 0 and bpos + 8 + size == iph, "substitute_raw_bulk_map_truncated")
++    return bpos + 8, bpos + 8 + size
++
++
++def _can_draw(start: int, entries: dict, depth: int = 16) -> bool:
++    """True if the package or anything it imports (transitively, merged mod + base stores)
++    has shader maps: an instance without its own shader maps draws with its parent's."""
++    seen, frontier = set(), [start]
++    for _ in range(depth):
++        nxt = []
++        for p_ in frontier:
++            if p_ in seen:
++                continue
++            seen.add(p_)
++            e = entries.get(p_)
++            if e is None:
++                return True        # unknown package: cannot prove it does not draw (fail closed)
++            if e.shader_map_hashes:
++                return True
++            nxt.extend(e.imported_packages)
++        frontier = nxt
++        if not frontier:
++            return False
++    return True
++
++
++def _keep(fmt, data):
++    return data, {"format": fmt, "blocks": None, "endpoint_order_fixed": 0, "bc7_rotation_remapped": 0}
++
++
++def verify_texture_substitutions(B, R, man: dict, mod, mstore, mstore2, base_pids: dict,
++                                 mod_stores: dict, mods, row_pids: set, stores: dict,
++                                 row_imports: dict) -> dict:
++    """Round 5/5b: every derived texture row (PS5 tile layout, channels kept or R<->B
++    swapped), checked independently of its writer.
++    Returns {"chunks": {cid: bytes}, "imports": {pid: tuple}, "ledger": [...]}."""
++    law = R.cityhash.ue_name_hash
++    mrows = {cid: i for i, cid in enumerate(mod.toc.ids)}
++    chunks, imports, ledger = {}, {}, []
++    merged: Dict[int, object] = {}
++    for st in stores.values():
++        merged.update(st["packages"])
++    importers: Dict[int, set] = {}
++    for m in B.effective_mod_order(mods):          # later wins, as in build_overlay
++        for p_, e in mod_stores[m.mod_id].packages.items():
++            merged[p_] = e
++            for i in e.imported_packages:
++                importers.setdefault(i, set()).add(p_)
++    tex_pids = set()
++    with open(mod.ucas_path, "rb") as fh:
++        store = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
++        try:
++            for t in man["textures"]:
++                pid = _pid(t.get("package_id"), "substitute_bad_package_id")
++                require(isinstance(t.get("package"), str) and law(t["package"]) == pid,
++                        "substitute_texture_identity", t.get("package_id"))
++                require(pid not in row_pids and pid not in tex_pids, "substitute_texture_is_also_a_material_row",
++                        t["package_id"])
++                tex_pids.add(pid)
++                require(pid in mstore.packages and pid in mstore2, "substitute_package_not_in_mod", t["package_id"])
++                require(sum(1 for m in mods if pid in mod_stores[m.mod_id].packages) == 1,
++                        "substitute_package_in_several_mods", t["package_id"])
++                require(pid not in base_pids, "substitute_texture_overrides_base_package",
++                        "%s: a base package has this id; base materials would read the derived copy" % t["package"])
++                entry = mstore.packages[pid]
++                require(not entry.shader_map_hashes and not mstore2[pid]["shader_maps"],
++                        "substitute_entry_has_own_shader_maps", t["package"])
++                require([_hex16(v) for v in entry.imported_packages] == t.get("store_imports") and
++                        tuple(mstore2[pid]["imports"]) == tuple(entry.imported_packages),
++                        "substitute_store_imports_disagree", t["package"])
++                kinds = {}
++                for cid in mod.toc.ids:
++                    if B.package_id_of_chunk(cid) == pid:
++                        kinds[cid[8:].hex()] = cid
++                require(set(kinds) <= {"00000001", "00000002"} and "00000001" in kinds,
++                        "substitute_texture_chunk_kinds", "%s: %s" % (t["package"], sorted(kinds)))
++                ents = {c.get("kind"): c for c in t.get("chunks") or []}
++                require(set(ents) == {("export" if k == "00000001" else "bulk") for k in kinds}
++                        and len(t.get("chunks")) == len(kinds), "substitute_texture_chunks_mismatch", t["package"])
++                orig, der = {}, {}
++                for k, cid in kinds.items():
++                    kind = "export" if k == "00000001" else "bulk"
++                    c = ents[kind]
++                    require(c.get("chunk_id") == cid.hex(), "substitute_chunk_missing", cid.hex())
++                    row = mrows[cid]
++                    require(mod.toc.meta(row)[20:] == bytes(4), "substitute_unsupported_chunk_meta", cid.hex())
++                    o = B.extract_chunk_bytes(mod.toc, row, store)
++                    meta = mod.toc.meta(row)[:20]
++                    require(B.blake3_20(o) == meta and R.blake3.iohash20(o) == meta.hex(),
++                            "substitute_original_iohash_mismatch", cid.hex())
++                    co = c.get("original") or {}
++                    require(sha256_bytes(o) == co.get("sha256") and len(o) == co.get("bytes") and
++                            co.get("iohash") == meta.hex(), "substitute_original_mismatch", cid.hex())
++                    d = _man_file(man, c.get("derived") or {}, "substitute_derived")
++                    dh = B.blake3_20(d)
++                    require(R.blake3.iohash20(d) == dh.hex() and (c.get("derived") or {}).get("iohash") == dh.hex(),
++                            "substitute_derived_iohash_mismatch", cid.hex())
++                    orig[kind], der[kind] = o, d
++                # header (struct only): same size; only the bulk-map entries and the export size differ
++                hs = struct.unpack_from("<I", orig["export"], 4)[0]
++                require(64 <= hs <= len(orig["export"]) and struct.unpack_from("<I", der["export"], 4)[0] == hs,
++                        "substitute_texture_header_changed", t["package"])
++                b0, b1 = _raw_bulk_map_region(orig["export"][:hs])
++                require(_raw_bulk_map_region(der["export"][:hs]) == (b0, b1), "substitute_texture_header_changed",
++                        t["package"])
++                xoff = struct.unpack_from("<i", orig["export"], 32)[0]
++                allowed = set(range(b0, b1)) | set(range(xoff + 8, xoff + 16))
++                require(all(der["export"][i] == orig["export"][i] for i in range(hs) if i not in allowed),
++                        "substitute_texture_header_changed", t["package"])
++                # re-derive with the pinned writer: must give exactly the shipped bytes
++                ch = t.get("channels")
++                transform = R.bcn_swap.swap_rb if ch == "swap_rb" else _keep
++                try:
++                    nc, nb, lay, _f, choice, lin = R.texture_package.derive_ps5(
++                        orig["export"], orig.get("bulk"), transform,
++                        lambda f, w_, h_, n_: R.ps5_tiling.choose(f, w_, h_, n_, R.census))
++                except R.ps5_tiling.TilingRefused as e:
++                    raise Refused("substitute_texture_tiling_refused", "%s: %s" % (t["package"], e))
++                except (R.texture_package.LayoutError, R.bcn_swap.SwapRefused, ValueError) as e:
++                    raise Refused("substitute_texture_not_derivable", "%s: %s" % (t["package"], e))
++                require(nc == der["export"] and nb == der.get("bulk"), "substitute_texture_bytes_not_reproduced",
++                        t["package"])
++                require(lay["format"] == t.get("format") and lay["package"] == t["package"] and
++                        (t.get("layout") or {}).get("ext_data") == choice["ext_data"] and
++                        (t.get("layout") or {}).get("num_mips_in_tail") == choice["num_mips_in_tail"],
++                        "substitute_texture_format_mismatch", t["package"])
++                olay = R.texture_package.layout(orig["export"], len(orig["bulk"]) if "bulk" in orig else None)
++                orig_lin = R.texture_package.payload(olay, orig["export"], orig.get("bulk"))
++                before, after = b"".join(orig_lin), b"".join(lin)
++                proof = t.get("proof") or {}
++                texels = None
++                if ch == "swap_rb":
++                    pr_ = R.bcn_decode.swap_proof(lay["format"], before, after)
++                    gpu = proof.get("gpu") or {}
++                    tol = max(16, pr_["texels_compared"] // 200)
++                    require(pr_["exact"] and pr_["texels_compared"] > 0 and gpu.get("exact") is True and
++                            gpu.get("texels_compared") == pr_["texels_compared"] and
++                            gpu.get("blocks") == len(before) // R.bcn_decode.BLOCK[lay["format"]] and
++                            abs(gpu.get("texels_where_r_differs_from_b", -10 ** 9) -
++                                pr_["texels_where_r_differs_from_b"]) <= tol,
++                            "substitute_texture_proof_failed", "%s: %s / gpu %s" % (t["package"], pr_, gpu))
++                    texels = pr_["texels_compared"]
++                else:
++                    require(lin == orig_lin, "substitute_texture_proof_failed", "%s: keep changed texels" % t["package"])
++                # the four tiling gates (Team B spec section 7), re-run here on the shipped bytes
++                lay2 = R.texture_package.layout(der["export"], len(der["bulk"]) if "bulk" in der else None,
++                                                allow_ps5=True)
++                shipped = R.texture_package.payload(lay2, der["export"], der.get("bulk"))
++                sx, sy = lay2["size"]
++                mode = choice["mode"]
++                ref = R.oracle.layout(lay2["format"], sx, sy, 0, len(lin), mode)
++                h_ = R.probe.platform_header(der["export"][lay2["export_offset"]:
++                                                          lay2["export_offset"] + lay2["export_size"]],
++                                             R.zen.ZenPackage(der["export"]).names)
++                verdict = (R.probe.judge(h_, {k: x for k, x in enumerate(shipped) if x}) or {}).get("verdict", "") \
++                    if h_ else ""
++                require(R.ps5_tiling.detile(lay2["format"], sx, sy, shipped, choice) == lin and
++                        ref["sizes"] == [len(x) for x in shipped] and
++                        ref["num_mips_in_tail"] == choice["num_mips_in_tail"] and
++                        R.oracle.tile_chain(lin, lay2["format"], sx, sy, 0, mode) == shipped and
++                        R.oracle.detile_chain(shipped, lay2["format"], sx, sy, 0, mode) == lin and
++                        h_ is not None and h_["ext_data"] == mode and
++                        h_["num_mips_in_tail"] == choice["num_mips_in_tail"] and
++                        (verdict.startswith(choice["mode_name"] + " (header and pixels agree") or
++                         verdict.startswith("undecided (texture too uniform") or
++                         verdict.startswith("no decodable mip pair")),
++                        "substitute_texture_round_trip_failed", "%s: verdict %r" % (t["package"], verdict))
++                tg = proof.get("tiling") or {}
++                require(tg.get("reference_sha256") == TILING_REFERENCE_SHA256 and tg.get("mips") == len(lin) and
++                        tg.get("bytes") == len(after), "substitute_texture_round_trip_failed",
++                        "%s: manifest tiling record" % t["package"])
++                # consumers: route it (renamed slot), or cannot draw at all (transitively)
++                routing = {law(c.get("package", "")) for c in t.get("consumers") or []}
++                users = importers.get(pid, set())
++                require(routing and routing <= users, "substitute_texture_consumer_not_importer", t["package"])
++                for u in sorted(users - routing):
++                    require(not _can_draw(u, merged), "substitute_texture_importer_can_draw",
++                            "%s is imported by %016x, which (or whose parents) has shader maps" % (t["package"], u))
++                for kind, d in der.items():
++                    chunks[kinds["00000001" if kind == "export" else "00000002"]] = d
++                imports[pid] = tuple(entry.imported_packages)
++                ledger.append({
++                    "kind": "texture", "package": t["package"], "package_id": t["package_id"],
++                    "op": t["op"], "channels": ch, "format": lay["format"],
++                    "letters": [t.get("from_letters"), t.get("to_letters")],
++                    "layout": {"form": "ps5", "mode": choice["mode_name"], "ext_data": choice["ext_data"],
++                               "num_mips_in_tail": choice["num_mips_in_tail"]},
++                    "chunks": [{"chunk_id": kinds[k].hex(), "original_iohash": B.blake3_20(orig[n]).hex(),
++                                "derived_iohash": B.blake3_20(der[n]).hex(), "derived_sha256": sha256_bytes(der[n]),
++                                "derived_bytes": len(der[n])}
++                               for k, n in sorted((("00000001", "export"), ("00000002", "bulk")))
++                               if n in der],
++                    "reproduced_by_pinned_writer": True, "header_bytes_checked": hs,
++                    "reference_decoder_texels_exact": texels,
++                    "gpu_decoder_texels_exact_at_derive_time": (proof.get("gpu") or {}).get("texels_compared"),
++                    "round_trip_detiled_bytes_exact": len(after),
++                    "tiling_gates": {"self_detile": True, "oracle_rule_sizes": True, "oracle_bytes_equal": True,
++                                     "oracle_detile": True, "probe_verdict": verdict},
++                    "consumers": sorted({c.get("package") for c in t.get("consumers") or []}),
++                    "importers_that_cannot_draw": sorted(_hex16(u) for u in users - routing),
++                })
++        finally:
++            store.close()
++    return {"chunks": chunks, "imports": imports, "ledger": ledger, "texture_pids": tex_pids}
+ 
+ 
+ def verify_substitutions(B, R, rec: dict, mirror: str, man: dict, mods) -> dict:
+@@ -1148,7 +1478,27 @@
+             "parent_imports_overridden_by_mod": sorted(_hex16(i) for i in pimps if i in all_mod_pids),
+             "base_header": {"container": h["container"], "sha256": h["sha256"], "iohash": h["iohash"]},
+         })
+-    return {"mod": mod, "chunks": chunks, "imports": imports, "ledger": ledger,
++    tex_ledger, tex_pids = [], set()
++    if man.get("textures"):
++        tx = verify_texture_substitutions(B, R, man, mod, mstore, mstore2, base_pids, mod_stores, mods,
++                                          {int(r["package_id"], 16) for r in man["rows"]}, stores, dict(imports))
++        require(not set(tx["chunks"]) & set(chunks), "substitute_chunk_twice")
++        chunks.update(tx["chunks"])
++        imports.update(tx["imports"])
++        tex_ledger, tex_pids = tx["ledger"], tx["texture_pids"]
++    # integrator rule (round 5b), EVERY schema: a shipped instance must point at derived PS5 textures only,
++    # so every package it imports that any installed mod provides must be a derived texture row here
++    any_mod = set()
++    for m in mods:
++        any_mod |= set(mod_stores[m.mod_id].packages)
++    for r in man["rows"]:
++        rp_ = int(r["package_id"], 16)
++        for i in imports[rp_]:
++            if i in any_mod:
++                require(i in tex_pids, "substitute_instance_imports_underived_texture",
++                        "%s imports mod package %016x that ships without a derived PS5-layout copy"
++                        % (r.get("package"), i))
++    return {"mod": mod, "chunks": chunks, "imports": imports, "ledger": ledger, "texture_ledger": tex_ledger,
+             "mod_targets": mod_targets,
+             "base_stores": {s: {"sha256": v["sha256"], "bytes": v["bytes"], "packages": len(v["packages"])}
+                             for s, v in sorted(stores.items())},
+@@ -1185,6 +1535,7 @@
+             all(tuple(h1.packages[p].imported_packages) == tuple(h2[p]["imports"]) for p in h2),
+             "substitute_merged_header_parsers_disagree", dest)
+     checked_chunks = 0
++    expected = sum(1 for c in subs["chunks"] if B.package_id_of_chunk(c) in subs["dest_pids"].get(dest, set()))
+     for cid, der in sorted(subs["chunks"].items()):
+         pid = B.package_id_of_chunk(cid)
+         if pid not in h1.packages or pid not in subs["dest_pids"].get(dest, set()):
+@@ -1197,11 +1548,12 @@
+         meta = dtoc.meta(row)[:20]
+         require(meta == B.blake3_20(der) and R.blake3.iohash20(der) == meta.hex(),
+                 "substitute_derived_iohash_mismatch", cid.hex())
+-        require(tuple(h1.packages[pid].imported_packages) == tuple(subs["imports"][pid]),
++        require(tuple(h1.packages[pid].imported_packages) == tuple(subs["imports"][pid]) and
++                not h1.packages[pid].shader_map_hashes,
+                 "substitute_merged_store_entry_mismatch", cid.hex())
+         checked_chunks += 1
+-    require(checked_chunks == len(subs["dest_pids"].get(dest, set())), "substitute_rows_not_all_shipped",
+-            dest)
++    require(checked_chunks == expected and expected >= len(subs["dest_pids"].get(dest, set())),
++            "substitute_rows_not_all_shipped", dest)
+     known = set(h1.packages) | set(subs["base_pids"])
+     mod_pids = set()
+     for m in mods_in_dest:
+@@ -1318,6 +1670,7 @@
+                       substitute: Optional[str] = None,
+                       accepted: Sequence[str] = (),
+                       readers: Optional[str] = None,
++                      tiling_reference: Optional[str] = None,
+                       reparent_plan: Optional[str] = None) -> dict:
+     """Deterministic plan.  Writes derived artifacts under work/targets/.
+     `substitute`: a derived-packages manifest (capability #12); `accepted`:
+@@ -1348,7 +1701,9 @@
+     if mods:
+         own = ownership(B, rec, mods, new_into)
+         if man is not None:
+-            R = load_readers(readers or default_readers_path())
++            R = load_readers(readers or default_readers_path(), textures=bool(man.get("textures")))
++            if man.get("textures"):
++                R.probe, R.oracle = load_tiling_reference(tiling_reference or default_tiling_reference_path())
+             subs = verify_substitutions(B, R, rec, mirror, man, mods)
+         if only_into is not None:
+             # diagnostic fallback (one container only, the console-proven shape):
+@@ -1458,7 +1813,7 @@
+     require(targets, "plan_has_zero_targets")
+     if subs is not None:
+         require(len(sub_checks) == len(subs["dest_pids"]) and
+-                sum(x["substituted_chunks_verified"] for x in sub_checks) == len(subs["ledger"]),
++                sum(x["substituted_chunks_verified"] for x in sub_checks) == len(subs["chunks"]),
+                 "substitute_post_build_check_count_mismatch")
+         for t in targets:
+             if t["kind"] == "iostore":
+@@ -1484,8 +1839,9 @@
+             "reparent_plan_sha256": man["_plan_sha256"],
+             "plan_rows_not_shipped": man["_plan_rows_not_shipped"],
+             "decisions_restated_on_command_line": sorted(set(accepted)),
+-            "readers_sha256": dict(READER_SHA256),
++            "readers_sha256": dict(READER_SHA256, **(TEXTURE_SHA256 if subs["texture_ledger"] else {})),
+             "rows": subs["ledger"],
++            "textures": subs["texture_ledger"],
+             "base_stores": subs["base_stores"],
+             "post_build": sub_checks,
+             "law": "mod files read-only; derived bytes only in the derived index/sidecar; "
+@@ -2307,6 +2663,14 @@
+                 log("  %s: parent %s -> %s (derived %d B, iohash %s; mod file unchanged)"
+                     % (r["package"], r["old_parent"], r["new_parent"], r["derived"]["bytes"],
+                        r["derived"]["iohash"][:16]))
++            for t in sub.get("textures", []):
++                log("  DERIVED TEXTURE %s: %s channels=%s%s, PS5 %s layout (tail %d mips), %d chunks; re-derived "
++                    "here, round trip byte-exact%s; mod file unchanged"
++                    % (t["package"], t["format"], t["channels"],
++                       (" (%s -> %s)" % tuple(t["letters"])) if t["channels"] == "swap_rb" else "",
++                       t["layout"]["mode"], t["layout"]["num_mips_in_tail"], len(t["chunks"]),
++                       (", %d texels proven exact" % t["reference_decoder_texels_exact"])
++                       if t["reference_decoder_texels_exact"] else ""))
+         for t in plan["targets"]:
+             log("TARGET %s [%s]" % (t["container"], t["kind"]))
+             log("  change: %s (%d B, %s) -> derived (%d B, %s)" % (
+@@ -2386,6 +2750,8 @@
+                                                "--substitute manifest was made from (sha-bound)")
+         p.add_argument("--readers", help="folder of the pinned second-source readers "
+                                          "(default ../mod-manager/material-fallback)")
++        p.add_argument("--tiling-reference", help="folder with Team B's texture_tiling_probe.py + tile_reference.py "
++                                                  "(pinned oracle for derived PS5 textures; default ../pak-intake)")
+     args = ap.parse_args(argv)
+     log = lambda s: print(s, file=sys.stderr)
+     result: dict = {"tool": TOOL}
+@@ -2426,7 +2792,7 @@
+                                      args.new_packages_into, args.repak, tsha,
+                                      only_into=args.only_into, substitute=args.substitute,
+                                      accepted=args.accept_decision, readers=args.readers,
+-                                     reparent_plan=args.reparent_plan)
++                                     reparent_plan=args.reparent_plan, tiling_reference=args.tiling_reference)
+             ppath = os.path.join(args.work, "plan.json")
+             write_json(ppath, plan)
+             _print_plan(plan, log)

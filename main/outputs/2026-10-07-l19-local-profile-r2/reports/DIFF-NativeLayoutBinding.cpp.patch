@@ -1,0 +1,28 @@
+--- v1/units/NativeLayoutBinding.cpp
++++ r2/units/NativeLayoutBinding.cpp
+@@ -1,6 +1,7 @@
+ #include "NativeLayoutBinding.hpp"
+ #include <NativeLayoutEngineIncludes.hpp>
+ #include <NativeLayoutWidths.hpp>
++#include "NativeLayoutActiveWidths.hpp"
+ #include <array>
+ #include <fstream>
+ #include <map>
+@@ -89,7 +90,7 @@
+             stage.widths.emplace(key, bits.storage_bytes);
+             fact_width=bits.storage_bytes;
+         } else if (key != STR("UEP_TotalSize")) {
+-            const auto width = GetAccessorWidth(schema->target, schema->canonical);
++            const auto width = GetBindingAccessorWidth(schema->target, schema->canonical);
+             if (!width || *width == 0)
+                 throw std::invalid_argument("Native accessor width unavailable: " + entry.section + "::" + entry.key);
+             stage.widths.emplace(key, *width);
+@@ -98,7 +99,7 @@
+         result->member_facts.push_back({fact_name,entry.offset,fact_width});
+     }
+     for (const auto& entry : bundle.vtables) {
+-        result->virtual_facts.push_back({entry.section+"::"+entry.key,entry.offset});
++        result->virtual_facts.push_back({entry.section+"::"+entry.key,entry.offset,sizeof(void*)});
+         auto found = result->virtual_targets.find(entry.section);
+         if (found == result->virtual_targets.end()) throw std::invalid_argument("Unknown native vtable class: " + entry.section);
+         // Some wrappers inherit one physical map (for example viewport/UObject).

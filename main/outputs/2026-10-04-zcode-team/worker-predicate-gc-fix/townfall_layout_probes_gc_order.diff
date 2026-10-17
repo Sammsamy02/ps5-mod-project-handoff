@@ -1,0 +1,24 @@
+--- a/src/townfall_layout_probes.cpp (worker-5-layout-validator original)
++++ b/src/townfall_layout_probes.cpp (fixed: UE ObjFirstGCIndex == ObjLastNonGCIndex + 1)
+@@ -127,12 +127,19 @@
+     }
+ 
+     // P3: GC index ordering (layout A only; layout B has no such fields).
++    // UE invariant (FUObjectArray): permanent objects occupy indices
++    // [0, ObjLastNonGCIndex]; GC-visible objects start at ObjFirstGCIndex ==
++    // ObjLastNonGCIndex + 1 in the settled state. A gap
++    // (ObjFirstGCIndex > ObjLastNonGCIndex + 1) is legal transiently while
++    // GC mutates the pool. The previous `first_gc <= last_non_gc` form
++    // inverted the invariant and refuted healthy arrays (live data:
++    // first=35477, last=35476 at 0x97ba110).
+     if (is_layout_a) {
+         const int32_t first_gc = (int32_t)rd_u32(hdr + kOffObjFirstGCIndex);
+         const int32_t last_non_gc =
+             (int32_t)rd_u32(hdr + kOffObjLastNonGCIndex);
+-        if (!(first_gc >= 0 && first_gc <= last_non_gc &&
+-              last_non_gc <= max_elements)) {
++        if (!(first_gc >= 0 && first_gc > last_non_gc &&
++              last_non_gc >= -1 && last_non_gc <= max_elements)) {
+             out.verdict = Verdict::Refuted;
+             out.code = RCode::GOA_R_GC_ORDER;
+             return out;

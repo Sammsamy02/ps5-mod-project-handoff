@@ -1,0 +1,46 @@
+{
+  "worker": "worker-e2e-config-entry",
+  "team": "2026-10-04-zcode-team",
+  "date": "2026-10-04",
+  "pass": "FINISH (prior attempt died mid-work; surviving pieces verified and reused, not redone: CLAIM.json skeleton, patched source draft, first .o build)",
+  "role": "Author the config-entry (e2e-cmd.json reader) revision DESIGN as a minimal diff to modinst_core.c and validate it host-side, so a later build worker can implement the new payload without re-deriving anything",
+  "workspace": "/WORKSPACE/.codex/worktrees/translation-core/what",
+  "writes_confined_to": "outputs/2026-10-04-zcode-team/worker-e2e-config-entry/",
+  "inputs_read_only": [
+    "outputs/2026-10-04-zcode-team/worker-e2e-staging-final/REPORT.md + STAGED-E2E-COMMANDS.md + cmd/ (13 staged dispatch files, SHASUMS.txt re-verified OK this session)",
+    "outputs/2026-10-04-zcode-team/worker-e2e-staging-final/host-test/host_cmd_entry_test.py (the entry-rule emulation my C code mirrors line-for-line) + its saved 35-line transcript sha 31a4764a...",
+    "outputs/2026-10-04-zcode-team/worker-e2e-console-dry/E2E-CMD-SCHEMA.md (sections 1-8, the governing design)",
+    "outputs/2026-10-04-zcode-team/worker-d1-chain-relink/composition/vendored/modinst_core.c (pristine patched-in base, sha 45c04d08...)",
+    "outputs/2026-10-04-zcode-team/worker-d1-chain-relink/composition/receipts/* (host-build.json compile/link argv, console-imports.stdout 116-symbol census, patches.json 51-tuple chain, console-build.json console argv)",
+    "outputs/2026-10-04-zcode-team/worker-d1-chain-relink/composition/build/host/*.o + pinned static libs (existing objects relinked UNCHANGED, except modinst_core.o which my patched .o replaces)",
+    "outputs/2026-10-04-zcode-team/worker-d1-chain-relink/owned/e2e_status.c/h (report path API: set_dir/begin/end/event)",
+    "fixture corpus: movement-speed-2x.zip, mm-skin.mfb, mm-lua.mfb (scratch copies only)"
+  ],
+  "deliverables": [
+    "CLAIM.json (this file)",
+    "CONFIG-ENTRY-DESIGN.md sha e36b7e7b2c23412e76a01e723133c1d3bc9ec2e3c3b310e7ebbb8ee7497786b7 (trigger slots, exit taxonomy, refusal report line, consumption, argv synthesis, strtol incident + census analysis, controller-flagged deltas, build-worker sha-pinning steps, Step P re-pin instructions)",
+    "patch/modinst_core-config-entry.diff sha 4bab84ab8c91a06a92f4d73cdd42c95f315631e7681a0d190dec2f992bfcb150 (+624/-1, 3 hunks; patch -p0 onto pristine reproduces owned BYTE-EXACT)",
+    "owned/modinst_core.c sha 43ea66c1c5dcf52bfb9158bae5f782438911b61f699eeb1f8dc29c6b702dcda0 (compile-ready)",
+    "host-test/host_cmd_entry_patched_test.py sha 14c18cbd8d26e7b60e22f16df99903662289fc003cc03801acc613ed5a7824fa + HOST-TEST-RECEIPT.md sha 0b9c6904671f631696b8309718e2f627d83980c859052700cf4c098e9c679b61 + host-test.log sha fae86422aaac964150bfa870409d3271fda032f4f2fefba5cf93ffb1af038539 (OVERALL: PASS, 32 checks)",
+    "host-test/build/modinst_core_cfgentry.o sha 51b881715d9a43f7c29886622f5d74becee5b38f02a93198f02549688c52ec40",
+    "host-test/build/modinst_composed_cfgentry sha 4659c24c4a4d829dc13a59813e7b137bf4d0efeaf0bca45b21e064b589eb2aa1 (full host binary: patched .o + 12 UNCHANGED D1 objects + pinned static libs)",
+    "REPORT.md (last)"
+  ],
+  "design_decisions_receipted": {
+    "trigger": "argc<2 bare dispatch reads compile-time E2E_CMD_PATH /data/modbridge/intake/e2e-cmd.json (console loader passes no argv); explicit override slot --e2e-cmd FILE (first occurrence, value required) runs the identical rule against FILE - the host harness entry point and a controller manual trigger; --e2e-cmd without a value stays legacy grammar (unknown flag -> usage/EX_BAD); argc>=2 without the flag never consults the entry (argv wins, leftover file untouched)",
+    "exit_taxonomy": "0 dispatch ok; 2 = EX_BAD no file at the slot (identical to today's bare usage()) or consume-rename failure (schema sec 6 verbatim); 6 = EX_CONFIG, file present but refused (BOM/oversize/non-UTF-8/parse/schema/allow-deny) - the controller-requested DISTINCT refusal code. All refusal paths RETURN, never the exit() macro (F-R2 shim), so no dangling end line and no begin line on refusal",
+    "refusal_report_line": "on refusals where state_root.state itself validated (string, absolute, <=LINE_MAX_), exactly ONE {\"event\":\"status\",\"stage\":\"e2e-cmd\",\"outcome\":\"refused\",\"detail\":\"<reason>\"} line to the existing e2e-status.jsonl report path via the existing e2e_status API; no begin/end pair, no store mutation, verb never executed; parse-level failures log stdout only; unopenable state dir loses the line silently (never mkdirs)",
+    "consumption": "ps5io_rename e2e-cmd.json -> e2e-cmd.json.consumed after validation, BEFORE falling into the parse loop (thus before e2e_status_begin); overwrite of stale .consumed is legal per schema sec 6; proven per dispatch",
+    "imports": "stdio/string/malloc/free/read_file/say/ps5io_rename/snprintf + e2e_status API only. PRIOR ATTEMPT DEFECT FIXED IN FINISH: its build used strtol() for the JSON int branch; plain strtol is NOT in the console 116-import census (saved census showed +_strtol). Replaced with a bounded sign-aware saturating decimal fold (cap 0x0CCCCCCCCCCCCCCC, no UB; only schema==1 is ever accepted so saturation refuses with the identical line). See CONFIG-ENTRY-DESIGN.md sec 6"
+  },
+  "verification_done_this_session": {
+    "pristine_base": "composition/vendored/modinst_core.c sha256 45c04d084215cb5da520ff1a5bf70219f5ce0e86baf55bda4da706dd8dda044d (patches.json patched_sha256) - re-verified",
+    "patch_apply_check": "patch -p0 of patch/modinst_core-config-entry.diff onto a pristine copy reproduces owned/modinst_core.c BYTE-EXACT (sha 43ea66c1...)",
+    "host_build": "patched .o compiled with the exact host-build.json receipt argv: exit 0; warnings = the SAME 3 pre-existing warnings as the D1 receipt host-compile-modinst_core.stderr (lines 643/1365/1379, untouched code); ZERO new warnings. CORRECTION vs the pre-FINISH CLAIM text which said '0 warnings' - inaccurate, the pristine file itself emits these 3",
+    "census": "nm -u patched .o vs pristine .o: 70 = 70, diff EMPTY; nm -u linked patched binary vs pristine D1 binary: 104 = 104, diff EMPTY; no strtol anywhere - host import delta ZERO; console 116-import re-proof remains the build worker's step",
+    "entry_proofs_host": "HOST-TEST-RECEIPT.md OVERALL: PASS (32 checks): A bare dispatch (slot absent) -> exit 2 + refusal line + usage, no state created; B 15-step stage 0..6 replay (13 distinct staged cmd files) via the compiled-in entry: 15/15 exit 0 + consumed-rename, transcript == 35-line corrected ledger AND sha256 == 31a4764a4ae13afac76db4e50e0905789a6b07294acb5943ebd2affb3b5ebeed (staging-final's emulation transcript); C legacy-argv twins on the SAME patched binary byte-identical to the entry transcript AND to staging-final's twin transcript produced by the PRISTINE D1 binary (legacy argv unaffected); C2 recover probe begin/end + consumed; D stale re-dispatch exit 2, zero state change; E argv>=2 without the flag never consults the entry, leftover cmd file untouched; F 14/14 refusal cases (13 x EX_CONFIG 6, absent-file EX_BAD 2; host-adapted cases show exactly ONE refused report line, no journal/records side effects); G valueless --e2e-cmd stays legacy grammar",
+    "parser_equivalence_probe": "standalone harness: 1->1, 12->12, -1->-1, 0->0, 007->7, huge saturates (still != 1, refuses identically to the harness int())"
+  },
+  "bounds": "no console contact, no network, no nested subagents; the composition sources/receipts of worker-d1-chain-relink read-only (my .o/binary live under this worker's dir); host binary executed only with scratch state/roots/cmd paths inside this worker's outputs dir; staged cmd/ files read-only, SHASUMS re-verified; CLAIM.json first, REPORT.md last",
+  "honesty": "This is a HOST-side validation of the compiled-in entry exercised via the --e2e-cmd override slot (the designed host harness entry point); the compile-time /data/... slot itself, console STOR/readback/consumed behavior, fresh tuple IDs (g1-cmd-entry-*), suites re-run (bridge 75 / F-R2 87 / fault 186 + new config-entry cases), the new build receipt and the Step P re-pin remain the build worker's + controller's work. Host results do not claim console behavior or any [TARGET] line. Controller-flagged deltas (EX_CONFIG vs schema sec 6/8 EX_BAD wording; refusal report line; --e2e-cmd slot) are listed in CONFIG-ENTRY-DESIGN.md sec 7 and require explicit ack or schema amendment before RUN-CONFIG B."
+}

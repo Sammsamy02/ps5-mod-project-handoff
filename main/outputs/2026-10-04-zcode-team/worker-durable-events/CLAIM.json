@@ -1,0 +1,64 @@
+{
+  "worker": "worker-durable-events",
+  "date": "2026-10-05",
+  "scope": "Host-side complementary evidence tooling implementing the user directive that runtime-status.txt is LATEST-STATE-ONLY (last-writer-wins by design) while the AUTHORITATIVE activation/terminal evidence is the durable per-build/run/PID events (the accumulated modbridge-supplier-diag jsonl + the UE4SS mirror lines), correlated by build/run/pid, never racing the status file. Delivers, in THIS worker directory only: (1) tools/epoch_view.py — one table row per GAME EPOCH (pid) from the accumulated sdiag jsonl (+ optional UE4SS mirror and runtime-status), with build_id (CLI-pinned only; the sdiag grammar carries none), session (status session row applied to its pid alone), first/last t_ms, the first-seen stage chain in the evidence.sh tag vocabulary (coarse ENTRY/ACT/VMMAP/lease/anchors/conversion/cfg/START/pad/harness/STOP AND the exact S-stage names, with the GAP-3 exepath_source display quirk annotated), the terminal event (verbatim r4 refusal line + int32 code + 0x-hex pad error decode), the predicted pair (anchor_count/intervals_found/lease_spans/lease_reg/extent/cfg/spanpub), E4-activated as literal-only-via-session-match else evidence-equivalence with caveat, buffered-Lua harness green, and the verdict class in the oracle vocabulary (E2 START / pad phase-6 / B7 MFA / engine-ready / mods-started plus D6/D7/C12/E1/STARTED) with a MINIMAL-ACCEPT-grade quartet qualifier; --json machine document; --baseline-bytes byte-exact append cut as a per-epoch NEW label with history always shown; robustness for unparseable lines, pid reuse across boots (occurrence #k), reboot detection (t_ms backwards -> BOOT-GAP note), truncated epochs (INCOMPLETE_WINDOW, never guessed), missing file (exit 2), empty input (NO-EPOCHS). (2) VALIDATION.txt — the 4-epoch table from the REAL accumulated launch-10 file plus the requirement/cross-check ledger. (3) PROCEDURE.md — the one-page RUN-N reading procedure. (4) REPORT.md. evidence.sh (owner worker-evidence-gap-fix-2, in flight) was read for vocabulary only (canonical copy worker-launch10-evidence-upgrade/evidence.sh) and never edited. NO console contact; LOCAL file analysis only; no files outside this worker directory created or modified.",
+  "user_directive_implemented": {
+    "directive": "runtime-status.txt is LATEST-STATE-ONLY (last-writer-wins by design); the authoritative activation/terminal evidence is the durable per-build/run/PID events — the sdiag jsonl (accumulates across epochs) + the UE4SS mirror lines; evidence reading must correlate by build/run/pid and never race the file",
+    "mechanism": [
+      "epoch facts come only from sdiag records and pid-prefixed UE4SS.log lines of that pid",
+      "the status file (when given) is parsed as one session row + last state and applied ONLY to the epoch whose pid equals the session pid; other epochs are never touched; when the session pid has no epoch in the file the tool says so instead of guessing",
+      "the old 'fetch status before terminal write' caveat is not modeled anywhere — there is no race to win"
+    ]
+  },
+  "claims": {
+    "four_epochs_recovered": {
+      "claim": "epoch_view.py recovers ALL FOUR game epochs from the real accumulated file launch10-prep/sdiag-baseline-run5.jsonl (2139 records, 318910 B, sha256 40504e28e0bc15fd0060304842ad2602bf5b279fb406affaedcb17cf51f4ec0f, byte-identical to launch10-evidence/run4-sdiag.jsonl) with their distinct outcomes: pid 317 (run1) E2 START code=3 'PS5Pad.ini must be ASCII text without control bytes'; pid 341 (run2) B7 MFA mfa_activate_failed code=-8 (0xfffffff8) 'size file is shorter than the load list says ue4ss/PS5Pad.ini' with ZERO bridge tags in the epoch (refusal preceded capture, per oracle B7); pid 355 (run3) pad phase-6 code=3 'PS5Pad input unavailable: phase=6, error=-2137915388' (0x80920004); pid 370 (run4) pad phase-6 with byte-identical refusal text — the run-4 repro, corroborated by the status session 370 (its only legal application under LATEST-STATE-ONLY).",
+      "evidence": [
+        "VALIDATION.txt section 1 (tool output verbatim on the real file) and section 2 R1",
+        "epoch split 548+495+548+548 = 2139 records in append order 317->341->355->370",
+        "r4 mirror lines in run4-ue4ss.log carry the same pids/codes/details; cross-sink t_ms agreement re-verified (317/341/355 exact; 370 1 ms writer skew, recorded)"
+      ]
+    },
+    "predicted_pair_on_conversion_passes": {
+      "claim": "The predicted pair values are recovered on the conversion-passing epochs: anchor_count=7, intervals_found=1, lease_spans=6, lease_reg=6, extent [0x400000, 0xc0602c8), cfg gamedir/workdir=1/1 — on pid 317 AND pid 355, the two passes LAUNCH10-RESULTS.md section 3 confirmed ('The predicted pair is CONFIRMED on real data, twice'), and honestly extended: pid 370 (run-4 repro) adds a THIRD identical quartet (spanpub totals 119/127/123 differ per boot with cap=16 saturation on all three).",
+      "evidence": [
+        "VALIDATION.txt section 2 R2; per-epoch predicted_pair blocks in the --json document",
+        "LAUNCH10-RESULTS.md sections 2-3 (run-3 MINIMAL-ACCEPT clause table and predicted-pair verification) re-derived from the accumulated file rather than the per-run files"
+      ]
+    },
+    "per_run_slice_identity": {
+      "claim": "The per-run evidence files are value-identical per-pid slices of the accumulated file: run1-sdiag.jsonl yields exactly epoch 317 and run3-sdiag.jsonl exactly epochs 317/341/355, each field-identical (records, t_first/t_last, chain, terminal, predicted_pair, activation, verdict, harness) to the corresponding epoch of the accumulated file — programmatically asserted (PASS). The baseline cut at run3's byte size (237211) marks exactly pid 370 NEW, proving the cut is a byte-exact epoch discriminator for RUN-N+1.",
+      "evidence": [
+        "VALIDATION.txt sections 3 C1-C2; the slice-identity assertion run (epoch_view --json compared across the three files)",
+        "provenance shas re-verified: run1 d5ad9fa05e9bf4f7..., run3 264ba150325dbe28..., run3-status f5ba12265b77c918..., run4==accumulated 40504e28..., run4-ue4ss==ue4ss-log-baseline-run5 324145c9d261d55b..., run4-status==runtime-status-baseline-run5 63909e2e28bcc0e0..."
+      ]
+    },
+    "vocabulary_fidelity": {
+      "claim": "The stage chain uses the same tag vocabulary as evidence.sh: the coarse tokens (ENTRY, ACT, VMMAP, lease, anchors, conversion, cfg, START, pad, harness, STOP) map 1:1 onto evidence.sh's S-stage table (S1_ENTRY_CTORS, S2_ACTIVATION, S3_VMMAP_WALK, S4_LEASE_REG + spanpub, S5_IDENTITY_ANCHORS, S6_CONVERSION, S7_CFG_ATTACH, S9_START_ACK, S11_STOP) and both chains are emitted per epoch; the GAP-3 exepath_source mid-walk quirk is annotated, never reordered; the evidence.sh G4 quirk (module_start_return=0 after a refusal = game continues UNMODDED, not an unload) is annotated. Verdict classes use the oracle vocabulary (E2 START, B7 MFA, pad phase-6, engine-ready, mods-started) plus the named D6/D7/C12/E1/STARTED classes; harness tags (buffered_lua_*/lua_*/worker_*) are sdiag-grammar tags unmapped in evidence.sh's stage_of_tag and are mapped here so harness-green is visible per epoch.",
+      "evidence": [
+        "real chains: conversion epochs ENTRY -> harness -> ACT -> VMMAP -> cfg -> lease -> anchors -> conversion -> START -> STOP; pid 341 ENTRY -> harness -> ACT -> STOP (B7 shape)",
+        "VALIDATION.txt C4 re-verifies LAUNCH10-RESULTS values (vmentry 22761/10028, spanpub totals 119/127, mfa_activated_low 36564/36566, stat_ownmod=1 with bridge_exepath_source=0 on all conversion epochs)"
+      ]
+    }
+  },
+  "honest_bounds": [
+    "build_id is NOT carried by the sdiag record grammar (fields verified: marker/schema/seq/pid/tag/value/value_hex/t_ms); it is settable only via --build-id from the controller's staging receipt and stays '-' when unset; no build identity is asserted for the four epochs beyond controller records",
+    "E4 'activated' is not literally on file for ANY of the four epochs (terminal-write O_TRUNC; statuses captured only the final failed state); the tool reports evidence-equivalence with the caveat and claims no rung above MINIMAL-ACCEPT-grade conversion; the rung declaration remains the controller's act per ORACLE.md section 2",
+    "validation is local fixture analysis of real console fetches supplied by the controller; no console contact was made and no new launch evidence was created",
+    "no verdict was upgraded by re-reading unchanged evidence; the tool has no replay/upgrade paths"
+  ],
+  "deliverables": [
+    "outputs/2026-10-04-zcode-team/worker-durable-events/tools/epoch_view.py",
+    "outputs/2026-10-04-zcode-team/worker-durable-events/VALIDATION.txt",
+    "outputs/2026-10-04-zcode-team/worker-durable-events/PROCEDURE.md",
+    "outputs/2026-10-04-zcode-team/worker-durable-events/REPORT.md",
+    "outputs/2026-10-04-zcode-team/worker-durable-events/CLAIM.json"
+  ],
+  "sources": {
+    "accumulated_sdiag": "outputs/2026-10-04-zcode-controller/launch10-prep/sdiag-baseline-run5.jsonl (2139 records; RUN-5 baseline cut, 318910 B)",
+    "ue4ss_mirror": "outputs/2026-10-04-zcode-controller/launch10-evidence/run4-ue4ss.log (== launch10-prep/ue4ss-log-baseline-run5.txt)",
+    "status_latest_state_only": "outputs/2026-10-04-zcode-controller/launch10-prep/runtime-status-baseline-run5.txt (== launch10-evidence/run4-runtime-status.txt; session 370)",
+    "per_run_corpus": "outputs/2026-10-04-zcode-controller/launch10-evidence/run{1,3}-sdiag.jsonl, run3-runtime-status.txt",
+    "vocabulary": "outputs/2026-10-04-zcode-team/worker-launch10-evidence-upgrade/evidence.sh (read-only) + outputs/2026-10-04-zcode-team/worker-launch10-acceptance-criteria/ORACLE.md + outputs/2026-10-04-zcode-controller/launch10-evidence/LAUNCH10-RESULTS.md"
+  }
+}

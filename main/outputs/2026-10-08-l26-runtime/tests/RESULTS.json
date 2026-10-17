@@ -1,0 +1,69 @@
+{
+  "status": "PASS_HOST_ONLY_MAC",
+  "label": "Mac-only / host-tested",
+  "environment": "macOS arm64 host clang++; no console contact; no live engine calls",
+  "suite": "Claude l25 item 6: (a) unknown-yet *Property class passes bootstrap scan mode without CastFlags; (b) bad class pointer refused with reason/field-address/class-pointer details; (c) refusal does not stop the scan; (d) scan mode resets after an exception via RAII scope",
+  "tested_headers": {
+    "NativePropertyPointerGuard.hpp": {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l25-runtime/typescan-r4/include/NativePropertyPointerGuard.hpp",
+      "sha256": "a249ec41c0dcd8efd030a964d083dbd75806ffadc653e5a82f53fe0bcbadc696"
+    },
+    "NativeTypeScanPolicy.hpp": {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l25-runtime/typescan-r4/include/NativeTypeScanPolicy.hpp",
+      "sha256": "ac06c50c2fdc68ca1b83060e5942b1a1129c68bf27d572c515956f7c6d1acdc7"
+    },
+    "NativePropertyPointerGuard.inl": {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l25-runtime/typescan-r4/include/NativePropertyPointerGuard.inl",
+      "sha256": "57bed8fc08329bd533f35fc215d04d353e56d74049f7ec8e6f74444e86ccc081"
+    },
+    "NativePropertyReadBackend.inl": {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l25-runtime/typescan-r4/include/NativePropertyReadBackend.inl",
+      "sha256": "d3d088b061daec39d4ac2017f0b2706352db0aa669ba2a43214ffda50b094525"
+    }
+  },
+  "headers_unmodified": true,
+  "results": [
+    {
+      "name": "scan_refusals",
+      "mode": "plain",
+      "compile": {
+        "argv": [
+          "clang++",
+          "-std=c++20",
+          "-I/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l25-runtime/typescan-r4/include",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/tests/test_scan_refusals.cpp",
+          "-o",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/tests/test_scan_refusals-plain"
+        ],
+        "exit": 0,
+        "stderr": ""
+      },
+      "exit": 0,
+      "stdout": "PASS (a) unknown-yet *Property class passes bootstrap only, no CastFlags needed\nPASS (b) refusals carry reason text, field address, class pointer (and key for pointer reads)\nPASS (c) refusal ended only its own chain; all 4 objects scanned, 4 fields registered\nPASS (d) RAII scope reset scan mode during unwinding; plain Begin/End counter-control stays stuck\nl25 scan-refusal host tests: (a) bootstrap unknown-yet, (b) detailed refusals, (c) scan continues, (d) RAII reset \u2014 all passed\n",
+      "stderr": ""
+    },
+    {
+      "name": "scan_refusals",
+      "mode": "asan-ubsan",
+      "compile": {
+        "argv": [
+          "clang++",
+          "-std=c++20",
+          "-I/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l25-runtime/typescan-r4/include",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/tests/test_scan_refusals.cpp",
+          "-o",
+          "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/tests/test_scan_refusals-asan-ubsan",
+          "-fsanitize=address,undefined",
+          "-fno-sanitize-recover=all",
+          "-g"
+        ],
+        "exit": 0,
+        "stderr": ""
+      },
+      "exit": 0,
+      "stdout": "PASS (a) unknown-yet *Property class passes bootstrap only, no CastFlags needed\nPASS (b) refusals carry reason text, field address, class pointer (and key for pointer reads)\nPASS (c) refusal ended only its own chain; all 4 objects scanned, 4 fields registered\nPASS (d) RAII scope reset scan mode during unwinding; plain Begin/End counter-control stays stuck\nl25 scan-refusal host tests: (a) bootstrap unknown-yet, (b) detailed refusals, (c) scan continues, (d) RAII reset \u2014 all passed\n",
+      "stderr": ""
+    }
+  ],
+  "notes": "ScanCollectionScope is a host-side RAII pattern over the shipped Begin/EndScanCollection API; the counter-control documents that the l24 candidate TypeChecker pairs Begin/End without RAII, so an escaping exception would leave scan mode stuck \u2014 adopt the scope in the next runtime revision."
+}

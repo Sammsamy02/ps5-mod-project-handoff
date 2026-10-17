@@ -1,0 +1,153 @@
+--- a/windows-candidate/owned_runtime.c
++++ b/windows-candidate/owned_runtime.c
+@@ -22,9 +22,22 @@
+ #if MB_OWNED_MUTEX
+ #include "../windows-services/mb_win_mutex_abi.h"
+ #endif
++#if MB_OWNED_FILEIO
++#include "../windows-services/mb_win_fileio_abi.h"
++#ifndef MB_OWNED_FILEIO_ROOT
++#error "owned_profile.h must define MB_OWNED_FILEIO_ROOT"
++#endif
++#ifdef MB_OWNED_FILEIO_ROOT_OVERRIDE
++#define MB_OWNED_FILEIO_ROOT_EFFECTIVE MB_OWNED_FILEIO_ROOT_OVERRIDE
++#else
++#define MB_OWNED_FILEIO_ROOT_EFFECTIVE MB_OWNED_FILEIO_ROOT
++#endif
++#endif
+ #include <pthread.h>
+ #include <stdlib.h>
+-#define IMPORT_CAPACITY (MB_OWNED_SYNC?64:MB_OWNED_WORKERS?26:MB_OWNED_CLOCK?18:16)
++/* +10 fileio imports fit every tier: entry+workers+fileio=31<=40;
++ * sync cap grows to 96 so the full stack 16+5+21+2+5+10=59 keeps headroom. */
++#define IMPORT_CAPACITY (MB_OWNED_SYNC?(MB_OWNED_FILEIO?96:64):MB_OWNED_WORKERS?(MB_OWNED_FILEIO?40:26):MB_OWNED_CLOCK?18:16)
+ #define ENTRY __attribute__((force_align_arg_pointer))
+ struct source {const void *bytes;size_t size;unsigned index,active;};
+ struct service {mb_win_heap_bridge_session heap;mb_win_tls_bridge_session tls;mb_win_loader_bridge_session loader;
+@@ -44,6 +57,9 @@
+ #endif
+ #if MB_OWNED_MUTEX
+  mb_win_mutex_session mutex;
++#endif
++#if MB_OWNED_FILEIO
++ mb_win_fileio_session fileio;
+ #endif
+  mb_win_runtime_bind_context runtime;mb_win_loader_runtime_context complete;unsigned active;};
+ static struct {
+@@ -61,6 +77,9 @@
+ #if MB_OWNED_MUTEX
+  mb_win_mutex mutex_owner;unsigned mutex_owner_live;
+ #endif
++#if MB_OWNED_FILEIO
++ mb_win_fileio fileio_owner;unsigned fileio_owner_live;
++#endif
+  pthread_mutex_t mutex;pthread_t entered_thread;unsigned entered,mutex_live,domain_live,heap_live,loader_live;
+  mb_pe_loader_record records[2];mb_pe_export_lease imports[2][IMPORT_CAPACITY],procedures[2][8];
+  mb_pe_loader_catalog_entry catalog[2];struct source sources[2];struct service services[2];
+@@ -157,6 +176,12 @@
+   * dispatch remains a documented future composition, not guessed here. */
+  result=mb_win_mutex_bind(&s->mutex,import,address);if(result!=MB_PE_BIND_UNRESOLVED)return result;
+ #endif
++#if MB_OWNED_FILEIO
++ /* The file I/O family's twenty KERNEL32 names intersect no other family
++  * (verified: no wait, close or error-name overlap), so this position in
++  * the shared-name bind chain cannot change any existing resolution. */
++ result=mb_win_fileio_bind(&s->fileio,import,address);if(result!=MB_PE_BIND_UNRESOLVED)return result;
++#endif
+ #if MB_OWNED_CLOCK
+  result=mb_win_clock_bind(&s->clock,import,address);
+ #endif
+@@ -165,6 +190,9 @@
+ #endif
+ static int service_end(void *unused,void *token){
+  (void)unused;struct service *s=token;
++#if MB_OWNED_FILEIO
++ if(s->fileio.active && mb_win_fileio_end_session(&s->fileio)!=MB_WIN_FILEIO_OK)return -1;
++#endif
+ #if MB_OWNED_MUTEX
+  if(s->mutex.active && mb_win_mutex_end_session(&s->mutex)!=MB_WIN_MUTEX_OK)return -1;
+ #endif
+@@ -217,6 +245,9 @@
+ #if MB_OWNED_MUTEX
+  if(mb_win_mutex_begin_session(&s->mutex,&owned.mutex_owner,module)!=MB_WIN_MUTEX_OK){if(service_end(NULL,s))abort();return -1;}
+ #endif
++#if MB_OWNED_FILEIO
++ if(mb_win_fileio_begin_session(&s->fileio,&owned.fileio_owner,module)!=MB_WIN_FILEIO_OK){if(service_end(NULL,s))abort();return -1;}
++#endif
+ #if MB_OWNED_CLOCK || MB_OWNED_WORKERS
+  *binder=service_bind;*context=s;
+ #else
+@@ -232,6 +263,7 @@
+  owned.report.sync_enabled=MB_OWNED_SYNC;
+  owned.report.init_once_enabled=MB_OWNED_INIT_ONCE;
+  owned.report.mutex_enabled=MB_OWNED_MUTEX;
++ owned.report.fileio_enabled=MB_OWNED_FILEIO;
+  int native=0;
+  int mutex_status=pthread_mutex_init(&owned.mutex,NULL);if(mutex_status)return fail(1,(unsigned)mutex_status);owned.mutex_live=1;
+  mb_win_thread_status ts=mb_win_threads_open(&owned.domain,&native);
+@@ -258,6 +290,14 @@
+ #if MB_OWNED_MUTEX
+  mb_win_mutex_config mc={&owned.domain,16};mb_win_mutex_status ms=mb_win_mutex_open(&owned.mutex_owner,&mc,&native);
+  if(owned.mutex_owner.state)owned.mutex_owner_live=1;if(ms!=MB_WIN_MUTEX_OK)return fail(39,(unsigned)(ms==MB_WIN_MUTEX_NATIVE_ERROR&&native?native:(int)ms));
++#endif
++#if MB_OWNED_FILEIO
++ /* Stage 41 (owner open) and 42 (owner close) are unique: the tree used 1-17,
++  * 19-29 and 31-40 before this family. The root is the payload's dedicated
++  * sandbox namespace (build passes a per-build host directory override for
++  * host driver controls only; the native ELF keeps the production root). */
++ mb_win_fileio_config fc={&owned.domain,MB_OWNED_FILEIO_ROOT_EFFECTIVE,16};mb_win_fileio_status fs=mb_win_fileio_open(&owned.fileio_owner,&fc,&native);
++ if(owned.fileio_owner.state)owned.fileio_owner_live=1;if(fs!=MB_WIN_FILEIO_OK)return fail(41,(unsigned)(fs==MB_WIN_FILEIO_NATIVE_ERROR&&native?native:(int)fs));
+ #endif
+  owned.sources[0]=(struct source){mb_owned_consumer_bytes,sizeof(mb_owned_consumer_bytes),0,0};
+  owned.sources[1]=(struct source){mb_owned_helper_bytes,sizeof(mb_owned_helper_bytes),1,0};
+@@ -297,7 +337,7 @@
+  if(result)return fail(8,(unsigned)result);
+  if(values[2]!=86 || values[3]!=93 || (void *)(uintptr_t)values[0]!=owned.records[1].link.module.image ||
+     owned.records[1].explicit_refs!=1 || owned.records[1].procedure_count!=1 || owned.heap.live_count!=(MB_OWNED_ENTRY?2u:0u) ||
+-    owned.report.consumer_imports!=(MB_OWNED_CLOCK?18u:MB_OWNED_ENTRY?16u:10u)+(MB_OWNED_WORKERS?5u:0u)+(MB_OWNED_SYNC?21u:0u)+(MB_OWNED_INIT_ONCE?2u:0u)+(MB_OWNED_MUTEX?5u:0u) || owned.report.helper_imports!=(MB_OWNED_CLOCK?10u:MB_OWNED_ENTRY?8u:6u))return fail(9,0);
++    owned.report.consumer_imports!=(MB_OWNED_CLOCK?18u:MB_OWNED_ENTRY?16u:10u)+(MB_OWNED_WORKERS?5u:0u)+(MB_OWNED_SYNC?21u:0u)+(MB_OWNED_INIT_ONCE?2u:0u)+(MB_OWNED_MUTEX?5u:0u)+(MB_OWNED_FILEIO?10u:0u) || owned.report.helper_imports!=(MB_OWNED_CLOCK?10u:MB_OWNED_ENTRY?8u:6u))return fail(9,0);
+ #if MB_OWNED_WORKERS
+  void *begin=NULL,*collect=NULL;lock(NULL);
+  status=mb_pe_loader_proc_name(&owned.loader,consumer,(mb_pe_string){"WorkerBegin",11},&begin,&error);
+@@ -316,6 +356,30 @@
+  int worker_native=0;mb_win_worker_status ws=mb_win_workers_collect(&owned.workers,&worker_native);
+  if(ws!=MB_WIN_WORKERS_OK)return fail(26,(unsigned)(ws==MB_WIN_WORKERS_NATIVE_ERROR&&worker_native?worker_native:(int)ws));
+ #endif
++#if MB_OWNED_FILEIO
++ /* Stages 43 (export resolve), 44 (first call window), 45 (native file-handle
++  * retirement), 46 (second call window) are unique in this tree. The two
++  * calls ride the existing worker admission route, so dll_calls_started /
++  * dll_calls_returned (exercise/unload/lookup) stay byte-identical with
++  * --fileio off and gain nothing else when it is on. */
++ void *fileio_export=NULL;lock(NULL);
++ status=mb_pe_loader_proc_name(&owned.loader,consumer,(mb_pe_string){"WorkerFileIo",12},&fileio_export,&error);
++ unlock(NULL);if(status!=MB_PE_LOADER_OK)return fail_loader(43,status,&error);
++ uint64_t fileio_out[4]={0};
++ if(worker_call_begin())return fail(44,1);++owned.report.worker_calls_started;
++ result=mb_owned_call_worker(fileio_export,fileio_out);++owned.report.worker_calls_returned;
++ /* The fixture cannot close file handles itself (the workers family binds the
++  * CloseHandle import for thread handles); it returns both open handles and
++  * this runner retires them through the documented delegation service. */
++ if(result!=1 || fileio_out[2]!=1 || fileio_out[3]!=UINT64_C(0x46494f31)){(void)worker_call_end();return fail(44,(unsigned)(result?result:1));}
++ if(!mb_win_fileio_close_handle(&owned.fileio_owner,(void *)(uintptr_t)fileio_out[0]) ||
++    !mb_win_fileio_close_handle(&owned.fileio_owner,(void *)(uintptr_t)fileio_out[1])){(void)worker_call_end();return fail(45,6);}
++ if(worker_call_end())return fail(44,2);
++ if(worker_call_begin())return fail(46,1);++owned.report.worker_calls_started;
++ result=mb_owned_call_worker(fileio_export,fileio_out);++owned.report.worker_calls_returned;
++ if(result!=1 || fileio_out[0]!=1 || fileio_out[3]!=UINT64_C(0x46494f32)){(void)worker_call_end();return fail(46,(unsigned)(result?result:1));}
++ if(worker_call_end())return fail(46,2);
++#endif
+  owned.report.stage=MB_OWNED_STAGE_UNLOAD;++owned.report.dll_calls_started;
+  result=mb_owned_call_unload(unload,(void *)(uintptr_t)values[0]);++owned.report.dll_calls_returned;
+  if(!result)return fail(10,0);
+@@ -380,6 +444,10 @@
+  if(owned.init_once_live){int native=0;mb_win_init_once_status io=mb_win_init_once_close(&owned.init_once,&native);
+   if(io!=MB_WIN_INIT_ONCE_OK)return fail(38,(unsigned)(io==MB_WIN_INIT_ONCE_NATIVE_ERROR&&native?native:(int)io));owned.init_once_live=0;}
+ #endif
++#if MB_OWNED_FILEIO
++ if(owned.fileio_owner_live){int native=0;mb_win_fileio_status fs=mb_win_fileio_close(&owned.fileio_owner,&native);
++  if(fs!=MB_WIN_FILEIO_OK)return fail(42,(unsigned)(fs==MB_WIN_FILEIO_NATIVE_ERROR&&native?native:(int)fs));owned.fileio_owner_live=0;}
++#endif
+ #if MB_OWNED_MUTEX
+  if(owned.mutex_owner_live){int native=0;mb_win_mutex_status ms=mb_win_mutex_close(&owned.mutex_owner,&native);
+   if(ms!=MB_WIN_MUTEX_OK)return fail(40,(unsigned)(ms==MB_WIN_MUTEX_NATIVE_ERROR&&native?native:(int)ms));owned.mutex_owner_live=0;}

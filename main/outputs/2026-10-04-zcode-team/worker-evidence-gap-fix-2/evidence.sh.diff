@@ -1,0 +1,347 @@
+38a39,84
+> #
+> # Rev 2026-10-05 (worker-evidence-gap-fix-2), per the FIRST REAL launch-10
+> # classification (worker-verdict-first-real LAUNCH10-RESULTS.md §5, gaps G1-G9;
+> # the three real runs are the regression corpus — rerun after this patch):
+> #   G1 verdict-name fidelity: the two refusal classes the real runs exposed are
+> #      now named with the oracle's own vocabulary — FAILED_E2_START (oracle E2:
+> #      runtime_start_failed code=3, EXPECTED-REFUSAL, verdict >= MINIMAL-ACCEPT)
+> #      and FAILED_B7_MFA (oracle B7: mfa_activate_failed, EXPECTED-REFUSAL, FAIL
+> #      with named cause, nothing downstream ran). When a code=3 refusal coexists
+> #      with the current session's sdiag conversion quartet (all 4 lmf_extent
+> #      events + anchor_count>0 + intervals_found>0 + cfg events), no D6 line, no
+> #      crash tail and a fresh failed status whose detail matches, the verdict is
+> #      MINIMAL_ACCEPT_E2_REFUSAL (E4 'activated' is not literally on file — the
+> #      terminal-write O_TRUNC caveat is printed with the verdict). ORACLE-CLASS
+> #      lines name the row on the one-pager and in the JSON tail. Bare
+> #      FAILED_code<N> remains the fallback for unpinned codes.
+> #   G2 sdiag per-session split: the jsonl is append-only across a whole console
+> #      boot, so events are grouped PER PID (session). SDIAGSUM is now the
+> #      file-total line (events/sessions/pid_first/pid_last; value tags are the
+> #      LAST session's) and each session gets a PIDSUM line (per-session values:
+> #      start_ok/start_failed, mfa/runtime_start_failed codes, extent_events,
+> #      the predicted pair anchor_count/intervals_found next to lease_spans/reg,
+> #      vmentry/walk_stop, cfg, spanpub, stat_ownmod, module_start_return) plus a
+> #      PIDCHAIN first-seen chain and a PIDJSON record for the JSON tail. STIME
+> #      deltas are computed ONLY within one pid — never across sessions. Optional
+> #      --baseline-sdiag-bytes / --baseline-dir modbridge-supplier-diag-baseline.
+> #      txt cut (launch-10 pinned NO sdiag baseline: cut defaults OFF; the
+> #      per-pid split scopes cumulative files regardless).
+> #   G3 the JSON tail carries the sdiag-derived fields (sdiag object with the
+> #      current session's quartet/predicted pair + per-session records), so
+> #      JSON-only consumers see the evidence that achieved MINIMAL-ACCEPT.
+> #   G4 note: S11_STOP after a failure line is module_start_return=0 ("entry
+> #      returned 0, game continues UNMODDED"), annotated — not re-staged.
+> #   G5 --sdiag FILE alias for fixtures whose diag file is not named
+> #      modbridge-supplier-diag.jsonl (documented-placement operator trap).
+> #   G6 failure lines are grouped by their r4 pid and the cumulative-window
+> #      caveat is printed (PATH_TEST stamps carry no pid; verdict = LAST
+> #      failure line, append-only ordering discipline).
+> #   G7 note only: current-session vmentry > pinned kBridgeVmmapEntries=16384
+> #      with walk_stop=0 is reported as a diag-note (oracle C1/S3 reconciliation
+> #      question); no verdict impact. JSON: vm_capacity object.
+> #   G8 note only: exepath_source=0 WITH a successful r10 fork (stat_ownmod=1)
+> #      and conversion proceeding is annotated — the fork refuses only when ALL
+> #      THREE stats fail; oracle C7 wording is looser than live behavior.
+> #   G9 note only: spanpub env pair printed as the 64-bit low/high split +
+> #      spanpub_cap=1 saturation note (both real boots saturated at 16).
+93a140,141
+> SDIAG_ARG=""
+> BASE_SDIAG=0
+103a152
+>                    [--baseline-sdiag-bytes N]
+105c154,155
+<                    [--from-dir DIR] [--dry-run] [--plan] [--out FILE] [--json-tail]
+---
+>                    [--from-dir DIR] [--sdiag FILE]
+>                    [--dry-run] [--plan] [--out FILE] [--json-tail]
+117a168,173
+>   --baseline-sdiag-bytes N  optional append-only baseline cut for the supplier-
+>                             diag jsonl. Launch-10 pinned NO sdiag baseline (sink
+>                             absence is normal), so this defaults to 0 (OFF);
+>                             per-pid session split scopes cumulative files
+>                             regardless. A modbridge-supplier-diag-baseline.txt
+>                             in --baseline-dir also enables the cut.
+118a175,177
+>   --sdiag FILE              explicit path to the supplier-diag jsonl (from-dir
+>                             mode) when the fixture is not named
+>                             modbridge-supplier-diag.jsonl (G5 alias)
+138a198
+>     --baseline-sdiag-bytes) BASE_SDIAG="$2"; shift 2 ;;
+140a201
+>     --sdiag) SDIAG_ARG="$2"; shift 2 ;;
+265c326,331
+<   [ -f "$FROM_DIR/modbridge-supplier-diag.jsonl" ]      && cp "$FROM_DIR/modbridge-supplier-diag.jsonl" "$SDIAG_F" && ok_sdiag=1
+---
+>   # G5: --sdiag FILE wins when given; otherwise the documented fixture name.
+>   if [ -n "$SDIAG_ARG" ]; then
+>     [ -f "$SDIAG_ARG" ] && cp "$SDIAG_ARG" "$SDIAG_F" && ok_sdiag=1
+>   elif [ -f "$FROM_DIR/modbridge-supplier-diag.jsonl" ]; then
+>     cp "$FROM_DIR/modbridge-supplier-diag.jsonl" "$SDIAG_F" && ok_sdiag=1
+>   fi
+315a382,389
+> 
+> # G2: optional sdiag baseline cut. Launch-10 pinned NO sdiag baseline (sink
+> # absence is normal), so the cut defaults OFF; enable via --baseline-sdiag-bytes
+> # or by dropping modbridge-supplier-diag-baseline.txt into --baseline-dir.
+> # (Size-only reference: there is no pinned sdiag sha to drift-guard.)
+> if [ "$BASE_SDIAG" -eq 0 ] && [ -n "$BASELINE_DIR" ] && [ -s "$BASELINE_DIR/modbridge-supplier-diag-baseline.txt" ]; then
+>   BASE_SDIAG=$(wc -c < "$BASELINE_DIR/modbridge-supplier-diag-baseline.txt" | tr -d ' ')
+> fi
+384a459,462
+>       # G1: the two refusal classes the REAL launch-10 runs exposed, named per
+>       # the oracle rows (B7 Phase-B MFA activation, E2 START-stage code=3).
+>       else if (line ~ /mfa_activate_failed/) { tstage = "S2_ACTIVATION"; treason = "B7 EXPECTED-REFUSAL — MFA activation refused (Phase B; loadlist/roots drifted; the named offending file is in the detail); NOTHING downstream ran" }
+>       else if (line ~ /runtime_start_failed code=3/) { tstage = "S9_START_REFUSED"; treason = "E2 EXPECTED-REFUSAL — START-stage refusal (post-conversion: prepare/start threw; pad profile / mod source / sink open); verdict FAILED_E2_START, >= MINIMAL-ACCEPT where the session conversion quartet holds" }
+488a567,571
+> # G2: the jsonl is append-only across a whole console boot, so everything is
+> # grouped PER PID (session). Value tags are last-write-wins WITHIN a pid only;
+> # STIME deltas are computed only within one pid (never across sessions);
+> # pid_first/pid_last label the file's first/last SESSION explicitly instead of
+> # the stale "first pid seen" reading.
+490c573
+<   awk '
+---
+>   awk -v cut="${BASE_SDIAG:-0}" '
+516a600
+>     function dv(v) { return (v == "" ? "-" : v) }
+536c620,622
+<       if (pid_first == "" && pid != "") pid_first = pid
+---
+>       if (pid == "") pid = "?"
+>       if (!(pid in psess_ix)) { psess_ix[pid] = nsess + 1; nsess++; psess[nsess] = pid }
+>       pev[pid]++
+538,546c624,654
+<       if (s != "") { if (!(s in sseen)) { sorder[++nsorder] = s; sseen[s] = 1 } slast = s }
+<       if (tag == "runtime_start_ok")     sok++
+<       if (tag == "runtime_start_failed") sfail++
+<       if (tag == "bridge_lease_reg_spans") lease_spans = val
+<       if (tag == "bridge_lease_reg")       lease_reg = val
+<       if (tag == "lmf_anchor_count")       anchor_count = val
+<       if (tag == "lmf_intervals_found")    intervals_found = val
+<       if (tag == "bridge_vmentry_entries") vme = val
+<       if (tag == "bridge_cfg_gamedir")     cfgdir = val
+---
+>       if (s != "") {
+>         if (!(s in sseen)) { sorder[++nsorder] = s; sseen[s] = 1 }
+>         slast = s
+>         if (!(pid in pinit)) { pinit[pid] = 1; pcount[pid] = 0 }
+>         if (!((pid, s) in pseen)) { pseen[pid, s] = 1; pcount[pid]++; pstage[pid, pcount[pid]] = s }
+>       }
+>       if (tms != "" && tms ~ /^[0-9]+$/) {
+>         if (pfirst[pid] == "") pfirst[pid] = tms
+>         plast[pid] = tms
+>       }
+>       if (tag == "runtime_start_ok")     { sok++; psok[pid]++ }
+>       if (tag == "runtime_start_failed") { sfail++; psfail[pid]++; prscode[pid] = val }
+>       if (tag == "mfa_activate_failed")   pmfa[pid] = val
+>       if (tag == "bridge_lease_reg_spans") pspans[pid] = val
+>       if (tag == "bridge_lease_reg")       preg[pid] = val
+>       if (tag == "lmf_anchor_count")       panchor[pid] = val
+>       if (tag == "lmf_intervals_found")    pintervals[pid] = val
+>       if (tag == "bridge_vmentry_entries") pvme[pid] = val
+>       if (tag == "bridge_vm_walk_stop")    pstop[pid] = val
+>       if (tag == "bridge_exepath_source")  pesrc[pid] = val
+>       if (tag == "bridge_cfg_gamedir")     { pcfgv[pid] = val; pcfg[pid]++ }
+>       if (tag == "bridge_cfg_workdir")     pcfg[pid]++
+>       if (tag ~ /^lmf_extent_(base_low|base_high|end_low|end_high)$/) pextb[pid, tag] = 1
+>       if (tag == "bridge_spanpub_count") pspubc[pid] = val
+>       if (tag == "bridge_spanpub_total") pspubt[pid] = val
+>       if (tag == "bridge_spanpub_cap")   pspubcap[pid] = val
+>       if (tag == "bridge_spanpub_env_low")  penvl[pid] = jstr($0, "value_hex")
+>       if (tag == "bridge_spanpub_env_high") penvh[pid] = jstr($0, "value_hex")
+>       if (tag == "stat_ownmod")    pstato[pid] = val
+>       if (tag == "stat_ownmod_ec") pstatoec[pid] = val
+>       if (tag == "module_start_return") pmodret[pid] = val
+548c656
+<         if (ptms != "" && ptms ~ /^[0-9]+$/ && tms ~ /^[0-9]+$/) {
+---
+>         if (ptms != "" && ptms_pid == pid && ptms ~ /^[0-9]+$/ && tms ~ /^[0-9]+$/) {
+552c660,663
+<           if (nshow < 24) { printf "STIME\t%s\t%s\t(first t_ms)\n", tag, tms; nshow++ }
+---
+>           if (nshow < 24) {
+>             if (ptms != "" && ptms_pid != pid) printf "SDIAGSESS\tpid=%s\n", pid
+>             printf "STIME\t%s\t%s\t(first t_ms)\n", tag, tms; nshow++
+>           }
+554c665
+<         ptms = tms
+---
+>         ptms = tms; ptms_pid = pid
+559c670,682
+<       printf "SDIAGSUM\tevents=%d pid_first=%s start_ok=%d start_failed=%d lease_spans=%s lease_reg=%s anchor_count=%s intervals_found=%s vmentry=%s cfg_gamedir=%s\n", n + 0, pid_first, sok + 0, sfail + 0, lease_spans, lease_reg, anchor_count, intervals_found, vme, cfgdir
+---
+>       lp = (nsess > 0) ? psess[nsess] : ""
+>       printf "SDIAGSUM\tevents=%d sessions=%d pid_first=%s pid_last=%s baseline_cut=%s start_ok=%d start_failed=%d lease_spans=%s lease_reg=%s anchor_count=%s intervals_found=%s vmentry=%s cfg_gamedir=%s (file totals; value tags = last session pid=%s; per-session lines follow)\n", n + 0, nsess + 0, dv(psess[1]), dv(lp), (cut + 0 > 0 ? "yes" : "no"), sok + 0, sfail + 0, dv(pspans[lp]), dv(preg[lp]), dv(panchor[lp]), dv(pintervals[lp]), dv(pvme[lp]), dv(pcfgv[lp]), dv(lp)
+>       for (pi = 1; pi <= nsess; pi++) {
+>         p = psess[pi]
+>         extn = ((pextb[p, "lmf_extent_base_low"] ? 1 : 0) + (pextb[p, "lmf_extent_base_high"] ? 1 : 0) + (pextb[p, "lmf_extent_end_low"] ? 1 : 0) + (pextb[p, "lmf_extent_end_high"] ? 1 : 0))
+>         mfav = dv(pmfa[p])
+>         if (mfav != "-" && mfav + 0 > 2147483647) mfav = mfav "(int32 " (mfav - 4294967296) ")"
+>         chain = ""
+>         for (j = 1; j <= pcount[p]; j++) chain = chain ((j > 1) ? " -> " : "") pstage[p, j]
+>         printf "PIDSUM\tpid=%s\tevents=%d\tt_first=%s\tt_last=%s\tstart_ok=%d\tstart_failed=%d\tmfa_activate_failed=%s\truntime_start_failed=%s\textent_events=%d\tcfg_events=%d\tlease_spans=%s\tlease_reg=%s\tanchor_count=%s\tintervals_found=%s\tvmentry=%s\tvm_walk_stop=%s\texepath_source=%s\tcfg_gamedir=%s\tspanpub_count=%s\tspanpub_total=%s\tspanpub_cap=%s\tenv_low=%s\tenv_high=%s\tstat_ownmod=%s\tstat_ownmod_ec=%s\tmodule_start_return=%s\n", p, pev[p] + 0, dv(pfirst[p]), dv(plast[p]), psok[p] + 0, psfail[p] + 0, mfav, dv(prscode[p]), extn, pcfg[p] + 0, dv(pspans[p]), dv(preg[p]), dv(panchor[p]), dv(pintervals[p]), dv(pvme[p]), dv(pstop[p]), dv(pesrc[p]), dv(pcfgv[p]), dv(pspubc[p]), dv(pspubt[p]), dv(pspubcap[p]), dv(penvl[p]), dv(penvh[p]), dv(pstato[p]), dv(pstatoec[p]), dv(pmodret[p])
+>         printf "PIDCHAIN\tpid=%s\t%s\n", p, chain
+>         printf "PIDJSON\t{\"pid\":\"%s\",\"events\":%d,\"t_first\":\"%s\",\"t_last\":\"%s\",\"start_ok\":%d,\"start_failed\":%d,\"mfa_activate_failed\":\"%s\",\"runtime_start_failed\":\"%s\",\"extent_events\":%d,\"cfg_events\":%d,\"lease_spans\":\"%s\",\"lease_reg\":\"%s\",\"anchor_count\":\"%s\",\"intervals_found\":\"%s\",\"vmentry\":\"%s\",\"vm_walk_stop\":\"%s\",\"exepath_source\":\"%s\",\"cfg_gamedir\":\"%s\",\"module_start_return\":\"%s\"}\n", p, pev[p] + 0, dv(pfirst[p]), dv(plast[p]), psok[p] + 0, psfail[p] + 0, mfav, dv(prscode[p]), extn, pcfg[p] + 0, dv(pspans[p]), dv(preg[p]), dv(panchor[p]), dv(pintervals[p]), dv(pvme[p]), dv(pstop[p]), dv(pesrc[p]), dv(pcfgv[p]), dv(pmodret[p])
+>       }
+612c735,744
+< [ "$ok_sdiag" = 1 ] && classify_sdiag "$SDIAG_F" >> "$CLS"
+---
+> # G2: optional append-only cut for the sdiag jsonl (baseline bytes), then the
+> # per-session (per-pid) classifier — never cross-session aggregation.
+> SDIAG_CLASS_F="$SDIAG_F"
+> SDIAG_CUT=0
+> if [ "$ok_sdiag" = 1 ] && [ "$BASE_SDIAG" -gt 0 ] && [ "$sz_sdiag" -gt "$BASE_SDIAG" ]; then
+>   extract_new_lines "$SDIAG_F" "$BASE_SDIAG" > "$TMPDIR_E/sdiag-new.jsonl"
+>   SDIAG_CLASS_F="$TMPDIR_E/sdiag-new.jsonl"
+>   SDIAG_CUT=1
+> fi
+> [ "$ok_sdiag" = 1 ] && classify_sdiag "$SDIAG_CLASS_F" >> "$CLS"
+654a787,835
+> # ---------------------------------------------------------------------------
+> # G2/G3/G7/G8/G9: per-session (per-pid) sdiag facts for the verdict, the
+> # one-pager notes and the JSON tail. The "current session" is the session of
+> # the LAST failure line's r4 pid when the sdiag knows it, else the file's
+> # last session (pid_last) — never a cross-session aggregate.
+> # ---------------------------------------------------------------------------
+> is_num() { case "$1" in ''|'-'|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
+> SDIAG_SUM_PAYLOAD=$(awk -F'\t' '$1=="SDIAGSUM" {print $2; exit}' "$CLS")
+> sd_events=$(printf '%s\n' "$SDIAG_SUM_PAYLOAD" | sed -n 's/^events=\([0-9]*\) .*/\1/p')
+> sd_sessions=$(printf '%s\n' "$SDIAG_SUM_PAYLOAD" | sed -n 's/.* sessions=\([0-9]*\) .*/\1/p')
+> sd_startfail_total=$(printf '%s\n' "$SDIAG_SUM_PAYLOAD" | sed -n 's/.* start_failed=\([0-9]*\) .*/\1/p')
+> sd_pid_first=$(printf '%s\n' "$SDIAG_SUM_PAYLOAD" | sed -n 's/.* pid_first=\([^ ]*\) .*/\1/p')
+> sd_pid_last=$(printf '%s\n' "$SDIAG_SUM_PAYLOAD" | sed -n 's/.* pid_last=\([^ ]*\) .*/\1/p')
+> n_sessions=${sd_sessions:-0}
+> FAIL_PID=$(awk -F'\t' '$1=="TIMING" && $2=="failline" {p=$3} END {sub(/^pid=/, "", p); print p}' "$CLS")
+> CUR_PID="$FAIL_PID"
+> [ -n "$CUR_PID" ] || CUR_PID="$sd_pid_last"
+> PF=$(awk -F'\t' -v want="pid=$CUR_PID" '$1=="PIDSUM" && $2==want { for (i = 3; i <= NF; i++) { eq = index($i, "="); print substr($i, 1, eq - 1) "=" substr($i, eq + 1) } exit }' "$CLS")
+> s_events=$(printf '%s\n' "$PF" | sed -n 's/^events=//p')
+> s_startfail=$(printf '%s\n' "$PF" | sed -n 's/^start_failed=//p')
+> s_mfa=$(printf '%s\n' "$PF" | sed -n 's/^mfa_activate_failed=//p')
+> s_rscode=$(printf '%s\n' "$PF" | sed -n 's/^runtime_start_failed=//p')
+> s_extent=$(printf '%s\n' "$PF" | sed -n 's/^extent_events=//p')
+> s_cfgev=$(printf '%s\n' "$PF" | sed -n 's/^cfg_events=//p')
+> s_spans=$(printf '%s\n' "$PF" | sed -n 's/^lease_spans=//p')
+> s_reg=$(printf '%s\n' "$PF" | sed -n 's/^lease_reg=//p')
+> s_anchor=$(printf '%s\n' "$PF" | sed -n 's/^anchor_count=//p')
+> s_intervals=$(printf '%s\n' "$PF" | sed -n 's/^intervals_found=//p')
+> s_vme=$(printf '%s\n' "$PF" | sed -n 's/^vmentry=//p')
+> s_walkstop=$(printf '%s\n' "$PF" | sed -n 's/^vm_walk_stop=//p')
+> s_exesrc=$(printf '%s\n' "$PF" | sed -n 's/^exepath_source=//p')
+> s_cfgdir=$(printf '%s\n' "$PF" | sed -n 's/^cfg_gamedir=//p')
+> s_spanpub=$(printf '%s\n' "$PF" | sed -n 's/^spanpub_count=//p')
+> s_spanpub_total=$(printf '%s\n' "$PF" | sed -n 's/^spanpub_total=//p')
+> s_spanpub_cap=$(printf '%s\n' "$PF" | sed -n 's/^spanpub_cap=//p')
+> s_envlow=$(printf '%s\n' "$PF" | sed -n 's/^env_low=//p')
+> s_envhigh=$(printf '%s\n' "$PF" | sed -n 's/^env_high=//p')
+> s_statownmod=$(printf '%s\n' "$PF" | sed -n 's/^stat_ownmod=//p')
+> s_statownmod_ec=$(printf '%s\n' "$PF" | sed -n 's/^stat_ownmod_ec=//p')
+> s_modret=$(printf '%s\n' "$PF" | sed -n 's/^module_start_return=//p')
+> CURCHAIN=$(awk -F'\t' -v want="pid=$CUR_PID" '$1=="PIDCHAIN" && $2==want {print $3; exit}' "$CLS")
+> # G1: oracle §2 MINIMAL-ACCEPT conversion quartet, scoped to the current session.
+> QUARTET=no
+> if [ "$s_extent" = "4" ] && is_num "$s_anchor" && [ "$s_anchor" -gt 0 ] \
+>    && is_num "$s_intervals" && [ "$s_intervals" -gt 0 ] \
+>    && is_num "$s_cfgev" && [ "$s_cfgev" -gt 0 ]; then QUARTET=yes; fi
+> # G1 clause 2: the D6 geometry refusal did NOT occur anywhere in the window.
+> n_d6=$(awk -F'\t' '$1=="CLASSLINE" && $3 ~ /no observed mapping interval intersects/ {c++} END {print c + 0}' "$CLS")
+> 
+710,711c891,892
+<   emit "  writer=supplier-diag-jsonl (t_ms, monotonic-ms; same writer — deltas valid):"
+<   awk -F'\t' '$1=="STIME" {printf "    %s t=%s %s\n", $2, $3, $4}' "$CLS" | head -24 >> "$sumf"
+---
+>   emit "  writer=supplier-diag-jsonl (t_ms, monotonic-ms; per-SESSION deltas — deltas NEVER cross sessions/pids; '(first t_ms)' opens each session):"
+>   awk -F'\t' '$1=="SDIAGSESS" {printf "    -- session %s (delta base resets) --\n", $2} $1=="STIME" {printf "    %s t=%s %s\n", $2, $3, $4}' "$CLS" | head -40 >> "$sumf"
+724a906,908
+> if [ "$n_fail" -gt 0 ] && [ "$n_entry4" -gt 0 ]; then
+>   emit "  failure lines by session (r4 pid): $(awk -F'\t' '$1=="TIMING" && $2=="failline" {print $3}' "$CLS" | sort | uniq -c | awk '{printf "%s x%s  ", $2, $1}')— window note (G6): the UE4SS.log window is CUMULATIVE across this boot's launches; failure lines carry r4 pid prefixes (per-session above), PATH_TEST/ACTIVATION_TEST stamps carry none (positional attribution only); verdict precedence = LAST failure line (append-only ordering discipline)"
+> fi
+731c915,930
+< [ "$ok_sdiag" = 1 ] && awk -F'\t' '$1=="SDIAGSUM" {print "  supplier-diag jsonl: " $2 " (single-writer t_ms sequence above)"}' "$CLS" >> "$sumf"
+---
+> if [ "$ok_sdiag" = 1 ]; then
+>   awk -F'\t' '$1=="SDIAGSUM" {print "  supplier-diag jsonl: " $2}' "$CLS" >> "$sumf"
+>   awk -F'\t' '$1=="PIDSUM" { msg = "    session " $2; for (i = 3; i <= NF; i++) msg = msg " " $i; print msg }' "$CLS" >> "$sumf"
+>   # G7/G8/G9 diag-notes on the CURRENT session — note fields only, no verdict impact.
+>   if [ -n "$CUR_PID" ] && [ -n "$s_events" ]; then
+>     if is_num "$s_vme" && [ "$s_vme" -gt 16384 ]; then
+>       emit "  diag-note (G7, oracle C1/S3): current-session bridge_vmentry_entries=$s_vme > pinned kBridgeVmmapEntries=16384 while bridge_vm_walk_stop=$s_walkstop (S3 predicts stop=2 when vm_total > 16384) — either the shipped capacity is larger than pinned, the tag counts walked records rather than stored entries, or the truncation flag lives outside the diag set. Reconciliation question only; note field, no verdict impact."
+>     fi
+>     if [ "$s_exesrc" = "0" ] && [ "$s_statownmod" = "1" ]; then
+>       emit "  diag-note (G8, oracle C7): bridge_exepath_source=0 WITH the r10 fork resolving successfully (stat_ownmod=1, stat_ownmod_ec=$s_statownmod_ec) and conversion proceeding on this session — the fork refuses only when ALL THREE stats fail; oracle C7's 'source 0 leads to conversion refusal' wording is looser than live behavior (record against the row; wording update at next oracle revision)."
+>     fi
+>     if [ "$s_spanpub_cap" = "1" ]; then
+>       emit "  diag-note (G9, oracle S2.2 item 6): spanpub env pair is the 64-bit low/high split env_low=$s_envlow env_high=$s_envhigh (NOT a lone 32-bit max-record-end); bridge_spanpub_count=$s_spanpub of spanpub_total=$s_spanpub_total with spanpub_cap=1 — saturation at kMaxPublishedSpans=16 (both real 2026-10-05 boots saturated; oracle note pending)."
+>     fi
+>   fi
+> fi
+740a940,943
+> if [ "$n_sessions" -gt 1 ]; then
+>   # G2: per-session first-seen chains — the file-level chain above mixes sessions.
+>   awk -F'\t' -v cur="pid=$CUR_PID" '$1=="PIDCHAIN" {printf "  session chain %s:%s %s\n", $2, ($2 == cur ? " (current)" : ""), $3}' "$CLS" >> "$sumf"
+> fi
+741a945,947
+> if [ "$n_fail" -gt 0 ] && [ "$s_modret" = "0" ] && printf '%s' "$CURCHAIN" | grep -q "S11_STOP"; then
+>   emit "  note (G4): S11_STOP in the current session's chain is module_start_return=0 AFTER the failure line — the entry returned 0 and the game continues UNMODDED (later launches ride the same boot); it is NOT a stop/unload event (display-granularity quirk, no value misattribution)"
+> fi
+775a982,984
+> ORACLE_CLASS=""
+> REFUSAL_CLASS="-"
+> ST_MATCH=no
+788a998,999
+>   LASTF_STAGE=$(printf '%s' "$LASTF" | sed 's/^modbridge module_start failed: //; s/ code=.*//')
+>   [ "$last_detail" = "$DET" ] && [ -n "$last_detail" ] && ST_MATCH=yes
+799a1011,1035
+>   # G1: name the two refusal classes the REAL launch-10 runs exposed with the
+>   # oracle's own vocabulary (LAUNCH10-RESULTS §5 G1), instead of bare FAILED_code<N>.
+>   if [ "$VSTAGE" = "FAILED_code${CODE}" ]; then
+>     if [ "$LASTF_STAGE" = "mfa_activate_failed" ]; then
+>       VSTAGE="FAILED_B7_MFA"
+>       REFUSAL_CLASS="B7-EXPECTED-REFUSAL"
+>       ORACLE_CLASS="B7 EXPECTED-REFUSAL - FAIL with named cause; nothing downstream ran (oracle section 1 row B7)"
+>     elif [ "$CODE" = "3" ] && [ "$LASTF_STAGE" = "runtime_start_failed" ]; then
+>       VSTAGE="FAILED_E2_START"
+>       REFUSAL_CLASS="E2-EXPECTED-REFUSAL"
+>       ORACLE_CLASS="E2 EXPECTED-REFUSAL - verdict >= MINIMAL-ACCEPT where the session's conversion quartet + NO-CRASH + a fresh failed status hold (oracle section 1 row E2)"
+>     fi
+>   fi
+>   # G1: MINIMAL-ACCEPT state — oracle section 2: everything after conversion may
+>   # be ANY named failure. Require the CURRENT session's sdiag conversion quartet,
+>   # no D6 line in the window, no crash tail, and a fresh failed status whose
+>   # detail matches the refusal. E4 'activated' is not literally on file (the
+>   # terminal write O_TRUNC-replaces earlier acks of the same launch) — the
+>   # evidence-equivalence caveat rides with the verdict.
+>   if [ "$VSTAGE" = "FAILED_E2_START" ] && [ "$QUARTET" = "yes" ] && [ "$n_d6" -eq 0 ] \
+>      && [ "$n_crash_tail" -eq 0 ] && [ "$fresh" = "yes" ] && [ "$last_state" = "failed" ]; then
+>     VSTAGE="MINIMAL_ACCEPT_E2_REFUSAL"
+>     REFUSAL_CLASS="E2-EXPECTED-REFUSAL-MINIMAL-ACCEPT"
+>     ORACLE_CLASS="E2 EXPECTED-REFUSAL - verdict >= MINIMAL-ACCEPT (oracle section 1 row E2 + section 2 ladder); E4 'activated' not literally on file (terminal-write O_TRUNC caveat) — evidence-equivalence per LAUNCH10-RESULTS section 2"
+>   fi
+802a1039,1045
+>   elif [ "$VSTAGE" = "MINIMAL_ACCEPT_E2_REFUSAL" ]; then
+>     NEXT="Oracle E2 EXPECTED-REFUSAL (verdict >= MINIMAL-ACCEPT): prepare/start refused AFTER conversion (named new info in the detail). This session's supplier-diag proves the conversion quartet (extent events=$s_extent/4 + anchor_count=$s_anchor + intervals_found=$s_intervals next to lease_spans=$s_spans + cfg_events=$s_cfgev), no D6 recurrence, no crash tail, fresh failed status. CAVEAT: E4 'activated' is NOT literally in the fetched status (terminal write O_TRUNC-replaces earlier acks of the same launch) — recorded by evidence-equivalence; belt-and-braces for the next launch: fetch runtime-status.txt immediately on any failed run (or before the terminal write lands)."
+>     [ "$ST_MATCH" = "yes" ] && NEXT="$NEXT Status detail matches the refusal line verbatim."
+>   elif [ "$VSTAGE" = "FAILED_E2_START" ]; then
+>     NEXT="Oracle E2 EXPECTED-REFUSAL: prepare/start threw after conversion (pad profile / mod source / sink open — named new info). Label kept conservative: the >= MINIMAL-ACCEPT rung needs the current session's conversion quartet + NO-CRASH + a fresh failed status, and this fetch is missing at least one of them (quartet=$QUARTET, fresh=$fresh, last_state=$last_state). The conversion clauses may still be diag-proven for this pid — read the PIDSUM line; rung claim reserved."
+>   elif [ "$VSTAGE" = "FAILED_B7_MFA" ]; then
+>     NEXT="Oracle B7 EXPECTED-REFUSAL: MFA activation refused (Phase B) — NOTHING downstream ran (no bridge walk/lease/conversion events exist for this session; its PIDSUM/chain shows the prologue only). The named offending file is in the detail; game continues UNMODDED; loadlist/roots drifted. FAIL-with-named-cause per the oracle; no rung claim."
+842a1086
+> [ -n "$ORACLE_CLASS" ] && emit "ORACLE-CLASS: $ORACLE_CLASS"
+852,853c1096,1103
+<   printf '{"verdict":"%s","stage_chain":"%s","failure_lines":%d,"diag22":%d,"gmalloc":%d,"shape_a":%d,"seeds_refuted":%d,"stage_tags":%d,"bridge_cfg":%d,"observer":{"start_ok":%d,"start_failed":%d,"stop_result":%d},"progress":%d,"mod_load_lines":%d,"igw":%d,"crash_tail":%d,"entry4_lines":%d,"pathtest_stamps":%d,"pathtest_open_failed":%d,"diag_lines":%d,"xwp_mirror":%d,"status":{"present":%s,"session_pid":"%s","session_ms":"%s","fresh":"%s","last_state":"%s","last_code":"%s","ladder":"%s"},"sizes":{"ue4ss":%d,"entry":%d,"xwp":%d,"sdiag":%d,"baselines":{"ue4ss":%d,"entry":%d,"status":%d,"xwp":%d,"session_pid":%s,"session_ms":%s}},"config":"shortest-2plugin-1216aab6"}\n' \
+<     "$VERDICT" "$stage_chain" \
+---
+>   # G3: per-session records (PIDJSON, emitted by classify_sdiag) + the current
+>   # session's sdiag facts + the vm-capacity note field (G7) so JSON-only
+>   # consumers see the evidence that achieved the verdict.
+>   SESS_JSON=$(awk -F'\t' '$1=="PIDJSON" {printf "%s%s", sep, $2; sep = ","} END {print ""}' "$CLS")
+>   VM_EXCEEDS=false
+>   is_num "$s_vme" && [ "$s_vme" -gt 16384 ] && VM_EXCEEDS=true
+>   printf '{"verdict":"%s","refusal_class":"%s","oracle_class":"%s","stage_chain":"%s","failure_lines":%d,"diag22":%d,"gmalloc":%d,"shape_a":%d,"seeds_refuted":%d,"stage_tags":%d,"bridge_cfg":%d,"observer":{"start_ok":%d,"start_failed":%d,"stop_result":%d},"progress":%d,"mod_load_lines":%d,"igw":%d,"crash_tail":%d,"entry4_lines":%d,"pathtest_stamps":%d,"pathtest_open_failed":%d,"diag_lines":%d,"xwp_mirror":%d,"status":{"present":%s,"session_pid":"%s","session_ms":"%s","fresh":"%s","last_state":"%s","last_code":"%s","ladder":"%s"},"sdiag":{"present":%s,"events":%d,"sessions":%d,"pid_first":"%s","pid_last":"%s","current_pid":"%s","chain":"%s","start_failed_total":%d,"baseline_cut":"%s","quartet":"%s","current":{"events":"%s","start_failed":"%s","mfa_activate_failed":"%s","runtime_start_failed":"%s","extent_events":"%s","cfg_events":"%s","lease_spans":"%s","lease_reg":"%s","anchor_count":"%s","intervals_found":"%s","vmentry":"%s","vm_walk_stop":"%s","exepath_source":"%s","cfg_gamedir":"%s","module_start_return":"%s"}},"sessions":[%s],"vm_capacity":{"pinned_kBridgeVmmapEntries":16384,"current_vmentry":"%s","current_vm_walk_stop":"%s","exceeds_pinned":%s},"sizes":{"ue4ss":%d,"entry":%d,"xwp":%d,"sdiag":%d,"baselines":{"ue4ss":%d,"entry":%d,"status":%d,"xwp":%d,"session_pid":%s,"session_ms":%s}},"config":"shortest-2plugin-1216aab6"}\n' \
+>     "$VERDICT" "$REFUSAL_CLASS" "$ORACLE_CLASS" "$stage_chain" \
+857a1108,1111
+>     "$([ "$ok_sdiag" = 1 ] && echo true || echo false)" "${sd_events:-0}" "${n_sessions:-0}" "${sd_pid_first:--}" "${sd_pid_last:--}" "${CUR_PID:--}" "$sc_sdiag" "${sd_startfail_total:-0}" "$([ "$SDIAG_CUT" = 1 ] && echo yes || echo no)" "$QUARTET" \
+>     "${s_events:--}" "${s_startfail:--}" "${s_mfa:--}" "${s_rscode:--}" "${s_extent:--}" "${s_cfgev:--}" "${s_spans:--}" "${s_reg:--}" "${s_anchor:--}" "${s_intervals:--}" "${s_vme:--}" "${s_walkstop:--}" "${s_exesrc:--}" "${s_cfgdir:--}" "${s_modret:--}" \
+>     "$SESS_JSON" \
+>     "${s_vme:--}" "${s_walkstop:--}" "$VM_EXCEEDS" \

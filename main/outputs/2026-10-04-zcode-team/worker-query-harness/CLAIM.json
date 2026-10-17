@@ -1,0 +1,39 @@
+{
+  "worker": "worker-query-harness",
+  "team": "2026-10-04-zcode-team",
+  "role": "Implement the harmless-query milestone harness (MILESTONE-TEST-DESIGN.md primary candidate) as a plug-in unit for the composed UE runtime.",
+  "claim": [
+    "Author src/NativeQueryHarness.hpp + src/NativeQueryHarness.cpp in this output dir, compilable as an --extra-unit of .superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/build_runtime.py (loader-context argv template + -I tick-file-owner-1/include + -I tick-witness-1/include).",
+    "Harness behavior: on the first genuine game-thread Tick (after identity publish), read UObjectArray::GetNumElements() twice on consecutive accepted ticks via injectable engine bindings (default: RC::Unreal::IsGameThreadInitialized/IsInGameThreadRaw/GetGameThreadIdRaw + RC::Unreal::UObjectArray::GetNumElements); record both counts, delta, monotonicity verdict in one fixed-size POD record published through a single-writer seqlock; no allocation on the Tick path; JSONL formatting helper is off-thread only.",
+    "Distinct refusal outcomes (counter + status channel, never a partial query record, never pending state): bindings absent, layout gate (S2) not armed, identity unknown, wrong thread; count not strictly > 10000 is a terminal Inconclusive-not-refuted outcome per the initializer heuristic.",
+    "Host tests in tests/: drive synthetic identity/counts through both GUObjectArray storage-layout claims (fixed/chunked) and both S2 axes combinations, exercise every refusal path, prove no-Tick work leaks (phase returns to Idle, snapshot stays absent after every refusal), terminal immutability, and snapshot/thread safety.",
+    "Target-side evidence within host-only bounds: a prospero-clang++ compile of the extra unit with the exact template argv shape (object emitted inside this output dir). No console, no network, no target execution, no composition re-run.",
+    "REPORT.md last: extra-unit integration notes, exact rung-1->2 acceptance evidence criteria, and what remains gated on in-game facts; deviations from the brief recorded (S2 publication has no public query API, so the gate is armed by controller wiring immediately after PublishStagedNativeLayoutMaps; threshold uses strict > 10000 per brief while UnrealInitializer's wait loop uses >= 10000)."
+  ],
+  "inputs_read_only": [
+    "outputs/2026-10-04-zcode-team/worker-3-gamethread/MILESTONE-TEST-DESIGN.md",
+    "outputs/2026-10-04-zcode-team/worker-3-gamethread/INTEGRATION-MAP.md",
+    ".superpowers/native-dependency-spike/ue4ss-native-tick-file-owner-1/build_runtime.py",
+    ".superpowers/native-dependency-spike/ue4ss-native-game-thread-1/include/Unreal/Platform/NativeGameThreadIdentity.hpp",
+    ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/include/Unreal/UnrealInitializer.hpp",
+    ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/include/Unreal/UObjectArray.hpp",
+    ".superpowers/native-dependency-spike/ue4ss-native-layout-binding-1/include/NativeLayoutBinding.hpp",
+    ".superpowers/native-dependency-spike/ue4ss-native-layout-binding-1/src/NativeLayoutBinding.cpp",
+    ".superpowers/native-dependency-spike/ue4ss-native-notify-cancel-1/build-1/receipt.json (argv template only)"
+  ],
+  "bounds": {
+    "call_budget": 45,
+    "nested_subagents": false,
+    "network": false,
+    "console": false,
+    "existing_files_modified": false,
+    "writes_confined_to": "outputs/2026-10-04-zcode-team/worker-query-harness/"
+  },
+  "status": "completed",
+  "started": "2026-10-04",
+  "results": {
+    "host_tests": "HOST_TESTS_PASSED: 358 checks, 0 failures (clang++ -std=c++20 -DNATIVE_QUERY_HARNESS_HOST_TEST)",
+    "target_probe": "extra-unit compile exit=0 with pinned prospero-clang++ and the build_runtime.py argv template; object 70816 bytes; 0 new undefined symbols after composition (4 engine seams resolved by composed units)",
+    "composition_or_target_execution": "none (controller-owned serialized step)"
+  }
+}

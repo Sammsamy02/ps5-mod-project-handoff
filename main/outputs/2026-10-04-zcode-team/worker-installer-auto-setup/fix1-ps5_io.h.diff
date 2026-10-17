@@ -1,0 +1,19 @@
+--- a/outputs/2026-10-04-zcode-team/worker-installer-ps5io/src/ps5_io.h
++++ b/outputs/2026-10-04-zcode-team/worker-installer-ps5io/src/ps5_io.h
+@@ -69,6 +69,16 @@
+ #define PS5IO_MAX_PATH   4096u
+ #define PS5IO_MAX_RW_CHUNK (16u * 1024u * 1024u) /* per-syscall bound */
+ #define PS5IO_MAX_BUNDLES 64u                    /* mfx bundle slots */
++
++/* Production namespace root dedicated to the file I/O owner (payload
++ * sandbox; same default as the SDK build's --fileio-root). The console
++ * adapter ensures it exists on first open (see ps5_io.c) and the composed
++ * installer verifies/creates it before any owner opens. Compile-time
++ * override: -DPS5IO_NAMESPACE_ROOT='"/other/root"'. Host builds never
++ * touch it (no console namespace side effects on the host). */
++#ifndef PS5IO_NAMESPACE_ROOT
++#define PS5IO_NAMESPACE_ROOT "/data/modbridge"
++#endif
+ 
+ enum {
+     PS5IO_RDONLY     = 1,

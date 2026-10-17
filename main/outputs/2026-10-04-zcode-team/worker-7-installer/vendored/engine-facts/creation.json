@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "engine": "creation",
+  "name": "Bethesda Creation Engine",
+  "framework": {"id": "overlay-ps5", "maturity": "planned"},
+  "components": {
+    "overlay-ps5": {"maturity": "planned", "what": "Data-only plug-in: layers Data/ files over the game's files and supplies the plugin load order."},
+    "skse-ps5":    {"maturity": "planned", "what": "Script-extender equivalent for native (.prx) plugins. A large separate project."}
+  },
+  "asset_converter": "bethesda-assets",
+  "load_order": "plugins_txt",
+  "base_plugins": [
+    "Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm",
+    "Fallout4.esm", "DLCRobot.esm", "DLCworkshop01.esm", "DLCCoast.esm",
+    "DLCworkshop02.esm", "DLCworkshop03.esm", "DLCNukaWorld.esm", "DLCUltraHighResolution.esm",
+    "Oblivion.esm",
+    "cc*.esm", "cc*.esl"
+  ],
+  "detect": {
+    "ext_any": [".esp", ".esm", ".esl", ".bsa", ".ba2"],
+    "path_contains_any": ["/data/skse/", "/data/scripts/"]
+  },
+  "roles": {
+    "data_plugin":    {"dest": "game/Data", "supported": true, "requires": ["overlay-ps5"]},
+    "pak":            {"dest": "game/Data", "supported": true, "convert": "bethesda-assets", "requires": ["overlay-ps5"]},
+    "config":         {"dest": "game/Data", "supported": true, "requires": ["overlay-ps5"]},
+    "asset_override": {"dest": "game/Data", "supported": true, "convert": "bethesda-assets", "requires": ["overlay-ps5"]},
+    "native_plugin":  {"dest": "skse/Plugins", "supported": true, "requires_rebuild": true, "requires": ["skse-ps5"]},
+    "script":         {"dest": "game/Data", "supported": true, "requires": ["overlay-ps5"]},
+    "lua_mod":        {"dest": "", "supported": false}
+  },
+  "layout": {"strip": ["Data/"], "provided": [{"component": "skse-ps5", "names": ["skse64_loader.exe", "skse64_steam_loader.dll", "f4se_loader.exe", "sksevr_loader.exe"]}], "ignore": ["readme*", "*.md", "*.url", "*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp", "*.bmp", "license*", "changelog*", "credits*"]},
+  "notes": "Data plugins (.esp/.esm/.esl, load-ordered), config/Papyrus scripts and (converted) assets all go through the data-only overlay plug-in. PC .bsa/.ba2 archives hold PC-format assets, so they are converted like loose files. Native script-extender plugins need a PS5 SKSE-equivalent."
+}

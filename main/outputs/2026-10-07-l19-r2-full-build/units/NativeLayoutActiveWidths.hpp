@@ -1,0 +1,43 @@
+#pragma once
+#include <NativeLayoutEngineIncludes.hpp>
+#include <NativeLayoutWidths.hpp>
+#include <utility>
+
+namespace RC::Platform::NativeLayouts {
+namespace ActiveWidthDetail {
+template<class T> constexpr auto FunctionWidth() noexcept -> std::optional<uint32_t> {
+    if constexpr (requires(T& value) { value.GetFunc(); })
+        return WidthDetail::ValueWidth<decltype(std::declval<T&>().GetFunc())>();
+    return std::nullopt;
+}
+template<class T> constexpr auto MinAlignmentWidth() noexcept -> std::optional<uint32_t> {
+    if constexpr (requires(T& value) { value.GetMinAlignment(); })
+        return WidthDetail::ValueWidth<decltype(std::declval<T&>().GetMinAlignment())>();
+    return std::nullopt;
+}
+template<class T> constexpr auto ClassCastFlagsWidth() noexcept -> std::optional<uint32_t> {
+    if constexpr (requires(T& value) { value.GetClassCastFlags(); })
+        return WidthDetail::ValueWidth<decltype(std::declval<T&>().GetClassCastFlags())>();
+    return std::nullopt;
+}
+template<class T> constexpr auto FieldCastFlagsWidth() noexcept -> std::optional<uint32_t> {
+    if constexpr (requires(T& value) { value.GetCastFlags(); })
+        return WidthDetail::ValueWidth<decltype(std::declval<T&>().GetCastFlags())>();
+    return std::nullopt;
+}
+}
+// These public accessors select the genuine active versioned getter. The broad
+// provider can be unavailable or include a larger alternate accessor type.
+// This adapter derives active access widths without supplying game layout values.
+inline auto GetBindingAccessorWidth(std::string_view class_name, std::string_view key) noexcept -> std::optional<uint32_t> {
+    if (class_name == "UFunction" && key == "Func")
+        return ActiveWidthDetail::FunctionWidth<Unreal::UFunction>();
+    if (class_name == "UStruct" && key == "MinAlignment")
+        return ActiveWidthDetail::MinAlignmentWidth<Unreal::UStruct>();
+    if (class_name == "UClass" && key == "ClassCastFlags")
+        return ActiveWidthDetail::ClassCastFlagsWidth<Unreal::UClass>();
+    if (class_name == "FFieldClass" && key == "CastFlags")
+        return ActiveWidthDetail::FieldCastFlagsWidth<Unreal::FFieldClass>();
+    return GetAccessorWidth(class_name, key);
+}
+}

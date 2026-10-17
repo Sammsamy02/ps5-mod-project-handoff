@@ -1,0 +1,311 @@
+--- /dev/null
++++ b/loader/include/guest_read_map.h
+@@ -0,0 +1,77 @@
++// guest_read_map.h -- bounded reads from validated, owned guest regions.
++#ifndef CAP13_GUEST_READ_MAP_H
++#define CAP13_GUEST_READ_MAP_H
++
++#include <cstddef>
++#include <cstdint>
++#include <cstring>
++#include <mutex>
++#include <new>
++#include <vector>
++
++namespace cap13 {
++
++// The owner must keep each registered allocation readable and alive until
++// removal, and quiesce concurrent guest calls before releasing it. A range
++// registration is not an OS memory probe or a substitute for PE validation.
++class GuestReadMap
++{
++  public:
++    bool add(const void* owner, const void* base, size_t length)
++    {
++        if (!owner || !base || !length) return false;
++        const auto begin = reinterpret_cast<uintptr_t>(base);
++        if (length > UINTPTR_MAX - begin) return false;
++        const auto end = begin + length;
++        std::lock_guard<std::mutex> guard(mu_);
++        for (const auto& range : ranges_)
++            if (range.owner == owner || (begin < range.end && range.begin < end))
++                return false;
++        try { ranges_.push_back({owner, begin, end}); }
++        catch (const std::bad_alloc&) { return false; }
++        return true;
++    }
++
++    bool remove(const void* owner)
++    {
++        if (!owner) return false;
++        std::lock_guard<std::mutex> guard(mu_);
++        for (auto it = ranges_.begin(); it != ranges_.end(); ++it)
++            if (it->owner == owner)
++            {
++                ranges_.erase(it);
++                return true;
++            }
++        return false;
++    }
++
++    bool read(const void* address, void* output, size_t length) const
++    {
++        if (!address || !output || !length) return false;
++        const auto begin = reinterpret_cast<uintptr_t>(address);
++        std::lock_guard<std::mutex> guard(mu_);
++        for (const auto& range : ranges_)
++            if (begin >= range.begin && begin < range.end &&
++                length <= range.end - begin)
++            {
++                std::memcpy(output, address, length);
++                return true;
++            }
++        return false;
++    }
++
++    static bool read_callback(void* user, const void* address,
++                              void* output, size_t length)
++    {
++        return user && static_cast<GuestReadMap*>(user)->read(address, output,
++                                                               length);
++    }
++
++  private:
++    struct Range { const void* owner; uintptr_t begin; uintptr_t end; };
++    mutable std::mutex mu_;
++    std::vector<Range> ranges_;
++};
++
++} // namespace cap13
++#endif // CAP13_GUEST_READ_MAP_H
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -26,6 +26,8 @@
+ #include "pe_loader.h"
+ 
+ namespace cap13 {
++
++class GuestReadMap;
+ 
+ // A mod-visible module handle ("HMODULE"): opaque index into the registry.
+ using WinModule = void*;
+@@ -67,6 +69,9 @@
+     struct Impl; // defined in win_api_shim.cpp; shared with the SysV impl
+                  // functions in that file.
+     void set_hooks(const Hooks& hooks);
++    // Configure before PE preparation. The map must outlive all guest calls.
++    // Its image ranges are registered on process attach and revoked on detach.
++    bool set_guest_read_map(GuestReadMap* map);
+     void set_mod_root(std::string utf8_root); // T2 confinement root
+ 
+     // Register a module the way Windows would expose it:
+@@ -83,7 +88,8 @@
+                                   uint64_t ordinal, void** out,
+                                   std::string* forwarder);
+     bool register_mapped_module(const char* source_path, WinModule handle,
+-                                MappedLookup lookup, void* owner);
++                                MappedLookup lookup, void* owner,
++                                size_t mapped_bytes = 0);
+     // Caller must quiesce guest users of the module before removing it.
+     bool unregister_mapped_module(const char* source_path, WinModule handle,
+                                   void* owner);
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -12,6 +12,7 @@
+ // CAP13 proposal-only; design-grade; bodies are intentionally small.
+ 
+ #include "win_api_shim.h"
++#include "guest_read_map.h"
+ #include "win32_last_error_state.h"
+ #include "win64_bridge.h"
+ 
+@@ -86,6 +87,7 @@
+         bool reviewed_for_publication = false;
+     };
+     Hooks hooks;
++    GuestReadMap* guest_read_map = nullptr;
+     std::string mod_root = "/data/modbridge/roots/";
+     std::mutex mu;
+     // dll-name(lowercased) -> { symbol/ordinal -> address }
+@@ -102,6 +104,7 @@
+         bool (*lookup)(WinModule, const char*, void**);
+         MappedLookup mapped_lookup = nullptr;
+         void* owner = nullptr;
++        bool read_range_registered = false;
+     };
+     std::unordered_map<std::string, ModuleEntry> modules;
+     bool builtins_registered = false;
+@@ -211,7 +214,27 @@
+ 
+ WinApiShim::WinApiShim() : m(new Impl()) { m->owner = this; }
+ 
+-void WinApiShim::set_hooks(const Hooks& hooks) { m->hooks = hooks; }
++void WinApiShim::set_hooks(const Hooks& hooks)
++{
++    m->hooks = hooks;
++    if (m->guest_read_map)
++    {
++        m->hooks.read_guest_bytes = GuestReadMap::read_callback;
++        m->hooks.read_guest_user = m->guest_read_map;
++    }
++}
++
++bool WinApiShim::set_guest_read_map(GuestReadMap* map)
++{
++    if (!map) return false;
++    std::lock_guard guard(m->mu);
++    for (const auto& row : m->modules)
++        if (row.second.mapped_lookup) return false;
++    m->guest_read_map = map;
++    m->hooks.read_guest_bytes = GuestReadMap::read_callback;
++    m->hooks.read_guest_user = map;
++    return true;
++}
+ void WinApiShim::set_mod_root(std::string utf8_root) { m->mod_root = std::move(utf8_root); }
+ 
+ void WinApiShim::register_module(const char* name, WinModule handle,
+@@ -227,7 +250,7 @@
+ 
+ bool WinApiShim::register_mapped_module(const char* source_path,
+                                         WinModule handle, MappedLookup lookup,
+-                                        void* owner)
++                                        void* owner, size_t mapped_bytes)
+ {
+     const std::string key = ascii_module_key(source_path);
+     if (key.empty() || !handle || !lookup || !owner) return false;
+@@ -239,6 +262,14 @@
+         m->modules.emplace(key, Impl::ModuleEntry{handle, nullptr, lookup, owner});
+     }
+     catch (const std::bad_alloc&) { return false; }
++    if (m->guest_read_map && mapped_bytes &&
++        !m->guest_read_map->add(owner, handle, mapped_bytes))
++    {
++        m->modules.erase(key);
++        return false;
++    }
++    if (m->guest_read_map && mapped_bytes)
++        m->modules.at(key).read_range_registered = true;
+     return true;
+ }
+ 
+@@ -251,6 +282,8 @@
+     auto row = m->modules.find(key);
+     if (row == m->modules.end() || row->second.handle != handle ||
+         row->second.owner != owner || !row->second.mapped_lookup) return false;
++    if (row->second.read_range_registered && m->guest_read_map &&
++        !m->guest_read_map->remove(owner)) return false;
+     m->modules.erase(row);
+     return true;
+ }
+--- a/loader/src/guest_pe_loader.cpp
++++ b/loader/src/guest_pe_loader.cpp
+@@ -160,7 +160,7 @@
+     if (shim_ && !source_path_.empty() && !module_registered_)
+     {
+         if (!shim_->register_mapped_module(source_path_.c_str(), load_.image,
+-                                            lookup_export, this))
++                                            lookup_export, this, load_.image_size))
+             return GuestNotifyStatus::ModuleRegistrationFailed;
+         module_registered_ = true;
+     }
+--- a/loader/tests/guest_pe_batch_test.cpp
++++ b/loader/tests/guest_pe_batch_test.cpp
+@@ -1,5 +1,6 @@
+ #include "guest_pe_batch.h"
+ #include "guest_pe_directory_source.h"
++#include "guest_read_map.h"
+ #include "pe_import_scan.h"
+ #include "win_api_shim.h"
+ #include "pe_types.h"
+@@ -454,6 +455,91 @@
+           system_result.missing[0] == "KERNEL32.dll!start_mod",
+           "reviewed system namespace stays reserved against a local DLL file");
+ 
++    cap13::GuestReadMap read_map;
++    int first_owner = 0, second_owner = 0;
++    char readable[] = "safe-guest-text";
++    char copied[sizeof(readable)]{};
++    check(read_map.add(&first_owner, readable, sizeof(readable)) &&
++          read_map.read(readable, copied, sizeof(copied)) &&
++          std::strcmp(copied, readable) == 0,
++          "owned guest range permits an exact bounded read");
++    check(!read_map.add(&second_owner, readable + 2, 3) &&
++          !read_map.add(&second_owner,
++                        reinterpret_cast<void*>(UINTPTR_MAX - 1), 4) &&
++          !read_map.read(readable + sizeof(readable) - 1, copied, 2),
++          "overlap, integer wrap, and out-of-range reads refuse");
++    check(read_map.remove(&first_owner) &&
++          !read_map.read(readable, copied, 1),
++          "owner removal revokes its guest-readable range");
++
++    check(shim.set_guest_read_map(&read_map),
++          "shim installs the bounded image reader before PE preparation");
++    int no_range_owner = 0, no_range_handle = 0;
++    auto no_range_lookup = +[](void*, const char*, uint64_t, void**,
++                               std::string*) -> bool { return false; };
++    check(shim.register_mapped_module("/mods/no-range.dll", &no_range_handle,
++                                      no_range_lookup, &no_range_owner) &&
++          shim.unregister_mapped_module("/mods/no-range.dll", &no_range_handle,
++                                        &no_range_owner),
++          "mapped registry without a read range remains removable");
++    auto dynamic_image = fixture;
++    auto* dynamic_import = reinterpret_cast<cap13::PeImportDescriptor*>(
++        dynamic_image.data() + 0x600);
++    dynamic_import->Name = 0x3100;
++    const uint64_t dynamic_thunk = 0x3120;
++    const uint64_t dynamic_proc_thunk = 0x3170;
++    std::memcpy(dynamic_image.data() + 0x800, &dynamic_thunk,
++                sizeof(dynamic_thunk));
++    std::memcpy(dynamic_image.data() + 0x808, &dynamic_proc_thunk,
++                sizeof(dynamic_proc_thunk));
++    std::memset(dynamic_image.data() + 0x900, 0, 0x80);
++    std::memcpy(dynamic_image.data() + 0x900, "KERNEL32.dll",
++                sizeof("KERNEL32.dll"));
++    std::memcpy(dynamic_image.data() + 0x922, "GetModuleHandleA",
++                sizeof("GetModuleHandleA"));
++    std::memcpy(dynamic_image.data() + 0x940, "UE4SS.dll",
++                sizeof("UE4SS.dll"));
++    std::memcpy(dynamic_image.data() + 0x950, "is_ue4ss_initialized",
++                sizeof("is_ue4ss_initialized"));
++    std::memcpy(dynamic_image.data() + 0x972, "GetProcAddress",
++                sizeof("GetProcAddress"));
++    const uint8_t dynamic_entry[] = {
++        0x48, 0x83, 0xec, 0x28,                   // align stack and shadow space
++        0x48, 0x8d, 0x0d, 0x35, 0x21, 0x00, 0x00, // lea rcx,[rip+0x2135] -> module RVA 0x3140
++        0x48, 0x8b, 0x05, 0x0e, 0x20, 0x00, 0x00, // mov rax,[rip+0x200e] -> first IAT RVA 0x3020
++        0xff, 0xd0,                               // call GetModuleHandleA
++        0x48, 0x89, 0xc1,                         // mov rcx,rax
++        0x48, 0x8d, 0x15, 0x32, 0x21, 0x00, 0x00, // lea rdx,[rip+0x2132] -> symbol RVA 0x3150
++        0x48, 0x8b, 0x05, 0x03, 0x20, 0x00, 0x00, // mov rax,[rip+0x2003] -> second IAT RVA 0x3028
++        0xff, 0xd0,                               // call GetProcAddress
++        0x48, 0x85, 0xc0, 0x0f, 0x95, 0xc0,
++        0x0f, 0xb6, 0xc0,
++        0x48, 0x83, 0xc4, 0x28, 0xc3              // return TRUE iff export found
++    };
++    std::memcpy(dynamic_image.data() + 0x400, dynamic_entry,
++                sizeof(dynamic_entry));
++    RecordingSwitch dynamic_switch;
++    auto dynamic_pe = cap13::pe_prepare_guest_with_shim(
++        dynamic_image.data(), dynamic_image.size(), shim, options, bank,
++        dynamic_switch, "/mods/dynamic.dll");
++    check(dynamic_pe.ok && dynamic_pe.module,
++          "static PE imports of dynamic lookup APIs prepare with a registered read map");
++    if (dynamic_pe.ok && dynamic_pe.module)
++    {
++        const auto attach = dynamic_pe.module->process_attach(teb);
++        check(attach == cap13::GuestNotifyStatus::Ok &&
++              dynamic_switch.enters == 1,
++              "DllMain resolves a module and export from its image literals through the bounded map");
++        void* entry = shim.resolve("dynamic.dll", "start_mod", 0);
++        uint8_t byte = 0;
++        check(entry && read_map.read(entry, &byte, 1),
++              "attached PE image is readable through the map");
++        check(dynamic_pe.module->process_detach(teb) ==
++                  cap13::GuestNotifyStatus::Ok &&
++              !read_map.read(entry, &byte, 1),
++              "detached PE image is revoked from the read map");
++    }
++
+     std::printf("cases=%d failed=%d\n", checks, failures);
+     return failures ? 1 : 0;
+ }

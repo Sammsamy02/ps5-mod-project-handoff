@@ -1,0 +1,352 @@
+--- a/src/LuaMod.cpp
++++ b/src/LuaMod.cpp
+@@ -5064,8 +5064,55 @@
+             const std::string map_narrow = url_name(url);
+             Output::send(STR("[FL-MAP] order={} map='{}' phase=loaded src=detour url='{}'\n"),
+                          order, world_name(world), ensure_str(map_narrow));
++        }
++
++        // [FL-MAP-EV] (agent-IO 2026-10-10, Claude round-10 item 2): the
++        // vtable-slot event source. note_pre_event/note_loaded_event are the
++        // copied-vtable LoadMap hook's markers (src=vmt-loadmap), reached
++        // through the extern "C" bridge VmtFlmapNoteLoadMapPre/Post below
++        // from UnrealInitializer's VmtPump LoadMap slot entry (the second
++        // poke in the Tick pump's private vtable copy; see
++        // 04-event-map-logger.patch). They share this namespace's ENTIRE
++        // contract with the detour source — one order counter, one
++        // s_pending, one s_last_world — so one load is never double-counted
++        // as a single source's pre/pending pair, and every loaded line
++        // publishes the same last-world pointer. Deltas from the detour
++        // pair, by design: (1) src=vmt-loadmap names the source; (2) the
++        // loaded line carries ok=<0|1> — the engine LoadMap RETURN, false
++        // meaning the load FAILED (the exact save-load failure signature
++        // the mission is chasing); (3) the world read is individually
++        // exception-isolated so a missing FWorldContext member offset can
++        // only blank the name, never drop the marker (the URL still names
++        // the map).
++        auto note_pre_event(const Unreal::FURL& url) -> void
++        {
++            const uint32_t order = ++s_order;
++            s_pending.store(order, std::memory_order_relaxed);
++            const std::string map_narrow = url_name(url);
++            Output::send(STR("[FL-MAP] order={} map='{}' phase=pre src=vmt-loadmap\n"), order, ensure_str(map_narrow));
+         }
+ 
++        auto note_loaded_event(Unreal::FWorldContext& world_context, const Unreal::FURL& url, bool load_ok) -> void
++        {
++            Unreal::UObject* world = nullptr;
++            try
++            {
++                world = world_context.GetThisCurrentWorld();
++            }
++            catch (...)
++            {
++            }
++            s_last_world = world;
++            uint32_t order = s_pending.exchange(0, std::memory_order_relaxed);
++            if (order == 0)
++            {
++                order = ++s_order;
++            }
++            const std::string map_narrow = url_name(url);
++            Output::send(STR("[FL-MAP] order={} map='{}' phase=loaded src=vmt-loadmap url='{}' ok={}\n"),
++                         order, world_name(world), ensure_str(map_narrow), load_ok ? 1 : 0);
++        }
++
+         // Bounded 1 Hz World-identity watch; called ONLY from funcptr_marshal_hook
+         // after the identity publication, the raw game-thread gate, dispatch-scope
+         // ownership and the deferred LoadMap arm — i.e. on the proven pump thread.
+@@ -5344,8 +5391,11 @@
+         // (launch-2 evidence: F7 keybind entries with ZERO Lua output and
+         // ZERO ExecuteInGameThread queues from either mod; round-4 without
+         // this code: both queued and ran). Map-load logging is now
+-        // event-driven only (NotifyOnNewObject at framework start, see the
+-        // [FL-MAP-EV] registration in UnrealInitializer).
++        // event-driven only: the [FL-MAP-EV] LoadMap vtable-slot hook armed
++        // at framework start (UnrealInitializer VmtPump second poke; see
++        // 04-event-map-logger.patch), plus the detour [FL-MAP] markers that
++        // stay in lua_load_map_pre/post_callback for worlds where the PLH
++        // detour arms. Zero polling, zero scans, zero dispatch-path work.
+ #endif
+         {
+             std::lock_guard<std::recursive_mutex> guard{LuaMod::m_thread_actions_mutex};
+@@ -5480,6 +5530,48 @@
+                 // drain failure never propagates into the engine Tick path.
+             }
+         }
++
++        // [FL-MAP-EV] (agent-IO 2026-10-10, Claude round-10 item 2): the
++        // C++ bodies behind the extern "C" trampolines at the bottom of
++        // this file (vmt_flmap_note_loadmap_pre/post), called by
++        // UnrealInitializer's copied-vtable LoadMap slot entry. noexcept +
++        // full exception isolation: these run INSIDE a real engine LoadMap
++        // call on the game thread; nothing here may throw across the
++        // engine boundary. The void* parameters keep the cross-TU
++        // declaration trivially header-free (the same law as
++        // vmt_engine_tick_drain); both TUs compile against the same
++        // FWorldContext/FURL headers, so the casts are exact.
++        auto VmtFlmapNoteLoadMapPre([[maybe_unused]] void* engine_self, [[maybe_unused]] void* world_context, const void* url) noexcept -> void
++        {
++            try
++            {
++                if (!url)
++                {
++                    return;
++                }
++                FlMap::note_pre_event(*static_cast<const Unreal::FURL*>(url));
++            }
++            catch (...)
++            {
++            }
++        }
++
++        auto VmtFlmapNoteLoadMapPost([[maybe_unused]] void* engine_self, void* world_context, const void* url, int loadmap_result) noexcept -> void
++        {
++            try
++            {
++                if (!url || !world_context)
++                {
++                    return;
++                }
++                FlMap::note_loaded_event(*static_cast<Unreal::FWorldContext*>(world_context),
++                                         *static_cast<const Unreal::FURL*>(url),
++                                         loadmap_result != 0);
++            }
++            catch (...)
++            {
++            }
++        }
+     }
+ #endif
+ 
+@@ -9647,4 +9739,23 @@
+ }
+ #else
+ extern "C" void vmt_engine_tick_drain() noexcept {}
++#endif
++
++// [FL-MAP-EV] (agent-IO 2026-10-10, Claude round-10 item 2): extern "C"
++// trampolines for the copied-vtable LoadMap slot hook (UnrealInitializer
++// VmtPump). Same trampoline law as vmt_engine_tick_drain above: stable
++// unmangled symbols, Prospero body + empty non-Prospero body so every
++// fold links.
++#if defined(__PROSPERO__)
++extern "C" void vmt_flmap_note_loadmap_pre(void* engine_self, void* world_context, const void* url) noexcept
++{
++    RC::Unreal::VmtFlmapNoteLoadMapPre(engine_self, world_context, url);
++}
++extern "C" void vmt_flmap_note_loadmap_post(void* engine_self, void* world_context, const void* url, int loadmap_result) noexcept
++{
++    RC::Unreal::VmtFlmapNoteLoadMapPost(engine_self, world_context, url, loadmap_result);
++}
++#else
++extern "C" void vmt_flmap_note_loadmap_pre(void*, void*, const void*) noexcept {}
++extern "C" void vmt_flmap_note_loadmap_post(void*, void*, const void*, int) noexcept {}
+ #endif
+--- a/src/UnrealInitializer.cpp
++++ b/src/UnrealInitializer.cpp
+@@ -11,6 +11,7 @@
+ #include <algorithm>
+ #include <type_traits>
+ #include <utility>
++#include <atomic>
+ 
+ #include <Helpers/Casting.hpp>
+ #include <SigScanner/SinglePassSigScanner.hpp>
+@@ -133,6 +134,14 @@
+     // (external linkage, no header declaration by design): the first-tick
+     // UFunction self-test calls it through the bound CDO.
+     auto UKismetStringLibrary_Conv_NameToString(FName InName) -> FString;
++    // [FL-MAP-EV] (agent-IO 2026-10-10, Claude round-10 item 2): the
++    // copied-vtable LoadMap slot entry's [FL-MAP] logging bridge, DEFINED
++    // in LuaMod.cpp (extern "C" trampolines at that file's bottom; the
++    // bodies reach the FlMap marker contract — order counter, world_name,
++    // s_last_world). Header-free void* parameters by the same law as
++    // vmt_engine_tick_drain above.
++    extern "C" void vmt_flmap_note_loadmap_pre(void* engine_self, void* world_context, const void* url) noexcept;
++    extern "C" void vmt_flmap_note_loadmap_post(void* engine_self, void* world_context, const void* url, int loadmap_result) noexcept;
+ }
+ #endif
+ 
+@@ -2174,6 +2183,147 @@
+                 return false;
+             }
+             return rc_seed::classify_seed_address(word, base) == rc_seed::SeedAddressClass::CodeCallOnly;
++        }
++
++        // =====================================================================
++        // [FL-MAP-EV] (agent-IO 2026-10-10, Claude round-10 item 2): the
++        // LoadMap vtable-slot event hook — the event-driven replacement
++        // for the REMOVED 1 Hz marshal-watch World scan (Claude: "polling
++        // caused the stutter AND missed the early maps"). The engine's
++        // LoadMap is a virtual on UEngine; the round-4 console session
++        // resolved its slot from the live GameEngine vtable
++        // ("GameEngine::LoadMap address 0x3c4d460", decoded log line 616)
++        // — the same live-vtable read class as the Tick bind below. The
++        // PLH detour path cannot install in this world (the owned-memory
++        // layer refuses live game-text detour installs; bHookLoadMap
++        // additionally has no INI mapping and refuses with the
++        // hooking-disabled pair), so the accepted copied-vtable primitive
++        // hooks the SLOT instead: the poke below lands in the Tick pump's
++        // PRIVATE copy BEFORE the single vptr publish, so ONE atomic swap
++        // arms BOTH the Tick pump and this LoadMap logger — a racing
++        // dispatcher sees the original table or the fully-poked copy,
++        // never a half state. The entry forwards to the ORIGINAL slot word
++        // exactly once (the drive_tick law), everything else is
++        // exception-isolated, and the [FL-MAP] markers themselves come
++        // from the LuaMod FlMap contract (shared order counter/last-world
++        // pointer with the detour source, so no double counting). Scope:
++        // LOGGING ONLY — queued Lua RegisterLoadMapPreHook/PostHook
++        // callbacks stay undelivered in this world exactly as the [R3]
++        // refusal line states; no Lua state is ever touched here.
++        // =====================================================================
++        using LoadMapFn = bool (*)(void* engine_self, void* world_context, FURL url, void* pending_game, void* error);
++        static LoadMapFn s_original_loadmap_entry{nullptr};
++        static bool s_loadmap_hooked{false};
++        static std::atomic<uint64_t> s_loadmap_entry_calls{0};
++        static std::atomic<uint64_t> s_loadmap_original_returns{0};
++
++        static bool vmt_engine_loadmap_entry(void* engine_self, void* world_context, FURL url, void* pending_game, void* error) noexcept
++        {
++            s_loadmap_entry_calls.fetch_add(1, std::memory_order_relaxed);
++            // Unreachable by construction: the slot is poked only AFTER
++            // s_original_loadmap_entry was recorded, and the entry is
++            // reachable only after the publish that follows the poke. If
++            // this ever fires there is no forwarding target and the real
++            // map load cannot run — refuse loudly rather than pretend.
++            if (!s_original_loadmap_entry)
++            {
++                try
++                {
++                    Output::send<LogLevel::Error>(STR("[FL-MAP-EV] LoadMap entry reached without an original entry recorded; refusing to forward (map load aborts) - THIS IS A BUG IN THE ARM ORDER\n"));
++                }
++                catch (...)
++                {
++                }
++                return false;
++            }
++            // phase=pre marker, isolated: a marker failure must never
++            // omit or duplicate the original call.
++            try
++            {
++                vmt_flmap_note_loadmap_pre(engine_self, world_context, &url);
++            }
++            catch (...)
++            {
++            }
++            // Exactly-once original forwarding, same receiver/args. The
++            // FURL by-value parameter is the caller's temporary (Itanium
++            // pass-by-hidden-reference; both sides compile against the
++            // same header, so the ABI is identical by construction).
++            const bool result = s_original_loadmap_entry(engine_self, world_context, url, pending_game, error);
++            s_loadmap_original_returns.fetch_add(1, std::memory_order_relaxed);
++            // phase=loaded marker, isolated.
++            try
++            {
++                vmt_flmap_note_loadmap_post(engine_self, world_context, &url, result ? 1 : 0);
++            }
++            catch (...)
++            {
++            }
++            return result;
++        }
++
++        enum class LoadMapPokeOutcome : uint8_t
++        {
++            Armed = 0,
++            RefusedClean = 1,
++            DirtyCopy = 2,
++        };
++
++        // Poke the LoadMap slot in the pump's PRIVATE copy (the original
++        // table is never written). Call ONLY between pump.arm() success
++        // and pump.publish_swap() so the single publish store covers both
++        // pokes atomically. RefusedClean: the copy is verified untouched
++        // (or restored bit-exact) — the Tick pump may publish Tick-only.
++        // DirtyCopy: the poke or its restore could not be verified — the
++        // caller MUST NOT publish this copy (retire the pump instead).
++        static auto vmt_pump_poke_loadmap_slot() -> LoadMapPokeOutcome
++        {
++            const auto slot_it = UEngine::VTableLayoutMap.find(L"LoadMap");
++            if (slot_it == UEngine::VTableLayoutMap.end() || slot_it->second == 0)
++            {
++                Output::send<LogLevel::Warning>(STR("[FL-MAP-EV] LoadMap slot NOT hooked: 'LoadMap' absent or zero in the UEngine vtable layout (map-load logging falls back to the LoadMap detour path only)\n"));
++                return LoadMapPokeOutcome::RefusedClean;
++            }
++            const size_t slot_index = static_cast<size_t>(slot_it->second) / sizeof(void*);
++            if (slot_index == pump.tick_slot_index)
++            {
++                Output::send<LogLevel::Error>(STR("[FL-MAP-EV] LoadMap slot NOT hooked: slot {} collides with the Tick slot (layout inconsistency); refusing the poke\n"), slot_index);
++                return LoadMapPokeOutcome::RefusedClean;
++            }
++            if (slot_index >= pump.entry_count)
++            {
++                Output::send<LogLevel::Warning>(STR("[FL-MAP-EV] LoadMap slot NOT hooked: slot {} (offset {:#x}) is outside the copied vtable extent ({} entries)\n"),
++                                                slot_index, slot_it->second, pump.entry_count);
++                return LoadMapPokeOutcome::RefusedClean;
++            }
++            const uintptr_t original_word = VmtTickPump::PumpCore::load_word(pump.original_address_point + slot_index);
++            if (!original_word || !in_text(original_word))
++            {
++                Output::send<LogLevel::Warning>(STR("[FL-MAP-EV] LoadMap slot NOT hooked: original slot word {:#x} is null or outside the authenticated text segment\n"),
++                                                original_word);
++                return LoadMapPokeOutcome::RefusedClean;
++            }
++            void** const copy_slot = pump.copy_address_point() + slot_index;
++            *copy_slot = reinterpret_cast<void*>(&vmt_engine_loadmap_entry);
++            if (VmtTickPump::PumpCore::load_word(copy_slot) != reinterpret_cast<uintptr_t>(&vmt_engine_loadmap_entry))
++            {
++                *copy_slot = reinterpret_cast<void*>(original_word);
++                if (VmtTickPump::PumpCore::load_word(copy_slot) != original_word)
++                {
++                    return LoadMapPokeOutcome::DirtyCopy;
++                }
++                Output::send<LogLevel::Warning>(STR("[FL-MAP-EV] LoadMap slot NOT hooked: poked word failed readback; the original word was restored bit-exact\n"));
++                return LoadMapPokeOutcome::RefusedClean;
++            }
++            // Publish the forwarding target BEFORE the hooked flag; the
++            // entry is reachable only after publish_swap(), which
++            // strictly follows this function inside vmt_pump_arm.
++            s_original_loadmap_entry = reinterpret_cast<LoadMapFn>(original_word);
++            s_loadmap_hooked = true;
++            const auto resolved_original = ASM::resolve_function_address_from_potential_jmp(reinterpret_cast<void*>(original_word));
++            Output::send(STR("[FL-MAP-EV] LoadMap slot armed (src=vmt-loadmap): slot={} original={:#x} resolved={:#x} - [FL-MAP] pre/post markers fire on every engine LoadMap call from this arm point\n"),
++                         slot_index, original_word, reinterpret_cast<uintptr_t>(resolved_original));
++            return LoadMapPokeOutcome::Armed;
+         }
+ 
+         // [ST] narrow-first diagnostic line for pump transitions and the
+@@ -2308,6 +2458,18 @@
+             Output::send(STR("[EU-VMT] copy ready: object={:#x} entries={} slot={} tick_entry={:#x} resolved={:#x} (copy retained for process lifetime)\n"),
+                          reinterpret_cast<uintptr_t>(engine_instance), pump.entry_count, pump.tick_slot_index,
+                          reinterpret_cast<uintptr_t>(pump.original_tick_entry), reinterpret_cast<uintptr_t>(resolved_original));
++            // [FL-MAP-EV]: the second poke — the LoadMap logger — lands in
++            // the SAME private copy BEFORE the single publish below, so one
++            // atomic vptr swap arms the Tick pump and the LoadMap event
++            // hook together. RefusedClean leaves the pump Tick-only (loud,
++            // non-fatal); DirtyCopy forbids publishing this copy at all.
++            const auto loadmap_poke = vmt_pump_poke_loadmap_slot();
++            if (loadmap_poke == LoadMapPokeOutcome::DirtyCopy)
++            {
++                pump.retired = true; // never publish an unverifiable copy
++                Output::send<LogLevel::Error>(STR("[EU-VMT] arming refused: the LoadMap poke left the copy unverifiable; the tick pump is NOT published (R3 carriers remain the pump)\n"));
++                return false;
++            }
+             if (!pump.publish_swap())
+             {
+                 pump.retired = true; // never swapped: the hook cannot fire; keep the retained copy inert
+@@ -2316,6 +2478,14 @@
+             }
+             Output::send(STR("[EU-VMT] armed: primary game-thread pump is the genuine UEngine::Tick vtable dispatch (vptr {:#x} -> {:#x})\n"),
+                          reinterpret_cast<uintptr_t>(pump.original_address_point), reinterpret_cast<uintptr_t>(pump.copy_address_point()));
++            if (s_loadmap_hooked)
++            {
++                Output::send(STR("[EU-VMT] armed with the [FL-MAP-EV] LoadMap logger (both pokes published by the single vptr swap)\n"));
++            }
++            else
++            {
++                Output::send(STR("[EU-VMT] armed Tick-only (the [FL-MAP-EV] LoadMap poke refused cleanly; see the [FL-MAP-EV] lines above)\n"));
++            }
+             return true;
+         }
+     } // namespace VmtPump

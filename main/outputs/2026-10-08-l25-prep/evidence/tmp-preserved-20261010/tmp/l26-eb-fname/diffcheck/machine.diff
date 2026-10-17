@@ -1,0 +1,69 @@
+--- orig/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UObjectGlobals.cpp	2026-10-08 23:41:56
++++ outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UObjectGlobals.cpp	2026-10-08 23:41:49
+@@ -637,6 +637,22 @@
+     // Diagnostic: '[FFO] query-fallback [n:X]' logs once per constructed
+     // name index when the fallback engages, so names-resolve-but-mismatch
+     // is visible instead of silent.
++    // l27 (agent-EB, fname-rootfix): the marker now also prints the
++    // constructed Number and a 24-char ToString tail. Byte-level ground
++    // truth (DECISION-MEMO.md): slot 2's sret decode is CORRECT, Find/Add
++    // share one id space, and a suffix-less Find can only return {0,0} or
++    // {id,0}. Therefore on the next launch exactly ONE of these shapes is
++    // possible, and each names the real bug:
++    //   ts:'<other name>'  -> the ctor INPUT string was corrupted before the
++    //                          call (ToCharTypePtr/ensure_str family; v7's
++    //                          S1/S2/S3/U2 all threw GetPackageNameFromLongName
++    //                          on dotted paths, proving that layer mangles).
++    //   ts:'' or garbage   -> n:X is likely a VALID id and the Kismet
++    //                          Conv_NameToString route (the mismatch
++    //                          detector's ToString) is the liar.
++    //   num:!=0            -> the only decode-side failure shape (a rebind
++    //                          of slot 2 to the raw core 0x242470, whose
++    //                          return IS id|(id<<32)); expected 0 here.
+     static uint32_t g_ffo_query_fallback_indices[128]{};
+     static int32_t g_ffo_query_fallback_count = 0;
+     static auto LogFindXOfQueryFallback(FName Result) -> void
+@@ -650,7 +666,14 @@
+             }
+             if (g_ffo_query_fallback_count >= 128) { return; }
+             g_ffo_query_fallback_indices[g_ffo_query_fallback_count++] = query_index;
+-            Output::send<LogLevel::Error>(STR("[FFO] query-fallback [n:{:X}]\n"), query_index);
++            auto rendered = ensure_str(Result.ToString());
++            if (rendered.size() > 24) { rendered = rendered.substr(0, 24); }
++            for (char& c : rendered)
++            {
++                if (c == '\n' || c == '\r') { c = ' '; } // one line per marker (wide-char log writer law)
++            }
++            Output::send<LogLevel::Error>(STR("[FFO] query-fallback [n:{:X} num:{} ts:'{}']\n"),
++                                          query_index, Result.GetNumber(), rendered);
+         }
+         catch (...)
+         {
+--- orig/outputs/2026-10-07-l18-full-build/units/NativeFNameAdapter.hpp	2026-10-08 23:41:56
++++ outputs/2026-10-07-l18-full-build/units/NativeFNameAdapter.hpp	2026-10-08 23:41:49
+@@ -44,6 +44,25 @@
+     if(!utf16(input,text,kMaxUnits+1)){r.reason="invalid or oversized UTF16 input";return r;}
+     // Native wide/no-length constructor: RDI=out, RSI=UTF16, EDX=mode.
+     // RAX is ignored, regardless of incidental/non-void callee behavior.
++    //
++    // PROOF-LOCK (agent-EB 2026-10-08, eboot sha 3b6cfad4...3622fc; do not
++    // 'fix' this decode without new disassembly evidence - see
++    // outputs/2026-10-08-l26-runtime/fname-rootfix/DECISION-MEMO.md):
++    //   0x23D590 saves RDI(out) in RBX, tail-calls 0x23D600, and the ONLY
++    //   result handoff is `mov qword ptr [rbx],rax` @0x23d5f0; the epilogue
++    //   rets WITHOUT reloading RAX (register return = leftover inner value
++    //   = garbage by contract). Reading *out as {index,number} is exactly
++    //   the engine's own 8-byte FName form.
++    //   0x23D600 normalizes before that store: `shl r14,0x20 / mov eax,eax
++    //   / or rax,r14` @0x23d83f-45 (r14=Number, 0 for suffix-less names).
++    //   The interning core 0x242470 DOES return id|(id<<32) @0x242560-66 -
++    //   but ONLY the outer overloads consume it, and every one re-normalizes
++    //   (verified 0x23d954, 0x23dc76, 0x23e038, 0x23e585, 0x23e682). The
++    //   packed form is unreachable through this slot; a Number!=0 result
++    //   for a suffix-less input is proof of a WRONG BIND, not a decode bug.
++    //   Shard-Find 0x23C340 and Store-probe 0x23C0B0 return the SAME raw
++    //   29-bit id (handle & 0x1FFFFFFF; block<<16 | byteoff>>1 - allocator
++    //   0x246122 `shr ebx,1`). No id<<16 transform exists anywhere.
+     ctor(&r.value,text,mode);
+     r.ok=true;r.reason="native output constructor returned";return r;
+ }

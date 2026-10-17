@@ -1,0 +1,42 @@
+{
+  "worker": "worker-engine-tick-fallback",
+  "claim": "The staged DefaultExecuteInGameThreadMethod=EngineTick pin cannot produce a silent dead OPTIONS menu after composition-5 reaches mods-started: EngineTick availability (UEngine::TickInternal.is_ready()) is decided once, synchronously, inside setup_unreal->UnrealInitializer::Initialize, and an unresolved EngineTick is FATAL there on __PROSPERO__ (the core GameThreadInitializer EngineTick pre-callback registration throws 'Native game-thread initializer callback registration failed'), so the runtime can never reach engine-ready/mods-started with the gate closed. Conditional on mods-started, every later ExecuteInGameThread succeeds; the F7 gate is unreachable, and switching the ini to ProcessEvent would trade a structurally-proven route for one with zero captured console evidence. Recommendation: KEEP EngineTick, no staged-ini change.",
+  "inputs": {
+    "port_tree": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss",
+    "unreal_lib": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal",
+    "bootstrap": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/bootstrap/ue4ss_backend.cpp",
+    "staged_ini": [
+      "outputs/2026-10-04-zcode-team/worker-ue4ss-settings/staged/ue4ss/UE4SS-settings.ini",
+      "outputs/2026-10-04-zcode-team/worker-settings-bundle-merge/staged-package/ue4ss/UE4SS-settings.ini (byte-identical, diff rc=0)",
+      "outputs/2026-10-04-zcode-team/worker-loadlist-final/final-package/ue4ss/UE4SS-settings.ini (line 12 identical)"
+    ],
+    "controller_restage_path": "/data/modbridge/roots/PPSA33286/ue4ss/UE4SS-settings.ini (not present on this Mac; local mirrors listed above)",
+    "prior_evidence": [
+      "outputs/2026-10-04-zcode-team/worker-lua-mod-smoke/REPORT.md (rank-1 risk being adjudicated)",
+      "outputs/2026-10-04-zcode-team/worker-ue4ss-settings/SETTINGS-CONTENT.md (config-review constraints)",
+      "outputs/2026-10-04-zcode-team/worker-pad-chord-audit/PAD-DISPATCH-PATH.md (dispatch path, independently concurs)"
+    ]
+  },
+  "method": [
+    "Read the port ExecuteInGameThread/WithDelay/Loop registrations and the availability predicates in the composition port tree (LuaMod.cpp, UE4SSRuntime.cpp, SettingsManager.*, UE4SSProgram.cpp, UnrealInitializer.cpp, DetourInstance.hpp, Hooks.cpp, LuaMadeSimple.cpp)",
+    "Trace ini key parse -> struct default -> m_default_game_thread_method assignment order vs install/start_lua_mods, engine-ready ack, and runtime-status states",
+    "Search all team outputs for captured console evidence of ProcessEventInternal resolution",
+    "Re-verify config-review constraints (no [Overrides], hot-reload keys absent, console keys zeroed) against the staged bytes and their consumers"
+  ],
+  "key_facts": {
+    "enum_values": "GameThreadExecutionMethod has exactly ProcessEvent and EngineTick (SettingsManager.hpp:16-20); ini parse recognizes only those two strings, case-insensitive (SettingsManager.cpp:150-160); code default EngineTick (SettingsManager.hpp:45)",
+    "plain_execute_has_no_fallback": "ExecuteInGameThread throws at LuaMod.cpp:4715-4720 when !UEngine::TickInternal.is_ready(); the WithDelay siblings fall back EngineTick<->ProcessEvent on __PROSPERO__ (LuaMod.cpp:4796-4841) and only throw when both are unavailable",
+    "availability_not_lazy": "TickInternal is assigned (scan-then-vtable) inside UnrealInitializer::Initialize (UnrealInitializer.cpp:1252-1319), called from setup_unreal (UE4SSProgram.cpp:1273) BEFORE the engine-ready ack (UE4SSProgram.cpp:654-661) and before the event loop starts Lua mods (UE4SSProgram.cpp:673 -> 1514 -> 1476/1483-1487)",
+    "engine_tick_fatal_if_unresolved": "On __PROSPERO__ an unresolved TickInternal makes the core HookedEngineTick registration return ERROR_ID (DetourInstance.hpp:158-163, 287-296) and throw 'Native game-thread initializer callback registration failed' (UnrealInitializer.cpp:1320-1327); init() catches and shuts down (UE4SSProgram.cpp:691-707) -> runtime-status failed, never mods-started",
+    "process_event_route": "Exists and is independent of the Tick scan: UObject::ProcessEventInternal assigned via virtual resolve when Hooks.HookUObjectProcessEvent=true (default, SettingsManager.hpp:128; assign at UnrealInitializer.cpp:1375-1382); but NO captured console log of 'ProcessEvent address' exists in any team output, and ProcessEvent closures drain only when the game calls ProcessEvent (LuaMod.cpp:4413-4436) vs per-frame EngineTick drain (4463-4478)"
+  },
+  "scopes": {
+    "writes": "outputs/2026-10-04-zcode-team/worker-engine-tick-fallback/ only",
+    "no_console_contact": true,
+    "no_nested_subagents": true,
+    "no_source_or_staged_file_modified": true
+  },
+  "verdict": "KEEP EngineTick (no restage). If mods-started is observed for composition-5 r6, the F7 EngineTick gate is already proven open; check UE4SS.log only for the documented throw line as a defensive signal. If r6 reports failed WITHOUT mods-started, look for 'Native game-thread initializer callback registration failed' in UE4SS.log - that is the real EngineTick failure shape, and no ini switch fixes it (ProcessEvent would have to pass its own unproven resolve while the core still hard-depends on EngineTick).",
+  "status": "complete",
+  "created_utc": "2026-10-04"
+}

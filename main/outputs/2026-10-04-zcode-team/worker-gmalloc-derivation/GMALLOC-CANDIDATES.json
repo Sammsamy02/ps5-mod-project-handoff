@@ -1,0 +1,72 @@
+{
+  "worker": "worker-gmalloc-derivation",
+  "date": "2026-10-04",
+  "status": "PROPOSAL — offline derivation only; no console contact; no frozen/wiring file modified",
+  "image": {
+    "path": ".superpowers/native-observations/townfall-static-executable-2026-10-02/decrypted-eboot.bin",
+    "sha256": "3b6cfad47dd17fea17d429bce80ae374d1fd2ef8894672cce63f5a26853622fc",
+    "translation_rule": "runtime = linked_vaddr + 0x400000 (base proven in-game per SEED-TABLE.json); file_off = linked + 0x4000 (LOAD0/LOAD1); RELA table file_off = 0x932F430 (DT_RELA linked 0x9653430, 1,661,599 entries, type 8 = relative, sym 0)"
+  },
+  "verdict": "SEEDABLE NOW behind its data-side validator — GMalloc derived by a new route (FMallocBinned3 vtable chain via .rela.dyn reconstruction) that the seed worker's exhausted anchors did not cover; requires launch-10 (or any authorized probe) to execute the validator before arming",
+  "candidates": [
+    {
+      "rank": 1,
+      "slot": "3_gmalloc",
+      "semantic": "FMalloc* GMalloc global (address OF the pointer variable; consumer bit_casts to FMalloc** — staged UnrealInitializer.cpp:889-892)",
+      "linked": "0x930add8",
+      "runtime": "0x970add8",
+      "segment": "phdr 7 (RW-), BSS (linked >= filesz end 0x93085f2, inside memsz end 0x9633418) — same mapped segment and base arithmetic as the live-validated GUA 0x97ba110",
+      "alignment": "8-aligned",
+      "derivation_chain": [
+        "STEP 1 anchors: 4 UTF-16 'FMallocBinned3' literals (linked 0x765b45a free-msg, 0x77d1b8c realloc-msg, 0x78788da small-block-msg, 0x78f7c14 alignment-msg); exact lea xrefs 0xb2720 / 0xb2363 / 0xaf86c / 0xb1b7b; containing functions (cc/90-padding roots) 0xb2440 / 0xb2160 / 0xaf4e0 / 0xb1440 = FMallocBinned3 Malloc/Realloc/Free validation paths",
+        "STEP 2 vtable via .rela.dyn: raw file data holds NO absolute pointers (PS5 RELA model) — reconstructed: 24,000 consecutive-reloc runs, 21,445 code-valued; the array at linked 0x7ec26e0 (runtime 0x82c26e0, phdr3 RELRO) contains 0xb1440; layout [0]=0xb1070 (complete dtor), [1]=0xb1440 (deleting dtor — byte-verified: D0@0xb1440 calls D1@0xb1070 at 0xb1449), defaults are shared stubs 0xe0 (xor eax,eax;ret) / 0x120 / 0xb290 (lea string;ret)",
+        "STEP 3 ctor: exactly 2 lea-to-vtable code sites — 0xafdc3 (root 0xafd40 = FMallocBinned3 ctor; stores derived vtable 0x7ec26e0 into [rdi] after inlined base-subobject init with vtable 0x8c2e28) and 0xb1076 (dtor)",
+        "STEP 4 factory: function 0xb3f0 constructs the instance IN PLACE as a global (lea rbx,[rip]->0x93089b8; mov rdi,rbx; xor esi,esi; call 0xafd40) and its body carries MallocBinned3's distinctive address-space constants movabs 0xc000000000/0x1000000000/0xbfc0000000/0x7fc0000000 plus pool params 0x12c00000/0x10000 — independent flavor corroboration",
+        "STEP 5 bootstrap store: 0xb660 'mov [rip+0x92ff771], rbx' -> linked 0x930add8. UNIQUE store image-wide (48/4c 89-form and 48/0F C7 imm32-form both checked; 0 others)",
+        "STEP 6 consumer census: exactly 11 rip-relative loads, 0 lea, 0 cmp-qword — all in 11 distinct FMemory thunk functions (getter root 0xc080; thunk cluster roots 0xddb0/0xdde0/0xde00/0xde20/0xde40/0xde60/0xdea0/0xdf00/0xdf20/0xdf40); 10 of 11 decode as pure FMalloc vtable dispatch: 'mov rdi,[rip+GM]; mov rax,[rdi]; call qword [rax+0x30|0x40|0x50]'"
+      ],
+      "corroborating_instance": {
+        "semantic": "the FMallocBinned3 instance is a GLOBAL (not heap): linked 0x93089b8, runtime 0x97089b8, 1 lea ref total (the factory)",
+        "consequence": "at runtime [GMalloc] is expected to equal 0x97089b8 exactly — an extremely sharp data validator (pointer-to-known-BSS, not a heap pointer)"
+      },
+      "vtable_runtime": "0x82c26e0 (phdr3, covered by PT_GNU_RELRO phdr4 -> mapped readable in-game)",
+      "validator": {
+        "class": "data-side, code-read-free (all reads in mapped data pages; no exec-span reads)",
+        "steps": [
+          "V1 (phdr7 BSS, same class as the GUA guard): qword@0x970add8 == 0x97089b8; alignment + readable via registered lease (permits_pointer_slot semantics) first",
+          "V2 (RELRO data, mprotect-first gated per FC-1 discipline): qword@0x97089b8 == 0x82c26e0 (instance vptr points into the module's read-only range)",
+          "V3 (optional, same V2 read discipline): qword@0x82c26e0 == 0x4b1070 and qword@0x82c26e8 == 0x4b1440 (dtor pair); a cheaper range-only variant may accept any value inside [0x400000, 0x7879b1c+0x400000)",
+          "V4 negative control: re-read V1 once later in the session; value must be unchanged (single bootstrap store at 0xb660)"
+        ],
+        "arming_rule": "seed arms only if V1 AND V2 pass; any failure leaves config.gmalloc=false -> today's loud PostInitialize throw",
+        "expected_log": "Post-initialization: GMalloc: 0x970add8 -> 0x97089b8 (consumer already prints (void*)GMalloc -> (void*)*GMalloc, staged :392)"
+      },
+      "integration_shape": "one constexpr kSeedGMalloc + results.gmalloc = (void*)0x970add8ull in the existing Diff-1 assignment block + config.gmalloc gate + Diff-4-style guard executing V1/V2 — lands exactly where SEED-INTEGRATION.md reserved it ('If slot 3 is derived later, it lands as one more constexpr + one more assignment in the same unit')",
+      "confidence": "derived-static-strong — full structural closure (string -> methods -> vtable -> ctor -> factory -> unique store -> 11 consumer dispatch sites), every link byte-decoded; NOT yet in-game validated; identity/ABI stays 'unverified' provenance until the validator runs"
+    },
+    {
+      "rank": 2,
+      "slot": "3_gmalloc-support",
+      "semantic": "FMallocBinned3 instance global (NOT a GMalloc seed — support candidate for V2 and diagnostics)",
+      "linked": "0x93089b8",
+      "runtime": "0x97089b8",
+      "segment": "phdr 7 BSS",
+      "validator": "qword@0x97089b8 == 0x82c26e0 (V2 above); do NOT seed this address as results.gmalloc — the consumer expects the address of the POINTER variable, not the object",
+      "confidence": "derived-static-strong (constructed in place by factory 0xb3f0; zero other refs)"
+    }
+  ],
+  "rejected_routes": {
+    "adjacency_to_GUA": "route (c) measured and rejected: hot load-refed slots within +/-0x1000 of GUA 0x93ba110 are GUObjectArray-family globals (e.g. 0x93ba120 = GUA+0x10, 20 loads); the derived GMalloc 0x930add8 sits 0xAF338 BELOW GUA in the GenericPlatformMemory TU cluster — adjacency carries no signal here",
+    "FPageAllocator_strings": "route (d) negative: 'FPageAllocator', 'FMemStack', 'TLsaAllocStack', 'GMallocCreate' strings absent from the image; allocator flavor evidence is instead the 4 FMallocBinned3 string anchors + MallocBinned3 address-space constants in ctor/factory",
+    "shipped_routes": "confirmed dead (per seed worker + re-verification): 14 idiom patterns 0/14; '/proc/meminfo' and root-privileges anchors absent; DeleteFile route reaches only the stack-guard slot 0x9131f08"
+  },
+  "census_bug_disclosure": "the stage-3/stage-5 automated shape census reported 0 targets due to an operator bug (compared instruction-end address against the rip-relative TARGET instead of re-deriving the displacement: 'ins.address+ins.size != t' always skipped valid sites); disclosed, not load-bearing — the derivation and consumer census above were computed by direct per-site regex+capstone verification (gmalloc_verify_refs.json, gmalloc_ref_sites.json)",
+  "artifacts": [
+    "derive_gmalloc.py (stage 1: BSS ref histogram, GUA adjacency, allocator string probes; GUA sanity reproduced the seed worker's 1565 lea refs exactly)",
+    "derive2_gmalloc.py (stage 2: anchor xrefs, first vtable attempt)",
+    "derive3_gmalloc.py (stage 3: string contexts, RELRO vtable enumeration miss -> RELA hypothesis)",
+    "derive4_gmalloc.py (stage 4: RELA reconstruction, vtable 0x7ec26e0, ctor/factory candidates)",
+    "derive5_gmalloc.py (stage 5: reloc-type dump, factory disassembly, census bug present here)",
+    "gmalloc_verify_refs.json + gmalloc_ref_sites.json (final byte-verified reference census)"
+  ]
+}

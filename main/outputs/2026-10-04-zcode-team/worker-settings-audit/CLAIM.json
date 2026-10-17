@@ -1,0 +1,81 @@
+{
+  "worker": "worker-settings-audit",
+  "written_first": true,
+  "date": "2026-10-04",
+  "scope": "Read-and-verify audit: prove (or disprove) that settings v3 (UE4SS-settings.ini sha256 d8faa4eca2ed2f22c02693b6841b7939412b4dd60c218a26438f985152d67038) is key-drift-free against the LAUNCH-10 composed build (composition-6 + geometry fix + read-path guard + diagnostic sink + bridge diag). No edits; local only.",
+  "subject": {
+    "ini_path_as_given": "outputs/2026-10-04-zcode-team/worker-settings-v3-package/package-v3/UE4SS-settings.ini",
+    "ini_path_actual": "outputs/2026-10-04-zcode-team/worker-settings-v3-package/package-v3/ue4ss/UE4SS-settings.ini",
+    "ini_sha256": "d8faa4eca2ed2f22c02693b6841b7939412b4dd60c218a26438f985152d67038",
+    "ini_bytes": 1448,
+    "note": "The task-stated path omitted the ue4ss/ level; the only file matching the pinned hash is one level deeper. Hash matches the stated d8faa4ec prefix."
+  },
+  "audited_launch10_units": {
+    "settings_parser": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/SettingsManager.cpp (unit 'settings'; byte-identical to the ue4ss-unreal-native-build-1/port copy)",
+    "program": "outputs/2026-10-04-zcode-team/worker-comp6-driver/staging/comp6-program/UE4SSProgram.cpp (sha256 75abf2ab77791f4e0aa2c068164d95d7737aefdcf0536a791f40599cd4ffb574)",
+    "initializer": "outputs/2026-10-04-zcode-team/worker-launch10-readpath-guard/staging/UnrealInitializer.cpp (current sha256 b943aed5966270fb7e817ae6df7932637cd5437b526f4512036134907669a6a3; witness pinned 1fc82e6b - see REPORT drift note; delta vs gmalloc staging base is seed-guard lines only, 0 settings lines)",
+    "ini_parser_units": "port/first/src/IniParser/{Ini,TokenParser,Value}.cpp compiled against ue4ss-unreal-native-build-1/.../deps/first/IniParser/include headers (List::for_each null-guard verified in Section.hpp)",
+    "delta_units_checked_for_settings_reads": [
+      "worker-facts-geometry-fix lmf geometryfix (none)",
+      "worker-facts-geometry-fix runtime_start_bridge_r13.geometrydiag.cpp (none)",
+      "worker-diagnostic-sink diagnostic.c (none)",
+      "worker-query-harness NativeQueryHarness.cpp (none)",
+      "worker-query-s2-arm runtime_ack_supplier.cpp (none)",
+      "bootstrap runtime_owner.cpp / ue4ss_backend.cpp replacements (none)"
+    ]
+  },
+  "verdict": "SETTINGS-SAFE-FOR-LAUNCH-10",
+  "claims": [
+    {
+      "id": "SA-1-KEYS-EXACT",
+      "claim": "v3 sets exactly 13 keys in 5 sections: [General] bUseUObjectArrayCache=false, SecondsToScanBeforeGivingUp=120, DefaultExecuteInGameThreadMethod=EngineTick, DefaultFNameToStringMethod=Scan; [Debug] ConsoleEnabled=0, GuiConsoleEnabled=0, GuiConsoleVisible=0, RenderMode=ExternalThread; [CrashDump] EnableDumping=0; [EngineVersionOverride] MajorVersion=5, MinorVersion=6; [Hooks] HookProcessInternal=0, HookProcessLocalScriptFunction=0. Every one is parsed by the composed SettingsManager::deserialize (registered at SettingsManager.cpp lines 146,136,151,161,223,224,225,239,268,172,173,279,280) and every one has at least one live consumer in the composed launch-10 units. ZERO v3 keys are unread/stale; ZERO value spellings are invalid for the retained parser (bools accept 0/1/false/true case-insensitively, TokenParser.cpp:84-105; ints per TokenParser is_int; method strings matched case-insensitively).",
+      "evidence": "v3 bytes re-read in full; SettingsManager.cpp (CR1) registration lines; consumer map in DRIFT-TABLE.md section B"
+    },
+    {
+      "id": "SA-2-HOOKS-ZEROS-LOAD-BEARING",
+      "claim": "The two [Hooks] zeros are consumed end-to-end by the launch-10 units under exactly these names: SettingsManager.cpp:279-280 REGISTER_BOOL_SETTING -> SettingsManager.hpp:116-117 defaults {true} -> staged UE4SSProgram.cpp:1240-1241 config.bHookProcessInternal/bHookProcessLocalScriptFunction -> launch-10 initializer line 1971 gate `if (UnrealConfig.bHookProcessInternal || UnrealConfig.bHookProcessLocalScriptFunction)`. With both=0 the init-time ExecuteUbergraph FuncPtr jmp-resolve read and the 164-byte Zydis read are skipped entirely (initializer 1971-~2035). The gate is an OR and the ProcessLocalScriptFunction sub-derivation (initializer:1990) checks only ScanOverrides.process_local_script_function (never the flag), so BOTH keys must be 0 - v3 does exactly that. ScanOverrides.process_internal/process_local_script_function have zero ini-reachable setters (grep: only version_finder is set programmatically, staged program:1030), confirming the ini keys are the ONLY disable route.",
+      "evidence": "initializer A-PI comment block 1958-1970; gate at 1971; staged program grep 1240-1241; SettingsManager.cpp:278-280"
+    },
+    {
+      "id": "SA-3-NATIVE-SERVICE-GATES",
+      "claim": "Four more v3 zeros are REQUIRED for launch-10 activation, not cosmetic: UE4SSProgram::validate_native_services() (staged program:727-755, __PROSPERO__) throws unless CrashDump.EnableDumping=0 (:730), Debug.SimpleConsoleEnabled=0 (:732), Debug.DebugConsoleEnabled=0 AND Debug.DebugConsoleVisible=0 AND Debug.RenderMode==ExternalThread (:734-735). Additionally create_simple_console() throws on Prospero if SimpleConsoleEnabled is true (staged program:890-891) and is called unconditionally at :278. v3 satisfies all. EnableHotReloadSystem/EnableAutoReloadingLuaMods must be 0 (:737) - v3 omits them and the code defaults are false (SettingsManager.hpp:33,35), so the gate passes. A parse failure cannot silently fall back to defaults: deserialize exceptions abort activation loudly (staged program:232-236, Prospero branch stores the message and shuts down).",
+      "evidence": "staged program 215-260, 727-755, 838-848, 887-912"
+    },
+    {
+      "id": "SA-4-ENGINEVERSION-5-6",
+      "claim": "[EngineVersionOverride] MajorVersion=5/MinorVersion=6 is correct for the UE 5.6.1 target: staged program:1009-1031 sets Unreal::Version::Major/Minor directly and replaces the version-finder scan with a no-op ScanOverrides.version_finder lambda (a scan that would otherwise run against the mapped image). UE4SS version handling and layout selection key off major.minor only; the .1 patch digit is not representable and not needed. The launch-10 initializer deliberately does NOT seed an engine-version slot and its own comment states the [EngineVersionOverride] settings route owns it (readpath-guard initializer:591-593).",
+      "evidence": "staged program 1009-1032; initializer comment 585-610"
+    },
+    {
+      "id": "SA-5-NO-NEW-KEYS-NEEDED",
+      "claim": "The launch-10 delta introduces NO new settings-dependent behavior: the read-path guard (5 classify_seed_address guards at initializer 757/777/828/880/906 + gmalloc validators 804/811), the geometry fix, the diagnostic sink, and the bridge diag perform zero settings reads (grep across all delta units: 0 references to settings_manager/SettingsManager). The staged program delta vs the port tree is 22 lines of Resolution-B path/logging only. The r3-armed initializer (launch-11 candidate) adds a build-define gate (UE4SS_R3_MARSHAL_MODE), explicitly NOT a settings key, and cites the SETTINGS-V3 trap rationale; arming it would still require no ini change. Conversely the EngineTick route that v3's comment relies on stays armed: Hooks.HookEngineTick/HookUObjectProcessEvent are unset by v3 and default true, consumed at initializer 1756 and 1909 (vtable/data reads, seed-guarded), and DefaultExecuteInGameThreadMethod=EngineTick drains closures via LuaMod::m_default_game_thread_method (composed LuaMod 4709/4805/4964/5151).",
+      "evidence": "grep receipts in DRIFT-TABLE.md section D; witness diff classification"
+    },
+    {
+      "id": "SA-6-OMITTED-SECTIONS-SAFE",
+      "claim": "v3 omitting [Overrides] is mechanically safe: Ini::Parser::get_list on a missing section returns List{nullptr} (Ini.cpp:91-103) and List::for_each null-guards m_section (Section.hpp:44-47,67-70) - no throw, no mod-dir mutation; ModsFolderPath/ControllingModsTxt REGISTER macros catch and keep defaults, and the native activation would REFUSE non-empty values anyway (SettingsManager.cpp:112-113), so omission is the only valid representation. The v3 header's 'comment-only section wedges the parser' warning is verified mechanically: after a section header with no keys, state stays StoreSectionKey and the next '[' throws a syntax error (TokenParser.cpp:242-248) - v3 contains no key-less section. v3 is plain ASCII with no BOM (a BOM would throw at StartOfFile), no NUL (checked at SettingsManager.cpp:64-65), size 1448 matching the v3 oracle (T3 PASS).",
+      "evidence": "Ini.cpp 91-103; Section.hpp 41-97; TokenParser.cpp 233-251,391-424; xxd of v3 bytes; host-test/v3-activation-output.txt T3"
+    }
+  ],
+  "non_claims": [
+    "No PS5/console execution and no claim the launch-10 one-pass build has run: at witness time (worker-launch10-build-witness, 2026-10-05 12:56 UTC) it had NOT; this audit covers the STAGED launch-10 inputs, which is what composition will consume.",
+    "No claim about the game's true engine version beyond the project-stated UE 5.6.1; the game binary was not inspected.",
+    "No claim that the packaged ini inside a shipped/ploader payload matches d8faa4ec - only the local package copy was hashed.",
+    "The initializer staging sha drifted after the witness pin (1fc82e6b -> b943aed5); the delta vs the gmalloc staging base contains zero settings/config/hook lines, but the launch-10 build must re-pin whatever bytes it actually composes.",
+    "Behavior of defaults carried over from launch-9 (sig-scan disk cache UseCache=true, input handler availability) is unchanged by v3 and was NOT re-verified host-side."
+  ],
+  "verdict_rationale": "All 13 v3 keys parse and consume correctly; the five REQUIRED zeros (EnableDumping, ConsoleEnabled, GuiConsoleEnabled+GuiConsoleVisible, the two [Hooks]) are exactly what the launch-10 native service gates and the A-PI gate demand; every unset key's default is either the vetted launch-9 value or a Detect/false mode that launch-10 requires; the delta adds no settings-dependent behavior. No v3.1 is proposed.",
+  "audit_inputs": [
+    "outputs/2026-10-04-zcode-team/worker-settings-v3-package/package-v3/ue4ss/UE4SS-settings.ini",
+    "outputs/2026-10-04-zcode-team/worker-settings-v3-package/{CLAIM.json,REPORT.md,SETTINGS-V3-DECISION.md,host-test/}",
+    ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/ue4ss/src/SettingsManager.cpp (+include/SettingsManager.hpp, byte-identical to ue4ss-unreal-native-build-1/port copy)",
+    ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/first/src/IniParser/{Ini,TokenParser,Value}.cpp",
+    ".superpowers/native-dependency-spike/ue4ss-unreal-native-build-1/source-dependencies/ue4ss/deps/first/IniParser/include/IniParser/{Ini,Section}.hpp",
+    "outputs/2026-10-04-zcode-team/worker-comp6-driver/staging/comp6-program/UE4SSProgram.cpp",
+    "outputs/2026-10-04-zcode-team/worker-launch10-readpath-guard/staging/UnrealInitializer.cpp",
+    "outputs/2026-10-04-zcode-team/worker-comp6-driver/build_runtime_composition6.py (+_fixed.py)",
+    "outputs/2026-10-04-zcode-team/worker-launch10-r3-armed/build_runtime_composition6_l10r3.py",
+    "outputs/2026-10-04-zcode-team/worker-launch10-build-witness/WITNESS.md",
+    ".superpowers/native-dependency-spike/ue4ss-native-notify-cancel-1/build-1/receipt.json (359 selected_runtime_units; composed unit map incl. settings/ini/ini-tokens/ini-value/luamod)"
+  ]
+}

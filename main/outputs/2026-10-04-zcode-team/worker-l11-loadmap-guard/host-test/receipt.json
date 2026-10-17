@@ -1,0 +1,104 @@
+{
+ "worker": "worker-l11-loadmap-guard",
+ "revision": "r2",
+ "date": "2026-10-05",
+ "scope": "Host execution of the REAL COMPOSED detour-arm layer through the outcomes the launch-11 R3 world hits at the LuaMod-side LoadMap arm. LOCAL ONLY: host process only; no console contact, no target execution, no composition run.",
+ "test_source": {
+  "path": "host-test/test_detour_refusal_r2.cpp",
+  "sha256": "b761074987aff6e5e48a33c21f5481101b71c5d045b6e25ecbbf1b1d85dd5525"
+ },
+ "build_script": {
+  "path": "host-test/build_and_run_r2.sh",
+  "sha256": "9f20c00a70e60534a9c11b105a04cddd0a4cbdcdd753b3ece79a469336cd78d6"
+ },
+ "binary": {
+  "path": "host-test/test_detour_refusal_r2",
+  "sha256": "39ff2a0cf52be88bc7fa05bbdca88fe58a295f4ee081204fbda9d5b6411d58ed"
+ },
+ "composed_units_rebuilt": [
+  [
+   "x64Detour.cpp",
+   "5bb9cea4ac6af186"
+  ],
+  [
+   "ADetour.cpp",
+   "920730412286cbff"
+  ],
+  [
+   "ZydisDisassembler.cpp",
+   "facfea222dd4c659"
+  ],
+  [
+   "RangeAllocator.cpp",
+   "c94bc041d6632..."
+  ],
+  [
+   "FBAllocator.cpp",
+   "61f45fd3bc60..."
+  ],
+  [
+   "ErrorLog.cpp",
+   "e92acbbe14d7..."
+  ],
+  [
+   "UID.cpp",
+   "fca158c78c46..."
+  ],
+  [
+   "MemProtector.cpp",
+   "d8192efda954 (prebuilt host-2 object, source-sha verified)"
+  ],
+  [
+   "PolyHookOs.cpp",
+   "d4f19e47a568..."
+  ],
+  [
+   "OwnedTrampoline.cpp",
+   "99aa5e47455e8d6c"
+  ],
+  [
+   "OwnedMemory.cpp (read-lease)",
+   "d824528d762f8156"
+  ],
+  [
+   "Misc.cpp",
+   "bbb8844aed71e299 (prebuilt Misc-host-x86.o; APPLE branch of this port does not compile on host; source-sha verified against composed sha)"
+  ]
+ ],
+ "provenance": "unit paths+shas pinned from worker-launch10-walkguard-prep/ue4ss-native-supplier-composition-6-l10wg/run-a/receipt.json selected_runtime_units; asmjit/asmtk archives from ue4ss-native-detour-host-deps-1/build-1 (jitallocator source sha 89da3fbb2d25 == composed unit sha, verified); zydis/zycore objects from ue4ss-native-owned-detour-1/host-1|host-2 receipts",
+ "fixture_fact": "the host-deps build replaces asmjit virtmem with the owned-allocator port (AllocatorBridge::record_created, virtmem.cpp:910), so asmjit JIT pages are registry-backed (page-granted RWX); measured at test phase 'fixture_fact'",
+ "phases": [
+  {
+   "name": "exec-only-denied",
+   "result": "PASS",
+   "proves": "PROT_NONE unregistered page: hook() soft-refuses with zero dereference; process survives (no ASan fault)"
+  },
+  {
+   "name": "readable-unregistered",
+   "result": "PASS",
+   "proves": "raw mmap R|X page (live game-text analog, readable yet never registered): hook() refuses at the empty-insts check (x64Detour.cpp:355-358); zero bytes mutated; refusal is registry-based, not readability-based"
+  },
+  {
+   "name": "owned readable+writeable",
+   "result": "PASS",
+   "proves": "registry-backed JIT page: the arm PROCEEDS END-TO-END (hook() true, real patch lands source()==84, owned trampoline executes ORIGINAL bytes ==42, unHook restores source and releases)"
+  },
+  {
+   "name": "write-refused (R3)",
+   "result": "PASS",
+   "proves": "RWX source transition denied -> hook() false at the isGood gate (x64Detour.cpp:492); zero source bytes written; source keeps executing; process survives"
+  },
+  {
+   "name": "copy-refused rollback",
+   "result": "PASS",
+   "proves": "mem_copy refused after a genuine 7-byte prefix -> internal rollback (x64Detour.cpp:500-522); source restored byte-identical; trampoline released; process survives"
+  }
+ ],
+ "run": {
+  "exit": 0,
+  "stdout": "host-test/run-r2.stdout",
+  "asan_log": "host-test/run-r2.asan.log",
+  "asan_errors": 0
+ },
+ "honest_bounds": "HOST ONLY: proves the detour-layer mechanics the LuaMod arm routes through, not console behavior; no igf6-class naked read exists in this composed layer to host-test (that premise belonged to a different-lineage port, 0619d2b4, which is NOT in the build). Console verdicts stay with the in-game IGW/matrix evidence."
+}

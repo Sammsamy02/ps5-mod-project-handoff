@@ -1,0 +1,470 @@
+--- a/worker-console-batch-runner/console_batch.py
++++ b/worker-console-batch-runner/console_batch.py
+@@ -240,22 +240,32 @@
+ }
+ 
+ # Launch probe #1 (definitive layout entry 1): IGW exec-writability probe, ARMED
+-# variant (worker-writability-probe-build, build_id igd1-6ebab07f2111; identities
+-# re-verified on disk 2026-10-04 by worker-batch-final-ini-adoption before pinning).
++# ROW-0 REBUILD variant (worker-igw-row0-rebuild, build_id igd1-e030a09eb4d1;
++# `"confirmed": 1` on ROW 0 ONLY). Supersedes the launch-9 pin
++# (worker-writability-probe-build, igd1-6ebab07f2111 / fself 48949316…) per
++# worker-probe-pairing-prep hazard H-1: staging the OLD bytes under the SAME
++# console filename would self-verify PASS against their own constants and
++# reproduce launch-9's all-skip evidence instead of the row-0 verdict.
++# Identities + §3 readback constants re-verified on disk 2026-10-05 against
++# THESE artifacts with THIS tool's own law (gate_sha preflight +
++# sht_prefix_end + body-sha recompute, determinism run1==run2, frozen
++# check_xwp_artifact rc=0) before pinning.
+ XWP_ARMED = {
+-    "prx": f"{T}/worker-writability-probe-build/modbridge_exec_write_probe_armed.prx",
+-    "sha": "48949316821b574bc0738b965ec0ab01500a870e34540e44568b65490704402e",
++    "prx": f"{T}/worker-igw-row0-rebuild/modbridge_exec_write_probe_armed.prx",
++    "sha": "e1541af612f97bb450b5f61888ae0c2fc93dea72454723dc9e0ffafabd6002df",
+     "bytes": 20013,
+-    "bare": f"{T}/worker-writability-probe-build/determinism/run-armed-1/bare-sdk/modbridge_exec_write_probe.prx",
+-    "bare_sha": "cfed5e3d7e62100649fe1221cd4eaaf7554df421f08792264ae5238acb6d0830",
++    "bare": f"{T}/worker-igw-row0-rebuild/determinism/run-armed-1/bare-sdk/modbridge_exec_write_probe.prx",
++    "bare_sha": "cc544d6e8fe94c151ca9d49bd12613f87999e8be20dcb935ff824bb1ef37a6f9",
+     "bare_bytes": 69464,
+     # SHT-strip readback law constants (same law as STAGE-PLAN-COMBINED §3;
+-    # recomputed on host 2026-10-04 from the bare-sdk ELF, run1 == run2)
++    # recomputed on host 2026-10-05 from the row-0 bare-sdk ELF with the §3
++    # snippet semantics, determinism run1 == run2; length unchanged vs the
++    # launch-9 build, body hash moves with the row-0 byte)
+     "readback_bytes": 67832,
+-    "readback_body_sha": "daea2ff4a6533fa9006efeeb1b24913a586b72c0f68826f563b9479bf6ef561b",
++    "readback_body_sha": "e3f13d1994a1b4d27de05e31885d5a5cf9ea91daea3c57c2c229afd3696c295e",
+     "target_prx": "/data/plugins/modbridge_exec_write_probe_armed.prx",
+     "module_line": "/data/plugins/modbridge_exec_write_probe_armed.prx",
+-    "build_id": "igd1-6ebab07f2111",
++    "build_id": "igd1-e030a09eb4d1",
+     "log": "/data/modbridge-exec-write-probe.jsonl",   # + UE4SS mirror lines
+ }
+ 
+@@ -3147,7 +3157,7 @@
+     it now runs LAST before the handoff.)"""
+     fl = Flow("stage-ridealongs")
+     fl.notes = ("DEFINITIVE return-session staging (FINAL-INI-LAYOUT §3, ninth-slot revision): "
+-                "5 PRXs (xwp-armed igd1-6ebab07f2111, fc1pool fc1pool1-78508a2e2940, qdrv1, "
++                "5 PRXs (xwp-armed igd1-e030a09eb4d1 row-0 rebuild, fc1pool fc1pool1-78508a2e2940, qdrv1, "
+                 "observer, cc1-carrier cc1-0864d65c1baf) + the FINAL 9-entry ploader.ini "
+                 "(8 registered; bootstrap whole-file STOR only when the historical line moves "
+                 "require it; ensure ops otherwise), byte-exact vs ploader.ini.canonical. "
+@@ -3174,7 +3184,7 @@
+                         "artifacts + canonical template identity")
+ 
+     fl.step("ride.0", "SC-PREFLIGHT — local identities: all FIVE fself PRXs (qdrv1 52c32216…, "
+-                      "observer 1afa0997…, xwp-armed 48949316…, fc1pool d2431bf8…, cc1-carrier "
++                      "observer 1afa0997…, xwp-armed e1541af6… (row-0 rebuild), fc1pool d2431bf8…, cc1-carrier "
+                       "d83410aa…) + all FIVE bare-sdk ELFs + the canonical template (verify "
+                       "hashes before replacing any owned file)", "preflight",
+             [gate_sha(QDRV1["prx"], QDRV1["sha"], QDRV1["bytes"]),
+@@ -3205,10 +3215,11 @@
+ 
+     fl.step("ride.1", "SC-PREFLIGHT b — recompute the §3 readback constants from all five "
+                       "bare-sdk ELFs (qdrv1 87112 / 71406d3c…; observer 30143976 / 3f89a5b6…; "
+-                      "xwp 67832 / daea2ff4…; fc1 67848 / 7e2dce27…; cc1 71528 / 131ff1c2…)", "preflight",
++                      "xwp 67832 / e3f13d19…; fc1 67848 / 7e2dce27…; cc1 71528 / 131ff1c2…)", "preflight",
+             ["qdrv1: readback bytes == 87112, body sha == 71406d3c…",
+              "observer: readback bytes == 30143976, body sha == 3f89a5b6…",
+-             "xwp: readback bytes == 67832, body sha == daea2ff4…",
++             "xwp: readback bytes == 67832, body sha == e3f13d19… (row-0 rebuild; a launch-9 "
++             "readback daea2ff4… REFUSES here — H-1 wrong-build law)",
+              "fc1: readback bytes == 67848, body sha == 7e2dce27…",
+              "cc1: readback bytes == 71528, body sha == 131ff1c2… (§3 prefix law; the brief's "
+              "1d17a27d… hashed bare[64:EOF] — see CC1 dict note + adoption receipts)",
+@@ -3282,11 +3293,14 @@
+              "curl -sS %s%s   # baseline if present" % (FTP, CC1["log"])],
+             freshness_baseline_fn())
+ 
+-    fl.step("ride.6", "SC-1/SC-2 — STOR modbridge_exec_write_probe_armed.prx (48949316… / "
+-                      "20013 B) to its FINAL name + SHT-strip readback law (67832 B / body "
+-                      "daea2ff4…; ONE re-STOR on failure, then abort)", "upload",
+-            ["local sha == 48949316… BEFORE upload (BUILD-ID law)",
+-             "readback: exact-length 67832 + body-hash daea2ff4… + Ehdr exception (e_shnum zeroed)",
++    fl.step("ride.6", "SC-1/SC-2 — STOR modbridge_exec_write_probe_armed.prx (e1541af6… / "
++                      "20013 B, ROW-0 REBUILD igd1-e030a09eb4d1) to its FINAL name + SHT-strip "
++                      "readback law (67832 B / body e3f13d19…; ONE re-STOR on failure, then "
++                      "abort; a stale launch-9 readback FAILS — H-1 wrong-build refusal)",
++            "upload",
++            ["local sha == e1541af6… BEFORE upload (BUILD-ID law; NEVER the launch-9 "
++             "48949316… bytes under this console name)",
++             "readback: exact-length 67832 + body-hash e3f13d19… + Ehdr exception (e_shnum zeroed)",
+              "distinct file under its OWN name — nothing is replaced",
+              "skipped entirely when the ini decision was a no-op (readback-only verify)"],
+             ["curl -sS -T %s %s%s" % (XWP_ARMED["prx"], FTP, XWP_ARMED["target_prx"]),
+@@ -4404,9 +4418,16 @@
+ def probe_evidence_verdict(xwp_text, xwp_base, fc1_text, fc1_base):
+     """Classify the two probe verdict sinks (evidence-path law):
+       /data/modbridge-exec-write-probe.jsonl — xwp-armed verdicts, envelope
+-        build_id igd1-6ebab07f2111; per-attempt + summary records, fail-open.
++        build_id igd1-e030a09eb4d1 (the ROW-0 REBUILD; worker-probe-pairing-prep
++        hazard H-1); per-attempt + summary records, fail-open.
+       /data/modbridge-fc1pool-facts.jsonl — fc1pool1-78508a2e2940; success =
+         fc1pool_result verdict validated (checks 11/11) + single FC1POOL: UE4SS line.
++    SEQ-1 BUILD-ID POST-STAGE LAW (H-1): the seq-1 `entry` record is the staged
++    build identity — it MUST carry the pinned build_id. Any other value means
++    the OLD/stale probe bytes ran under the same console filename (WRONG BUILD,
++    loud FAIL; re-stage the pinned rebuild, never re-rate the evidence). Fresh
++    records with NO seq-1 entry record leave the staged identity UNVERIFIED
++    (WARN note; the recorded refusals stay honest terminal evidence).
+     Returns (status, detail, info). Presence/freshness/classification only — the
+     probes' verdicts are EVIDENCE; this gate never certifies writability."""
+     info = {"xwp": {}, "fc1": {}}
+@@ -4417,26 +4438,39 @@
+         return "FAIL", "xwp jsonl: %s" % note_x, info
+     x_lines = [ln for ln in fresh_x.splitlines() if ln.strip()]
+     x_bad, x_foreign, x_exps = [], [], []
++    x_seq1 = None
+     for ln in x_lines:
+         try:
+             j = json.loads(ln)
+         except Exception:
+             x_bad.append(ln[:60])
+             continue
++        if j.get("seq") == 1 and j.get("exp") == "entry":
++            x_seq1 = j   # the staged build identity (H-1 seq-1 law)
+         if j.get("build_id") != XWP_ARMED["build_id"]:
+             x_foreign.append(str(j.get("build_id")))
+         elif j.get("exp"):
+             x_exps.append(j["exp"])
+     info["xwp"] = {"fresh_records": len(x_lines), "exps": x_exps, "baseline_note": note_x,
+-                   "build_id": XWP_ARMED["build_id"]}
++                   "build_id": XWP_ARMED["build_id"],
++                   "seq1_entry_build_id": (x_seq1 or {}).get("build_id")}
+     if x_bad:
+         return "FAIL", "xwp jsonl: %d unparseable line(s): %s" % (len(x_bad), x_bad[:2]), info
++    if x_seq1 is not None and x_seq1.get("build_id") != XWP_ARMED["build_id"]:
++        return "FAIL", ("xwp jsonl: WRONG BUILD — seq-1 entry record build_id %s != pinned %s "
++                        "(the OLD/stale probe bytes ran under the same console filename; H-1 "
++                        "wrong-build refusal: re-stage the pinned row-0 rebuild, never re-rate "
++                        "this evidence)" % (x_seq1.get("build_id"), XWP_ARMED["build_id"])), info
+     if x_foreign:
+         return "FAIL", "xwp jsonl: foreign build_id(s) %s (single-writer discipline violated or stale sink)" % x_foreign[:3], info
+     if not x_lines:
+         status = "WARN"
+         notes.append("xwp: ZERO fresh verdict records this launch (probe did not run or sink "
+                      "unreachable — check SC-5b OK lines / UE4SS mirror)")
++    elif x_seq1 is None:
++        status = "WARN"
++        notes.append("xwp: fresh records but NO seq-1 entry record — staged build identity "
++                     "UNVERIFIED this launch (grammar divergence; reconcile, never guess)")
+ 
+     fresh_f, note_f = _fresh_sink_lines(fc1_text, fc1_base)
+     if fresh_f is None:
+@@ -4742,7 +4776,8 @@
+         return "PASS", "probe verdict sinks: %s" % detail
+ 
+     fl.step("ge.3b", "Probe verdict sinks — /data/modbridge-exec-write-probe.jsonl (build_id "
+-                     "igd1-6ebab07f2111) + /data/modbridge-fc1pool-facts.jsonl (build_id "
++                     "igd1-e030a09eb4d1 row-0 rebuild; the seq-1 `entry` record MUST carry it — "
++                     "H-1 wrong-build refusal) + /data/modbridge-fc1pool-facts.jsonl (build_id "
+                      "fc1pool1-78508a2e2940): freshness vs the staging baselines, strict-JSON "
+                      "envelope law, fc1pool_result validated 11/11; single FC1POOL: UE4SS line "
+                      "recorded", "classify",
+@@ -4907,7 +4942,7 @@
+             "flow": "game-evidence", "runbook": "MASTER-VERIFICATION-RUNBOOK.md",
+             "cp_results": "see cp0-cp4-verdict.json / cp5-verdict.json / cp6-verdict.json / rung_check-*.json",
+             "probe_sinks": "see probe-verdicts.json (/data/modbridge-exec-write-probe.jsonl "
+-                           "igd1-6ebab07f2111 + /data/modbridge-fc1pool-facts.jsonl "
++                           "igd1-e030a09eb4d1 row-0 rebuild + /data/modbridge-fc1pool-facts.jsonl "
+                            "fc1pool1-78508a2e2940)",
+             "honesty": ("visible menu + visible pickup are USER-eye facts; log lines classify and route, "
+                         "they never certify (runbook G4/G7; do-not-claim guard); probe sink "
+@@ -5080,8 +5115,8 @@
+                    "SHT-strip", "[PPSA33286]", "EXACTLY 8", "8 registered", "composition = 2",
+                    "modbridge_qh_driver.prx", "modbridge_runtime_aligned_observer.prx",
+                    "modbridge_exec_write_probe_armed.prx", "modbridge_fc1pool.prx",
+-                   "48949316", "d2431bf8", "67832", "daea2ff4", "67848", "7e2dce27",
+-                   "igd1-6ebab07f2111", "fc1pool1-78508a2e2940",
++                   "48949316", "e1541af6", "d2431bf8", "67832", "e3f13d19", "67848", "7e2dce27",
++                   "igd1-e030a09eb4d1", "fc1pool1-78508a2e2940",
+                    "d83410aa", "e72366c4", "71528", "131ff1c2", "cc1-0864d65c1baf",
+                    "modbridge_carrier.prx",
+                    "INI-BOOTSTRAPPED", "ploader.ini.canonical", "fd9c7393",
+@@ -5268,7 +5303,7 @@
+                    "townfall_runtime_aligned_entry.log", "modbridge-ingame-facts.jsonl",
+                    "modbridge-exec-write-probe.jsonl", "modbridge-fc1pool-facts.jsonl",
+                    "modbridge-carrier-facts.jsonl",
+-                   "igd1-6ebab07f2111", "fc1pool1-78508a2e2940", "validated 11/11",
++                   "igd1-e030a09eb4d1", "fc1pool1-78508a2e2940", "validated 11/11",
+                    "cc1-0864d65c1baf", "CENSUS:VALIDATED",
+                    "CP0-CP4", "OPTIONS", "CROSS", "0x33ac8c0", "USER ACTION REQUIRED",
+                    "LOAD A SAVE", "ARM ploader.elf"]:
+@@ -5821,9 +5856,9 @@
+                   CANON.replace(CC1["ini_line"] + "\n", ""), "missing expected line")
+ 
+     print("== selftest K: probe verdict sink classifier (evidence-path law) ==")
+-    xwp_j = {"marker": "modbridge.execwriteprobe", "schema": 1, "seq": 1, "exp": "row",
++    xwp_j = {"marker": "modbridge.execwriteprobe", "schema": 1, "seq": 1, "exp": "entry",
+              "build_id": XWP_ARMED["build_id"]}
+-    xwp_good = json.dumps(xwp_j) + "\n" + json.dumps(dict(xwp_j, seq=2, exp="attempt")) + "\n"
++    xwp_good = json.dumps(xwp_j) + "\n" + json.dumps(dict(xwp_j, seq=2, exp="startup")) + "\n"
+     fc1_j = {"marker": "modbridge.ingamefacts", "schema": 1, "seq": 4, "exp": "fc1pool_result",
+              "build_id": FC1POOL["build_id"], "verdict": "validated", "reason_code": "none",
+              "checks_passed": 11, "checks_total": 11}
+@@ -5832,18 +5867,36 @@
+     v, d, info = probe_evidence_verdict(xwp_good, "", fc1_good, "")
+     check("probe sinks PASS on green fixtures (no baseline)", v == "PASS", d)
+     check("fc1 validated 11/11 detected", info["fc1"]["validated_results"] == 1)
++    check("seq-1 entry build_id recorded == pinned row-0 rebuild (H-1 identity receipt)",
++          info["xwp"]["seq1_entry_build_id"] == XWP_ARMED["build_id"], str(info["xwp"]))
+     v, d, info = probe_evidence_verdict(xwp_good, xwp_good, fc1_good, fc1_good)
+     check("probe sinks WARN when no fresh growth this launch", v == "WARN" and
+           "ZERO fresh" in d, d)
+-    v, d, info = probe_evidence_verdict(xwp_good + json.dumps(dict(xwp_j, seq=3)) + "\n",
+-                                        xwp_good, fc1_good, "")
+-    check("fresh growth vs baseline isolates THIS launch's records", v == "PASS" and
+-          info["xwp"]["fresh_records"] == 1, str(info["xwp"]))
++    check("no fresh records -> no seq-1 identity claim",
++          info["xwp"]["seq1_entry_build_id"] is None, str(info["xwp"]))
++    v, d, info = probe_evidence_verdict(
++        xwp_good + json.dumps(dict(xwp_j)) + "\n"
++        + json.dumps(dict(xwp_j, seq=3, exp="row")) + "\n",
++        xwp_good, fc1_good, "")
++    check("fresh growth vs baseline isolates THIS launch's records (seq restarts at the "
++          "seq-1 entry)", v == "PASS" and
++          info["xwp"]["fresh_records"] == 2
++          and info["xwp"]["seq1_entry_build_id"] == XWP_ARMED["build_id"], str(info["xwp"]))
+     v, d, _ = probe_evidence_verdict("not-json\n", "", fc1_good, "")
+     check("FAIL on unparseable xwp line", v == "FAIL" and "unparseable" in d, d)
+-    v, d, _ = probe_evidence_verdict(json.dumps(dict(xwp_j, build_id="igd1-DEADBEEF")) + "\n",
++    v, d, _ = probe_evidence_verdict(json.dumps(dict(xwp_j, build_id="igd1-6ebab07f2111")) + "\n",
+                                      "", fc1_good, "")
+-    check("FAIL on foreign xwp build_id", v == "FAIL" and "foreign build_id" in d, d)
++    check("WRONG BUILD refused: seq-1 entry carrying the OLD launch-9 build_id FAILS (H-1)",
++          v == "FAIL" and "WRONG BUILD" in d and "igd1-6ebab07f2111" in d, d)
++    v, d, _ = probe_evidence_verdict(xwp_good +
++                                     json.dumps(dict(xwp_j, seq=2, exp="startup",
++                                                     build_id="igd1-DEADBEEF")) + "\n",
++                                     "", fc1_good, "")
++    check("FAIL on foreign xwp build_id (non-seq-1 record)", v == "FAIL" and "foreign build_id" in d, d)
++    v, d, info = probe_evidence_verdict(json.dumps(dict(xwp_j, seq=1, exp="row")) + "\n", "",
++                                        fc1_good, "")
++    check("WARN when fresh records lack a seq-1 entry record (staged identity UNVERIFIED)",
++          v == "WARN" and "UNVERIFIED" in d and info["xwp"]["seq1_entry_build_id"] is None, d)
+     v, d, _ = probe_evidence_verdict("zz\n", "baseline-mismatch", fc1_good, "")
+     check("FAIL on baseline mismatch (rotated sink)", v == "FAIL" and "baseline" in d, d)
+     fc1_refused = json.dumps(dict(fc1_j, verdict="refused", reason_code="pool_window_uncovered",
+@@ -5974,6 +6027,49 @@
+     l_spawnfail = l_menu_open + "[Lua] [TownfallItemSpawner] Failed at ground trace. See UE4SS.log. boom\n"
+     _cp5f, per = cp56_verdict(l_green, l_menu_open, l_spawnfail)
+     check("CP6 failure names stage", per["CP6"].startswith("FAIL"), per["CP6"])
++
++    print("== selftest N: XWP row-0 rebuild pin (worker-probe-pairing-prep hazard H-1) ==")
++    # The pin must equal the on-disk artifact, verified with THIS tool's own law
++    # (preflight gate_sha + §3 sht_prefix_end / body-sha recompute) — never pinned
++    # from a brief's claims alone.
++    _n_sha, _n_bytes = local_sha(XWP_ARMED["prx"])
++    check("pinned fself == on-disk row-0 rebuild (e1541af6… / 20013 B)",
++          _n_sha == XWP_ARMED["sha"] and _n_bytes == XWP_ARMED["bytes"],
++          "%s %s" % (_n_sha, _n_bytes))
++    _n_bare_sha, _n_bare_bytes = local_sha(XWP_ARMED["bare"])
++    check("pinned bare-sdk == on-disk row-0 rebuild (cc544d6e… / 69464 B)",
++          _n_bare_sha == XWP_ARMED["bare_sha"] and _n_bare_bytes == XWP_ARMED["bare_bytes"],
++          "%s %s" % (_n_bare_sha, _n_bare_bytes))
++    _xwp_bare = open(XWP_ARMED["bare"], "rb").read()
++    check("§3 constants recompute from the pinned artifact (67832 / e3f13d19…)",
++          sht_prefix_end(_xwp_bare) == XWP_ARMED["readback_bytes"]
++          and hashlib.sha256(_xwp_bare[64:XWP_ARMED["readback_bytes"]]).hexdigest()
++          == XWP_ARMED["readback_body_sha"],
++          "%d" % sht_prefix_end(_xwp_bare))
++    check("row-0 build_id embedded in BOTH pinned artifacts",
++          XWP_ARMED["build_id"].encode() in open(XWP_ARMED["prx"], "rb").read()
++          and XWP_ARMED["build_id"].encode() in _xwp_bare, XWP_ARMED["build_id"])
++
++    def _law_readback_of(bare):
++        rb = bytearray(bare[:XWP_ARMED["readback_bytes"]])
++        rb[60:62] = b"\x00\x00"   # make_fself law: e_shnum zeroed in the readback header
++        return bytes(rb)
++
++    _old_bare_path = os.path.join(T, "worker-writability-probe-build/determinism/run-armed-1/"
++                                  "bare-sdk/modbridge_exec_write_probe.prx")
++    _old_bare = open(_old_bare_path, "rb").read()
++    ok_old, det_old = sht_strip_readback_law(_law_readback_of(_old_bare), _xwp_bare,
++                                             XWP_ARMED["readback_bytes"],
++                                             XWP_ARMED["readback_body_sha"])
++    check("WRONG BUILD refused: a launch-9 readback FAILS the row-0 law (never self-verifies PASS)",
++          not ok_old and "diverge" in det_old, det_old)
++    ok_new, det_new = sht_strip_readback_law(_law_readback_of(_xwp_bare), _xwp_bare,
++                                             XWP_ARMED["readback_bytes"],
++                                             XWP_ARMED["readback_body_sha"])
++    check("CORRECT staged: the row-0 readback PASSES its own pinned law", ok_new, det_new)
++    check("pinned row-0 build_id differs from the superseded launch-9 id",
++          XWP_ARMED["build_id"] == "igd1-e030a09eb4d1"
++          and XWP_ARMED["build_id"] != "igd1-6ebab07f2111", XWP_ARMED["build_id"])
+ 
+     print("")
+     print("selftest summary: %d ok, %d failed" % (len(oks), len(fails)))
+--- a/worker-console-batch-runner/tests/fake_console_drive.py
++++ b/worker-console-batch-runner/tests/fake_console_drive.py
+@@ -165,15 +165,17 @@
+ C2_GREEN = '{"marker":"modbridge.ingamefacts","build_id":"qdrv1-c20c70ec4112","seq":1,"exp":"qh_counter"}\n'
+ 
+ # probe verdict sinks (evidence-path law): pre-launch baseline EMPTY (first launch
+-# with the probes), post-launch fixtures carry THIS launch's verdict records
++# with the probes), post-launch fixtures carry THIS launch's verdict records.
++# The xwp chain follows the pinned grammar: seq-1 `entry` carries the staged
++# build identity (H-1 seq-1 build-id post-stage law) — the ROW-0 REBUILD id.
+ XWP_STAGES = [
+     "",  # baseline fetch (stage-ridealongs SC-0b): absent on a first probe launch
+-    ('{"marker":"modbridge.execwriteprobe","schema":1,"seq":1,"exp":"row",'
++    ('{"marker":"modbridge.execwriteprobe","schema":1,"seq":1,"exp":"entry",'
+      '"build_id":"%s"}\n' % cb.XWP_ARMED["build_id"]) +
+-    ('{"marker":"modbridge.execwriteprobe","schema":1,"seq":2,"exp":"attempt",'
+-     '"build_id":"%s","mprotect_rc":0}\n' % cb.XWP_ARMED["build_id"]) +
+-    ('{"marker":"modbridge.execwriteprobe","schema":1,"seq":3,"exp":"summary",'
+-     '"build_id":"%s","module_start":"0"}\n' % cb.XWP_ARMED["build_id"]),
++    ('{"marker":"modbridge.execwriteprobe","schema":1,"seq":2,"exp":"startup",'
++     '"build_id":"%s"}\n' % cb.XWP_ARMED["build_id"]) +
++    ('{"marker":"modbridge.execwriteprobe","schema":1,"seq":3,"exp":"attempt",'
++     '"build_id":"%s","mprotect_rc":0}\n' % cb.XWP_ARMED["build_id"]),
+ ]
+ _FC1_BASE = ('{"marker":"modbridge.ingamefacts","schema":1,"seq":1,"exp":"entry",'
+              '"build_id":"%s"}\n' % cb.FC1POOL["build_id"]) + \
+@@ -819,7 +821,7 @@
+       str(cb.final_ini_verify_endstate(stored_ini())))
+ check("all FIVE PRXs STORed exactly once, file order (xwp, fc1, qdrv1, observer, cc1-carrier)",
+       fc.prx_stors == [XWP_STOR_URL, FC1_STOR_URL, Q_STOR_URL, OBS_STOR_URL, CC1_STOR_URL], str(fc.prx_stors))
+-check("xwp SHT-strip law verdict OK (67832 / daea2ff4…)",
++check("xwp SHT-strip law verdict OK (67832 / e3f13d19…, the row-0 rebuild)",
+       json.load(open(os.path.join(ctx.run_dir, "xwp-readback-verdict.json")))["ok"] is True)
+ check("fc1 SHT-strip law verdict OK (67848 / 7e2dce27…)",
+       json.load(open(os.path.join(ctx.run_dir, "fc1-readback-verdict.json")))["ok"] is True)
+@@ -957,6 +959,43 @@
+       stored_ini() == HISTORICAL_INI, repr(stored_ini())[:120])
+ check("exactly initial STOR + ONE re-STOR of xwp, then abort (no retries, no publish)",
+       len(fc.prx_stors) == 2, str(fc.prx_stors))
++
++print("== fake-console drive: H-1 WRONG-BUILD refusal — console still holds the LAUNCH-9 xwp "
++      "bytes under the SAME filename: the row-0 law must refuse, never self-verify PASS ==")
++OLD_XWP_BARE = os.path.join(cb.T, "worker-writability-probe-build/determinism/run-armed-1/"
++                            "bare-sdk/modbridge_exec_write_probe.prx")
++
++
++def old_build_readback(d):
++    """Simulate the stale launch-9 fself sitting on the console: the ftpsrv channel
++    serves the segment-covered prefix of the OLD bare-sdk ELF (e_shnum zeroed)."""
++    bare = open(OLD_XWP_BARE, "rb").read()
++    rb = bytearray(bare[:d["readback_bytes"]])
++    rb[60:62] = b"\x00\x00"
++    return bytes(rb)
++
++
++seed_ini(HISTORICAL_INI)
++fc.prx_stors = []
++fc.stor_sequence = []
++fc.prx_readback_corruptor = old_build_readback
++ctx = cb.Ctx(run_dir=fresh("order-law-oldbuild"), dry=False, assume_yes=True)
++res = cb.build_stage_ridealongs().run(ctx)
++fc.prx_readback_corruptor = None
++statuses = dict(res)
++check("ride.6 REFUSES the stale launch-9 xwp readback against the pinned row-0 law (H-1)",
++      statuses.get("ride.6") == "FAIL", statuses.get("ride.6"))
++check("guard + publish SKIPPED after the wrong-build halt; NO ini publish at all",
++      statuses.get("ride.9c") == "SKIPPED_HALT" and statuses.get("ride.4") == "SKIPPED_HALT"
++      and not any(s[0] == "ini" for s in fc.stor_sequence), str(fc.stor_sequence))
++check("console keeps the OLD ini byte-identical (safe state)", stored_ini() == HISTORICAL_INI,
++      repr(stored_ini())[:120])
++check("exactly initial STOR + ONE re-STOR of xwp, then abort (the wrong bytes never PASS)",
++      len(fc.prx_stors) == 2, str(fc.prx_stors))
++check("the pinned row-0 verdict law rejects the OLD body hash while the pinned local fself is "
++      "the row-0 rebuild (e1541af6 pin vs launch-9 bytes)",
++      cb.XWP_ARMED["build_id"] == "igd1-e030a09eb4d1"
++      and cb.local_sha(cb.XWP_ARMED["prx"])[0] == cb.XWP_ARMED["sha"])
+ 
+ print("== fake-console drive: ORDER LAW (c) — a =2 entry whose file is MISSING/0-byte: "
+       "publish REFUSED ==")
+@@ -1361,12 +1400,49 @@
+ check("probe verdict sinks PASS (xwp records + fc1pool_result validated 11/11)",
+       pv["status"] == "PASS" and pv["sinks"]["fc1"]["validated_results"] == 1
+       and pv["sinks"]["xwp"]["fresh_records"] == 3, str(pv)[:200])
++check("seq-1 entry build_id == pinned row-0 rebuild (H-1 identity receipt on the green path)",
++      pv["sinks"]["xwp"]["seq1_entry_build_id"] == cb.XWP_ARMED["build_id"], str(pv["sinks"]["xwp"]))
+ cv = json.load(open(os.path.join(ctx.run_dir, "carrier-verdicts.json")))
+ check("cc1 census sink PASS (fresh census_result CENSUS:VALIDATED + 30 qh_counter + one CC1: line)",
+       cv["status"] == "PASS" and cv["sinks"]["cc1"]["census_verdict"] == "CENSUS:VALIDATED"
+       and cv["sinks"]["cc1"]["qh_counter_lines"] == 30
+       and cv["sinks"]["cc1"]["ue4ss_cc1_lines"] == 1, str(cv)[:240])
+ check("game receipt written", os.path.exists(os.path.join(ctx.run_dir, "game-evidence-receipt.json")))
++
++print("== fake-console drive: H-1 BUILD-ID MISMATCH refused — seq-1 entry carries the OLD "
++      "launch-9 build_id: the real ge.3b step must FAIL loud ==")
++OLD_BUILD = "igd1-6ebab07f2111"
++_ge_steps = {s["id"]: s["fn"] for s in cb.build_game_evidence().steps}
++
++
++def _xwp_rec(seq, exp, build):
++    return json.dumps({"marker": "modbridge.execwriteprobe", "schema": 1,
++                       "seq": seq, "exp": exp, "build_id": build}) + "\n"
++
++
++ctx = cb.Ctx(run_dir=fresh("ge-wrongbuild"), dry=False, assume_yes=True)
++ctx.state["xwp_text"] = (_xwp_rec(1, "entry", OLD_BUILD) + _xwp_rec(2, "startup", OLD_BUILD)
++                         + _xwp_rec(3, "attempt", OLD_BUILD))
++ctx.state["xwp_jsonl_baseline"] = ""
++ctx.state["fc1_text"] = FC1_STAGES[1]
++ctx.state["fc1_jsonl_baseline"] = ""
++ctx.state["l_text"] = ""
++st, det = _ge_steps["ge.3b"](ctx)
++check("ge.3b FAILS on the WRONG-BUILD seq-1 entry (old launch-9 bytes ran)", st == "FAIL",
++      "%s :: %s" % (st, det))
++check("the refusal NAMES the observed stale build identity", OLD_BUILD in det, det[:200])
++pv = json.load(open(os.path.join(ctx.run_dir, "probe-verdicts.json")))
++check("probe-verdicts.json records the observed seq-1 identity for the runbook",
++      pv["sinks"]["xwp"]["seq1_entry_build_id"] == OLD_BUILD, str(pv["sinks"]["xwp"]))
++ctx = cb.Ctx(run_dir=fresh("ge-noentry"), dry=False, assume_yes=True)
++ctx.state["xwp_text"] = _xwp_rec(2, "startup", cb.XWP_ARMED["build_id"])
++ctx.state["xwp_jsonl_baseline"] = ""
++ctx.state["fc1_text"] = FC1_STAGES[1]
++ctx.state["fc1_jsonl_baseline"] = ""
++ctx.state["l_text"] = ""
++st, det = _ge_steps["ge.3b"](ctx)
++check("ge.3b WARNs (honest, not FAIL) when fresh records lack the seq-1 entry record",
++      st == "WARN" and "UNVERIFIED" in det, "%s :: %s" % (st, det))
+ 
+ print("== fake-console drive: dll8 (PREFERRED single DLL run) ==")
+ fc.serve_8fam = True
+--- a/worker-console-batch-runner/USER-SESSION-GUIDE.md
++++ b/worker-console-batch-runner/USER-SESSION-GUIDE.md
+@@ -75,14 +75,15 @@
+ pre-image copy), then:
+ 
+ 1. Uploads all FOUR modules under their OWN names — the two launch probes
+-   `modbridge_exec_write_probe_armed.prx` (xwp-armed, `igd1-6ebab07f2111`, sha `48949316…` /
+-   20013 B) and `modbridge_fc1pool.prx` (fc1pool1-78508a2e2940, sha `d2431bf8…` / 22733 B),
++   `modbridge_exec_write_probe_armed.prx` (xwp-armed ROW-0 REBUILD, `igd1-e030a09eb4d1`, sha `e1541af6…` /
++   20013 B; supersedes the launch-9 build `igd1-6ebab07f2111` per worker-probe-pairing-prep H-1 — a stale
++   launch-9 readback REFUSES the law) and `modbridge_fc1pool.prx` (fc1pool1-78508a2e2940, sha `d2431bf8…` / 22733 B),
+    plus the two ridealongs `modbridge_qh_driver.prx` (sha `52c32216…` / 26157 B) and
+    `modbridge_runtime_aligned_observer.prx` (sha `1afa0997…` / 30152151 B). Because the
+    console's ftpsrv returns the SHT-stripped fself readback (the segment-covered prefix of the
+    bare-sdk ELF — full-file hash equality is IMPOSSIBLE through this channel by construction),
+    each readback is verified against the §3 law: exact length (**67832** xwp / **67848** fc1 /
+-   **87112** qdrv1 / **30143976** observer / **71528** cc1-carrier bytes) + body hash (`daea2ff4…` xwp,
++   **87112** qdrv1 / **30143976** observer / **71528** cc1-carrier bytes) + body hash (`e3f13d19…` xwp row-0,
+    `7e2dce27…` fc1, `71406d3c…` qdrv1, `3f89a5b6…` observer, `131ff1c2…` cc1) + header exception (only
+    e_shoff/e_shentsize/e_shnum/e_shstrndx may differ; e_shnum must be zeroed). A failed readback
+    re-STORs from the verified local file EXACTLY ONCE, then aborts.
+@@ -142,8 +143,9 @@
+ Then it fetches the evidence sinks (runtime-status, UE4SS.log, D1, C2, and the three probe verdict
+ sinks), runs `post_launch_check.py` and `rung_check.py`, and checks CP0-CP4 (module ran;
+ activation; engine-ready + Tick `0x33ac8c0`; mods-started; the Item Spawner load banner) plus the
+-probe sink gate (`/data/modbridge-exec-write-probe.jsonl` must carry fresh `igd1-6ebab07f2111`
+-records; `/data/modbridge-fc1pool-facts.jsonl` must carry fresh `fc1pool1-78508a2e2940` records
++probe sink gate (`/data/modbridge-exec-write-probe.jsonl` must carry fresh `igd1-e030a09eb4d1`
++records whose seq-1 `entry` line carries exactly that build_id — any other value is the WRONG-BUILD
++refusal per H-1; `/data/modbridge-fc1pool-facts.jsonl` must carry fresh `fc1pool1-78508a2e2940` records
+ with a `fc1pool_result` verdict `validated` 11/11; the cc1 census sink
+ `/data/modbridge-carrier-facts.jsonl` must carry fresh `cc1-0864d65c1baf` records with a
+ `census_result` verdict `CENSUS:VALIDATED` — recorded refusals are honest terminal
+@@ -222,6 +224,7 @@
+   [TARGET] until this session runs. The §3 readback constants were additionally recomputed on
+   host from the pinned bare-sdk ELFs and match the brief's table exactly
+   (qdrv1 87112 B / `71406d3c…`; observer 30143976 B / `3f89a5b6…`;
+-  xwp 67832 B / `daea2ff4…`; fc1 67848 B / `7e2dce27…`), and the adopted law's own proofs were
++  xwp launch-9 67832 B / `daea2ff4…` — superseded 2026-10-05 by the row-0 rebuild
++  `igd1-e030a09eb4d1` (same 67832 B, body `e3f13d19…`); fc1 67848 B / `7e2dce27…`), and the adopted law's own proofs were
+   re-run green by the adopter (final verifier selftest 9/9; simulator 13 variants PASS incl. the
+   40320-permutation byte-exact convergence).

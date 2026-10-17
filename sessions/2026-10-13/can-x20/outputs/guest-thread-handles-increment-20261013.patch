@@ -1,0 +1,508 @@
+--- /dev/null
++++ b/loader/include/guest_thread_manager.h
+@@ -0,0 +1,64 @@
++// Host-owned thread objects for attached guest PE batches. These objects are
++// not published as kernel32 imports until guest pointer and loader-lock gates.
++#ifndef CAP13_GUEST_THREAD_MANAGER_H
++#define CAP13_GUEST_THREAD_MANAGER_H
++
++#include "guest_pe_thread.h"
++
++#include <cstdint>
++#include <memory>
++
++namespace cap13 {
++
++enum class GuestThreadCreateStatus
++{
++    Ok, WrongState, InvalidStart, UnsupportedOptions, Exhausted, StartFailed
++};
++struct GuestThreadCreateResult
++{
++    GuestThreadCreateStatus status = GuestThreadCreateStatus::WrongState;
++    uint64_t handle = 0;
++    uint32_t thread_id = 0;
++};
++enum class GuestThreadWaitStatus { Object0, Timeout, InvalidHandle, WouldDeadlock };
++struct GuestThreadQueryResult
++{
++    bool valid = false;
++    bool finished = false;
++    GuestThreadRunResult run{};
++};
++
++class GuestThreadManager
++{
++  public:
++    using Runner = GuestThreadRunResult (*)(GuestPeBatchResult&, StaticTlsBank&,
++                                             void*, void*);
++    explicit GuestThreadManager(GuestPeBatchResult& batch, StaticTlsBank& bank,
++                                Runner runner = pe_run_guest_thread);
++    ~GuestThreadManager();
++    GuestThreadManager(const GuestThreadManager&) = delete;
++    GuestThreadManager& operator=(const GuestThreadManager&) = delete;
++
++    // This stage supports an immediate start with default attributes and
++    // stack. Other options are refused before any worker is created.
++    GuestThreadCreateResult create(void* start, void* argument,
++                                   void* attributes = nullptr,
++                                   uint64_t stack_size = 0,
++                                   uint32_t flags = 0);
++    GuestThreadWaitStatus wait(uint64_t handle, uint32_t milliseconds);
++    GuestThreadQueryResult query(uint64_t handle);
++    bool close(uint64_t handle);
++    // Stops admission and joins every worker, including closed handles.
++    // Must precede batch detach. Calling from an owned worker is refused.
++    bool quiesce_all();
++    // Includes failures from workers whose handles were already closed.
++    // Check after quiesce before deciding whether the batch can be detached.
++    bool had_worker_failure();
++
++  private:
++    struct Impl;
++    std::unique_ptr<Impl> m_;
++};
++
++} // namespace cap13
++#endif
+--- /dev/null
++++ b/loader/src/guest_thread_manager.cpp
+@@ -0,0 +1,233 @@
++#include "guest_thread_manager.h"
++#include "win32_thread_identity.h"
++
++#include <atomic>
++#include <chrono>
++#include <condition_variable>
++#include <mutex>
++#include <thread>
++#include <unordered_map>
++#include <utility>
++#include <vector>
++#include <cstdlib>
++
++namespace cap13 {
++namespace {
++std::atomic<uint64_t> next_handle{1};
++uint64_t reserve_handle() noexcept
++{
++    uint64_t value = next_handle.load(std::memory_order_relaxed);
++    while (value != UINT64_MAX)
++    {
++        if (next_handle.compare_exchange_weak(value, value + 1,
++                                              std::memory_order_relaxed))
++            return value;
++    }
++    return 0;
++}
++}
++
++struct GuestThreadManager::Impl
++{
++    struct Record
++    {
++        uint32_t id = 0;
++        bool handle_open = true; // protected by Impl::mutex
++        std::mutex mutex;
++        std::condition_variable cv;
++        bool finished = false;
++        GuestThreadRunResult run{};
++        std::thread worker;
++    };
++    GuestPeBatchResult& batch;
++    StaticTlsBank& bank;
++    Runner runner;
++    std::mutex mutex;
++    bool accepting = true;
++    bool quiescing = false;
++    bool quiesced = false;
++    bool failed_worker = false;
++    std::unordered_map<uint64_t, std::shared_ptr<Record>> handles;
++    std::vector<std::shared_ptr<Record>> records;
++
++    Impl(GuestPeBatchResult& b, StaticTlsBank& k, Runner r)
++        : batch(b), bank(k), runner(r) {}
++
++    bool valid_start(void* start) const
++    {
++        if (!batch.ok || batch.modules.empty() || !start) return false;
++        unsigned owners = 0;
++        for (const auto& module : batch.modules)
++        {
++            if (!module || !module->mapped_handle()) return false;
++            if (module->owns_executable_address(start)) ++owners;
++        }
++        return owners == 1;
++    }
++
++    void reap_closed_finished()
++    {
++        for (auto it = records.begin(); it != records.end();)
++        {
++            const auto& rec = *it;
++            if (rec->handle_open) { ++it; continue; }
++            bool finished;
++            GuestThreadRunStatus status;
++            {
++                std::lock_guard<std::mutex> guard(rec->mutex);
++                finished = rec->finished;
++                status = rec->run.status;
++            }
++            if (!finished) { ++it; continue; }
++            if (rec->worker.joinable()) rec->worker.join();
++            if (status != GuestThreadRunStatus::Ok) failed_worker = true;
++            it = records.erase(it);
++        }
++    }
++};
++
++GuestThreadManager::GuestThreadManager(GuestPeBatchResult& batch,
++                                       StaticTlsBank& bank, Runner runner)
++    : m_(new Impl(batch, bank, runner)) {}
++
++GuestThreadManager::~GuestThreadManager()
++{
++    // Keeping references to a destroyed batch would be unsafe. A caller that
++    // destroys the manager on its own worker violates the lifetime contract.
++    if (!quiesce_all()) std::terminate();
++}
++
++GuestThreadCreateResult GuestThreadManager::create(
++    void* start, void* argument, void* attributes, uint64_t stack_size,
++    uint32_t flags)
++{
++    std::lock_guard<std::mutex> guard(m_->mutex);
++    if (!m_->accepting) return {GuestThreadCreateStatus::WrongState, 0, 0};
++    m_->reap_closed_finished();
++    if (attributes || stack_size || flags)
++        return {GuestThreadCreateStatus::UnsupportedOptions, 0, 0};
++    if (!m_->runner || !m_->valid_start(start))
++        return {GuestThreadCreateStatus::InvalidStart, 0, 0};
++    const uint32_t id = win32_reserve_thread_id();
++    const uint64_t handle = reserve_handle();
++    if (!id || !handle)
++        return {GuestThreadCreateStatus::Exhausted, 0, 0};
++    std::shared_ptr<Impl::Record> rec;
++    bool appended = false;
++    try
++    {
++        rec = std::make_shared<Impl::Record>();
++        rec->id = id;
++        m_->records.push_back(rec);
++        appended = true;
++        m_->handles.emplace(handle, rec);
++        Impl* impl = m_.get();
++        rec->worker = std::thread([impl, rec, start, argument] {
++            GuestThreadRunResult result{GuestThreadRunStatus::StartFailed, 0};
++            try
++            {
++                if (win32_bind_current_thread_id(rec->id))
++                    result = impl->runner(impl->batch, impl->bank, start, argument);
++            }
++            catch (...) { result = {GuestThreadRunStatus::StartFailed, 0}; }
++            {
++                std::lock_guard<std::mutex> done_guard(rec->mutex);
++                rec->run = result;
++                rec->finished = true;
++            }
++            rec->cv.notify_all();
++        });
++    }
++    catch (...)
++    {
++        m_->handles.erase(handle);
++        if (appended) m_->records.pop_back();
++        return {GuestThreadCreateStatus::StartFailed, 0, 0};
++    }
++    return {GuestThreadCreateStatus::Ok, handle, id};
++}
++
++GuestThreadWaitStatus GuestThreadManager::wait(uint64_t handle,
++                                               uint32_t milliseconds)
++{
++    std::shared_ptr<Impl::Record> rec;
++    {
++        std::lock_guard<std::mutex> guard(m_->mutex);
++        auto it = m_->handles.find(handle);
++        if (it == m_->handles.end()) return GuestThreadWaitStatus::InvalidHandle;
++        rec = it->second;
++    }
++    if (rec->worker.get_id() == std::this_thread::get_id())
++        return GuestThreadWaitStatus::WouldDeadlock;
++    std::unique_lock<std::mutex> guard(rec->mutex);
++    if (milliseconds == UINT32_MAX)
++        rec->cv.wait(guard, [&] { return rec->finished; });
++    else if (!rec->cv.wait_for(guard, std::chrono::milliseconds(milliseconds),
++                               [&] { return rec->finished; }))
++        return GuestThreadWaitStatus::Timeout;
++    return GuestThreadWaitStatus::Object0;
++}
++
++GuestThreadQueryResult GuestThreadManager::query(uint64_t handle)
++{
++    std::shared_ptr<Impl::Record> rec;
++    {
++        std::lock_guard<std::mutex> guard(m_->mutex);
++        auto it = m_->handles.find(handle);
++        if (it == m_->handles.end()) return {};
++        rec = it->second;
++    }
++    std::lock_guard<std::mutex> guard(rec->mutex);
++    return {true, rec->finished, rec->run};
++}
++
++bool GuestThreadManager::close(uint64_t handle)
++{
++    std::lock_guard<std::mutex> guard(m_->mutex);
++    auto it = m_->handles.find(handle);
++    if (it == m_->handles.end()) return false;
++    it->second->handle_open = false;
++    m_->handles.erase(it);
++    if (!m_->quiescing) m_->reap_closed_finished();
++    return true;
++}
++
++bool GuestThreadManager::quiesce_all()
++{
++    std::vector<std::shared_ptr<Impl::Record>> records;
++    {
++        std::lock_guard<std::mutex> guard(m_->mutex);
++        if (m_->quiesced) return true;
++        if (m_->quiescing) return false;
++        for (const auto& rec : m_->records)
++            if (rec->worker.joinable() &&
++                rec->worker.get_id() == std::this_thread::get_id())
++                return false;
++        m_->accepting = false;
++        m_->quiescing = true;
++        records = m_->records;
++    }
++    for (const auto& rec : records)
++        if (rec->worker.joinable()) rec->worker.join();
++    {
++        std::lock_guard<std::mutex> guard(m_->mutex);
++        for (const auto& rec : records)
++        {
++            std::lock_guard<std::mutex> done_guard(rec->mutex);
++            if (rec->run.status != GuestThreadRunStatus::Ok)
++                m_->failed_worker = true;
++        }
++        m_->reap_closed_finished();
++        m_->quiescing = false;
++        m_->quiesced = true;
++    }
++    return true;
++}
++
++bool GuestThreadManager::had_worker_failure()
++{
++    std::lock_guard<std::mutex> guard(m_->mutex);
++    return m_->failed_worker;
++}
++
++} // namespace cap13
+--- /dev/null
++++ b/loader/src/win32_thread_identity.h
+@@ -0,0 +1,14 @@
++#ifndef CAP13_WIN32_THREAD_IDENTITY_H
++#define CAP13_WIN32_THREAD_IDENTITY_H
++
++#include <cstdint>
++
++namespace cap13 {
++
++// Process-wide, non-reused DWORD identities. Zero signals exhaustion.
++uint32_t win32_reserve_thread_id() noexcept;
++bool win32_bind_current_thread_id(uint32_t id) noexcept;
++uint32_t win32_current_thread_id() noexcept;
++
++} // namespace cap13
++#endif
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -14,6 +14,7 @@
+ #include "win_api_shim.h"
+ #include "guest_read_map.h"
+ #include "win32_last_error_state.h"
++#include "win32_thread_identity.h"
+ #include "win64_bridge.h"
+ 
+ #include <atomic>
+@@ -41,6 +42,37 @@
+ #endif
+ 
+ namespace cap13 {
++
++namespace {
++std::atomic<uint64_t> next_guest_thread_id{1};
++thread_local uint32_t current_guest_thread_id = 0;
++}
++
++uint32_t win32_reserve_thread_id() noexcept
++{
++    uint64_t id = next_guest_thread_id.load(std::memory_order_relaxed);
++    while (id <= UINT32_MAX)
++    {
++        if (next_guest_thread_id.compare_exchange_weak(
++                id, id + 1, std::memory_order_relaxed))
++            return static_cast<uint32_t>(id);
++    }
++    return 0;
++}
++
++bool win32_bind_current_thread_id(uint32_t id) noexcept
++{
++    if (!id || current_guest_thread_id) return false;
++    current_guest_thread_id = id;
++    return true;
++}
++
++uint32_t win32_current_thread_id() noexcept
++{
++    if (!current_guest_thread_id)
++        current_guest_thread_id = win32_reserve_thread_id();
++    return current_guest_thread_id;
++}
+ 
+ namespace {
+ 
+@@ -396,16 +428,13 @@
+ 
+ static uint32_t impl_GetCurrentThreadId(WinApiShim::Impl* m)
+ {
+-    // A host thread keeps one Windows-visible ID across all shim instances.
+-    // Assignment is process-wide and never wraps a DWORD ID into reuse.
+-    static std::atomic<uint64_t> next_id{1};
+-    static thread_local uint64_t id = next_id.fetch_add(1, std::memory_order_relaxed);
+-    if (id > UINT32_MAX)
++    const uint32_t id = win32_current_thread_id();
++    if (!id)
+     {
+         m->fail_closed("GetCurrentThreadId ID space exhausted");
+         return 0;
+     }
+-    return static_cast<uint32_t>(id);
++    return id;
+ }
+ 
+ static uint32_t impl_GetLastError(WinApiShim::Impl*)
+--- a/loader/tests/guest_pe_thread_test.cpp
++++ b/loader/tests/guest_pe_thread_test.cpp
+@@ -1,4 +1,6 @@
+ #include "guest_pe_thread.h"
++#include "guest_thread_manager.h"
++#include "win32_thread_identity.h"
+ #include "win_api_shim.h"
+ 
+ #include <cstdint>
+@@ -17,6 +19,17 @@
+ int checks = 0;
+ int failures = 0;
+ std::atomic<int> ue4ss_calls{0};
++std::atomic<bool> blocked_started{false};
++std::atomic<bool> blocked_release{false};
++std::atomic<uint32_t> blocked_identity{0};
++cap13::GuestThreadRunResult blocked_runner(cap13::GuestPeBatchResult&,
++                                            cap13::StaticTlsBank&, void*, void*)
++{
++    blocked_identity.store(cap13::win32_current_thread_id());
++    blocked_started.store(true);
++    while (!blocked_release.load()) std::this_thread::yield();
++    return {cap13::GuestThreadRunStatus::Ok, 77};
++}
+ void check(bool ok, const char* name)
+ {
+     ++checks;
+@@ -142,6 +155,80 @@
+           segment.enters == before_invalid + 1,
+           "refused guest segment stops worker before the start function");
+     segment.allow_until = 1000;
++
++    {
++        cap13::GuestThreadManager manager(batch, bank, blocked_runner);
++        auto invalid = manager.create(reinterpret_cast<void*>(&ue4ss_initialized),
++                                      nullptr);
++        check(invalid.status == cap13::GuestThreadCreateStatus::InvalidStart,
++              "manager rejects foreign executable address before spawn");
++        auto unsupported = manager.create(start, nullptr, nullptr, 0, 4);
++        check(unsupported.status == cap13::GuestThreadCreateStatus::UnsupportedOptions,
++              "manager refuses unsupported suspended start");
++        auto created = manager.create(start, nullptr);
++        check(created.status == cap13::GuestThreadCreateStatus::Ok &&
++              created.handle != 0 && created.thread_id != 0,
++              "manager creates an opaque handle and reserved worker ID");
++        while (!blocked_started.load()) std::this_thread::yield();
++        check(blocked_identity.load() == created.thread_id,
++              "worker GetCurrentThreadId identity agrees with create result");
++        auto pending = manager.query(created.handle);
++        check(pending.valid && !pending.finished &&
++              manager.wait(created.handle, 0) == cap13::GuestThreadWaitStatus::Timeout,
++              "running worker reports pending state and zero-timeout wait");
++        check(manager.close(created.handle) &&
++              manager.wait(created.handle, 0) == cap13::GuestThreadWaitStatus::InvalidHandle &&
++              !manager.query(created.handle).valid,
++              "close invalidates handle without ending worker");
++        check(blocked_started.load() && !blocked_release.load(),
++              "closed handle leaves worker running");
++        blocked_release.store(true);
++        auto second = manager.create(start, nullptr);
++        check(second.status == cap13::GuestThreadCreateStatus::Ok &&
++              second.handle != created.handle &&
++              second.thread_id != created.thread_id &&
++              manager.wait(second.handle, 10000) ==
++                  cap13::GuestThreadWaitStatus::Object0,
++              "closed handle and worker identity are never reused");
++        check(manager.close(second.handle) && !manager.close(second.handle),
++              "closing a handle twice is refused");
++        check(manager.quiesce_all(),
++              "quiesce joins worker even after its handle was closed");
++        check(manager.create(start, nullptr).status ==
++                  cap13::GuestThreadCreateStatus::WrongState,
++              "quiesced manager refuses new workers");
++    }
++    {
++        cap13::GuestThreadManager manager(batch, bank);
++        auto created = manager.create(start, nullptr);
++        check(created.status == cap13::GuestThreadCreateStatus::Ok,
++              "manager creates real Win64 guest worker");
++        check(manager.wait(created.handle, 10000) ==
++                  cap13::GuestThreadWaitStatus::Object0,
++              "thread handle signals after guest worker completion");
++        auto completed = manager.query(created.handle);
++        check(completed.valid && completed.finished &&
++              completed.run.status == cap13::GuestThreadRunStatus::Ok &&
++              completed.run.exit_code == 0,
++              "completed handle retains worker outcome and exit code");
++        check(manager.close(created.handle) && manager.quiesce_all(),
++              "completed handle closes and manager quiesces before detach");
++        check(!manager.had_worker_failure(),
++              "successful worker leaves no hidden batch failure");
++    }
++    {
++        segment.allow_until = segment.enters;
++        cap13::GuestThreadManager manager(batch, bank);
++        auto created = manager.create(start, nullptr);
++        check(created.status == cap13::GuestThreadCreateStatus::Ok &&
++              manager.wait(created.handle, 10000) ==
++                  cap13::GuestThreadWaitStatus::Object0,
++              "failed guest start still completes its thread object");
++        check(manager.close(created.handle) && manager.quiesce_all() &&
++              manager.had_worker_failure(),
++              "closed failed worker remains visible before batch detach");
++        segment.allow_until = 1000;
++    }
+     check(cap13::pe_detach_guest_batch(batch, main_teb),
+           "root DLL detaches after all worker threads join");
+ 
+--- a/loader/tests/run_guest_pe_thread.py
++++ b/loader/tests/run_guest_pe_thread.py
+@@ -15,7 +15,8 @@
+               'tests/guest-pe-thread-host')
+ sources = [
+     'tests/guest_pe_thread_test.cpp',
+-    'src/guest_pe_thread.cpp', 'src/guest_pe_batch.cpp',
++    'src/guest_thread_manager.cpp', 'src/guest_pe_thread.cpp',
++    'src/guest_pe_batch.cpp',
+     'src/pe_import_scan.cpp', 'src/guest_pe_loader.cpp',
+     'src/pe_loader.cpp', 'src/pe_tls_registration.cpp',
+     'src/static_tls_bank.cpp', 'src/guest_teb_lifecycle.cpp',

@@ -1,0 +1,392 @@
+# PROPOSAL PATCH (PARKED) - P2/02 tree dead-code removal: variant-B skip
+# arms + dead R3 marshal paths. DO NOT APPLY WITHOUT
+# parked/P2-variant-b-removal/NOTES.md (owner FX, 2026-10-10). Removes
+# compiled-out arms from the candidate tree: needs FULL rebuild + packaging
+# verify; CHANGES.json rows are refreshed in the same patch (G2 pins stay
+# green). Apply AFTER 01-build-variants-drop-b.patch, BEFORE 03.
+#
+# Authored against (base states):
+#   typescan-r4/candidate/src/UnrealInitializer.cpp sha256
+#     6ed7a208da04ff6e49ebcccf6d7d53457c95b69d14317771bb977d3d2875e537
+#   typescan-r4/candidate/src/LuaMod.cpp sha256
+#     aac03fbc5897f500905db50022ea27960ade5e736dc0d9a836b125b51238fd9b
+#   typescan-r4/CHANGES.json (pre-patch state)
+# Result states: UnrealInitializer.cpp ->
+#   6a9087b55207d69d820ae7c15ec5e6fcef61281fcad9876ad16f008d350d6197
+#   LuaMod.cpp -> 5a6a06e6f2ece6fb220391b3de198212d0ad66d3b83fdbfa1cbce55e60ac9aa0
+#   (agent-Q's copyin-probe overlay patch verified to apply CLEANLY on the
+#    patched UnrealInitializer.cpp: /usr/bin/patch --dry-run rc=0, no fuzz)
+#
+# Removals (every site carries a [L26][P2] tombstone):
+#   UnrealInitializer.cpp: 3 variant-B skip arms (G3 cache-block gate,
+#     class-delete-listener guard, shutdown-listener guard) - production
+#     registrations become unconditional; MODBRIDGE_L25_SKIP_DELETE_LISTENER
+#     disappears from every compiled source.
+#   LuaMod.cpp: the Lua-mod delete-listener skip arm (4th site); the
+#     dead-by-construction ranked-natives carrier loop in
+#     r3_marshal_calibration_consumer + its only-callee helpers
+#     r3_marshal_carrier_precheck and arm_funcptr_marshal_drain; the
+#     R3MarshalQueryHarnessDispatch declaration.
+#   UnrealInitializer.cpp: the R3MarshalQueryHarnessDispatch definition
+#     (declared+defined, zero call sites).
+#   DELIBERATELY KEPT: the Blueprint-override event-carrier family +
+#     funcptr_marshal_hook + r3_marshal_lazy_arm (the designated FALLBACK
+#     pump per EU FIX4; VmtPump is primary) - see NOTES for the evidence
+#     and the follow-up decision flagged for root/Claude.
+#   CHANGES.json: candidate_sha256 refreshed for both files (changes[] +
+#     files[] rows) + fx_p2_row_sync note.
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp
+@@ -548,7 +548,10 @@
+             bFAssetDataAvailable = true;
+         }
+ 
+-#if !defined(MODBRIDGE_L25_SKIP_DELETE_LISTENER)
++        // [L26][P2] (agent FX, 2026-10-10): the variant-B skip arm of this block
++        // (agent-AC G3) was REMOVED - the searcher pools + class create/delete
++        // listener registrations are unconditional production code. See
++        // outputs/2026-10-08-l25-prep/parked/P2-variant-b-removal/.
+         // [L25][G3] (agent-AC container audit X1/X2): this whole bUseUObjectArrayCache
+         // block also requires the variant-A gate. It registers the class create +
+         // class-delete listeners (AddUObjectCreateListener / AddUObjectDeleteListener on
+@@ -599,7 +602,6 @@
+ 
+             Output::send(STR("Adding GUObjectArray listeners\n"));
+             UObjectArray::AddUObjectCreateListener(&FClassCreateListener::ClassCreateListener);
+-#if !defined(MODBRIDGE_L25_SKIP_DELETE_LISTENER)
+             // L25 (item 2): pre/post markers around the class-cache delete listener.
+             Output::send(STR("[L25][DeleteListener] class-delete-listener registration begin (pre-marker)\n"));
+             l25_dl_diag("l25_dl_class_begin", 0);
+@@ -609,20 +611,8 @@
+             Output::send(STR("[L25][DeleteListener] class-delete-listener registration returned in {}ms (post-marker)\n"),
+                          static_cast<long long>(l25_class_reg_ms));
+             l25_dl_diag("l25_dl_class_done", static_cast<unsigned>(l25_class_reg_ms));
+-#else
+-            Output::send(STR("[L25][DeleteListener] delete-listener registration SKIPPED (variant B; unsafe long-term: stale object pointers not cleared)\n"));
+-#endif
+         }
+-#else
+-        // [L25][G3] variant-B side of the cache-block gate above: log only when the ini
+-        // would have enabled the cache (today's 1947 B settings already have it false).
+-        if (UnrealConfig.bUseUObjectArrayCache)
+-        {
+-            Output::send(STR("[L25][DeleteListener] UObjectArray cache block suppressed under variant B: searcher pools + class create/delete listeners skipped (ini had bUseUObjectArrayCache=true; forced off)\n"));
+-        }
+-#endif
+ 
+-#if !defined(MODBRIDGE_L25_SKIP_DELETE_LISTENER)
+         // L25 (items 2/4): the shutdown-listener registration is the exact point where
+         // every observed PS5 init stall stopped ("Adding shutdown listener" is the last
+         // log line). Markers immediately before/after + the hardened callee (UObjectArray.cpp,
+@@ -637,10 +627,6 @@
+         Output::send(STR("[L25][DeleteListener] shutdown-listener registration returned in {}ms (post-marker)\n"),
+                      static_cast<long long>(l25_shutdown_reg_ms));
+         l25_dl_diag("l25_dl_shutdown_done", static_cast<unsigned>(l25_shutdown_reg_ms));
+-#else
+-        Output::send(STR("Adding shutdown listener\n"));
+-        Output::send(STR("[L25][DeleteListener] delete-listener registration SKIPPED (variant B; unsafe long-term: stale object pointers not cleared)\n"));
+-#endif
+ 
+         IsInitialized() = true;
+         StaticStorage::bIsInitialized = true;
+@@ -3296,18 +3282,11 @@
+         }
+     }
+ 
+-    auto R3MarshalQueryHarnessDispatch() -> void
+-    {
+-        if constexpr (UnrealInitializer::R3MarshalGate::kR3MarshalMode)
+-        {
+-            // QueryHarnessEngineTickDispatch body (merge-lineage SINI:223-228) unchanged:
+-            // per-observation entry for the query harness; refusals are counted inside
+-            // the harness and never thrown. Semantic change declared per R3D 4.4b: the
+-            // harness's "two consecutive accepted reads" now count CARRIER invocations,
+-            // not engine ticks; rung instruments must be relabeled.
+-            RC::Platform::QueryHarness::Global().OnEngineTickDispatch();
+-        }
+-    }
++    // [L26][P2] (agent FX, 2026-10-10): R3MarshalQueryHarnessDispatch was REMOVED -
++    // declared (LuaMod.cpp) and defined here but never called by any TU in this
++    // tree (agent-H R3 audit finding; re-verified 2026-10-10: zero call sites).
++    // The query-harness half of the old EngineTick pump never rode the marshal.
++    // See outputs/2026-10-08-l25-prep/parked/P2-variant-b-removal/.
+ 
+     auto R3MarshalPumpPending() -> bool
+     {
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
+@@ -299,7 +299,6 @@
+         // Signatures are part of the DIFF 1/DIFF 2 contract and must not drift.
+         // =================================================================================
+         auto R3MarshalPublishGameThreadIdentity() -> bool;
+-        auto R3MarshalQueryHarnessDispatch() -> void;
+         auto R3MarshalPumpPending() -> bool;
+     }
+ 
+@@ -4493,9 +4492,10 @@
+     // original, then SetFuncPtr(&Internal::UnrealScriptFunctionHook) - ONE aligned
+     // pointer store into already-RW heap memory, zero syscalls). Its post-callback body
+     // (funcptr_marshal_hook below) drains the SAME m_game_thread_actions queue
+-    // process_event_hook drains. Arming is parameterized by the carrier's FName id:
+-    // the calibration owner calls arm_funcptr_marshal_drain; this unit owns readiness,
+-    // the drain, and the registration only. File scope by design: no LuaMod.hpp change,
++    // process_event_hook drains. Arming is parameterized by the carrier's FName id
++    // ([L26][P2] the former arm_funcptr_marshal_drain ranked-native arm was removed;
++    // arming is now exclusively arm_event_carrier_locked in the event-carrier
++    // family). File scope by design: no LuaMod.hpp change,
+     // so no additional unit recompiles.
+     // =====================================================================================
+     static std::atomic<bool> m_funcptr_marshal_armed{false};
+@@ -5353,94 +5353,19 @@
+     }
+ 
+     // =====================================================================================
+-    // [R3] Identity pre-check (DIFF 1; R3D 4.3, the R3 port of VSD 2.1). Pure data reads
+-    // before ANY store: non-null FuncPtr, not the script-function pointer, FUNC_Native.
+-    // Refusal is loud and stores nothing. This is the same gate shape the Lua
+-    // RegisterHook native branch applies (LUA:4618-4620), so the R3 tier gets the
+-    // PLH-missing semantic validation for free.
+-    // =====================================================================================
+-    // [L25][G2] (agent-AC container audit rank 2): the carrier identity in every R3 log
+-    // below (precheck, drain-arm, event-carrier arm — 7 print sites) is the FName
+-    // comparison index + pointer, NEVER UObject::GetFullName(). GetFullName() routes
+-    // FName::ToString -> (PS5: fname_tostring unbound by design) engine
+-    // ProcessEvent(Conv_NameToString) + a GMalloc-backed FString allocation — an
+-    // unproven engine-call class on console (no run in this lineage has completed one).
+-    // Applies to BOTH variants: data reads only, no engine calls, no allocation; the
+-    // "[n: X]" style matches the proven init-gate log convention.
+-    // =====================================================================================
+-    static auto r3_marshal_carrier_precheck(Unreal::UFunction* carrier) -> bool
+-    {
+-        if (!carrier)
+-        {
+-            Output::send<LogLevel::Error>(STR("[R3] marshal arm refused: carrier UFunction is null\n"));
+-            return false;
+-        }
+-        const auto current_func_ptr = carrier->GetFuncPtr();
+-        if (!current_func_ptr)
+-        {
+-            Output::send<LogLevel::Error>(STR("[R3] marshal arm refused: carrier [n: {:X}] @0x{:016X} has a null FuncPtr\n"),
+-                                         carrier->GetFName().GetComparisonIndex().ToUnstableInt(),
+-                                         reinterpret_cast<uintptr_t>(carrier));
+-            return false;
+-        }
+-        if (current_func_ptr == Unreal::UObject::ProcessInternalInternal.get_function_address())
+-        {
+-            Output::send<LogLevel::Error>(STR("[R3] marshal arm refused: carrier [n: {:X}] @0x{:016X} is a script function (Func == ProcessInternal)\n"),
+-                                         carrier->GetFName().GetComparisonIndex().ToUnstableInt(),
+-                                         reinterpret_cast<uintptr_t>(carrier));
+-            return false;
+-        }
+-        if (!carrier->HasAnyFunctionFlags(Unreal::EFunctionFlags::FUNC_Native))
+-        {
+-            Output::send<LogLevel::Error>(STR("[R3] marshal arm refused: carrier [n: {:X}] @0x{:016X} does not have FUNC_Native\n"),
+-                                         carrier->GetFName().GetComparisonIndex().ToUnstableInt(),
+-                                         reinterpret_cast<uintptr_t>(carrier));
+-            return false;
+-        }
+-        return true;
+-    }
+-
++    // [L26][P2] (agent FX, 2026-10-10): r3_marshal_carrier_precheck +
++    // arm_funcptr_marshal_drain were REMOVED - dead code. Their ONLY caller
++    // was the ranked-natives loop of r3_marshal_calibration_consumer, and
++    // that loop could NEVER arm: both ranked names ("Actor:ReceiveTick",
++    // "AnimInstance:BlueprintUpdateAnimation") are
++    // BlueprintImplementableEvents, so the FUNC_Native precheck refused them
++    // BY CONSTRUCTION (the code's own former comment admitted it), and on
++    // console the StaticFindObject lookups cannot resolve at all (GATE-1
++    // numbered duplicates; ET nul-throw-armor session evidence: "marshal
++    // carrier candidate not found ... not interned"). The event-carrier
++    // family (arm_event_carrier_locked, below) never called these. See
++    // outputs/2026-10-08-l25-prep/parked/P2-variant-b-removal/.
+     // =====================================================================================
+-    // [R3] Register the drain on the calibration-selected carrier (DIFF 1). Parameterized
+-    // by the carrier's FName id; the calibration owner (R3D 4.2 protocol, cc1 ridealong
+-    // lineage) selects and calls this. The exact hook registration per
+-    // UFunction.cpp:78-89: RegisterPostHook -> GetFunctionHookData() (emplaces the map
+-    // entry saving the CURRENT FuncPtr as the original, then
+-    // SetFuncPtr(&Internal::UnrealScriptFunctionHook)) -> AddPostCallback. Post-hook so
+-    // the original function always executes first and unmodified.
+-    // =====================================================================================
+-    static auto arm_funcptr_marshal_drain(Unreal::UFunction* carrier, const Unreal::FName& carrier_id) -> bool
+-    {
+-        if (is_funcptr_marshal_armed())
+-        {
+-            if (carrier_id != m_funcptr_marshal_carrier_id)
+-            {
+-                Output::send<LogLevel::Warning>(STR("[R3] marshal arm ignored: already armed on a different carrier\n"));
+-                return false;
+-            }
+-            return true; // idempotent re-arm of the same carrier
+-        }
+-        if (!r3_marshal_carrier_precheck(carrier))
+-        {
+-            return false;
+-        }
+-        const int32_t callback_id = carrier->RegisterPostHook(&funcptr_marshal_hook, nullptr);
+-        if (callback_id < 0)
+-        {
+-            Output::send<LogLevel::Error>(STR("[R3] marshal arm refused: RegisterPostHook returned an invalid callback id for carrier [n: {:X}] @0x{:016X}\n"),
+-                                         carrier->GetFName().GetComparisonIndex().ToUnstableInt(),
+-                                         reinterpret_cast<uintptr_t>(carrier));
+-            return false;
+-        }
+-        m_funcptr_marshal_callback_id = callback_id;
+-        m_funcptr_marshal_carrier_id = carrier_id;
+-        m_funcptr_marshal_armed.store(true, std::memory_order_release);
+-        Output::send(STR("[R3] FuncPtr-marshal armed on carrier [n: {:X}] @0x{:016X} (callback id {})\n"),
+-                     carrier->GetFName().GetComparisonIndex().ToUnstableInt(),
+-                     reinterpret_cast<uintptr_t>(carrier),
+-                     callback_id);
+-        return true;
+-    }
+ 
+ #ifdef __PROSPERO__
+     // =====================================================================================
+@@ -5450,7 +5375,8 @@
+     // UObject::ProcessEvent -> UFunction::Invoke -> Func on the game thread, resolving the
+     // MOST-DERIVED UFunction, i.e. the Blueprint class's own override object. Those
+     // overrides are script functions (Func = the VM entry, no FUNC_Native), so
+-    // r3_marshal_carrier_precheck refuses them; but a Func swap on the override object
++    // the former r3_marshal_carrier_precheck refused them (FUNC_Native gate);
++    // a Func swap on the override object
+     // intercepts exactly the engine-driven Invoke while the saved original Func still runs
+     // the Blueprint body (post-hook, parms untouched). Calls from other Blueprint code use
+     // the local-script path and bypass Func; that only means fewer drains, never a wrong
+@@ -5463,7 +5389,7 @@
+         {
+             return false;
+         }
+-        // Natives go through r3_marshal_carrier_precheck; this family is script overrides only.
++        // Natives were the (removed) ranked path; this family is script overrides only.
+         return !carrier->HasAnyFunctionFlags(Unreal::EFunctionFlags::FUNC_Native);
+     }
+ 
+@@ -5586,6 +5512,10 @@
+     // cc1/in-runtime census resolves its owner before it may join this table.
+     // No new imports: StringType, StaticFindObject, FName, Output are all already
+     // included/used in this TU; FNAME_Add is never issued (lookup-only names).
++    // [L26][P2] (agent FX, 2026-10-10): the ranked-natives selection described
++    // above is HISTORY - the ranked loop and its arm_funcptr_marshal_drain
++    // helper were removed (dead by construction; see the tombstones). This
++    // consumer arms the Blueprint-override event carriers ONLY.
+     // =====================================================================================
+     static auto r3_marshal_calibration_consumer() -> void
+     {
+@@ -5598,29 +5528,11 @@
+             Output::send(STR("[R3] marshal not armed: initializer owns the game-thread pump (pump_pending=false)\n"));
+             return;
+         }
+-        static constexpr const CharType* k_r3_marshal_carrier_candidates[]{
+-            STR("Actor:ReceiveTick"),                     // CARRIER-CANDIDATES §3 rank 1
+-            STR("AnimInstance:BlueprintUpdateAnimation"), // §3 rank 2 (thread_risk recorded there)
+-        };
+-        for (const CharType* candidate_name : k_r3_marshal_carrier_candidates)
+-        {
+-            const StringType candidate_string{candidate_name};
+-            Unreal::UFunction* carrier = Unreal::UObjectGlobals::StaticFindObject<Unreal::UFunction*>(nullptr, nullptr, candidate_string);
+-            if (!carrier)
+-            {
+-                Output::send(STR("[R3] marshal carrier candidate not found: {} (not interned, or class not constructed yet)\n"), candidate_string);
+-                continue;
+-            }
+-            if (arm_funcptr_marshal_drain(carrier, carrier->GetFName()))
+-            {
+-                return; // armed: the marshal is now the game-thread pump
+-            }
+-            // Refused loudly by r3_marshal_carrier_precheck (null FuncPtr / script-only /
+-            // non-native): fall through to the next rank. No store happened.
+-        }
+-        // [claude-cloud event-carrier] The ranked names are BlueprintImplementableEvents
+-        // (no FUNC_Native), so the precheck above refuses them by construction. Arm the
+-        // Blueprint overrides of the same per-frame events instead (see below).
++        // [L26][P2] (agent FX, 2026-10-10): the ranked-natives carrier loop was
++        // REMOVED here - dead by construction (BlueprintImplementableEvents
++        // never pass the FUNC_Native precheck; on console the long-name
++        // lookups cannot resolve: GATE-1 numbered duplicates). Arm ONLY the
++        // Blueprint-override event carriers below.
+         m_funcptr_marshal_last_scan_ms.store(r3_now_ms(), std::memory_order_relaxed);
+         if (r3_marshal_arm_event_carriers() > 0)
+         {
+@@ -8452,7 +8364,10 @@
+         // propagated to UE4SSProgram::on_program_start's single TRY block and
+         // silently skipped start_lua_mods (mods-started=0). Logged, never
+         // fatal to mod start.
+-#if !defined(MODBRIDGE_L25_SKIP_DELETE_LISTENER)
++        // [L26][P2] (agent FX, 2026-10-10): the variant-B skip arm of this
++        // registration (agent-AC G1) was REMOVED - the Lua-mod delete-listener
++        // registration is unconditional. See
++        // outputs/2026-10-08-l25-prep/parked/P2-variant-b-removal/.
+         try
+         {
+             Unreal::UObjectArray::AddUObjectDeleteListener(&LuaType::FLuaObjectDeleteListener::s_lua_object_delete_listener);
+@@ -8465,15 +8380,6 @@
+         {
+             Output::send<LogLevel::Error>(STR("[L25] delete-listener registration exception: unknown\n"));
+         }
+-#else
+-        // [L25][G1] (agent-AC container audit rank 1): this AddUObjectDeleteListener is the
+-        // same 3-touch GMalloc TArray-append family as the gated shutdown-listener
+-        // registration in UnrealInitializer (temp TArray Malloc + engine-array
+-        // Append/Realloc + temp Free through the FMemory virtual wrappers). Variant B
+-        // would hit the same rejected-Realloc crash here one call later, on the
+-        // UE4SS-UpdateThread. Skip-log mirrors the UnrealInitializer skip-line style.
+-        Output::send(STR("[L25][DeleteListener] Lua-mod delete-listener registration SKIPPED (variant B; unsafe long-term: Lua-held stale object pointers never cleared and Lua onDelete callbacks never fire)\n"));
+-#endif
+ #ifdef __PROSPERO__
+         // [R3] launch-11 marshal consumer (see r3_marshal_calibration_consumer): must run
+         // BEFORE the RegisterLoadMapPreCallback below — the first eager detour registration
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/CHANGES.json
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/CHANGES.json
+@@ -85,7 +85,7 @@
+    "copied_original": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/original/src/UnrealInitializer.cpp",
+    "candidate": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp",
+    "original_sha256": "78c16fb7c06a457e0b179e8564cc96baf1c86313fb6007e2fdb8735e76146321",
+-   "candidate_sha256": "6ed7a208da04ff6e49ebcccf6d7d53457c95b69d14317771bb977d3d2875e537",
++   "candidate_sha256": "6a9087b55207d69d820ae7c15ec5e6fcef61281fcad9876ad16f008d350d6197",
+    "copied_original_sha256": "78c16fb7c06a457e0b179e8564cc96baf1c86313fb6007e2fdb8735e76146321"
+   },
+   {
+@@ -109,7 +109,7 @@
+    "copied_original": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/original/src/LuaMod.cpp",
+    "candidate": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp",
+    "original_sha256": "fc9589dbb81ee7128d5f54b46061a01f3faf54b4b038e6bdfc5ac2626348119f",
+-   "candidate_sha256": "aac03fbc5897f500905db50022ea27960ade5e736dc0d9a836b125b51238fd9b",
++   "candidate_sha256": "5a6a06e6f2ece6fb220391b3de198212d0ad66d3b83fdbfa1cbce55e60ac9aa0",
+    "copied_original_sha256": "fc9589dbb81ee7128d5f54b46061a01f3faf54b4b038e6bdfc5ac2626348119f"
+   },
+   {
+@@ -379,7 +379,7 @@
+    "copied_original": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/original/src/UnrealInitializer.cpp",
+    "candidate": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/UnrealInitializer.cpp",
+    "original_sha256": "44b05cc6d8d054d334603a723f70deb3241e3be6cc2d129473ff6f1a4a21e4c4",
+-   "candidate_sha256": "6ed7a208da04ff6e49ebcccf6d7d53457c95b69d14317771bb977d3d2875e537",
++   "candidate_sha256": "6a9087b55207d69d820ae7c15ec5e6fcef61281fcad9876ad16f008d350d6197",
+    "copied_original_sha256": "78c16fb7c06a457e0b179e8564cc96baf1c86313fb6007e2fdb8735e76146321"
+   },
+   {
+@@ -403,7 +403,7 @@
+    "copied_original": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/original/src/LuaMod.cpp",
+    "candidate": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp",
+    "original_sha256": "cef8d02f74b66e2cdd944d176ae3c0d2ec79439e1573ae51fff7fd1a11fd8e98",
+-   "candidate_sha256": "aac03fbc5897f500905db50022ea27960ade5e736dc0d9a836b125b51238fd9b",
++   "candidate_sha256": "5a6a06e6f2ece6fb220391b3de198212d0ad66d3b83fdbfa1cbce55e60ac9aa0",
+    "copied_original_sha256": "fc9589dbb81ee7128d5f54b46061a01f3faf54b4b038e6bdfc5ac2626348119f"
+   },
+   {
+@@ -863,5 +863,13 @@
+   "by": "root single-writer after FR (parity revert) + FW (cleanup) landed",
+   "refreshed": 6,
+   "notes": "property reads reverted to upstream userdata; literal-strict markers; release diag define; FString __tostring attached by FW"
++ },
++ "fx_p2_row_sync": {
++  "date": "2026-10-10",
++  "by": "agent FX (PARKED patch set; root applies atomically with the whole P2 set - outputs/2026-10-08-l25-prep/parked/P2-variant-b-removal/)",
++  "refreshed": "UnrealInitializer.cpp + LuaMod.cpp candidate_sha256 (changes[] + files[] rows)",
++  "change": "variant-B skip-listener arms REMOVED (4 sites: UnrealInitializer.cpp x3 - G3 cache-block gate, class-delete-listener guard, shutdown-listener guard; LuaMod.cpp x1 - Lua-mod delete-listener guard; production registrations now unconditional; MODBRIDGE_L25_SKIP_DELETE_LISTENER no longer appears in any compiled source). Dead R3 marshal paths REMOVED: R3MarshalQueryHarnessDispatch (decl+def, zero call sites), r3_marshal_carrier_precheck + arm_funcptr_marshal_drain (only caller was the dead-by-construction ranked-natives loop - both ranked names are BlueprintImplementableEvents the FUNC_Native precheck refused by construction; on console the StaticFindObject lookups cannot resolve: GATE-1), and the ranked-natives loop itself in r3_marshal_calibration_consumer (now arms event carriers only). NOT removed (deliberate): the Blueprint-override event-carrier family + funcptr_marshal_hook + r3_marshal_lazy_arm - the designated FALLBACK pump per EU FIX4 (VmtPump is primary; carriers remain fallback). Tombstone markers [L26][P2] at every removal site.",
++  "verification": "host-only static checks during authoring (token census 0 across compiled sources; zero remaining code refs to removed symbols; brace balance preserved). NO build, NO packaging, NO console contact (Mac on battery). Full rebuild + packaging verify REQUIRED when root applies.",
++  "console_contact": false
+  }
+ }
+\ No newline at end of file

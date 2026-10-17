@@ -1,0 +1,58 @@
+--- a/include/LuaType/LuaUObject.hpp
++++ b/include/LuaType/LuaUObject.hpp
+@@ -20,6 +20,7 @@
+ #include <Unreal/CoreUObject/UObject/Class.hpp>
+ #include <Unreal/UObject.hpp>
+ #include <Unreal/UObjectArray.hpp>
++#include <Unreal/TypeChecker.hpp> // [IK 02b] get_world_name for the GetWorld outer-chain fallback (AActor.cpp:38-52 shape)
+ #include <Unreal/VersionedContainer/Container.hpp>
+ #include <Unreal/World.hpp>
+ #pragma warning(default : 4005)
+@@ -648,7 +649,47 @@
+             table.add_pair("GetWorld", [](const LuaMadeSimple::Lua& lua) -> int {
+                 const auto& lua_object = lua.get_userdata<SelfType>();
+                 const auto object = lua_object.get_remote_cpp_object();
++#ifdef __PROSPERO__
++                // [IK world-fix 02b, Claude round-8 item 4; IF audit §1.2/§4.4(b)]:
++                // UEHelpers.GetWorld rides this hardcoded member (UEHelpers.lua:96-107
++                // -> PlayerController:GetWorld() / GameInstance:GetWorld()). The staged
++                // PS5 layout pair (profile/units/CompiledNativeLayoutDeclarations.hpp,
++                // selection_source=compiled-audited-townfall-l25) stages NO [UObject]
++                // GetWorld vtable entry, so the native virtual wrapper
++                // (unreal/src/UObject.cpp:316-319) THROWS "Virtual UObject::GetWorld
++                // is unavailable" — 8 of 24 UEHelpers exports transitively dead (IF
++                // census). Instead of throwing, fall back to the in-tree outer-chain
++                // walk with EXACT AActor::GetWorld semantics (unreal/src/AActor.cpp:38-52):
++                // first OuterPrivate behind the same RF_ClassDefaultObject /
++                // RF_BeginDestroyed / IsUnreachable gate, then walk OuterPrivate until
++                // the outer's class FName == TypeChecker::get_world_name(); return
++                // that outer as UWorld*, else nullptr. Host builds (#else) keep the
++                // upstream member byte-identical.
++                Unreal::UWorld* world{};
++                if (Unreal::UObject::VTableLayoutMap.contains(STR("GetWorld")))
++                {
++                    world = object ? object->GetWorld() : nullptr;
++                }
++                else if (object)
++                {
++                    Unreal::UObject* outer = object->GetOuterPrivate();
++                    if (outer && !object->HasAnyFlags(Unreal::RF_ClassDefaultObject) && !outer->HasAnyFlags(Unreal::RF_BeginDestroyed) && !outer->GetObjectItem()->IsUnreachable())
++                    {
++                        while (outer)
++                        {
++                            if (outer->GetClassPrivate()->GetNamePrivate() == Unreal::TypeChecker::get_world_name())
++                            {
++                                world = static_cast<Unreal::UWorld*>(outer);
++                                break;
++                            }
++                            outer = outer->GetOuterPrivate();
++                        }
++                    }
++                }
++                auto_construct_object(lua, world);
++#else
+                 auto_construct_object(lua, object ? object->GetWorld() : nullptr);
++#endif
+                 return 1;
+             });
+ 

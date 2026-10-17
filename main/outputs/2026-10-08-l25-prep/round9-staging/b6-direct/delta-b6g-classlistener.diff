@@ -1,0 +1,23 @@
+--- /LOCAL_SCRATCH	2026-10-12 11:29:52
++++ 2026-10-08-l26-runtime/typescan-r4/candidate/src/ClassListener.cpp	2026-10-12 12:31:40
+@@ -244,6 +244,12 @@
+         }
+     }
+ 
++    namespace UObjectGlobals
++    {
++        auto r9_index_note_deleted(int32_t Index) -> void; // [R9-IDX] UObjectGlobals.cpp
++    }
++    using UObjectGlobals::r9_index_note_deleted;
++
+     void FShutdownDeleteListener::NotifyUObjectDeleted([[maybe_unused]] const UObjectBase* Object, [[maybe_unused]] int32 Index)
+     {
+         // [R9-GUARD] called by the engine: nothing may escape into engine code.
+@@ -251,6 +257,7 @@
+         {
+             // L25 (item 3): throttled engine-dispatch proof marker (body was empty before;
+             // this listener exists for the shutdown callback only).
++            r9_index_note_deleted(Index); // [R9-IDX] keep the object index exact
+             if (L25ShutdownDeleteNotifyMarker.should_log())
+             {
+                 Output::send(STR("[L25][DeleteListener] engine called FShutdownDeleteListener::NotifyUObjectDeleted (Object={} Index={} calls={})\n"),

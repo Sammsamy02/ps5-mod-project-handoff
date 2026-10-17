@@ -1,0 +1,105 @@
+{
+  "label": "One independent source-only runtime-code review; no compile/execution proof",
+  "verdict": "NO_OPEN_CRITICAL_OR_IMPORTANT_FINDINGS_IN_NARROW_SCOPE",
+  "files": [
+    {
+      "path": "outputs/2026-10-12-caps-prep-chatgpt/cap04/deferred-arm-stage/stage_delivery_guard.py",
+      "sha256": "313517ee4d7f1d4ad4a52fb0976ce6865d8ed29bbbd55f9d22496fdff2986feb",
+      "size": 3990,
+      "read_stat_stable": true
+    },
+    {
+      "path": "outputs/2026-10-12-caps-prep-chatgpt/cap04/deferred-arm-stage/test_stage.py",
+      "sha256": "03b760f20dc5656aa9f1bfcbfca08bb882e773028f2382a196940df566169c54",
+      "size": 3712,
+      "read_stat_stable": true
+    },
+    {
+      "path": "outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp",
+      "sha256": "895a13657e69dae60835b3eea3113d6990eb29538c4b6c09e41cb132fad2b307",
+      "size": 575361,
+      "read_stat_stable": true
+    },
+    {
+      "path": ".superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/include/Unreal/Hooks/Internal/DetourInstance.hpp",
+      "sha256": "8e593c0627b67a990b7b50151d70f4cf72445221c681bd111a45c89aed9ab81e",
+      "size": 33780,
+      "read_stat_stable": true
+    }
+  ],
+  "findings": [
+    {
+      "id": "R1",
+      "priority": 1,
+      "title": "Publish deferred state before making arm pending visible",
+      "source_lines": [
+        10402,
+        10404
+      ],
+      "stager_location": "REPLACEMENTS omits startup publication ordering",
+      "condition": "Concurrent game-thread arm after pending release but before state1 publication",
+      "effect": "Partial callback may admit initial state0; startup may overwrite terminal state2/3 back to1",
+      "reproduced_runtime": false,
+      "disposition": "Resolved in same review: state1 and route flag now sequenced before pending release; no later startup state store in replaced block."
+    }
+  ],
+  "verification": {
+    "command": "PYTHONDONTWRITEBYTECODE=1 TMPDIR=<stage-dir> python3 -B <stage-dir>/test_stage.py",
+    "tests": 5,
+    "result": "PASS",
+    "duration_seconds": 0.024,
+    "meaning": "Text/staging contracts only; no C++ or concurrency execution"
+  },
+  "writes": "Only REVIEW.json and REVIEW.md; no derived output or original source edits",
+  "final_files": [
+    {
+      "path": "outputs/2026-10-12-caps-prep-chatgpt/cap04/deferred-arm-stage/stage_delivery_guard.py",
+      "sha256": "51e39871bdfe3892a404bbed114f0d0475f6a0c813a641e112ad0e2d7d673aab",
+      "size": 4766,
+      "read_stat_stable": true
+    },
+    {
+      "path": "outputs/2026-10-12-caps-prep-chatgpt/cap04/deferred-arm-stage/test_stage.py",
+      "sha256": "8a5acbad989b5815ef16b00d86d839a833d58bf856fe1b31f12e19ba040e6599",
+      "size": 5169,
+      "read_stat_stable": true
+    },
+    {
+      "path": "outputs/2026-10-12-caps-prep-chatgpt/cap04/deferred-arm-stage/delivery-guard.patch",
+      "sha256": "4a1cd4f62c1fefd2765de2a69d3fac01e8864bc04d69de3c31c52e2b8b8a31c1",
+      "size": 4758,
+      "read_stat_stable": true
+    },
+    {
+      "path": "/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp",
+      "sha256": "895a13657e69dae60835b3eea3113d6990eb29538c4b6c09e41cb132fad2b307",
+      "size": 575361,
+      "read_stat_stable": true
+    },
+    {
+      "path": "outputs/2026-10-12-caps-prep-chatgpt/cap04/deferred-arm-stage/TDD-GREEN.log",
+      "sha256": "43cf4dcddac24bf72814e5e3dc85e0fa509f4d2bb2031821c5bc327bc55c0b5d",
+      "size": 695,
+      "read_stat_stable": true
+    },
+    {
+      "path": "outputs/2026-10-12-caps-prep-chatgpt/cap04/deferred-arm-stage/PUBLICATION-RED.log",
+      "sha256": "28cb653d6d30b357af99df7cf0c3bc702bcec3edc1876d4e6233553bf84a13fb",
+      "size": 1402,
+      "read_stat_stable": true
+    },
+    {
+      "path": "outputs/2026-10-12-caps-prep-chatgpt/cap04/deferred-arm-stage/stage-receipt.json",
+      "sha256": "35ad9f0f052afce26737f7fec56668be0d2fb785a59569958a763205e3e3d071",
+      "size": 527,
+      "read_stat_stable": true
+    }
+  ],
+  "final_derived_sha256": "f15261d6032f951fb33cde23e7c2ea9b977265071d4ea7a7f66f7a25be1dea10",
+  "final_verification": {
+    "reviewer_reran_suite": false,
+    "reviewer_original_suite": "5 tests PASS before R1 correction",
+    "root_supplied_green_log": "test_eager_and_fully_armed_delivery_remain_enabled (test_stage.DeliverySourceContract) ... ok\ntest_other_platform_body_is_unchanged_by_guard (test_stage.DeliverySourceContract) ... ok\ntest_pending_and_failed_registration_cannot_deliver_native_lua (test_stage.DeliverySourceContract) ... ok\ntest_pending_publication_follows_state_and_route_initialization (test_stage.DeliverySourceContract) ... ok\ntest_stage_is_only_guards_and_truthful_refusal_text (test_stage.DeliverySourceContract) ... ok\ntest_stager_refuses_source_drift_empty_and_second_application (test_stage.DeliverySourceContract) ... ok\n\n----------------------------------------------------------------------\nRan 6 tests in 0.031s\n\nOK\n",
+    "reviewer_memory_only_transform": "Four exact-once anchors passed pinned source check; derived SHA matches final receipt. No output write/apply."
+  }
+}

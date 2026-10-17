@@ -1,0 +1,1 @@
+Frozen corrected pair:374 selected units/391 inputs, runtime objects byte-identical119191728B SHAabcf511b262cd495367859df28c1ffb27ca2405023ec3bb06ffa656be71ada02. Pass2 freshly compiled final initializer+SCprovider; all374 source/object pairs match. Outer import/teardown/source acceptance remain root gates; console untouched.

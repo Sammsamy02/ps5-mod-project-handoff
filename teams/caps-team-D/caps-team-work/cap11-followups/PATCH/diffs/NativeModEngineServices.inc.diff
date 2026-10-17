@@ -1,0 +1,43 @@
+--- a/typescan-r4/candidate/src/Mod/NativeModEngineServices.inc
++++ b/typescan-r4/candidate/src/Mod/NativeModEngineServices.inc
+@@ -472,30 +472,25 @@
+ 
+ namespace RC::Platform
+ {
+-    // Called by the runtime's data-only game-thread pumps (LuaMod.cpp):
+-    // source 0 = R3 FuncPtr-marshal carrier drain, 1 = copied-vtable Tick drain.
+-    // Must never throw into engine code.
++    // Called by the runtime's data-only game-thread pumps (LuaMod.cpp) on every
++    // pump call: source 0 = R3 FuncPtr-marshal carrier drain, 1 = copied-vtable
++    // Tick drain. Must never throw into engine code.
+     void NativeModsGameThreadFrame(int source) noexcept
+     {
+         try
+         {
+             using namespace NativeMods;
+-            static std::chrono::steady_clock::time_point last{};
+             const auto now = std::chrono::steady_clock::now();
+-            const float dt = last.time_since_epoch().count() == 0 ? 0.0f : std::chrono::duration<float>(now - last).count();
+-            last = now;
+             Runtime::pump_seen.store(true, std::memory_order_release);
+             if (source == 1) Runtime::vmt_seen.store(true, std::memory_order_release);
+             const auto pump = source == 1 ? PumpSource::VmtEngineTick : PumpSource::GameThreadPump;
+-            runtime_host().game_thread_frame(dt, pump);
+-            // [FIX F5] the per-frame service (#11 GUI render) runs at most once per
+-            // engine frame, not once per pump call (FrameGate, NativeModHostCore.hpp).
+-            if (auto* after = Runtime::after_frame.load(std::memory_order_acquire))
+-            {
+-                static FrameGate gate;
+-                float frame_dt = 0.0f;
+-                if (gate.due(now, pump, &frame_dt)) after(frame_dt);
+-            }
++            // [FIX F5 + FU5] the native mods' frame work (queued tasks, GAME_THREAD_TICK /
++            // ENGINE_TICK callbacks) AND the per-frame service (#11 GUI render) run at most
++            // once per engine frame, not once per pump call: one FrameGate, owned by the
++            // host (NativeModHostCore.hpp game_thread_pump), decides for both.
++            float frame_dt = 0.0f;
++            if (!runtime_host().game_thread_pump(now, pump, &frame_dt)) return;
++            if (auto* after = Runtime::after_frame.load(std::memory_order_acquire)) after(frame_dt);
+         }
+         catch (...)
+         {

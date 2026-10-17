@@ -1,0 +1,74 @@
+--- .superpowers/native-dependency-spike/native-coherent-runtime-1/source/port/unreal/src/FField.cpp
++++ outputs/2026-10-07-l19-r4-owner-variant/candidate/FField.cpp
+@@ -3,6 +3,8 @@
+ #include <Unreal/CoreUObject/UObject/UnrealType.hpp>
+ #include <Unreal/VersionedContainer/Container.hpp>
+ #include <Helpers/Casting.hpp>
++#include <cstring>
++#include <memory>
+ 
+ #define IMPLEMENT_FFIELD_VIRTUAL_WRAPPER(class_name, function_name, return_type, params, args) \
+ if (Version::IsBelow(4, 25)) \
+@@ -233,7 +235,7 @@
+     {
+         auto CurrentVariant = GetOwnerVariant();
+ 
+-        while (!CurrentVariant.IsUObject())
++        while (CurrentVariant.IsValid() && !CurrentVariant.IsUObject())
+         {
+             CurrentVariant = CurrentVariant.GetOwnerVariant();
+         }
+@@ -344,7 +346,12 @@
+         {
+             throw std::runtime_error("FField::Owner is not available in UE versions below 4.25");
+         }
+-        return GetOwner();
++        // The version-aware wrapper retains its pre5.3 bool and is16 bytes,
++        // but the native UE5.3+ member is only8 bytes. Never copy the adjacent
++        // Next pointer into that legacy bool/padding.
++        FFieldVariant owner{static_cast<FField*>(nullptr)};
++        std::memcpy(std::addressof(owner), std::addressof(GetOwner()), FFieldVariant::StaticSize());
++        return owner;
+     }
+ 
+     auto FField::GetFFieldFNameUnsafe() -> FName
+@@ -734,9 +741,13 @@
+ 
+     auto FFieldVariant::GetOwnerVariant() -> FFieldVariant
+     {
++        if (!IsValid())
++        {
++            return FFieldVariant{static_cast<FField*>(nullptr)};
++        }
+         if (IsUObject())
+         {
+-            return Container.Object->GetOuterPrivate();
++            return ToUObjectUnsafe()->GetOuterPrivate();
+         }
+         else
+         {
+@@ -755,7 +766,7 @@
+ 
+     void FFieldVariant::Set(FField* Field)
+     {
+-        if (Version::IsAtLeast(4, 25))
++        if (Version::IsBelow(5, 3))
+         {
+             IsObject = false;
+         }
+@@ -764,11 +775,13 @@
+ 
+     void FFieldVariant::Set(UObject* Object)
+     {
+-        if (Version::IsAtLeast(4, 25))
++        if (Version::IsBelow(5, 3))
+         {
+             IsObject = true;
+         }
+-        Container.Object = Object;
++        Container.Object = Version::IsAtLeast(5, 3) && Object
++            ? reinterpret_cast<UObject*>(reinterpret_cast<uintptr_t>(Object) | UObjectMask)
++            : Object;
+     }
+ 
+     auto FFieldVariant::HashObject() -> size_t

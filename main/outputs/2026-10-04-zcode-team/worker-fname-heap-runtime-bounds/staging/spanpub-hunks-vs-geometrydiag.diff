@@ -1,0 +1,148 @@
+--- /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-facts-geometry-fix/staging/runtime_start_bridge_r13.geometrydiag.cpp	2026-10-05 07:38:50
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-fname-heap-runtime-bounds/staging/runtime_start_bridge_r13.geometrydiag-spanpub.cpp	2026-10-05 08:32:07
+@@ -1,5 +1,34 @@
+ // runtime_start_bridge.cpp — the module_start -> composed-runtime wiring.
+ //
++// worker-fname-heap-runtime-bounds SPANPUB STAGED COPY (launch10-c,
++// 2026-10-05): worker-facts-geometry-fix/runtime_start_bridge_r13.geometrydiag.cpp
++// (sha c3d6c4de…) + ONLY the published-span additions for the FName-pool
++// runtime-bounds admission:
++//   * bridge_spanpub_publish(): filters the FROZEN walk-results snapshot
++//     (the SAME mappings[] the lease registration consumed — never
++//     g_image_regions, which is image-extent-clamped by design) through the
++//     host-tested pure filter rc_seed::publish_nonimage_readable_spans
++//     (SeedValidation.hpp, co-located): prot&READ, clipped to the outside of
++//     [base, base+0xbc602c8), remainder >= one FName block capacity
++//     (0x20000 = FNameBlockOffsets * Stride), top-16 by size, published
++//     ascending by address. Also publishes the CAPTURED ENVELOPE (max record
++//     end over the whole snapshot): the kernel enumeration is address-
++//     ordered, so a truncated capture is a prefix — the consumer refuses an
++//     admission miss at/above the envelope as 'snapshot truncated' (omitted
++//     mapping) instead of a false 'unmapped'. Bridge capture capacity is
++//     16,384 records, static bss (r4; launch-2 ENOMEM evidence; launch-9
++//     observed vm_total 10,019 -> complete with margin).
++//   * extern "C" bridge_readable_span_count() / bridge_readable_span_at()
++//     accessors consumed by the initializer TU in the SAME PRX (intra-module
++//     link: no new PRX imports or exports).
++//   * diagnostics bridge_spanpub_count / bridge_spanpub_total /
++//     bridge_spanpub_cap through the existing channel.
++// Conversion behavior, the PLH lease registration set, and the geometrydiag
++// events are byte-identical to the geometrydiag base; the only touches inside
++// bridge_register_readable_ranges are ONE publish call after the existing
++// loop and ONE diagnostic line on the walk-failure early return (see
++// DIFF.md hunks for the r14+diag re-application anchors).
++//
+ // worker-facts-geometry-fix STAGED COPY (2026-10-05): canonical
+ // worker-module-start-wiring/runtime_start_bridge_r13.cpp (conversion
+ // behavior byte-identical) + the controller-directed geometry diagnostics
+@@ -491,12 +520,18 @@
+ static PLH::OwnedMemory::ScopedRegion *g_image_regions[128];
+ static unsigned g_image_region_count = 0;
+ 
++// spanpub (launch10-c) forward declaration — defined below the registration
++// function with the rest of the spanpub block (table + accessors).
++static void bridge_spanpub_publish(const lmf::OsVmMapping *mappings, size_t count,
++                                   uint64_t extent_lo, uint64_t extent_bytes);
++
+ static void bridge_register_readable_ranges()
+ {
+     static lmf::OsVmMapping mappings[kBridgeVmmapEntries];
+     size_t total = 0;
+     if (bridge_query_vmentry(nullptr, mappings, kBridgeVmmapEntries, &total) != 0) {
+         ::diagnostic_event("bridge_lease_reg", 0xffffffffu);
++        ::diagnostic_event("bridge_spanpub_count", 0);  // spanpub: loud absence — table stays empty
+         return;
+     }
+     const size_t count = total < kBridgeVmmapEntries ? total : kBridgeVmmapEntries;
+@@ -531,8 +566,91 @@
+     g_image_region_count = registered;
+     ::diagnostic_event("bridge_lease_reg_spans", (uint32_t)readable_spans);
+     ::diagnostic_event("bridge_lease_reg", (uint32_t)registered);
++    // spanpub (launch10-c): publish the SAME frozen walk snapshot for the
++    // seed-admission path; the initializer TU consumes it via the extern "C"
++    // accessors below. Extent inputs are the file-vaddr pair already used
++    // above; the filter clips to the OUTSIDE of that extent.
++    bridge_spanpub_publish(mappings, count, extent_begin, kImageExtentVaddr);
++}
++
++// ---- launch10-c spanpub (worker-fname-heap-runtime-bounds) -----------------
++// Bounded storage + accessors for the seed-admission span table. The pure
++// filter is rc_seed::publish_nonimage_readable_spans (SeedValidation.hpp,
++// co-located with this file; freestanding, host-tested — the fixtures drive
++// the SAME function end-to-end with a realistic walk). This TU adds only the
++// snapshot plumbing. <cstdint> is already included above; SeedValidation.hpp
++// is the one new include and pulls nothing beyond <cstddef>/<cstdint>/
++// <string_view>.
++#include "SeedValidation.hpp"
++
++static rc_seed::VmSpanRecord g_spanpub_records[kBridgeVmmapEntries];  // WHOLE frozen snapshot (all records — non-readable records still prove enumeration coverage for the envelope)
++static rc_seed::AddressSpan g_published_readable_spans[rc_seed::kMaxPublishedSpans];
++static uint64_t g_spanpub_envelope_end = 0;  // max captured record end (truncation honesty)
++static uint32_t g_published_readable_span_count = 0;
++static uint32_t g_published_readable_span_total = 0;
++
++static void bridge_spanpub_publish(const lmf::OsVmMapping *mappings, size_t count,
++                                   uint64_t extent_lo, uint64_t extent_bytes)
++{
++    g_published_readable_span_count = 0;
++    g_published_readable_span_total = 0;
++    g_spanpub_envelope_end = 0;
++    // Copy the WHOLE frozen snapshot (same-capture rule: this is the array
++    // this function's caller just filled with bridge_query_vmentry — no
++    // second sysctl). The pure filter skips non-readable records itself but
++    // still counts them toward the captured envelope.
++    const size_t bounded = count < kBridgeVmmapEntries ? count : kBridgeVmmapEntries;
++    for (size_t i = 0; i < bounded; ++i) {
++        g_spanpub_records[i].start = mappings[i].start;
++        g_spanpub_records[i].end = mappings[i].end;
++        g_spanpub_records[i].protection = static_cast<uint32_t>(mappings[i].protection);
++    }
++    const rc_seed::PublicationResult pub = rc_seed::publish_nonimage_readable_spans(
++        g_spanpub_records, bounded, extent_lo, extent_bytes,
++        g_published_readable_spans, rc_seed::kMaxPublishedSpans);
++    g_published_readable_span_count = pub.published;
++    g_published_readable_span_total = pub.total;
++    g_spanpub_envelope_end = pub.envelope_end;
++    ::diagnostic_event("bridge_spanpub_count", pub.published);
++    ::diagnostic_event("bridge_spanpub_total", pub.total);
++    ::diagnostic_event("bridge_spanpub_cap", pub.cap_saturated);
++    ::diagnostic_event("bridge_spanpub_env_low", (uint32_t)(pub.envelope_end & 0xffffffffu));
++    ::diagnostic_event("bridge_spanpub_env_high", (uint32_t)(pub.envelope_end >> 32));
++}
++
++// Seed-admission span table (class (ii), non-image readable spans only —
++// image memory is refused by the extent check on the consumer side). Intra-
++// module contract: populated by bridge_register_readable_ranges at
++// module_start, consumed later by the initializer's seed path on the same
++// single-threaded init discipline as every other bridge state.
++extern "C" uint32_t bridge_readable_span_count(void)
++{
++    return g_published_readable_span_count;
++}
++
++extern "C" int bridge_readable_span_at(uint32_t index, uint64_t *lo, uint64_t *hi)
++{
++    if (index >= g_published_readable_span_count || lo == nullptr || hi == nullptr) {
++        return 0;
++    }
++    *lo = g_published_readable_spans[index].lo;
++    *hi = g_published_readable_spans[index].hi;
++    return 1;
+ }
+ 
++// Captured-envelope end (max record end over the WHOLE snapshot): the
++// initializer passes it to check_pool_shape so an admission miss at/above
++// the cut refuses as 'snapshot truncated' (omitted mapping) instead of a
++// false 'unmapped'. Returns 0 and writes nothing when unavailable.
++extern "C" int bridge_capture_envelope(uint64_t *envelope_end)
++{
++    if (envelope_end == nullptr || g_published_readable_span_count == 0) {
++        return 0;
++    }
++    *envelope_end = g_spanpub_envelope_end;
++    return 1;
++}
++
+ extern "C" int modbridge_runtime_stop(void)
+ {
+     auto &slot = owner_slot();

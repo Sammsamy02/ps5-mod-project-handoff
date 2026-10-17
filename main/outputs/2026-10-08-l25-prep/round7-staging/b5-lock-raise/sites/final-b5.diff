@@ -1,0 +1,171 @@
+# B5 sites track, FINAL (not applied to the candidate, not built). Base: candidate/src/LuaMod.cpp sha256 4d6bc63b7a90a8026a9c918ee6bee36c2d4eaa450220be82e8071f5427bfde9a (B4 snapshot b63ba460).
+# = proposed-B5-raise-after-unlock.diff (15 raise sites, hunks unchanged) + get_mod_ref_cxx (2 helper-raise sites: RegisterCustomEvent, RegisterHook).
+# Change: inside every lock scope of a registered Lua function, errors are C++ exceptions (std::runtime_error), converted to the same Lua error by
+#   process_lua_function's TRY (LuaMadeSimple.cpp:1726, LuaMadeSimple.hpp:843-857) after the lock guard is destroyed.
+# Apply from the worktree root: patch -p1 < final-b5.diff        (no new #include, no new symbol outside LuaMod.cpp)
+--- a/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
++++ b/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/LuaMod.cpp
+@@ -317,6 +317,26 @@
+         return lua_object.get_remote_cpp_object();
+     }
+ 
++    // [B5] get_mod_ref for call sites that hold LuaMod::m_thread_actions_mutex.
++    // Lua is compiled as C on this port, so lua.throw_error (luaL_error) is a
++    // longjmp that skips the lock guard's destructor and leaks the mutex for the
++    // rest of the session. A missing 'ModRef' is therefore reported here with a
++    // C++ exception (same text as get_mod_ref). Use it ONLY inside a function
++    // registered through register_function: process_lua_function's TRY catches
++    // the exception, the guard has already been released by then, and TRY raises
++    // the same Lua error afterwards.
++    static auto get_mod_ref_cxx(const LuaMadeSimple::Lua& lua) -> LuaMod*
++    {
++        if (lua_getglobal(lua.get_lua_state(), "ModRef") == LUA_TNIL)
++        {
++            throw std::runtime_error("[get_mod_ref] Tried retrieving 'ModRef' global variable but it was nil, please do not override this global");
++        }
++
++        // Explicitly using the top of the stack (-1) since that's where 'getglobal' puts stuff
++        auto& lua_object = lua.get_userdata<LuaType::LuaModRef>(-1);
++        return lua_object.get_remote_cpp_object();
++    }
++
+     static auto get_function_name_without_prefix(const StringType& function_full_name) -> StringType
+     {
+         static constexpr StringViewType function_prefix{STR("Function ")};
+@@ -2352,7 +2372,7 @@
+ 
+                 if (!lua.is_string())
+                 {
+-                    lua.throw_error(error_overload_not_found);
++                    throw std::runtime_error(error_overload_not_found);
+                 }
+ 
+                 // [LFB] ONE hand converter for the Lua path name (was
+@@ -2363,33 +2383,33 @@
+                 Unreal::UFunction* unreal_function = Unreal::UObjectGlobals::StaticFindObject<Unreal::UFunction*>(nullptr, nullptr, function_name_no_prefix);
+                 if (!unreal_function)
+                 {
+-                    lua.throw_error(std::format("Tried to unregister a hook with Lua function 'UnregisterHook' but no UFunction with the specified name "
++                    throw std::runtime_error(std::format("Tried to unregister a hook with Lua function 'UnregisterHook' but no UFunction with the specified name "
+                                                 "was found.\n>FunctionName: {}",
+                                                 to_string(function_name_no_prefix)));
+                 }
+ 
+                 if (!lua.is_integer())
+                 {
+-                    lua.throw_error(error_overload_not_found);
++                    throw std::runtime_error(error_overload_not_found);
+                 }
+                 const auto pre_id = lua.get_integer();
+ 
+                 if (!lua.is_integer())
+                 {
+-                    lua.throw_error(error_overload_not_found);
++                    throw std::runtime_error(error_overload_not_found);
+                 }
+                 const auto post_id = lua.get_integer();
+ 
+                 if (pre_id > std::numeric_limits<int32_t>::max())
+                 {
+-                    lua.throw_error(std::format("Tried to unregister a hook with Lua function 'UnregisterHook' but the PreCallbackId supplied was too "
++                    throw std::runtime_error(std::format("Tried to unregister a hook with Lua function 'UnregisterHook' but the PreCallbackId supplied was too "
+                                                 "large (>int32)\n>FunctionName: {}",
+                                                 to_string(function_name_no_prefix)));
+                 }
+ 
+                 if (post_id > std::numeric_limits<int32_t>::max())
+                 {
+-                    lua.throw_error(std::format("Tried to unregister a hook with Lua function 'UnregisterHook' but the PostCallbackId supplied was too "
++                    throw std::runtime_error(std::format("Tried to unregister a hook with Lua function 'UnregisterHook' but the PostCallbackId supplied was too "
+                                                 "large (>int32)\n>FunctionName: {}",
+                                                 to_string(function_name_no_prefix)));
+                 }
+@@ -2432,7 +2452,7 @@
+                     error_message.append(fmt::format("ProcessInternal: {}\n", Unreal::UObject::ProcessInternalInternal.get_function_address()));
+                     error_message.append(
+                             fmt::format("FUNC_Native: {}\n", static_cast<uint32_t>(unreal_function->HasAnyFunctionFlags(Unreal::EFunctionFlags::FUNC_Native))));
+-                    lua.throw_error(error_message);
++                    throw std::runtime_error(error_message);
+                 }
+ 
+                 return 0;
+@@ -3068,7 +3088,7 @@
+ 
+             if (!lua.is_string())
+             {
+-                lua.throw_error(error_overload_not_found);
++                throw std::runtime_error(error_overload_not_found);
+             }
+ 
+             // [LFB] ONE hand converter: Lua event-name string -> UTF-16 (was
+@@ -3078,10 +3098,10 @@
+ 
+             if (!lua.is_function())
+             {
+-                lua.throw_error(error_overload_not_found);
++                throw std::runtime_error(error_overload_not_found);
+             }
+ 
+-            auto mod = get_mod_ref(lua);
++            auto mod = get_mod_ref_cxx(lua);
+             auto hook_lua = get_hook_lua(mod);
+ 
+             lua_xmove(lua.get_lua_state(), hook_lua->get_lua_state(), 1);
+@@ -3111,7 +3131,7 @@
+ 
+             if (!lua.is_string())
+             {
+-                lua.throw_error(error_overload_not_found);
++                throw std::runtime_error(error_overload_not_found);
+             }
+             // [LFB] ONE hand converter (was ensure_str).
+             auto custom_event_name = LuaType::LuaFNameBridge::Bridge{lua.get_lua_state()}.string();
+@@ -5953,7 +5973,7 @@
+ 
+             if (!lua.is_string())
+             {
+-                lua.throw_error(error_overload_not_found);
++                throw std::runtime_error(error_overload_not_found);
+             }
+ 
+             // [LFB] Claude item 2 (RegisterHook path names): the ONE hand
+@@ -5963,10 +5983,10 @@
+ 
+             if (!lua.is_function())
+             {
+-                lua.throw_error(error_overload_not_found);
++                throw std::runtime_error(error_overload_not_found);
+             }
+ 
+-            auto mod = get_mod_ref(lua);
++            auto mod = get_mod_ref_cxx(lua);
+             auto [hook_lua, lua_thread_registry_index] = make_hook_state(mod); // operates on LuaMod::m_lua incrementing its stack via lua_newthread
+ 
+             // Duplicate the Lua function to the top of the stack for lua_xmove and luaL_ref
+@@ -5991,7 +6011,7 @@
+             Unreal::UFunction* unreal_function = Unreal::UObjectGlobals::StaticFindObject<Unreal::UFunction*>(nullptr, nullptr, function_name_no_prefix);
+             if (!unreal_function)
+             {
+-                lua.throw_error(std::format(
++                throw std::runtime_error(std::format(
+                         "Tried to register a hook with Lua function 'RegisterHook' but no UFunction with the specified name was found.\nFunction Name: {}",
+                         to_string(function_name_no_prefix)));
+             }
+@@ -6040,7 +6060,7 @@
+                 error_message.append(fmt::format("ProcessInternal: {}\n", Unreal::UObject::ProcessInternalInternal.get_function_address()));
+                 error_message.append(
+                         fmt::format("FUNC_Native: {}\n", static_cast<uint32_t>(unreal_function->HasAnyFunctionFlags(Unreal::EFunctionFlags::FUNC_Native))));
+-                lua.throw_error(error_message);
++                throw std::runtime_error(error_message);
+             }
+ 
+             lua.set_integer(pre_id);
+@@ -8692,7 +8712,7 @@
+                                 }
+                                 else
+                                 {
+-                                    lua.throw_error(fmt::format(
++                                    throw std::runtime_error(fmt::format(
+                                             "[script_hook] Tried accessing unreal property without a registered handler. Property type '{}' not supported.",
+                                             to_string(param_type.ToString())));
+                                 }

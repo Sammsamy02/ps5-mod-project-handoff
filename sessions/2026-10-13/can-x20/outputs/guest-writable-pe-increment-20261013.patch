@@ -1,0 +1,278 @@
+--- a/loader/include/guest_write_map.h
++++ b/loader/include/guest_write_map.h
+@@ -17,6 +17,7 @@
+ class GuestWriteMap
+ {
+   public:
++    struct Span { void* base; size_t length; };
+     bool add(const void* owner, void* base, size_t length)
+     {
+         if (!owner || !base || !length) return false;
+@@ -36,13 +37,49 @@
+     {
+         if (!owner) return false;
+         std::lock_guard<std::mutex> guard(mu_);
+-        for (auto it = ranges_.begin(); it != ranges_.end(); ++it)
++        bool removed = false;
++        for (auto it = ranges_.begin(); it != ranges_.end();)
+             if (it->owner == owner)
+             {
+-                ranges_.erase(it);
+-                return true;
++                it = ranges_.erase(it);
++                removed = true;
+             }
+-        return false;
++            else ++it;
++        return removed;
++    }
++
++    // Atomically add every writable section of one owned PE. A plain add()
++    // still permits only one range per owner for stack/heap registrations.
++    bool add_many(const void* owner, const std::vector<Span>& spans)
++    {
++        if (!owner || spans.empty()) return false;
++        std::lock_guard<std::mutex> guard(mu_);
++        for (const auto& range : ranges_)
++            if (range.owner == owner) return false;
++        for (size_t i = 0; i < spans.size(); ++i)
++        {
++            if (!spans[i].base || !spans[i].length) return false;
++            const uintptr_t begin = reinterpret_cast<uintptr_t>(spans[i].base);
++            if (spans[i].length > UINTPTR_MAX - begin) return false;
++            const uintptr_t end = begin + spans[i].length;
++            for (const auto& range : ranges_)
++                if (begin < range.end && range.begin < end) return false;
++            for (size_t j = 0; j < i; ++j)
++            {
++                const uintptr_t prev = reinterpret_cast<uintptr_t>(spans[j].base);
++                const uintptr_t prev_end = prev + spans[j].length;
++                if (begin < prev_end && prev < end) return false;
++            }
++        }
++        if (spans.size() > ranges_.max_size() - ranges_.size()) return false;
++        try { ranges_.reserve(ranges_.size() + spans.size()); }
++        catch (const std::bad_alloc&) { return false; }
++        for (const auto& span : spans)
++        {
++            const uintptr_t begin = reinterpret_cast<uintptr_t>(span.base);
++            ranges_.push_back({owner, begin, begin + span.length});
++        }
++        return true;
+     }
+ 
+     bool write(void* address, const void* source, size_t length) const
+--- a/loader/include/pe_loader.h
++++ b/loader/include/pe_loader.h
+@@ -78,6 +78,7 @@
+         uint32_t export_dir_rva = 0;
+         uint32_t export_dir_size = 0;
+         std::vector<ExecRange> executable_ranges;
++        std::vector<ExecRange> writable_ranges;
+     };
+     Impl* impl = nullptr;
+ };
+--- a/loader/src/pe_loader.cpp
++++ b/loader/src/pe_loader.cpp
+@@ -553,6 +553,15 @@
+                                         sec.VirtualSize : sec.SizeOfRawData;
+             kept->executable_ranges.push_back({sec.VirtualAddress, sec.VirtualAddress + exec_bytes});
+         }
++        if ((sec.Characteristics & PE_SCN_MEM_WRITE) &&
++            !(sec.Characteristics & PE_SCN_MEM_EXECUTE))
++        {
++            const uint32_t bytes = sec.VirtualSize ?
++                sec.VirtualSize : sec.SizeOfRawData;
++            if (bytes)
++                kept->writable_ranges.push_back({sec.VirtualAddress,
++                                                  sec.VirtualAddress + bytes});
++        }
+     }
+     out.ok = true;
+     out.impl = kept;
+--- a/loader/src/win_api_shim.h
++++ b/loader/src/win_api_shim.h
+@@ -24,11 +24,11 @@
+ #include <unordered_map>
+ 
+ #include "pe_loader.h"
++#include "guest_write_map.h"
+ 
+ namespace cap13 {
+ 
+ class GuestReadMap;
+-class GuestWriteMap;
+ 
+ // A mod-visible module handle ("HMODULE"): opaque index into the registry.
+ using WinModule = void*;
+@@ -98,7 +98,8 @@
+                                   std::string* forwarder);
+     bool register_mapped_module(const char* source_path, WinModule handle,
+                                 MappedLookup lookup, void* owner,
+-                                size_t mapped_bytes = 0);
++                                size_t mapped_bytes = 0,
++                                const std::vector<GuestWriteMap::Span>* writable = nullptr);
+     // Caller must quiesce guest users of the module before removing it.
+     bool unregister_mapped_module(const char* source_path, WinModule handle,
+                                   void* owner);
+--- a/loader/src/win_api_shim.cpp
++++ b/loader/src/win_api_shim.cpp
+@@ -140,6 +140,7 @@
+         MappedLookup mapped_lookup = nullptr;
+         void* owner = nullptr;
+         bool read_range_registered = false;
++        bool write_ranges_registered = false;
+     };
+     std::unordered_map<std::string, ModuleEntry> modules;
+     bool builtins_registered = false;
+@@ -309,7 +310,8 @@
+ 
+ bool WinApiShim::register_mapped_module(const char* source_path,
+                                         WinModule handle, MappedLookup lookup,
+-                                        void* owner, size_t mapped_bytes)
++                                        void* owner, size_t mapped_bytes,
++                                        const std::vector<GuestWriteMap::Span>* writable)
+ {
+     const std::string key = ascii_module_key(source_path);
+     if (key.empty() || !handle || !lookup || !owner) return false;
+@@ -329,6 +331,17 @@
+     }
+     if (m->guest_read_map && mapped_bytes)
+         m->modules.at(key).read_range_registered = true;
++    if (m->guest_write_map && writable && !writable->empty())
++    {
++        if (!m->guest_write_map->add_many(owner, *writable))
++        {
++            if (m->modules.at(key).read_range_registered)
++                (void)m->guest_read_map->remove(owner);
++            m->modules.erase(key);
++            return false;
++        }
++        m->modules.at(key).write_ranges_registered = true;
++    }
+     return true;
+ }
+ 
+@@ -341,6 +354,11 @@
+     auto row = m->modules.find(key);
+     if (row == m->modules.end() || row->second.handle != handle ||
+         row->second.owner != owner || !row->second.mapped_lookup) return false;
++    if (row->second.write_ranges_registered && m->guest_write_map)
++    {
++        if (!m->guest_write_map->remove(owner)) return false;
++        row->second.write_ranges_registered = false;
++    }
+     if (row->second.read_range_registered && m->guest_read_map &&
+         !m->guest_read_map->remove(owner)) return false;
+     m->modules.erase(row);
+--- a/loader/src/guest_pe_loader.cpp
++++ b/loader/src/guest_pe_loader.cpp
+@@ -159,8 +159,21 @@
+     if (attached_) return GuestNotifyStatus::WrongState;
+     if (shim_ && !source_path_.empty() && !module_registered_)
+     {
++        std::vector<GuestWriteMap::Span> writable;
++        try
++        {
++            if (load_.impl)
++                for (const auto& range : load_.impl->writable_ranges)
++                    writable.push_back({load_.image + range.begin,
++                                        size_t(range.end - range.begin)});
++        }
++        catch (const std::bad_alloc&)
++        {
++            return GuestNotifyStatus::ModuleRegistrationFailed;
++        }
+         if (!shim_->register_mapped_module(source_path_.c_str(), load_.image,
+-                                            lookup_export, this, load_.image_size))
++                                            lookup_export, this, load_.image_size,
++                                            &writable))
+             return GuestNotifyStatus::ModuleRegistrationFailed;
+         module_registered_ = true;
+     }
+--- a/loader/tests/guest_pe_thread_test.cpp
++++ b/loader/tests/guest_pe_thread_test.cpp
+@@ -2,6 +2,7 @@
+ #include "guest_read_map.h"
+ #include "guest_thread_manager.h"
+ #include "guest_write_map.h"
++#include "pe_types.h"
+ #include "win32_thread_identity.h"
+ #include "win_api_shim.h"
+ 
+@@ -150,6 +151,26 @@
+     check(!shim.write_guest_bytes(&stack_output, &supplied, sizeof(supplied)) &&
+           unsafe_write_calls.load() == 0,
+           "configured write map cannot be bypassed by later hook changes");
++    uint8_t split_output[8]{};
++    int split_owner = 0;
++    cap13::GuestWriteMap split_map;
++    std::vector<cap13::GuestWriteMap::Span> split_ranges = {
++        {split_output, 2}, {split_output + 4, 2}};
++    const uint8_t mark = 0x7e;
++    check(split_map.add_many(&split_owner, split_ranges) &&
++          split_map.write(split_output + 1, &mark, 1) &&
++          split_map.write(split_output + 4, &mark, 1) &&
++          !split_map.write(split_output + 2, &mark, 1),
++          "multi-section registration admits each range but not its gap");
++    check(split_map.remove(&split_owner) &&
++          !split_map.write(split_output + 1, &mark, 1) &&
++          !split_map.write(split_output + 4, &mark, 1),
++          "owner removal revokes every section together");
++    std::vector<cap13::GuestWriteMap::Span> overlap_ranges = {
++        {split_output, 3}, {split_output + 2, 2}};
++    check(!split_map.add_many(&split_owner, overlap_ranges) &&
++          !split_map.write(split_output, &mark, 1),
++          "overlapping multi-section registration is atomic refusal");
+     cap13::WinApiShim::ExecutableMemoryBackend backend{};
+     backend.allocate_writable = allocate_writable;
+     backend.seal_executable = seal_executable;
+@@ -179,6 +200,35 @@
+     void* start = shim.resolve("fixture.dll", "start_mod", 0);
+     check(start && batch.modules[0]->owns_executable_address(start),
+           "worker start is validated inside attached executable code");
++    uint32_t writable_rva = 0;
++    const auto* dos = reinterpret_cast<const cap13::PeDosHeader*>(fixture.data());
++    const auto* coff = reinterpret_cast<const cap13::PeFileHeader*>(
++        fixture.data() + dos->e_lfanew + 4);
++    const auto* sections = reinterpret_cast<const cap13::PeSectionHeader*>(
++        reinterpret_cast<const uint8_t*>(coff) + sizeof(*coff) +
++        coff->SizeOfOptionalHeader);
++    for (uint16_t i = 0; i < coff->NumberOfSections; ++i)
++        if ((sections[i].Characteristics & cap13::PE_SCN_MEM_WRITE) &&
++            !(sections[i].Characteristics & cap13::PE_SCN_MEM_EXECUTE) &&
++            (sections[i].VirtualSize || sections[i].SizeOfRawData))
++        { writable_rva = sections[i].VirtualAddress; break; }
++    check(writable_rva != 0,
++          "unchanged synthetic PE exposes a writable non-executable section");
++    auto* mapped_base = static_cast<uint8_t*>(batch.modules[0]->mapped_handle());
++    uint8_t* mapped_output = mapped_base + writable_rva;
++    if (writable_rva)
++    {
++        const uint8_t old = *mapped_output;
++        const uint8_t changed = old ^ 0x5a;
++        check(shim.write_guest_bytes(mapped_output, &changed, 1) &&
++              *mapped_output == changed &&
++              shim.write_guest_bytes(mapped_output, &old, 1) &&
++              *mapped_output == old,
++              "attached PE writable section is registered for bounded output");
++        check(!shim.write_guest_bytes(mapped_base, &changed, 1) &&
++              !shim.write_guest_bytes(start, &changed, 1),
++              "PE headers and executable start remain output-write denied");
++    }
+ 
+     cap13::GuestThreadRunResult run{};
+     const int before = segment.enters;
+@@ -288,6 +338,12 @@
+     }
+     check(cap13::pe_detach_guest_batch(batch, main_teb),
+           "root DLL detaches after all worker threads join");
++    if (writable_rva)
++    {
++        const uint8_t value = 0;
++        check(!shim.write_guest_bytes(mapped_output, &value, 1),
++              "detaching PE revokes its registered writable section");
++    }
+ 
+     // A copy changes only the synthetic import name so DllMain no longer
+     // calls DisableThreadLibraryCalls; the original fixture stays unchanged.

@@ -1,0 +1,39 @@
+DESIGN-2 host test, LOCKFIX-CORE v1
+T1 stuck-key repro
+  ok   OLD: keybind never ran in 1.2 s while the game thread kept pumping (4857 events) -> reproduces the B4 symptom
+  ok   NEW: key dispatched once although H is leaked on the game thread
+  ok   NEW: key press -> callback start = 242 us (< 20 ms)
+T2 fast path + lost-wakeup protocol
+  ok   every one of 80000 items ran exactly once (dup=0 miss=0)
+  ok   max enqueue->run latency 131 us (< 200 ms; no lost wakeup stalls)
+      events=184688 q_takes=88512
+  ok   idle-ratio run consumed all 200 items
+  ok   queue-lock takes 400 for 7847055 events (old design: 1+ per event)
+T3 two mods firing hooks at each other from two threads (ABBA) + re-entrancy
+  ok   ABBA: both threads finished 400 iterations each, no deadlock
+      forced entries (cross-mod wait expired) = 800, max wait A=2108 us B=2110 us
+  ok   no single mod-lock wait exceeded 50 ms
+  ok   nested hooks inside one mod (and A->B->A) re-enter without deadlock or deferral
+T4 deferral keeps per-mod order; fallback executor; tombstone
+  ok   while mod A's Lua lock is busy: A's 3 keys deferred, B's key ran
+  ok   after release A's keys run in original order A1,A2,A3
+  ok   fallback: ran exactly once, 400 ms after the press (target 400 ms)
+  ok   a key is delivered exactly once even with both executors polling
+  ok   tombstoned (uninstalled) mod: scope refuses, item would be dropped
+  ok   re-registered mod (hot reload) accepts again
+T7 deferral is capped (leaked or spin-held mod lock cannot starve a mod for ever)
+  ok   owner thread held the mod lock: 28 deferrals, then forced after 152 ms (cap 150 ms in the test, 2000 ms in production)
+  ok   after the holder released, the next Try gets the real lock and the streak resets
+T6 H ledger detects a leaked guard (report only)
+  ok   no false positive on balanced HGuard use
+  ok   longjmp out of an HGuard is flagged (leak_suspect=1)
+T5 [LOCK] statistics line
+  ok   rate limit: second call within 10 s printed nothing (7 line(s) from the first)
+  ok   line printed again after 10 s
+  ok   final line printed regardless of the limiter
+  ok   line starts with the declared marker text
+      [LOCK] keys q=7 d=7 drop=0 fb=1 slow=0 wait_ms max=400.312 mean=59.376 cb_max_ms=0.000 | qlock takes=89071 contended=15760 hold_max_ms=0.021 wait_max_ms=0.101 | fast skip=551 take=1 | eigt q=0 run=0 dly q=0 run=0 | defer=31 forced=801 unwrapped=0 stale=1 leak_suspect=1 | pump gap_max_ms=0 drain_win_ms=0 drain_max_ms=0
+      [LOCK] mod=modA lua_lock wait_max_ms=0.000 hold_max_ms=0.000 acq=1 contended=0 defer=0 forced=0
+      [LOCK] mod=modA_abba lua_lock wait_max_ms=2.108 hold_max_ms=2.302 acq=405 contended=400 defer=0 forced=400
+  ok   all required statistics fields present
+checked=25 failed=0

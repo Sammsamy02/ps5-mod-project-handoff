@@ -1,0 +1,66 @@
+
+##############################################################################
+# PLAN (dry-run) — flow 'dll8' — nothing will be executed
+# console contact: NONE in this mode
+##############################################################################
+[22:02:43] 
+[22:02:43] --- step dll8.0 :: pre-flight local identity + receipt profile checks  [group: preflight]
+[22:02:43]   GATE  candidate identity table in CONSOLE-STAGE-PLAN-8FAM.md re-verified before touching the console
+[22:02:43]   GATE  local sha256(owned-dll-candidate.elf) == 792811911e77… and bytes == 336552
+[22:02:43]   GATE  receipt result_profile.path == /data/modbridge-owned-dll-candidate.jsonl (not /tmp — the /tmp-trap lesson: verify, do not assume)
+[22:02:43]   GATE  receipt flags: console_contact=false, target_execution=false, prx_created=false
+[22:02:43]   CMD   shasum -a 256 /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-dll-8fam-combined/out-sdk-composition/c3aba79f968a492b849e5ece2f009e8e/owned-dll-candidate.elf
+[22:02:43]   CMD   stat -f %z /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-dll-8fam-combined/out-sdk-composition/c3aba79f968a492b849e5ece2f009e8e/owned-dll-candidate.elf
+[22:02:43]   CMD   python3 -c 'read receipt.json, assert profile fields'
+[22:02:43] 
+[22:02:43] --- step dll8.0b :: receipt profile assertions (path /data, flags false, build_id)  [group: preflight]
+[22:02:43]   GATE  result_profile.path == /data/modbridge-owned-dll-candidate.jsonl
+[22:02:43]   GATE  console_contact/target_execution/prx_created/downloaded_dll_executed all false
+[22:02:43]   GATE  result_profile.build_id == c3aba79f968a…
+[22:02:43]   CMD   cat /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-dll-8fam-combined/out-sdk-composition/c3aba79f968a492b849e5ece2f009e8e/receipt.json
+[22:02:43] 
+[22:02:43] --- step dll8.1 :: G0 manager reachability (else STOP — do not probe anything else)  [group: g0]
+[22:02:43]   GATE  GET http://ps5-host-not-configured.invalid:8084/list_payloads -> HTTP 200
+[22:02:43]   CMD   curl -sS http://ps5-host-not-configured.invalid:8084/list_payloads
+[22:02:43] 
+[22:02:43] --- step dll8.2 :: Step 1 — upload ONCE as fresh alias ALLFAM8_DLL_TEST.elf  [group: upload]
+[22:02:43]   GATE  fresh distinct display filename; no prior alias touched (history_preserved pattern)
+[22:02:43]   CMD   curl -sS -X POST "http://ps5-host-not-configured.invalid:8084/manage:upload?filename=ALLFAM8_DLL_TEST.elf" --data-binary @/WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-dll-8fam-combined/out-sdk-composition/c3aba79f968a492b849e5ece2f009e8e/owned-dll-candidate.elf
+[22:02:43] 
+[22:02:43] --- step dll8.3 :: Step 2a — manage:check (ok / folder_exists / file_exists)  [group: verify]
+[22:02:43]   GATE  response contains ok / folder_exists / file_exists for the new entry
+[22:02:43]   CMD   curl -sS http://ps5-host-not-configured.invalid:8084/manage:check
+[22:02:43] 
+[22:02:43] --- step dll8.4 :: Step 2b — FTP readback identity gate (readback law)  [group: verify]
+[22:02:43]   GATE  readback sha256 == 792811911e773c9b07a47ba3b22bc5d290f9f3ab86056ddfc985cf25e6d804fb
+[22:02:43]   GATE  readback bytes == 336552
+[22:02:43]   GATE  ELF magic 7f 45 4c 46
+[22:02:43]   GATE  on mismatch: STOP — never dispatch a bytes-divergent payload (f72 precedent)
+[22:02:43]   CMD   curl -sS ftp://ps5-host-not-configured.invalid:2121/data/pldmgr/payloads/ALLFAM8_DLL_TEST/ALLFAM8_DLL_TEST.elf -o <run-dir>/dll8-readback.elf
+[22:02:43]   CMD   shasum -a 256 <run-dir>/dll8-readback.elf
+[22:02:43] 
+[22:02:43] --- step dll8.5 :: Step 3 — dispatch EXACTLY ONCE via pldmgr /loadpayload (game closed)  [group: dispatch]
+[22:02:43]   GATE  payload-only state: game closed, game_launched=false, no ploader arm, no PRX-slot interaction
+[22:02:43]   GATE  exactly one dispatch — never re-send on ambiguity; reconcile first
+[22:02:43]   CMD   curl -sS "http://ps5-host-not-configured.invalid:8084/loadpayload:/data/pldmgr/payloads/ALLFAM8_DLL_TEST/ALLFAM8_DLL_TEST.elf"
+[22:02:43] 
+[22:02:43] --- step dll8.6 :: Step 4 — wait ~15 s (self-terminating profile: 4 phases, exits in seconds)  [group: dispatch]
+[22:02:43]   GATE  if fewer than 4 new records after first read: wait 60 s, re-read ONCE, then stop — never re-dispatch
+[22:02:43]   CMD   sleep 15
+[22:02:43] 
+[22:02:43] --- step dll8.7 :: Step 5 — readback results + EXPECTED-DELTA-8FAM.md verdict  [group: verdict]
+[22:02:43]   GATE  exactly 4 new records for c3aba79f…, sequences 0..3, phases [1,2,3,5], appended after ALL existing records (positions 37-40 dll8-first; 41-44 if the dll7 fallback ran first — position yields to the append-only invariant)
+[22:02:43]   GATE  record1: all NINE family keys {"enabled":1} incl. static_tls and seh64 (seh64 first time on target)
+[22:02:43]   GATE  record2: consumer_imports 90 (= 82 + 8 SEH64 binds: 7 KERNEL32 + 1 VCRUNTIME140), helper_imports 10, worker.begin [5,1,258,259], worker.result oracle quadruple, results [86,93], memory.last.length 114688
+[22:02:43]   GATE  record3: stage 11, cleanup {pending:0,retired:1}, session_ends [1,1], memory.last.length 163840 (FINAL memory.last oracle; mapped image grew 334656 -> 336552), first_failure all zeros
+[22:02:43]   GATE  console-only delta NOT a failure: delivery stdout_error 32 with stdout_records 1
+[22:02:43]   GATE  any first_failure.stage triages through the full 8-family range map incl. the NEW seh64 fixtures -130..-137
+[22:02:43]   CMD   curl -sS ftp://ps5-host-not-configured.invalid:2121/data/modbridge-owned-dll-candidate.jsonl -o <run-dir>/allfam8-console-result.jsonl
+[22:02:43]   CMD   python3 console_batch.py verdict against EXPECTED-DELTA-8FAM.md
+[22:02:43] 
+[22:02:43] --- step dll8.8 :: Step 5b — console receipt (allfam8-console-receipt.json) + result copy  [group: verdict]
+[22:02:43]   GATE  receipt JSON saved next to the result copy; JSONL left append-only intact
+[22:02:43]   GATE  on ANY mismatch: freeze copy with expected_values_matched=false; NO re-dispatch, NO rebuild decision in-session
+[22:02:43]   CMD   write allfam8-console-receipt.json into the run dir
+
+OVERALL: GREEN

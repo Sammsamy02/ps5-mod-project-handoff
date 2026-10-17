@@ -1,0 +1,114 @@
+--- a/win64_bridge.S
++++ b/win64_bridge.S
+@@ -1,7 +1,8 @@
+ // win64_bridge.S -- Win64 <-> SysV x86_64 calling-convention bridge (asm).
+ //
+-// STATUS: hand-written, UNVERIFIED until the M0 host unit tests pass
+-// (macOS is SysV x86_64, so the tests can run here without a console).
++// STATUS: staged Mac tests verify integer argument placement for host->guest
++// call5/6 and guest->host arities 5..8. Other ABI shapes and target behavior
++// remain unverified.
+ // Read DESIGN/native-dll-loader.md section 4a first.
+ //
+ // Conventions:
+@@ -78,11 +79,10 @@
+     add  rsp, 0x28
+     ret
+ 
+-// call5: + sysv stack a5 at [rsp_entry+8]; win a5 belongs at [rsp+0x20]
++// call5: fn consumes SysV RDI, so a5 arrives in R9; Win64 a5 is on stack.
+ GLOBALFN(cap13_win64_call5)
+-    mov  r10, [rsp + 8]         // sysv a5 (read before dropping the frame)
+     sub  rsp, 0x28
+-    mov  [rsp + 0x20], r10      // win a5 slot (just above the shadow space)
++    mov  [rsp + 0x20], r9       // win a5 slot (just above the shadow space)
+     mov  rax, rdi
+     mov  r9,  r8
+     mov  r8,  rcx
+@@ -91,19 +91,18 @@
+     add  rsp, 0x28
+     ret
+ 
+-// call6: sysv a5,a6 at [rsp+8],[rsp+16] -> win slots [rsp+0x20],[rsp+0x28]
++// call6: SysV a5 is R9, a6 is [rsp_entry+8]; Win64 a5/a6 use stack slots.
+ GLOBALFN(cap13_win64_call6)
+-    mov  r10, [rsp + 8]
+-    mov  r11, [rsp + 16]
+-    sub  rsp, 0x28
+-    mov  [rsp + 0x20], r10
+-    mov  [rsp + 0x28], r11
++    mov  r10, [rsp + 8]         // read a6 before allocating the Win64 frame
++    sub  rsp, 0x38              // shadow + two slots + alignment; preserve our return address
++    mov  [rsp + 0x20], r9       // a5
++    mov  [rsp + 0x28], r10      // a6
+     mov  rax, rdi
+     mov  r9,  r8
+     mov  r8,  rcx
+     mov  rcx, rsi
+     call rax
+-    add  rsp, 0x28
++    add  rsp, 0x38
+     ret
+ 
+ // ==========================================================================
+@@ -111,7 +110,7 @@
+ // loads r11 = SysV target and jumps into one of these shared arity thunks.
+ //
+ // Frame (all variants), rsp-relative after `sub rsp, 0xE8`:
+-//   0x000..0x01F  staged guest stack args (up to 4, lowest at 0x000)
++//   0x000..0x01F  staged SysV stack args (guest args 7 and 8)
+ //   0x020..0x02F  pad
+ //   0x030..0x0CF  XMM6..XMM15 saves (10 x 16 B)
+ //   0x0D0         saved RSI      0x0D8         saved RDI
+@@ -137,27 +136,25 @@
+     mov  [rsp + 0x0D0], rsi
+     mov  [rsp + 0x0D8], rdi
+ 
+-.if \n_stack > 0
+-    mov  r10, [rsp + 0x110]
+-    mov  [rsp + 0x000], r10
+-.endif
+-.if \n_stack > 1
+-    mov  r10, [rsp + 0x118]
+-    mov  [rsp + 0x008], r10
+-.endif
+ .if \n_stack > 2
+     mov  r10, [rsp + 0x120]
+-    mov  [rsp + 0x010], r10
++    mov  [rsp + 0x000], r10
+ .endif
+ .if \n_stack > 3
+     mov  r10, [rsp + 0x128]
+-    mov  [rsp + 0x018], r10
++    mov  [rsp + 0x008], r10
+ .endif
+ 
+     mov  rdi, rcx               // sysv a1 = win a1
+     mov  rsi, rdx               // sysv a2 = win a2
+     mov  rdx, r8                // sysv a3 = win a3
+     mov  rcx, r9                // sysv a4 = win a4
++.if \n_stack > 0
++    mov  r8,  [rsp + 0x110]     // sysv a5 = win stack a5
++.endif
++.if \n_stack > 1
++    mov  r9,  [rsp + 0x118]     // sysv a6 = win stack a6
++.endif
+     call r11                    // SysV target (r11 from the trampoline)
+ 
+     movups xmm6,  [rsp + 0x030]
+--- a/win64_bridge.h
++++ b/win64_bridge.h
+@@ -17,9 +17,10 @@
+ // returns differ (Win64 hidden sret vs SysV RAX:RDX) and are refused until
+ // the descriptor generator exists.
+ //
+-// The assembly in win64_bridge.S is hand-written and UNVERIFIED until the
+-// M0 host unit tests run (macOS is SysV; guest register states are
+-// simulated with crafted asm fixtures). Do not trust it before that.
++// The assembly in win64_bridge.S is hand-written. Mac tests now cover
++// integer argument placement for host->guest call5/6 and guest->host
++// arities 5..8; nonvolatile-register preservation, mixed signatures,
++// callbacks, and target behavior remain separate obligations.
+ #ifndef CAP13_WIN64_BRIDGE_H
+ #define CAP13_WIN64_BRIDGE_H
+ 

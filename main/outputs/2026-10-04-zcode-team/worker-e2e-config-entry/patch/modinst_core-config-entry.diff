@@ -1,0 +1,640 @@
+--- a/composition/vendored/modinst_core.c
++++ b/modinst_core.c
+@@ -1526,7 +1526,612 @@
+     say("          [--no-auto-bundle]  (F-R1 bridge: with --mod, default composes bundles/<id>.mfb from the quarantine)");
+     say("  recover");
+ }
++
++/* ---- worker-e2e-config-entry: config-file-driven entry (G1 fallback) --------
++ * Implements worker-e2e-console-dry/E2E-CMD-SCHEMA.md sec 1-6, mirroring the
++ * host harness worker-e2e-staging-final/host-test/host_cmd_entry_test.py
++ * line-for-line (same bounded JSON subset, same allow/deny lists, same
++ * synthesized argv). Controller deltas receipted in
++ * outputs/2026-10-04-zcode-team/worker-e2e-config-entry/CONFIG-ENTRY-DESIGN.md:
++ *   - EX_CONFIG (6): file present but refused - distinct from EX_BAD (2),
++ *     which stays "no file at the slot" (sec 1: identical to today's bare
++ *     usage()) and "consume rename failed" (sec 6);
++ *   - on refusals where state_root.state itself validated, exactly ONE
++ *     {"event":"status","stage":"e2e-cmd","outcome":"refused",...} line to the
++ *     existing e2e-status.jsonl report path (no begin/end pair, no store
++ *     mutation, verb never executed). Parse-level failures with no valid
++ *     state dir log one stdout line only.
++ * Exit paths here RETURN (never the exit() macro - F-R2 routes that through
++ * e2e_status_end and a refusal must not leave a dangling end line).
++ * Imports: read_file/say/malloc/free/snprintf/ps5io_rename and the e2e_status
++ * API only - all already in the 116-symbol census; census delta target ZERO.
++ * Parse/validation memory (one <=4096-byte file) is intentionally live until
++ * process exit: the synthesized argv points into it for the dispatch. */
+ 
++#define E2E_CMD_PATH "/data/modbridge/intake/e2e-cmd.json"
++#define E2E_CMD_MAX 4096   /* file size cap, refused before parsing (sec 5) */
++#define E2E_ARGV_MAX 64    /* synthesized vector cap (sec 5) */
++#define EX_CONFIG 6        /* e2e-cmd present but refused (distinct code) */
++
++typedef enum { EJ_STR, EJ_INT, EJ_BOOL, EJ_OBJ, EJ_ARR } ej_kind;
++
++typedef struct ej_val ej_val;
++struct ej_val {
++    ej_kind kind;
++    char *s;        /* EJ_STR */
++    long i;         /* EJ_INT */
++    int b;          /* EJ_BOOL */
++    char *key;      /* member name when linked under an EJ_OBJ */
++    ej_val *child;  /* EJ_OBJ/EJ_ARR: first member/element */
++    ej_val *next;   /* next sibling */
++};
++
++static void ej_free(ej_val *v) {
++    while (v) {
++        ej_val *n = v->next;
++        ej_free(v->child);
++        free(v->s);
++        free(v->key);
++        free(v);
++        v = n;
++    }
++}
++
++typedef struct {
++    const char *p;
++    size_t i, n;
++    const char *err;   /* one-line refusal reason, set at the failure site */
++} ej_cur;
++
++/* Strict UTF-8 over the whole file (host harness: raw.decode("utf-8")). */
++static int ej_utf8_ok(const char *p, size_t n) {
++    size_t i = 0;
++    while (i < n) {
++        unsigned char b = (unsigned char)p[i];
++        if (b < 0x80) { i++; continue; }
++        if (b >= 0xc2 && b <= 0xdf) {
++            if (i + 1 >= n || (unsigned char)p[i+1] >> 6 != 2) return 0;
++            i += 2;
++        } else if (b == 0xe0) {
++            if (i + 2 >= n) return 0;
++            if ((unsigned char)p[i+1] < 0xa0 || (unsigned char)p[i+1] > 0xbf ||
++                (unsigned char)p[i+2] >> 6 != 2) return 0;
++            i += 3;
++        } else if ((b >= 0xe1 && b <= 0xec) || b == 0xee || b == 0xef) {
++            if (i + 2 >= n || (unsigned char)p[i+1] >> 6 != 2 ||
++                (unsigned char)p[i+2] >> 6 != 2) return 0;
++            i += 3;
++        } else if (b == 0xed) {
++            if (i + 2 >= n || (unsigned char)p[i+1] < 0x80 || (unsigned char)p[i+1] > 0x9f ||
++                (unsigned char)p[i+2] >> 6 != 2) return 0;
++            i += 3;
++        } else if (b == 0xf0) {
++            if (i + 3 >= n) return 0;
++            if ((unsigned char)p[i+1] < 0x90 || (unsigned char)p[i+1] > 0xbf ||
++                (unsigned char)p[i+2] >> 6 != 2 || (unsigned char)p[i+3] >> 6 != 2) return 0;
++            i += 4;
++        } else if (b >= 0xf1 && b <= 0xf3) {
++            if (i + 3 >= n || (unsigned char)p[i+1] >> 6 != 2 ||
++                (unsigned char)p[i+2] >> 6 != 2 || (unsigned char)p[i+3] >> 6 != 2) return 0;
++            i += 4;
++        } else if (b == 0xf4) {
++            if (i + 3 >= n || (unsigned char)p[i+1] < 0x80 || (unsigned char)p[i+1] > 0x8f ||
++                (unsigned char)p[i+2] >> 6 != 2 || (unsigned char)p[i+3] >> 6 != 2) return 0;
++            i += 4;
++        } else return 0;   /* 0x80-0xbf continuation, 0xc0/0xc1 overlong, 0xf5-0xff */
++    }
++    return 1;
++}
++
++static void ej_ws(ej_cur *c) {
++    while (c->i < c->n && (c->p[c->i] == ' ' || c->p[c->i] == '\t' ||
++                           c->p[c->i] == '\r' || c->p[c->i] == '\n')) c->i++;
++}
++
++static int ej_peek(ej_cur *c) {
++    return c->i < c->n ? (unsigned char)c->p[c->i] : -1;
++}
++
++/* Sec 5 string: escapes limited to \" \\ \/ ; \uXXXX refuses; control <0x20
++ * refuses. Storage is one E2E_CMD_MAX+1 block - a string can never exceed
++ * the file it was parsed from. */
++static ej_val *ej_string(ej_cur *c) {
++    ej_val *v;
++    char *s;
++    if (ej_peek(c) != '"') { c->err = "expected '\"'"; return 0; }
++    c->i++;
++    s = (char *)malloc(E2E_CMD_MAX + 1);
++    if (!s) { c->err = "out of memory"; return 0; }
++    {
++        size_t len = 0;
++        for (;;) {
++            unsigned char ch;
++            if (c->i >= c->n) { free(s); c->err = "unterminated string"; return 0; }
++            ch = (unsigned char)c->p[c->i];
++            if (ch == '"') {
++                c->i++;
++                s[len] = 0;
++                break;
++            }
++            if (ch < 0x20) { free(s); c->err = "control char in string"; return 0; }
++            if (ch == '\\') {
++                unsigned char e;
++                c->i++;
++                if (c->i >= c->n) { free(s); c->err = "bad escape"; return 0; }
++                e = (unsigned char)c->p[c->i];
++                if (e == 'u') { free(s); c->err = "\\uXXXX escape refuses (sec 5)"; return 0; }
++                if (e != '"' && e != '\\' && e != '/') {
++                    free(s); c->err = "bad escape (only \\\" \\\\ \\/ legal)"; return 0;
++                }
++                ch = e;
++                c->i++;
++            } else c->i++;
++            s[len++] = (char)ch;
++        }
++    }
++    v = (ej_val *)calloc(1, sizeof *v);
++    if (!v) { free(s); c->err = "out of memory"; return 0; }
++    v->kind = EJ_STR;
++    v->s = s;
++    return v;
++}
++
++static ej_val *ej_new(ej_kind k) {
++    ej_val *v = (ej_val *)calloc(1, sizeof *v);
++    if (!v) return 0;
++    v->kind = k;
++    return v;
++}
++
++static ej_val *ej_value(ej_cur *c, int depth);
++
++/* Sec 5: one top-level object; object depth <= 2; arrays only as a top-level
++ * member value (mods); only true (false/null refuse); plain ints only;
++ * duplicate keys refuse. Mirrors rd_parse() byte-for-byte. */
++static ej_val *ej_value(ej_cur *c, int depth) {
++    int ch;
++    ej_ws(c);
++    ch = ej_peek(c);
++    if (ch < 0) { c->err = "unexpected end of input"; return 0; }
++    if (ch == '"') return ej_string(c);
++    if (ch == '{') {
++        ej_val *obj;
++        if (depth >= 2) { c->err = "object depth > 2 refuses (sec 5)"; return 0; }
++        c->i++;
++        obj = ej_new(EJ_OBJ);
++        if (!obj) { c->err = "out of memory"; return 0; }
++        ej_ws(c);
++        if (ej_peek(c) == '}') { c->i++; return obj; }
++        for (;;) {
++            ej_val *kn, *v, *tail;
++            char *k;
++            ej_ws(c);
++            kn = ej_string(c);          /* key: parse a string node, steal its s */
++            if (!kn) return 0;
++            k = kn->s;
++            free(kn);
++            for (tail = obj->child; tail; tail = tail->next)
++                if (!strcmp(tail->key, k)) {
++                    free(k);
++                    c->err = "duplicate key";
++                    return 0;
++                }
++            ej_ws(c);
++            if (ej_peek(c) != ':') {
++                free(k); c->err = "expected ':'"; return 0;
++            }
++            c->i++;
++            v = ej_value(c, depth + 1);
++            if (!v) { free(k); return 0; }
++            v->key = k;                 /* the value node IS the member */
++            if (obj->child) {
++                for (tail = obj->child; tail->next; tail = tail->next) ;
++                tail->next = v;
++            } else obj->child = v;
++            ej_ws(c);
++            if (ej_peek(c) == ',') { c->i++; continue; }
++            if (ej_peek(c) == '}') { c->i++; return obj; }
++            c->err = "expected ',' or '}'";
++            return 0;
++        }
++    }
++    if (ch == '[') {
++        ej_val *arr;
++        if (depth != 1) { c->err = "array only legal as a top-level member: mods (sec 5)"; return 0; }
++        c->i++;
++        arr = ej_new(EJ_ARR);
++        if (!arr) { c->err = "out of memory"; return 0; }
++        ej_ws(c);
++        if (ej_peek(c) == ']') { c->i++; return arr; }
++        for (;;) {
++            ej_val *el, *tail;
++            el = ej_value(c, depth + 1);
++            if (!el) return 0;
++            if (arr->child) {
++                for (tail = arr->child; tail->next; tail = tail->next) ;
++                tail->next = el;
++            } else arr->child = el;
++            ej_ws(c);
++            if (ej_peek(c) == ',') { c->i++; continue; }
++            if (ej_peek(c) == ']') { c->i++; return arr; }
++            c->err = "expected ',' or ']'";
++            return 0;
++        }
++    }
++    if (c->n - c->i >= 4 && !memcmp(c->p + c->i, "true", 4)) {
++        ej_val *v = ej_new(EJ_BOOL);
++        if (!v) { c->err = "out of memory"; return 0; }
++        v->b = 1;
++        c->i += 4;
++        return v;
++    }
++    if (c->n - c->i >= 5 && !memcmp(c->p + c->i, "false", 5)) {
++        c->err = "only bool true is allowed (sec 5)";
++        return 0;
++    }
++    if (c->n - c->i >= 4 && !memcmp(c->p + c->i, "null", 4)) {
++        c->err = "only bool true is allowed (sec 5)";
++        return 0;
++    }
++    if (ch == '-' || (ch >= '0' && ch <= '9')) {
++        size_t j = c->i + (ch == '-' ? 1 : 0);
++        long v;
++        if (j >= c->n || c->p[j] < '0' || c->p[j] > '9') { c->err = "bad int"; return 0; }
++        while (j < c->n && c->p[j] >= '0' && c->p[j] <= '9') j++;
++        /* bounded sign-aware decimal fold, saturating (NOT strtol: plain
++         * strtol is absent from the console 116-import census and would
++         * break the delta-zero target). Only schema==1 is ever accepted, so
++         * a saturated value refuses with the same "schema must be exactly 1"
++         * line - observably identical to the harness int() for all inputs.
++         * Cap 0x0CCCCCCCCCCCCCCC keeps v*10+9 inside long with no UB. */
++        {
++            size_t k = c->i + (ch == '-' ? 1 : 0);
++            v = 0;
++            while (k < j && v < 0x0CCCCCCCCCCCCCCCL) v = v * 10 + (c->p[k++] - '0');
++            if (ch == '-') v = -v;
++        }
++        c->i = j;
++        ej_ws(c);
++        if (c->i < c->n) {
++            int a = ej_peek(c);
++            if ((a >= '0' && a <= '9') || a == '.' || a == 'e' || a == 'E' ||
++                a == '+' || a == '-') { c->err = "only plain ints (sec 5)"; return 0; }
++        }
++        {
++            ej_val *n = ej_new(EJ_INT);
++            if (!n) { c->err = "out of memory"; return 0; }
++            n->i = v;
++            return n;
++        }
++    }
++    c->err = "unexpected byte";
++    return 0;
++}
++
++static ej_val *ej_member(ej_val *obj, const char *key) {
++    ej_val *m;
++    if (!obj || obj->kind != EJ_OBJ) return 0;
++    for (m = obj->child; m; m = m->next)
++        if (!strcmp(m->key, key)) return m;
++    return 0;
++}
++
++/* One-line refusal record on the existing report path (controller delta) plus
++ * the schema sec 6 stdout line and usage(). state_dir may be 0 (no validated
++ * report path yet). Returns `code` for the caller to return from main. */
++static int e2e_refuse(const char *state_dir, const char *reason, int code) {
++    if (state_dir) {
++        e2e_status_set_dir(state_dir);
++        e2e_status_event("e2e-cmd", "refused", reason);
++    }
++    say("error bad_request e2e-cmd: %s", reason);
++    usage();
++    return code;
++}
++
++static int e2e_verb_legal(const char *key, const char *verb) {
++    /* schema sec 3 mapping: options key -> legal verbs (eager refusal) */
++    if (!strcmp(key, "title"))
++        return !strcmp(verb, "register-mod") || !strcmp(verb, "prepare") ||
++               !strcmp(verb, "prepare-archive") || !strcmp(verb, "install") ||
++               !strcmp(verb, "simulate-runtime");
++    if (!strcmp(key, "id") || !strcmp(key, "bundle")) return !strcmp(verb, "register-mod");
++    if (!strcmp(key, "archive") || !strcmp(key, "quarantine") ||
++        !strcmp(key, "mod") || !strcmp(key, "no_auto_bundle"))
++        return !strcmp(verb, "prepare-archive");
++    if (!strcmp(key, "remove")) return !strcmp(verb, "install");
++    if (!strcmp(key, "rt_state")) return !strcmp(verb, "simulate-runtime");
++    if (!strcmp(key, "choices")) return !strcmp(verb, "prepare") || !strcmp(verb, "install");
++    return 0;
++}
++
++static const char *e2e_opt_flag(const char *key) {
++    if (!strcmp(key, "title")) return "--title";
++    if (!strcmp(key, "id")) return "--id";
++    if (!strcmp(key, "bundle")) return "--bundle";
++    if (!strcmp(key, "archive")) return "--archive";
++    if (!strcmp(key, "quarantine")) return "--quarantine";
++    if (!strcmp(key, "mod")) return "--mod";
++    if (!strcmp(key, "remove")) return "--remove";
++    if (!strcmp(key, "rt_state")) return "--rt-state";
++    if (!strcmp(key, "choices")) return "--choices";
++    if (!strcmp(key, "no_auto_bundle")) return "--no-auto-bundle";
++    return 0;
++}
++
++/* schema sec 6: consume BEFORE e2e_status_begin / verb execution */
++static int e2e_consume(const char *path) {
++    char consumed[LINE_MAX_ + 16];
++    if (snprintf(consumed, sizeof consumed, "%s.consumed", path) <= 0) return -1;
++    return ps5io_rename(path, consumed);   /* 0 ok; overwrites stale .consumed */
++}
++
++static const char *e2e_cmd_override_path(int argc, char **argv) {
++    int i;
++    for (i = 1; i + 1 < argc; ++i)
++        if (!strcmp(argv[i], "--e2e-cmd")) return argv[i + 1];   /* first wins */
++    return 0;   /* valueless --e2e-cmd stays legacy grammar (unknown flag) */
++}
++
++/* Returns -1 and replaces the caller's argc/argv with the synthesized vector
++ * on success; otherwise returns the exit code main must return (2 absent /
++ * consume failure, 6 refused). */
++static int e2e_cmd_entry(const char *path, const char *prog,
++                         int *out_argc, char ***out_argv) {
++    char *raw = 0;
++    size_t rawlen = 0;
++    ej_val *root = 0, *sr, *mods, *opts, *m;
++    const char *verb, *sd_report = 0;
++    char *joinbuf = 0;
++    char *synargv[E2E_ARGV_MAX];
++    char **heap_argv;
++    int n = 0, mods_present, i;
++    ej_cur c;
++
++    if (read_file(path, &raw, &rawlen)) {
++        /* sec 1/6: nothing executes, exit identical to today's bare usage() */
++        say("error bad_request e2e-cmd: file absent");
++        usage();
++        return EX_BAD;
++    }
++    if (rawlen >= 3 && (unsigned char)raw[0] == 0xef &&
++        (unsigned char)raw[1] == 0xbb && (unsigned char)raw[2] == 0xbf) {
++        free(raw);
++        return e2e_refuse(0, "BOM refuses (sec 5)", EX_CONFIG);
++    }
++    if (rawlen > E2E_CMD_MAX) {
++        free(raw);
++        return e2e_refuse(0, "file > 4096 bytes refuses before parsing (sec 5)", EX_CONFIG);
++    }
++    if (!ej_utf8_ok(raw, rawlen)) {
++        free(raw);
++        return e2e_refuse(0, "not valid UTF-8", EX_CONFIG);
++    }
++    c.p = raw; c.i = 0; c.n = rawlen; c.err = "parse error";
++    root = ej_value(&c, 0);
++    if (!root) {
++        char why[128];
++        snprintf(why, sizeof why, "parse error at byte %lu: %s",
++                 (unsigned long)c.i, c.err ? c.err : "invalid");
++        free(raw);
++        return e2e_refuse(0, why, EX_CONFIG);
++    }
++    ej_ws(&c);
++    if (c.i != c.n || root->kind != EJ_OBJ) {
++        ej_free(root); free(raw);
++        return e2e_refuse(0, root->kind != EJ_OBJ ? "top level must be one object (sec 5)"
++                                                  : "trailing bytes after top-level value",
++                          EX_CONFIG);
++    }
++
++    /* -- validation, mirroring host validate() order exactly --------------- */
++    for (m = root->child; m; m = m->next)
++        if (strcmp(m->key, "schema") && strcmp(m->key, "verb") &&
++            strcmp(m->key, "state_root") && strcmp(m->key, "mods") &&
++            strcmp(m->key, "options")) {
++            char why[192];
++            snprintf(why, sizeof why, "unknown top-level key '%s' (sec 6)", m->key);
++            ej_free(root); free(raw);
++            return e2e_refuse(0, why, EX_CONFIG);
++        }
++    m = ej_member(root, "schema");
++    if (!m || m->kind != EJ_INT || m->i != 1) {
++        ej_free(root); free(raw);
++        return e2e_refuse(0, "schema must be exactly 1 (sec 2)", EX_CONFIG);
++    }
++    m = ej_member(root, "verb");
++    if (!m || m->kind != EJ_STR) {
++        ej_free(root); free(raw);
++        return e2e_refuse(0, "verb must be string", EX_CONFIG);
++    }
++    verb = m->s;
++    if (!strcmp(verb, "make-bundle") || !strcmp(verb, "download")) {
++        char why[64];
++        snprintf(why, sizeof why, "deny-listed verb '%s' (sec 2)", verb);
++        ej_free(root); free(raw);
++        return e2e_refuse(0, why, EX_CONFIG);
++    }
++    if (strcmp(verb, "records") && strcmp(verb, "register-mod") &&
++        strcmp(verb, "prepare") && strcmp(verb, "prepare-archive") &&
++        strcmp(verb, "install") && strcmp(verb, "simulate-runtime") &&
++        strcmp(verb, "recover")) {
++        char why[192];
++        snprintf(why, sizeof why, "verb '%s' not in allow-list (sec 2)", verb);
++        ej_free(root); free(raw);
++        return e2e_refuse(0, why, EX_CONFIG);
++    }
++    sr = ej_member(root, "state_root");
++    {
++        int cnt = 0;
++        ej_val *e;
++        if (sr && sr->kind == EJ_OBJ)
++            for (e = sr->child; e; e = e->next) cnt++;
++        if (!sr || sr->kind != EJ_OBJ || cnt != 2 ||
++            !ej_member(sr, "state") || !ej_member(sr, "roots")) {
++            ej_free(root); free(raw);
++            return e2e_refuse(0, "state_root must be an object with exactly state,roots (sec 2)",
++                              EX_CONFIG);
++        }
++    }
++    for (m = sr->child; m; m = m->next) {
++        if (m->kind != EJ_STR || m->s[0] != '/' || strlen(m->s) > LINE_MAX_) {
++            ej_free(root); free(raw);
++            return e2e_refuse(0, "state_root.state/.roots must be absolute strings <= LINE_MAX_ (sec 2)",
++                              EX_CONFIG);
++        }
++    }
++    /* state dir validated: report-path logging now possible on later refusals */
++    sd_report = ej_member(sr, "state")->s;
++
++    mods = ej_member(root, "mods");
++    mods_present = mods != 0;
++    if (mods_present) {
++        ej_val *e;
++        if (mods->kind != EJ_ARR) {
++            ej_free(root); free(raw);
++            return e2e_refuse(sd_report, "mods must be array (sec 2)", EX_CONFIG);
++        }
++        if (strcmp(verb, "prepare") && strcmp(verb, "install")) {
++            char why[128];
++            snprintf(why, sizeof why, "mods present with verb '%s' refuses (sec 2)", verb);
++            ej_free(root); free(raw);
++            return e2e_refuse(sd_report, why, EX_CONFIG);
++        }
++        {
++            int cnt = 0;
++            for (e = mods->child; e; e = e->next) cnt++;
++            if (cnt > 16) {
++                ej_free(root); free(raw);
++                return e2e_refuse(sd_report, "mods > 16 entries (sec 3)", EX_CONFIG);
++            }
++        }
++        for (e = mods->child; e; e = e->next)
++            if (e->kind != EJ_STR || !e->s[0] || strlen(e->s) > LINE_MAX_) {
++                ej_free(root); free(raw);
++                return e2e_refuse(sd_report, "mods entries must be non-empty strings <= LINE_MAX_",
++                                  EX_CONFIG);
++            }
++    }
++    opts = ej_member(root, "options");
++    if (opts) {
++        ej_val *e;
++        int cnt = 0;
++        if (opts->kind != EJ_OBJ) {
++            ej_free(root); free(raw);
++            return e2e_refuse(sd_report, "options must be object (sec 2)", EX_CONFIG);
++        }
++        for (e = opts->child; e; e = e->next) cnt++;
++        if (cnt > 16) {
++            ej_free(root); free(raw);
++            return e2e_refuse(sd_report, "options > 16 keys (sec 3)", EX_CONFIG);
++        }
++        for (e = opts->child; e; e = e->next) {
++            if (!strcmp(e->key, "crash_at") || !strcmp(e->key, "cancel_at") ||
++                !strcmp(e->key, "cancel_after") || !strcmp(e->key, "variant") ||
++                !strcmp(e->key, "defaults") || !strcmp(e->key, "state_name") ||
++                !strcmp(e->key, "code") || !strcmp(e->key, "detail")) {
++                char why[160];
++                snprintf(why, sizeof why, "deny-listed option '%s' (sec 2)", e->key);
++                ej_free(root); free(raw);
++                return e2e_refuse(sd_report, why, EX_CONFIG);
++            }
++            if (!e2e_opt_flag(e->key)) {
++                char why[192];
++                snprintf(why, sizeof why, "unknown options key '%s' (sec 6)", e->key);
++                ej_free(root); free(raw);
++                return e2e_refuse(sd_report, why, EX_CONFIG);
++            }
++            if (!e2e_verb_legal(e->key, verb)) {
++                char why[224];
++                snprintf(why, sizeof why, "options.%s illegal for verb '%s' (eager refusal, sec 3)",
++                         e->key, verb);
++                ej_free(root); free(raw);
++                return e2e_refuse(sd_report, why, EX_CONFIG);
++            }
++            if (!strcmp(e->key, "no_auto_bundle")) {
++                if (e->kind != EJ_BOOL || !e->b) {
++                    ej_free(root); free(raw);
++                    return e2e_refuse(sd_report, "no_auto_bundle accepts bool true only (sec 5)",
++                                      EX_CONFIG);
++                }
++            } else {
++                if (e->kind != EJ_STR || !e->s[0] || strlen(e->s) > LINE_MAX_) {
++                    char why[192];
++                    snprintf(why, sizeof why, "options.%s must be a non-empty string <= LINE_MAX_",
++                             e->key);
++                    ej_free(root); free(raw);
++                    return e2e_refuse(sd_report, why, EX_CONFIG);
++                }
++            }
++        }
++    }
++    if (mods_present && opts && ej_member(opts, "remove")) {
++        ej_free(root); free(raw);
++        return e2e_refuse(sd_report, "mods together with options.remove refuses (sec 3)",
++                          EX_CONFIG);
++    }
++
++    /* -- consume, then synthesize the argv (sec 3 mechanical mapping) ------ */
++    if (e2e_consume(path)) {
++        ej_free(root); free(raw);
++        say("error e2e-cmd consume failed");
++        usage();
++        return EX_BAD;   /* sec 6 verbatim; verb NOT executed */
++    }
++
++    synargv[n++] = (char *)prog;
++    synargv[n++] = (char *)verb;
++    synargv[n++] = "--state";
++    synargv[n++] = (char *)ej_member(sr, "state")->s;
++    synargv[n++] = "--roots";
++    synargv[n++] = (char *)ej_member(sr, "roots")->s;
++    if (mods_present) {
++        ej_val *e;
++        size_t total = 0;
++        char *w;
++        for (e = mods->child; e; e = e->next) total += strlen(e->s) + 1;
++        joinbuf = (char *)malloc(total + 1);
++        if (!joinbuf) { ej_free(root); free(raw); return EX_IO; }
++        w = joinbuf;
++        for (e = mods->child; e; e = e->next) {
++            size_t l = strlen(e->s);
++            if (w != joinbuf) *w++ = ',';
++            memcpy(w, e->s, l);
++            w += l;
++        }
++        *w = 0;
++        synargv[n++] = "--mods";
++        synargv[n++] = joinbuf;
++    }
++    /* fixed key order (host synth_argv): title,id,bundle,archive,quarantine,
++     * mod,remove,rt_state,choices, then value-less --no-auto-bundle */
++    {
++        static const char *order[] = { "title", "id", "bundle", "archive", "quarantine",
++                                       "mod", "remove", "rt_state", "choices",
++                                       "no_auto_bundle" };
++        size_t k;
++        for (k = 0; k < sizeof order / sizeof order[0]; ++k) {
++            ej_val *e = opts ? ej_member(opts, order[k]) : 0;
++            if (!e) continue;
++            if (!strcmp(order[k], "no_auto_bundle")) {
++                synargv[n++] = "--no-auto-bundle";
++            } else {
++                synargv[n++] = (char *)e2e_opt_flag(order[k]);
++                synargv[n++] = e->s;
++            }
++        }
++    }
++    synargv[n] = 0;
++    heap_argv = (char **)malloc((size_t)(n + 1) * sizeof *heap_argv);
++    if (!heap_argv) { free(joinbuf); ej_free(root); free(raw); return EX_IO; }
++    for (i = 0; i <= n; ++i) heap_argv[i] = synargv[i];
++    /* raw/tree/joinbuf stay live: heap_argv points into them (bounded by the
++     * 4096-byte file); freed at process exit per schema sec 5 */
++    *out_argc = n;
++    *out_argv = heap_argv;
++    return -1;
++}
++
+ int main(int argc, char **argv) {
+     const char *cmd = 0, *title = 0, *mods = 0, *remove = 0, *id = 0, *bundle = 0,
+                *defaults = 0, *choices = 0, *statedir = 0, *rtstate = 0, *detail = 0,
+@@ -1542,6 +2147,24 @@
+         return EX_OK;
+     }
+ 
++    /* worker-e2e-config-entry: schema sec 1 entry rule. argc<2 (bare dispatch:
++     * the console loader forwards no arguments) consults the compile-time
++     * fixed path; the explicit override slot `--e2e-cmd FILE` (first
++     * occurrence, value required) runs the IDENTICAL validate/consume/
++     * synthesize rule against FILE — this is the host harness's entry point
++     * and a controller-side manual trigger. Without the flag and with
++     * argc>=2 the entry is never consulted: legacy argv wins and a leftover
++     * cmd file stays untouched (schema sec 6). */
++    { const char *e2e_path = e2e_cmd_override_path(argc, argv);
++      if (argc < 2 || e2e_path) {
++          int nargc; char **nargv;
++          int erc = e2e_cmd_entry(argc < 2 ? E2E_CMD_PATH : e2e_path,
++                                  argc > 0 ? argv[0] : "modbridge-installer",
++                                  &nargc, &nargv);
++          if (erc >= 0) return erc;   /* refused/absent: verb NOT executed */
++          argc = nargc; argv = nargv;
++      } }
++
+     for (i = 1; i < argc; ++i) {
+         if (!strcmp(argv[i], "--state") && i + 1 < argc) { statedir = argv[++i]; }
+         else if (!strcmp(argv[i], "--roots") && i + 1 < argc) { g_roots = argv[++i]; }

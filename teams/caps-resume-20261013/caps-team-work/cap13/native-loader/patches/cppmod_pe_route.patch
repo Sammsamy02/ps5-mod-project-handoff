@@ -1,0 +1,47 @@
+# cppmod_pe_route.patch -- OPTIONAL host-side routing for the cap13 PE route.
+#
+# PROPOSAL ONLY. The primary integration needs NO host edit: the manifest
+# names `dlls/pe_adapter.sprx` (an ABI-v1 module) and the existing loader
+# path is untouched. This patch is the ALTERNATIVE for an integrator who
+# prefers routing inside CppMod: when the dlls folder holds the original
+# `main.dll` (PE bytes) plus our adapter, the adapter is opened instead and
+# told where the original DLL lives. The PE refusal for direct PE loads
+# REMAINS in CppModModule -- this patch never maps PE bytes in the host.
+#
+# Base: what/outputs/2026-10-08-l26-runtime/typescan-r4/candidate/src/Mod/CppMod.cpp
+# Apply decision belongs to Claude (integrator). Not built, not tested.
+--- a/src/Mod/CppMod.cpp
++++ b/src/Mod/CppMod.cpp
+@@ -129,9 +129,17 @@
+             // Keep the existing mod layout. A binary adapter must supply a
+             // native artifact here; the native module owner explicitly refuses Windows PE.
+             m_dlls_path = m_mod_path / "dlls";
++// [CAP13] PE route: when the folder holds the ORIGINAL Windows DLL plus our
++// pe_adapter.sprx, open the adapter as the platform module and pass the
++// original DLL's path via the conventional env-free side channel (M1: an
++// mbm_host_v1 extension row or a per-mod setup call decided by the
++// integrator). The host still never touches PE bytes; the MZ refusal below
++// and in CppModModule stays exactly as it is.
++#ifdef CAP13_PE_ROUTE
++            const bool has_pe_adapter = std::filesystem::exists(m_dlls_path / "pe_adapter.sprx");
++            const bool has_original_dll = std::filesystem::exists(m_dlls_path / "main.dll");
++#endif
+ #ifdef __PROSPERO__
+             // [CAP09 F1] error_code lookup (staged NativeCppModPath.hpp): an OS
+             // error refuses this mod with its error number instead of throwing
+             // a filesystem_error.
+@@ -146,6 +154,12 @@
+                 throw std::runtime_error("Native C++ mod dlls folder contains no PRX, SPRX, or legacy module candidate");
+             const auto dll_path = *selected;
+ #else
++// [CAP13] prefer the adapter over any native candidate when both exist:
++#ifdef CAP13_PE_ROUTE
++            if (has_pe_adapter && has_original_dll)
++            {
++                dll_path = m_dlls_path / "pe_adapter.sprx";
++            }
++            else
++#endif
+             auto dll_path = m_dlls_path / "main.dll";
+             if (!std::filesystem::exists(dll_path))
+                 dll_path = m_dlls_path / (Unicode::EncodeUtf8(m_mod_name) + ".dll");

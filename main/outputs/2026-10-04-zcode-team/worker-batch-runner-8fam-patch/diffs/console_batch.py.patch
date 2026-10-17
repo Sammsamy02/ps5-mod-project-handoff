@@ -1,0 +1,719 @@
+--- console_batch.py.orig	2026-10-04 21:48:20
++++ /WORKSPACE/.codex/worktrees/translation-core/what/outputs/2026-10-04-zcode-team/worker-console-batch-runner/console_batch.py	2026-10-04 21:59:20
+@@ -3,9 +3,13 @@
+ """
+ console_batch.py — single controller for the staged console test plans.
+ 
+-Built by worker-console-batch-runner, 2026-10-04. This tool executes, step by
+-step with gates, the plans frozen by:
++Built by worker-console-batch-runner, 2026-10-04; extended the same day by
++worker-batch-runner-8fam-patch (ownership transferred in-place) with the
++8-family stage. This tool executes, step by step with gates, the plans frozen by:
++  * worker-8fam-console-prep/CONSOLE-STAGE-PLAN-8FAM.md (PREFERRED single DLL
++    run) + worker-dll-8fam-combined/EXPECTED-DELTA-8FAM.md
+   * worker-dll-7fam-stage-prep/CONSOLE-STAGE-PLAN-7FAM.md (+ EXPECTED-LEDGER-7FAM.md)
++    — kept as the documented FALLBACK attribution path, never run by default
+   * worker-e2e-console-stage-prep/CONSOLE-STAGE-PLAN.md (+ EXPECTED-LEDGER.md)
+     via worker-e2e-staging-final/STAGED-E2E-COMMANDS.md (the 13 cmd files)
+   * worker-record-sink-addon/STAGE-PLAN-QDRV1.md (ploader.ini =2 stage, BEFORE launch)
+@@ -15,11 +19,14 @@
+ 
+ Subcommands:
+   plan             dry-run: print every step, gate and exact command; NO execution
+-  dll7             7-family DLL payload-only stage (upload/check/readback/dispatch/ledger)
++  dll8             8-family DLL payload-only stage (upload/check/readback/dispatch/ledger) — PREFERRED
++  dll7             7-family DLL payload-only stage — FALLBACK attribution path only
+   e2e              E2E installer 15-dispatch stage 0..6 cycle with records baselines
+   stage-qdrv1      qdrv1 PRX stage + ploader.ini append + readback (game CLOSED, pre-launch)
+   game-evidence    post-launch evidence: post_launch_check + rung_check + CP0-CP7 checks
+-  all              recommended session order: dll7 -> e2e -> stage-qdrv1 -> game-evidence
++  all              recommended session order: dll8 -> e2e -> stage-qdrv1 -> game-evidence
++                   (`--dll 7` runs the dll7 fallback attribution path instead; EXACTLY ONE
++                   DLL stage per session — never both by default)
+   selftest         host/fixture tests of the tool logic (no console contact)
+ 
+ Safety model:
+@@ -69,6 +76,22 @@
+     "report_profile_path": "/data/modbridge-owned-dll-candidate.jsonl",
+ }
+ 
++# PREFERRED single DLL run (worker-8fam-console-prep/CONSOLE-STAGE-PLAN-8FAM.md;
++# identity re-verified on host 2026-10-04 by worker-batch-runner-8fam-patch:
++# sha256 + bytes EXACT match against the receipt and the artifact on disk).
++DLL8 = {
++    "elf": f"{T}/worker-dll-8fam-combined/out-sdk-composition/c3aba79f968a492b849e5ece2f009e8e/owned-dll-candidate.elf",
++    "receipt": f"{T}/worker-dll-8fam-combined/out-sdk-composition/c3aba79f968a492b849e5ece2f009e8e/receipt.json",
++    "sha": "792811911e773c9b07a47ba3b22bc5d290f9f3ab86056ddfc985cf25e6d804fb",
++    "bytes": 336552,
++    "build_id": "c3aba79f968a492b849e5ece2f009e8e",
++    "alias": "ALLFAM8_DLL_TEST.elf",
++    "payload_path": "/data/pldmgr/payloads/ALLFAM8_DLL_TEST/ALLFAM8_DLL_TEST.elf",
++    "results_path": "/data/modbridge-owned-dll-candidate.jsonl",
++    "existing_records": 36,  # dll8-first (recommended): appends at 37-40; 41-44 if the dll7 fallback ran first
++    "report_profile_path": "/data/modbridge-owned-dll-candidate.jsonl",
++}
++
+ E2E = {
+     "payload": f"{T}/worker-e2e-payload-build/build-r1/modbridge-installer.payload.elf",
+     "sha": "a21771f894dd43be3dc650b12ffa65ccdc6413d150c0b9fb338302836901a054",
+@@ -336,8 +359,212 @@
+             div.append("record%d: first_failure not all zeros: %r" % (n, ff))
+ 
+     return ("PASS" if not div else "FAIL"), details
++
++
++# --- 8FAM ledger (CONSOLE-STAGE-PLAN-8FAM.md + EXPECTED-DELTA-8FAM.md) -------
++
++# 9 counted family keys: the eight 7-family keys + seh64 (the 8th family).
++FAMILY_KEYS_8 = FAMILY_KEYS + ["seh64"]
++
++SEH64_FIXTURE_CODES = {
++    -130: "context probe failed — RtlCaptureContext route or frame sanity in the fixture (RIP/RSP insane)",
++    -131: "no in-image function entry — RtlLookupFunctionEntry returned nothing in-image (.pdata/.xdata unwind data not visible at runtime)",
++    -132: "RtlVirtualUnwind produced an insane caller frame — unwind math or the copied CONTEXT",
++    -133: "__C_specific_handler dispatch did not route the same-frame raise to the handler (returned instead of transferring, or handled != exactly once)",
++    -134: "guarded-state restore corrupted registers/nonvolatiles (integer guard words not intact)",
++    -135: "cross-frame unwind failed — __finally not run / handler not reached / unwound frames resumed; classic break is unwind-info registration order",
++    -136: "dynamic function-table registration path (RtlAddFunctionTable over a bridge/non-PE address) — lookup missed or base inexact",
++    -137: "deregistration/filter-state cleanup — table not gone after RtlRemoveFunctionTable, double-removal not refused, or unhandled-filter round-trip wrong",
++}
++
++FAMILY_RANGES_8 = FAMILY_RANGES + [((-137, -130), "seh64")]
++
++
++def triage_8fam(code):
++    """Map first_failure.stage to its family range / fixture meaning (8FAM ledger)."""
++    try:
++        c = int(code)
++    except (TypeError, ValueError):
++        return "non-numeric first_failure.stage: %r" % (code,)
++    for (lo, hi), name in FAMILY_RANGES_8:
++        if lo <= c <= hi:
++            if name == "seh64":
++                return "seh64 fixture %d: %s" % (c, SEH64_FIXTURE_CODES.get(c, "unknown"))
++            if name == "static_tls":
++                return "static_tls fixture %d: %s" % (c, TLS_FIXTURE_CODES.get(c, "unknown"))
++            return "%s fixture code %d" % (name, c)
++    return "code %d outside known fixture ranges" % c
++
++
++def verdict_8fam_records(text, build_id=None):
++    """Verify the 4 expected appended records for build c3aba79f... (8 families).
++
++    Oracle per EXPECTED-DELTA-8FAM.md: consumer_imports 90 (+8 SEH64 binds),
++    helper_imports 10, results [86,93], seh64 {enabled:1} from record1 onward,
++    memory.last.length 114688 (record2/seq2) -> 163840 (record3/seq3 FINAL;
++    the mapped image grew 334656 -> 336552 bytes). Positional expectation
++    (37-40 dll8-first, 41-44 after a dll7 fallback run) YIELDS to the hard
++    append-only invariant: 4 records appended after ALL existing, none modified.
++    """
++    build_id = build_id or DLL8["build_id"]
++    details = {"build_id": build_id, "records_found": 0, "appended_after_all_existing": None,
++               "divergences": [], "triage": [], "notes": []}
++    lines = [ln for ln in text.splitlines() if ln.strip()]
++    recs = []
++    for i, ln in enumerate(lines):
++        obj = None
++        try:
++            obj = json.loads(ln)
++        except Exception:
++            continue
++        if isinstance(obj, dict) and obj.get("build_id") == build_id:
++            recs.append((i, obj, ln))
++    details["records_found"] = len(recs)
++    if len(recs) != 4:
++        details["divergences"].append(
++            "expected exactly 4 records for build %s, found %d (ledger: 0 => never ran; "
++            "1 => crash between phase-1 and stage 2 [NOT the import set — it is set-identical "
++            "to console-passed 133c5e9e; suspect dir-3 EXCEPTION admission / .ehflags unwind "
++            "tables]; 2 => hang/crash in the stage 55/56 dual-owner window [static TLS then "
++            "SEH64 — module_cause/detail names which])" % (build_id, len(recs)))
++        if recs:
++            details["triage"].append("partial run — see EXPECTED-DELTA-8FAM failure signatures")
++        return "FAIL", details
++    # Append-only hard invariant: the 4 records must be contiguous at the END of the file
++    idxs = [i for i, _, _ in recs]
++    appended_at_end = idxs == list(range(idxs[0], idxs[0] + 4)) and idxs[-1] == len(lines) - 1
++    details["appended_after_all_existing"] = appended_at_end
++    if not appended_at_end:
++        details["divergences"].append(
++            "c3aba79f records are not a contiguous block at end-of-file (positions %s of %d lines); "
++            "hard invariant 'appended after ALL existing records, none modified' violated — "
++            "the positional expectation (37-40 / 41-44) yields to this invariant" % (idxs, len(lines)))
++    else:
++        details["notes"].append("appended at file positions %d-%d (%s)" % (
++            idxs[0] + 1, idxs[-1] + 1,
++            "expected: dll8-first" if idxs[0] == 36 else
++            "expected: dll7 fallback ran first" if idxs[0] == 40 else
++            "off the positional expectation — another authorized run landed in between; "
++            "append-only invariant still satisfied"))
++    div = details["divergences"]
+ 
++    def chk(i_obj, path, expected, label=None):
++        _, obj, _ = i_obj
++        ok, v = get_path(obj, path)
++        if not ok:
++            div.append("%s: key %s MISSING (expected %r)" % (label, path, expected))
++        elif v != expected:
++            div.append("%s: %s = %r, expected %r" % (label, path, v, expected))
+ 
++    r0, r1, r2, r3 = recs[0], recs[1], recs[2], recs[3]
++
++    # Build-frame + sequence/phase for all
++    for n, rec in enumerate((r0, r1, r2, r3)):
++        chk(rec, "marker", "modbridge.owned-dll", "record%d" % n)
++        chk(rec, "schema", 1, "record%d" % n)
++        chk(rec, "sequence", n, "record%d" % n)
++        chk(rec, "phase", [1, 2, 3, 5][n], "record%d" % n)
++
++    # Record 0 — census-zero bootstrap
++    chk(r0, "entry.enabled", 0, "record0")
++    chk(r0, "execution.stage", 0, "record0")
++    chk(r0, "results", [0, 0], "record0")
++    chk(r0, "cleanup", {"pending": 0, "retired": 0}, "record0")
++    for fam in FAMILY_KEYS_8:
++        if fam in r0[1]:
++            div.append("record0: family key %r present — census-zero record must carry NO family keys" % fam)
++
++    # Record 1 — attach stage, family census visible (seh64 for the FIRST time on target)
++    chk(r1, "execution.stage", 2, "record1")
++    chk(r1, "execution.started", 1, "record1")
++    chk(r1, "execution.run_attempted", 0, "record1")
++    chk(r1, "execution.completed", 0, "record1")
++    chk(r1, "entry.enabled", 1, "record1")
++    chk(r1, "clock.enabled", 1, "record1")
++    chk(r1, "worker.enabled", 1, "record1")
++    chk(r1, "cleanup", {"pending": 1, "retired": 0}, "record1")
++    chk(r1, "delivery.file_records", 1, "record1")
++    for fam in FAMILY_KEYS_8:
++        ok, v = get_path(r1[1], fam)
++        if not ok:
++            div.append("record1: family key %r MISSING (seh64 appears on target for the FIRST time here; "
++                       "a stale ALLFAM7 artifact would show 82 imports / no seh64 — re-check the "
++                       "readback hash first)" % fam)
++        elif v != {"enabled": 1}:
++            div.append("record1: %s = %r, expected {\"enabled\":1}" % (fam, v))
++
++    # Record 2 — run complete (8-family oracle values)
++    chk(r2, "execution.stage", 9, "record2")
++    chk(r2, "execution.run_attempted", 1, "record2")
++    chk(r2, "execution.completed", 1, "record2")
++    chk(r2, "execution.dll_calls_started", 3, "record2")
++    chk(r2, "execution.dll_calls_returned", 3, "record2")
++    chk(r2, "entry.attach_calls", [1, 1], "record2")
++    chk(r2, "entry.attach_result", [7, 7], "record2")
++    chk(r2, "entry.detach_calls", [0, 1], "record2")
++    chk(r2, "entry.detach_result", [0, 0], "record2")
++    chk(r2, "entry.contract_errors", 0, "record2")
++    chk(r2, "clock.session_begins", [1, 1], "record2")
++    chk(r2, "clock.session_ends", [0, 1], "record2")
++    chk(r2, "worker.calls_started", 4, "record2")
++    chk(r2, "worker.calls_returned", 4, "record2")
++    chk(r2, "worker.begin", [5, 1, 258, 259], "record2")
++    chk(r2, "worker.result", [2166572391, 1234605616436508552, 3782448555, 0], "record2")
++    chk(r2, "counts.consumer_imports", 90, "record2")
++    chk(r2, "counts.helper_imports", 10, "record2")
++    chk(r2, "counts.source_acquires", [1, 1], "record2")
++    chk(r2, "counts.source_releases", [0, 1], "record2")
++    chk(r2, "results", [86, 93], "record2")
++    chk(r2, "static_tls", {"enabled": 1}, "record2")
++    chk(r2, "seh64", {"enabled": 1}, "record2")
++    chk(r2, "memory.owner_status", 0, "record2")
++    chk(r2, "memory.last.operation", 3, "record2")
++    chk(r2, "memory.last.native_result", 0, "record2")
++    chk(r2, "memory.last.offset", 0, "record2")
++    chk(r2, "memory.last.length", 114688, "record2")
++    chk(r2, "delivery.first_file_error", 0, "record2")
++    chk(r2, "delivery.file_records", 2, "record2")
++    chk(r2, "delivery.stdout_records", 1, "record2")
++    if get_path(r2[1], "counts.consumer_imports") == (True, 82):
++        details["notes"].append("consumer_imports 82 = the ALLFAM7/7-family bind shape — stale artifact "
++                                "under the new alias or a bind-chain regression; 88/89 => count which of "
++                                "the 8 SEH64 binds landed (host split oracle KERNEL32 73 / VCRUNTIME140 1)")
++    ok, v = get_path(r2[1], "delivery.first_stdout_error")
++    if ok and v == 32:
++        details["notes"].append("delivery stdout_error 32 with stdout_records 1 = console-only delivery "
++                                "channel status, present in every console run — NOT a failure")
++    elif ok and v != 0:
++        div.append("record2: delivery.first_stdout_error = %r (32 expected on console)" % v)
++
++    # Record 3 — FINAL record, pass/fail oracle (memory.last.length grows to the seq3 value)
++    chk(r3, "execution.stage", 11, "record3")
++    chk(r3, "entry.detach_calls", [1, 1], "record3")
++    chk(r3, "entry.detach_result", [0, 0], "record3")
++    chk(r3, "entry.attach_result", [7, 7], "record3")
++    chk(r3, "entry.contract_errors", 0, "record3")
++    chk(r3, "clock.session_ends", [1, 1], "record3")
++    chk(r3, "counts.source_releases", [1, 1], "record3")
++    chk(r3, "cleanup", {"pending": 0, "retired": 1}, "record3")
++    chk(r3, "results", [86, 93], "record3")
++    chk(r3, "counts.consumer_imports", 90, "record3")
++    chk(r3, "counts.helper_imports", 10, "record3")
++    chk(r3, "memory.last.length", 163840, "record3")
++    chk(r3, "delivery.first_file_error", 0, "record3")
++    chk(r3, "delivery.file_records", 3, "record3")
++
++    # first_failure all zeros on records 2 and 3 + triage naming (-130..-137 SEH64 map)
++    for n, rec in ((2, r2), (3, r3)):
++        ff = rec[1].get("first_failure")
++        if not isinstance(ff, dict) or any(
++                ff.get(k) not in (0, None) for k in ("stage", "native_status", "windows_error", "module_cause")):
++            stage = ff.get("stage") if isinstance(ff, dict) else None
++            if isinstance(stage, int) and stage < 0:
++                details["triage"].append("record%d first_failure: %s" % (n, triage_8fam(stage)))
++            div.append("record%d: first_failure not all zeros: %r" % (n, ff))
++
++    return ("PASS" if not div else "FAIL"), details
++
++
+ # --- E2E ledger ------------------------------------------------------------
+ 
+ def L(lines):
+@@ -880,19 +1107,24 @@
+     return fn
+ 
+ 
+-# --- dll7 --------------------------------------------------------------------
++# --- dll7 / dll8 (one shared gate discipline; per-plan identity + ledger) ------
+ 
+-def build_dll7():
+-    fl = Flow("dll7")
+-    d = DLL7
+-    fl.step("dll7.0", "pre-flight local identity + receipt profile checks", "preflight",
+-            [gate_sha(d["elf"], d["sha"], d["bytes"]),
++def _dll_payload_flow(tag, d, plan_doc, ledger_doc, verdict_fn, verdict_gates,
++                      result_copy, verdict_file, receipt_file, preflight_receipt_file,
++                      receipt_status_name):
++    """The upload/check/readback==EXACTLY/dispatch-once/verdict gate chain shared
++    by the dll7 (fallback) and dll8 (preferred) payload stages, per their frozen
++    plans. Everything is parameterized; nothing here knows family specifics."""
++    fl = Flow(tag)
++    fl.step(tag + ".0", "pre-flight local identity + receipt profile checks", "preflight",
++            ["candidate identity table in %s re-verified before touching the console" % plan_doc,
++             gate_sha(d["elf"], d["sha"], d["bytes"]),
+              "receipt result_profile.path == %s (not /tmp — the /tmp-trap lesson: verify, do not assume)" % d["report_profile_path"],
+              "receipt flags: console_contact=false, target_execution=false, prx_created=false"],
+             ["shasum -a 256 %s" % d["elf"],
+              "stat -f %%z %s" % d["elf"],
+              "python3 -c 'read receipt.json, assert profile fields'"],
+-            preflight_fn([(d["elf"], d["sha"], d["bytes"])], "dll7"))
++            preflight_fn([(d["elf"], d["sha"], d["bytes"])], tag))
+ 
+     def receipt_check(ctx):
+         try:
+@@ -911,53 +1143,53 @@
+                 problems.append("receipt %s != false" % k)
+         if prof.get("build_id") != d["build_id"]:
+             problems.append("receipt build_id != %s" % d["build_id"])
+-        ctx.save("dll7-preflight-receipt-check.json", json.dumps(
++        ctx.save(preflight_receipt_file, json.dumps(
+             {"problems": problems, "status": r.get("status")}, indent=2))
+         if problems:
+             return "FAIL", "; ".join(problems)
+         return "PASS", "receipt profile clean (%s)" % r.get("status", "?")
+ 
+-    fl.step("dll7.0b", "receipt profile assertions (path /data, flags false, build_id)", "preflight",
+-            ["result_profile.path == /data/modbridge-owned-dll-candidate.jsonl",
++    fl.step(tag + ".0b", "receipt profile assertions (path /data, flags false, build_id)", "preflight",
++            ["result_profile.path == %s" % d["report_profile_path"],
+              "console_contact/target_execution/prx_created/downloaded_dll_executed all false",
+-             "result_profile.build_id == e72f5318…"],
++             "result_profile.build_id == %s…" % d["build_id"][:12]],
+             ["cat %s" % d["receipt"]], receipt_check)
+ 
+-    fl.step("dll7.1", "G0 manager reachability (else STOP — do not probe anything else)", "g0",
++    fl.step(tag + ".1", "G0 manager reachability (else STOP — do not probe anything else)", "g0",
+             ["GET %s/list_payloads -> HTTP 200" % HTTP],
+             ["curl -sS %s/list_payloads" % HTTP],
+-            curl_get(HTTP + "/list_payloads", outfile="list_payloads.dll7.json", name="G0 list_payloads"))
++            curl_get(HTTP + "/list_payloads", outfile="list_payloads.%s.json" % tag, name="G0 list_payloads"))
+ 
+-    fl.step("dll7.2", "Step 1 — upload ONCE as fresh alias ALLFAM7_DLL_TEST.elf", "upload",
++    fl.step(tag + ".2", "Step 1 — upload ONCE as fresh alias %s" % d["alias"], "upload",
+             ["fresh distinct display filename; no prior alias touched (history_preserved pattern)"],
+-            ["curl -sS -X POST \"%s/manage:upload?filename=ALLFAM7_DLL_TEST.elf\" --data-binary @%s" % (HTTP, d["elf"])],
++            ["curl -sS -X POST \"%s/manage:upload?filename=%s\" --data-binary @%s" % (HTTP, d["alias"], d["elf"])],
+             upload_once(d["alias"], d["elf"]))
+ 
+-    fl.step("dll7.3", "Step 2a — manage:check (ok / folder_exists / file_exists)", "verify",
++    fl.step(tag + ".3", "Step 2a — manage:check (ok / folder_exists / file_exists)", "verify",
+             ["response contains ok / folder_exists / file_exists for the new entry"],
+             ["curl -sS %s/manage:check" % HTTP],
+-            curl_get(HTTP + "/manage:check", outfile="manage_check.dll7.txt", expect_substr="ok", name="manage:check"))
++            curl_get(HTTP + "/manage:check", outfile="manage_check.%s.txt" % tag, expect_substr="ok", name="manage:check"))
+ 
+-    fl.step("dll7.4", "Step 2b — FTP readback identity gate (readback law)", "verify",
++    fl.step(tag + ".4", "Step 2b — FTP readback identity gate (readback law)", "verify",
+             ["readback sha256 == %s" % d["sha"],
+              "readback bytes == %d" % d["bytes"],
+              "ELF magic 7f 45 4c 46",
+              "on mismatch: STOP — never dispatch a bytes-divergent payload (f72 precedent)"],
+-            ["curl -sS %s%s -o %s" % (FTP, d["payload_path"], "<run-dir>/dll7-readback.elf"),
+-             "shasum -a 256 <run-dir>/dll7-readback.elf"],
+-            ftp_readback_verify(d["payload_path"], d["sha"], d["bytes"], "dll7-readback.elf"))
++            ["curl -sS %s%s -o %s" % (FTP, d["payload_path"], "<run-dir>/%s-readback.elf" % tag),
++             "shasum -a 256 <run-dir>/%s-readback.elf" % tag],
++            ftp_readback_verify(d["payload_path"], d["sha"], d["bytes"], "%s-readback.elf" % tag))
+ 
+     def dispatch_fn(ctx):
+         rc, out, err = run_cmd(ctx, ["curl", "-sS", "%s/loadpayload:%s" % (HTTP, d["payload_path"])],
+-                               "dispatch ALLFAM7_DLL_TEST", outfile="dispatch.dll7.txt")
++                               "dispatch %s" % d["alias"][:-4], outfile="dispatch.%s.txt" % tag)
+         if rc != 0:
+             return "FAIL", "dispatch curl rc=%d — exactly-one-dispatch law: do NOT re-send; reconcile first" % rc
+         ctx.save("dispatch-warning.txt",
+-                 "DISPATCH SENT EXACTLY ONCE for ALLFAM7_DLL_TEST. If results are ambiguous later, "
+-                 "reconcile — never re-dispatch (AGENTS.md).\n")
++                 "DISPATCH SENT EXACTLY ONCE for %s. If results are ambiguous later, "
++                 "reconcile — never re-dispatch (AGENTS.md).\n" % d["alias"][:-4])
+         return "PASS", "dispatched once; response: %s" % out[:80].replace("\n", " ")
+ 
+-    fl.step("dll7.5", "Step 3 — dispatch EXACTLY ONCE via pldmgr /loadpayload (game closed)", "dispatch",
++    fl.step(tag + ".5", "Step 3 — dispatch EXACTLY ONCE via pldmgr /loadpayload (game closed)", "dispatch",
+             ["payload-only state: game closed, game_launched=false, no ploader arm, no PRX-slot interaction",
+              "exactly one dispatch — never re-send on ambiguity; reconcile first"],
+             ["curl -sS \"%s/loadpayload:%s\"" % (HTTP, d["payload_path"])],
+@@ -970,57 +1202,103 @@
+         time.sleep(15)
+         return "PASS", "waited 15 s before the results readback"
+ 
+-    fl.step("dll7.6", "Step 4 — wait ~15 s (self-terminating profile: 4 phases, exits in seconds)", "dispatch",
++    fl.step(tag + ".6", "Step 4 — wait ~15 s (self-terminating profile: 4 phases, exits in seconds)", "dispatch",
+             ["if fewer than 4 new records after first read: wait 60 s, re-read ONCE, then stop — never re-dispatch"],
+             ["sleep 15"],
+             wait_fn)
+ 
+     def results_fn(ctx):
+         rc, out, err = run_cmd(ctx, ["curl", "-sS"] + CURL_TIMEOUT + [FTP + d["results_path"], "-o",
+-                                     os.path.join(ctx.run_dir, "allfam7-console-result.jsonl")],
++                                     os.path.join(ctx.run_dir, result_copy)],
+                                "readback results jsonl")
+         if rc != 0 and not ctx.dry:
+             return "FAIL", "results readback failed rc=%d" % rc
+         if ctx.dry:
+             return "PASS", "dry"
+-        text = open(os.path.join(ctx.run_dir, "allfam7-console-result.jsonl")).read()
+-        verdict, details = verdict_7fam_records(text)
++        text = open(os.path.join(ctx.run_dir, result_copy)).read()
++        verdict, details = verdict_fn(text)
+         details["expected_existing_records_before"] = d["existing_records"]
+-        ctx.save("allfam7-ledger-verdict.json", json.dumps({"verdict": verdict, "details": details}, indent=2, default=str))
++        ctx.save(verdict_file, json.dumps({"verdict": verdict, "details": details}, indent=2, default=str))
+         if verdict != "PASS":
+             return "FAIL", "ledger mismatch — divergent fields: %s" % details["divergences"][:4]
+-        return "PASS", "all 4 records match EXPECTED-LEDGER-7FAM (%s)" % (
++        return "PASS", "all 4 records match %s (%s)" % (
++            ledger_doc,
+             "appended after all existing records" if details["appended_after_all_existing"] else "append-only fallback assertion")
+ 
+-    fl.step("dll7.7", "Step 5 — readback results + EXPECTED-LEDGER-7FAM verdict", "verdict",
+-            ["exactly 4 new records for e72f5318…, sequences 0..3, phases [1,2,3,5], appended after the 36 existing records",
+-             "record1: all EIGHT family keys {\"enabled\":1} incl. static_tls (first time on target)",
+-             "record2: consumer_imports 82, helper_imports 10, worker.begin [5,1,258,259], worker.result oracle quadruple, results [86,93], memory.last.length 147456",
+-             "record3: stage 11, cleanup {pending:0,retired:1}, session_ends [1,1], first_failure all zeros",
+-             "console-only delta NOT a failure: delivery stdout_error 32 with stdout_records 1"],
+-            ["curl -sS %s%s -o <run-dir>/allfam7-console-result.jsonl" % (FTP, d["results_path"]),
+-             "python3 console_batch.py verdict against EXPECTED-LEDGER-7FAM.md"],
++    fl.step(tag + ".7", "Step 5 — readback results + %s verdict" % ledger_doc, "verdict",
++            verdict_gates,
++            ["curl -sS %s%s -o <run-dir>/%s" % (FTP, d["results_path"], result_copy),
++             "python3 console_batch.py verdict against %s" % ledger_doc],
+             results_fn)
+ 
+     def receipt_fn(ctx):
+         receipt = {
+-            "flow": "dll7", "plan": "CONSOLE-STAGE-PLAN-7FAM.md", "ledger": "EXPECTED-LEDGER-7FAM.md",
++            "flow": tag, "plan": plan_doc, "ledger": ledger_doc,
+             "build_id": d["build_id"], "alias": d["alias"], "artifact_sha256": d["sha"], "artifact_bytes": d["bytes"],
+-            "status": "ALLFAM7_DLL_TEST_TARGET_RUN_PASSED (only if dll7.7 PASS — see events.log)",
++            "status": "%s (only if %s.7 PASS — see events.log)" % (receipt_status_name, tag),
+             "dispatch_count": 1, "re_dispatched": False, "jsonl_left_intact": True,
+             "canonical_evidence_dir": "outputs/2026-10-04-zcode-controller/console/ (pass --run-root to write there)",
+         }
+-        ctx.save("allfam7-console-receipt.json", json.dumps(receipt, indent=2))
++        ctx.save(receipt_file, json.dumps(receipt, indent=2))
+         return "PASS", "receipt written (fill statuses from events.log; CURRENT-BUILD.md notes are a manual follow-up)"
+ 
+-    fl.step("dll7.8", "Step 5b — console receipt (allfam7-console-receipt.json) + result copy", "verdict",
++    fl.step(tag + ".8", "Step 5b — console receipt (%s) + result copy" % receipt_file, "verdict",
+             ["receipt JSON saved next to the result copy; JSONL left append-only intact",
+              "on ANY mismatch: freeze copy with expected_values_matched=false; NO re-dispatch, NO rebuild decision in-session"],
+-            ["write allfam7-console-receipt.json into the run dir"],
++            ["write %s into the run dir" % receipt_file],
+             receipt_fn)
+     return fl
++
++
++DLL7_VERDICT_GATES = [
++    "exactly 4 new records for e72f5318…, sequences 0..3, phases [1,2,3,5], appended after the 36 existing records",
++    "record1: all EIGHT family keys {\"enabled\":1} incl. static_tls (first time on target)",
++    "record2: consumer_imports 82, helper_imports 10, worker.begin [5,1,258,259], worker.result oracle quadruple, results [86,93], memory.last.length 147456",
++    "record3: stage 11, cleanup {pending:0,retired:1}, session_ends [1,1], first_failure all zeros",
++    "console-only delta NOT a failure: delivery stdout_error 32 with stdout_records 1",
++]
++
++
++def build_dll7():
++    """7-family DLL stage (ALLFAM7_DLL_TEST) — the documented FALLBACK
++    attribution path. Run explicitly and only per the CONSOLE-STAGE-PLAN-8FAM
++    fallback rule (SEH64-specific 8-family failure + remaining window budget);
++    never part of the default session."""
++    return _dll_payload_flow(
++        tag="dll7", d=DLL7,
++        plan_doc="CONSOLE-STAGE-PLAN-7FAM.md", ledger_doc="EXPECTED-LEDGER-7FAM.md",
++        verdict_fn=verdict_7fam_records, verdict_gates=DLL7_VERDICT_GATES,
++        result_copy="allfam7-console-result.jsonl", verdict_file="allfam7-ledger-verdict.json",
++        receipt_file="allfam7-console-receipt.json", preflight_receipt_file="dll7-preflight-receipt-check.json",
++        receipt_status_name="ALLFAM7_DLL_TEST_TARGET_RUN_PASSED")
+ 
+ 
++DLL8_VERDICT_GATES = [
++    "exactly 4 new records for c3aba79f…, sequences 0..3, phases [1,2,3,5], appended after ALL existing records "
++    "(positions 37-40 dll8-first; 41-44 if the dll7 fallback ran first — position yields to the append-only invariant)",
++    "record1: all NINE family keys {\"enabled\":1} incl. static_tls and seh64 (seh64 first time on target)",
++    "record2: consumer_imports 90 (= 82 + 8 SEH64 binds: 7 KERNEL32 + 1 VCRUNTIME140), helper_imports 10, "
++    "worker.begin [5,1,258,259], worker.result oracle quadruple, results [86,93], memory.last.length 114688",
++    "record3: stage 11, cleanup {pending:0,retired:1}, session_ends [1,1], memory.last.length 163840 (FINAL "
++    "memory.last oracle; mapped image grew 334656 -> 336552), first_failure all zeros",
++    "console-only delta NOT a failure: delivery stdout_error 32 with stdout_records 1",
++    "any first_failure.stage triages through the full 8-family range map incl. the NEW seh64 fixtures -130..-137",
++]
++
++
++def build_dll8():
++    """8-family DLL stage (ALLFAM8_DLL_TEST, build c3aba79f…) — the PREFERRED
++    single DLL run per CONSOLE-STAGE-PLAN-8FAM.md: same upload/check/readback/
++    dispatch-once gate chain as dll7, verdict against EXPECTED-DELTA-8FAM.md."""
++    return _dll_payload_flow(
++        tag="dll8", d=DLL8,
++        plan_doc="CONSOLE-STAGE-PLAN-8FAM.md", ledger_doc="EXPECTED-DELTA-8FAM.md",
++        verdict_fn=verdict_8fam_records, verdict_gates=DLL8_VERDICT_GATES,
++        result_copy="allfam8-console-result.jsonl", verdict_file="allfam8-ledger-verdict.json",
++        receipt_file="allfam8-console-receipt.json", preflight_receipt_file="dll8-preflight-receipt-check.json",
++        receipt_status_name="ALLFAM8_DLL_TEST_TARGET_RUN_PASSED")
++
++
+ # --- e2e ----------------------------------------------------------------------
+ 
+ def build_e2e():
+@@ -1760,14 +2038,36 @@
+             ["python3 console_batch.py game-evidence-receipt write"],
+             final_fn)
+     return fl
++
++
++# Session order (CONSOLE-STAGE-PLAN-8FAM "Sequencing"): EXACTLY ONE DLL stage
++# runs per session. dll8 (ALLFAM8_DLL_TEST) is the PREFERRED single run — a PASS
++# proves a strict superset of the 7-family run in the same budget. dll7
++# (ALLFAM7_DLL_TEST, plan/ledger frozen and unchanged) is the documented
++# FALLBACK attribution path: run it explicitly (--dll 7 / the dll7 subcommand)
++# ONLY if the 8-family run fails on a SEH64-specific surface and the window
++# still has budget. Never both by default.
++DEFAULT_DLL = "dll8"
++SELECTED_DLL = DEFAULT_DLL
++DLL_BUILDERS = {"dll7": build_dll7, "dll8": build_dll8}
+ 
+ 
+ def build_all():
++    dll_tag = SELECTED_DLL
++    if dll_tag == "dll8":
++        fallback_note = ("EXACTLY ONE DLL stage per session; dll7 is the documented fallback "
++                         "attribution path — run it explicitly only per the plan's fallback rule, "
++                         "never both by default.")
++    else:
++        fallback_note = ("This is the documented FALLBACK attribution session (chosen via --dll 7): "
++                         "EXACTLY ONE DLL stage runs; the preferred single DLL run remains dll8 "
++                         "(CONSOLE-STAGE-PLAN-8FAM). Never both by default.")
+     fl = Flow("all")
+-    fl.notes = ("Recommended single-session order (7fam plan Sequencing section): "
+-                "payload-only stages first in ONE game-closed window (dll7, then e2e), "
+-                "then stage-qdrv1, then the single UE4SS game session with evidence collection LAST.")
+-    for sub in (build_dll7, build_e2e, build_stage_qdrv1, build_game_evidence):
++    fl.notes = ("Recommended single-session order (CONSOLE-STAGE-PLAN-8FAM Sequencing): "
++                "payload-only stages first in ONE game-closed window (%s, then e2e), "
++                "then stage-qdrv1, then the single UE4SS game session with evidence collection LAST. "
++                "%s" % (dll_tag, fallback_note))
++    for sub in (DLL_BUILDERS[dll_tag], build_e2e, build_stage_qdrv1, build_game_evidence):
+         f = sub()
+         for st in f.steps:
+             st2 = dict(st)
+@@ -1776,7 +2076,7 @@
+     return fl
+ 
+ 
+-FLOWS = {"dll7": build_dll7, "e2e": build_e2e, "stage-qdrv1": build_stage_qdrv1,
++FLOWS = {"dll8": build_dll8, "dll7": build_dll7, "e2e": build_e2e, "stage-qdrv1": build_stage_qdrv1,
+          "game-evidence": build_game_evidence, "all": build_all}
+ 
+ 
+@@ -1816,7 +2116,33 @@
+                    "manage:check", "/data/modbridge-owned-dll-candidate.jsonl",
+                    "83ee2ae95268", "334656", "EXPECTED-LEDGER-7FAM"]:
+         check("dll7 anchor %r" % anchor[:40], anchor in d7)
++
++    ctx = Ctx(None, dry=True); FLOWS["dll8"]().run(ctx); d8 = "\n".join(ctx.events)
++    for anchor in ["manage:upload?filename=ALLFAM8_DLL_TEST.elf",
++                   "loadpayload:/data/pldmgr/payloads/ALLFAM8_DLL_TEST/ALLFAM8_DLL_TEST.elf",
++                   "manage:check", "/data/modbridge-owned-dll-candidate.jsonl",
++                   "792811911e77", "336552", "EXPECTED-DELTA-8FAM", "CONSOLE-STAGE-PLAN-8FAM",
++                   "consumer_imports 90", "memory.last.length 114688", "memory.last.length 163840",
++                   "-130..-137", "allfam8-console-receipt.json"]:
++        check("dll8 anchor %r" % anchor[:40], anchor in d8)
+ 
++    print("== selftest A2: session order — dll8-first, exactly ONE DLL stage ==")
++    saved_sel = SELECTED_DLL
++    fa = build_all()
++    ctx = Ctx(None, dry=True); fa.run(ctx)
++    ids = [st["id"] for st in fa.steps]
++    check("all default runs dll8 (never dll7)",
++          any(i.startswith("dll8/") for i in ids) and not any(i.startswith("dll7/") for i in ids))
++    check("all default order dll8 FIRST", ids[0].startswith("dll8/"), ids[0])
++    check("all notes name the fallback attribution path", "fallback attribution" in (fa.notes or ""))
++    globals()["SELECTED_DLL"] = "dll7"
++    fa = build_all()
++    ctx = Ctx(None, dry=True); fa.run(ctx)
++    ids = [st["id"] for st in fa.steps]
++    check("all --dll 7 runs dll7 (never dll8)",
++          any(i.startswith("dll7/") for i in ids) and not any(i.startswith("dll8/") for i in ids))
++    globals()["SELECTED_DLL"] = saved_sel
++
+     ctx = Ctx(None, dry=True); FLOWS["e2e"]().run(ctx); e2 = "\n".join(ctx.events)
+     for cmdf in ["recover.json", "stage0-records.json", "stage1-register.json", "stage2a-prepare-archive.json",
+                  "stage2b-1-register.json", "stage2b-2-register.json", "stage2b-3-prepare.json",
+@@ -1913,6 +2239,95 @@
+     check("7fam triage map -77 -> mutex", "mutex" in triage_7fam(-77))
+     check("7fam stdout_error32 note emitted", True)  # exercised in PASS fixture path above
+ 
++    print("== selftest B2: 8FAM verdict fixtures (EXPECTED-DELTA-8FAM oracle) ==")
++    base8 = json.loads(json.dumps(base))
++    base8["build_id"] = "c3aba79f968a492b849e5ece2f009e8e"
++
++    def rec8(seq, phase, **over):
++        r = json.loads(json.dumps(base8))
++        r["sequence"] = seq
++        r["phase"] = phase
++        for k, v in over.items():
++            if k == "_fams":
++                for f in FAMILY_KEYS_8:
++                    r[f] = {"enabled": 1}
++            else:
++                r[k] = v
++        return r
++
++    good2_8 = json.loads(json.dumps(good2))
++    good2_8["counts"] = dict(good2_8["counts"], consumer_imports=90)
++    good2_8["memory"] = dict(good2_8["memory"],
++                             last=dict(good2_8["memory"]["last"], length=114688))
++    good2_8["seh64"] = {"enabled": 1}
++    good3_8 = json.loads(json.dumps(good2_8))
++    good3_8.update({"execution": dict(good3_8["execution"], stage=11),
++                    "entry": dict(good3_8["entry"], detach_calls=[1, 1]),
++                    "clock": dict(good3_8["clock"], session_ends=[1, 1]),
++                    "counts": dict(good3_8["counts"], source_releases=[1, 1]),
++                    "cleanup": {"pending": 0, "retired": 1},
++                    "delivery": dict(good3_8["delivery"], file_records=3),
++                    "memory": dict(good3_8["memory"],
++                                   last=dict(good3_8["memory"]["last"], length=163840))})
++    r1_8 = rec8(1, 2, _fams=1, execution={"stage": 2, "started": 1, "run_attempted": 0, "completed": 0,
++                "dll_calls_started": 0, "dll_calls_returned": 0},
++                entry={"enabled": 1}, clock={"enabled": 1},
++                worker={"enabled": 1, "calls_started": 0, "calls_returned": 0},
++                cleanup={"pending": 1, "retired": 0}, delivery={"file_records": 1}, first_failure={})
++    pass8_text = "\n".join(json.dumps(x) for x in
++                           (rec8(0, 1), r1_8, rec8(2, 3, **good2_8), rec8(3, 5, **good3_8)))
++    v, d = verdict_8fam_records(pass8_text)
++    check("8fam PASS fixture (bare 4 records)", v == "PASS", str(d["divergences"][:3]))
++    prior36 = [{"marker": "modbridge.owned-dll", "schema": 1, "build_id": "133c5e9e59f24c2fb57e7e3422c665a1",
++                "sequence": i % 4, "phase": [1, 2, 3, 5][i % 4]} for i in range(36)]
++    full8_text = "\n".join([json.dumps(x) for x in prior36] + pass8_text.splitlines())
++    v, d = verdict_8fam_records(full8_text)
++    check("8fam PASS fixture (full transcript, dll8-first)", v == "PASS", str(d["divergences"][:3]))
++    check("8fam PASS fixture notes positions 37-40 (dll8-first)",
++          any("37-40" in n and "dll8-first" in n for n in d["notes"]), str(d["notes"]))
++
++    def fail8(name, mutate, triage_needle=None):
++        lines = [json.loads(x) for x in pass8_text.splitlines()]
++        mutate(lines)
++        v, d = verdict_8fam_records("\n".join(json.dumps(x) for x in lines))
++        check("8fam FAIL fixture: %s" % name, v == "FAIL", "verdict=%s" % v)
++        if triage_needle:
++            check("8fam triage names %r" % triage_needle,
++                  any(triage_needle in t for t in d["triage"]), str(d["triage"]))
++        return d
++
++    fail8("consumer_imports 82 (stale ALLFAM7 artifact shape)",
++          lambda ls: ls[2].__setitem__("counts", dict(ls[2]["counts"], consumer_imports=82)))
++    fail8("consumer_imports 88 (partial SEH64 bind chain)",
++          lambda ls: ls[3].__setitem__("counts", dict(ls[3]["counts"], consumer_imports=88)))
++    fail8("helper_imports drift (must stay 10)",
++          lambda ls: ls[2].__setitem__("counts", dict(ls[2]["counts"], helper_imports=12)))
++    fail8("memory.last.length stale 7fam value 147456 at seq2",
++          lambda ls: ls[2]["memory"].__setitem__("last", dict(ls[2]["memory"]["last"], length=147456)))
++    fail8("final memory.last oracle lost (163840 -> 114688 at seq3)",
++          lambda ls: ls[3]["memory"].__setitem__("last", dict(ls[3]["memory"]["last"], length=114688)))
++    fail8("seh64 key missing at record1 (stale ALLFAM artifact)",
++          lambda ls: ls[1].pop("seh64"))
++    fail8("census-zero carries seh64", lambda ls: ls[0].__setitem__("seh64", {"enabled": 1}))
++    fail8("first_failure -133",
++          lambda ls: ls[2].__setitem__("first_failure", {"stage": -133, "native_status": 0,
++                                                         "windows_error": 0, "module_cause": 0}),
++          triage_needle="__C_specific_handler")
++    check("8fam triage map -135 names registration order", "registration order" in triage_8fam(-135))
++    check("8fam triage map -136 names RtlAddFunctionTable", "RtlAddFunctionTable" in triage_8fam(-136))
++    check("8fam triage still maps 7fam ranges (-122)", "same-thread idempotence" in triage_8fam(-122))
++    check("8fam triage rejects foreign code -140", "outside known fixture ranges" in triage_8fam(-140))
++
++    # Fallback-order positional case: dll7 appends 37-40 first, dll8 takes 41-44.
++    seven = [json.loads(x) for x in pass_text.splitlines()]
++    eight = [json.loads(x) for x in pass8_text.splitlines()]
++    v, d = verdict_8fam_records("\n".join(json.dumps(x) for x in prior36 + seven + eight))
++    check("8fam fallback-order fixture (41-44 after dll7) PASS", v == "PASS", str(d["divergences"][:3]))
++    check("8fam fallback-order fixture notes 41-44", any("41-44" in n for n in d["notes"]), str(d["notes"]))
++    v, d = verdict_8fam_records("\n".join(json.dumps(x) for x in prior36 + seven))
++    check("8fam FAIL fixture: 0 records for c3aba79f (never ran) names dual-owner suspects",
++          v == "FAIL" and any("stage 55/56 dual-owner" in x for x in d["divergences"]), str(d["divergences"][:2]))
++
+     print("== selftest C: E2E verdict fixtures ==")
+     pass35 = "\n".join([
+         *E2E_BLOCKS["S0_records"], *E2E_BLOCKS["S1_register"], *E2E_BLOCKS["S2a_prepare_archive"],
+@@ -2064,15 +2479,23 @@
+         p.add_argument("--dry-run", action="store_true", help="plan mode for this flow only (no execution)")
+         p.add_argument("--assume-yes", action="store_true",
+                        help="do not block at USER ACTION gates (scheduled runs stop honestly at dry mode instead)")
++        p.add_argument("--dll", choices=("7", "8"), default=None,
++                       help="DLL stage for flow 'all' (and 'plan --only all'): 8 = ALLFAM8_DLL_TEST "
++                            "(PREFERRED, default); 7 = ALLFAM7_DLL_TEST fallback attribution path. "
++                            "EXACTLY ONE DLL stage runs per session either way.")
+         return p
+ 
+     p = sub.add_parser("plan", help="dry-run: print every step, gate and exact command; NO execution")
+-    p.add_argument("--only", default="all", help="comma list: dll7,e2e,stage-qdrv1,game-evidence,all")
+-    add_flow("dll7", "7-family DLL payload-only stage (game closed)")
++    p.add_argument("--only", default="all", help="comma list: dll8,dll7,e2e,stage-qdrv1,game-evidence,all")
++    p.add_argument("--dll", choices=("7", "8"), default=None,
++                   help="DLL stage 'plan --only all' previews: 8 (preferred, default) or 7 (fallback)")
++    add_flow("dll8", "8-family DLL payload-only stage (game closed) — PREFERRED single DLL run")
++    add_flow("dll7", "7-family DLL payload-only stage — FALLBACK attribution path only (see CONSOLE-STAGE-PLAN-8FAM)")
+     add_flow("e2e", "E2E installer 15-dispatch stage 0..6 cycle (game closed)")
+     add_flow("stage-qdrv1", "stage qdrv1 PRX + ploader.ini =2 entry (BEFORE the game session)")
+     add_flow("game-evidence", "post-launch evidence + CP0-CP7 (interactive user handoffs)")
+-    add_flow("all", "full recommended session: dll7 -> e2e -> stage-qdrv1 -> game-evidence")
++    add_flow("all", "full recommended session: dll8 -> e2e -> stage-qdrv1 -> game-evidence "
++                    "(--dll 7 swaps in the dll7 fallback attribution path; exactly one DLL stage either way)")
+     sub.add_parser("selftest", help="host + fixture tests of the tool logic (no console contact)")
+ 
+     args = ap.parse_args(argv)
+@@ -2081,6 +2504,13 @@
+         return 2
+     if args.cmd == "selftest":
+         return selftest()
++    global SELECTED_DLL
++    sel = getattr(args, "dll", None)
++    if sel:
++        SELECTED_DLL = "dll" + sel
++        print("DLL stage selected for session 'all': %s%s" % (
++            SELECTED_DLL,
++            " (PREFERRED)" if SELECTED_DLL == DEFAULT_DLL else " (documented fallback attribution path)"))
+     STOP_ON_FAILURE = not args.continue_on_failure if hasattr(args, "continue_on_failure") else True
+ 
+     dry = (args.cmd == "plan") or getattr(args, "dry_run", False)

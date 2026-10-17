@@ -1,0 +1,31 @@
+# Tiny Probe transitions at Mono 6.12.0.206
+
+[Official pinned Mono source](https://github.com/mono/mono/tree/0cbf0e290c31adb476f9de0fa44b1d8829affa40). Pinned official commit: `0cbf0e290c31adb476f9de0fa44b1d8829affa40`. This is a source audit, not a host or execution result. TRANSITION-REQUIREMENTS.json lists exact files, symbols, branch conditions and required port evidence. SOURCE-RECEIPT.json pins eight newly retained official implementation files, copied license/patent notices and three already-retained runtime inputs. No platform macro or target ABI is assumed.
+
+## Host → managed invocation and exception
+
+The actual Probe needs static Run(int32) and static ThrowForHostBoundaryTest(), not a delegate callback. Public mono_runtime_invoke enters GC-unsafe mode, delegates through runtime callbacks, and with a nonnull exception-output pointer converts runtime errors to managed exceptions too (metadata/object.c:3095–3112). Pass obj=NULL and a pointer to the cookie value in params[0]; check exception first; only a successful boxed int32 result may be unboxed. Do not pass a null exception output or treat a thrown method result as usable. Attached-thread and managed-object rooting requirements still apply.
+
+MONO_AOT_MODE_INTERP sets AOT-only, interpreter and AOT-trampoline flags, but not force_use_interpreter (mini/driver.c:2941–2946). mini-runtime.c:3078–3104 first tries a compiled/AOT method; unavailable compiled code can select use_interp. Its :3208 branch calls interp_runtime_invoke directly as a C callback. For interpreted Run, interp.c:1906–1953 constructs a runtime-invoke IL wrapper, transforms it and executes an interpreter frame. Wrapper IL generation is required even in a no-native-JIT host.
+
+marshal-ilgen.c:1639–1715 emits a managed Exception catch when exc is nonnull. ThrowForHostBoundaryTest also needs real corlib InvalidOperationException/string construction. interp_throw (interp.c:1104–1142) calls mono_handle_exception with an LMF frame; interp_set_resume_state (:7217) roots the exception via GC handle. If unwinding reaches native code, mono_restore_context is called. This requires interpreter-aware EH, not a C++ catch around an imaginary interpreter function.
+
+## Managed → native imports: two real branches
+
+transform.c:1728–1738 replaces PInvoke calls with mono_marshal_get_native_wrapper; marshal.c:3466–3530 resolves the native address for the non-AOT IL wrapper. native-library.c:1179–1278 reads actual ImplMap/ModuleRef metadata, applies enabled dllmap mappings, resolves and caches the address. The legacy __Internal branch (:1068) opens the running process namespace, then pinvoke_probe_for_symbol (:1280 onward) may try name variants unless metadata requests no mangling. A fallback resolver does not by itself deny symbols already available through the normal loader. A restricted actual metadata/resolver policy and two implemented bridge exports remain missing.
+
+The fast branch matters for this tiny probe: transform.c:2362–2385 selects MINT_CALLI_NAT_FAST for non-dynamic simple signatures when MONO_ARCH_HAS_NO_PROPER_MONOCTX is absent. Its classifier (:1743–1800) accepts I4 and pointer-like arguments/results. AbiVersion is eligible for V_P; RuntimeProbe can be PP_P after verifying the generated int32/byref-int32 native signature. interp.c:2090–2140 directly calls pointer-sized C function types, wrapped by do_icall_wrapper (:2211) with LMF/context capture. This is upstream architecture-dependent ABI code, not portable C proof that int32 and pointer function types are interchangeable. Real compiler/platform ABI acceptance remains necessary.
+
+If the generic branch is selected, ves_pinvoke_method (interp.c:1558–1621) obtains interp_to_native_trampoline and packs arguments via architecture CallContext helpers or build_args_from_sig. In the selected execution mode the named trampoline comes from AOT; the special no-proper-MonoContext branch instead calls a JIT-only LMF wrapper path, which must be resolved against actual AOT availability, not waved away. Therefore the generic trampoline is conditional for the two Probe imports, rather than automatically exercised.
+
+Both paths retain GC/thread/LMF requirements. marshal-ilgen.c:1805–1878 and :1994–2059 emit enter/exit GC-safe region calls under their documented conditions. interp.c:600–640 requires a real MonoContext capture/resume strategy; unsupported configurations explicitly error. get_context (:464) allocates interpreter frame/data stacks and uses native TLS. None of this is supplied by two resolver function pointers.
+
+## AOT/exception prerequisite that remains even with fast imports
+
+mini-exceptions.c:212–239 loads named AOT trampolines restore_context, call_filter, throw_exception, rethrow_exception and rethrow_preserve_exception, then calls mono_arch_exceptions_init. aot-runtime.c:5468–5517 obtains the mscorlib AOT module, loads named code and registers trampoline metadata. Thus a plain IL corlib plus the C interpreter sources is insufficient for the current INTERP configuration. Matching corlib/AOT code, loader/relocations and exception/unwind registration must exist. LLVM-only modes are different branches and are not proposed substitutes.
+
+native_to_interp_trampoline / mono_create_ftnptr_arg_trampoline (interp.c:2955–3028) serve compiled/function-pointer entry paths. Probe declares no delegates or reverse callbacks; the direct runtime-invoke interpreter path does not inherently traverse that entry wrapper. Additional corlib/internal-call reachability could add requirements, so do not claim those symbols are globally unnecessary without a complete closure.
+
+## Bounded next work
+
+No enabling runtime component was staged: host target configuration, real AOT corlib, allocator/TLS/GC/context implementation and bridge export resolution are absent. A portable shim cannot replace those semantics. The useful build-window prerequisite is to resolve each JSON row against an actual target runtime, verify fast/generic path selection, then execute Run with successful and failing cookie/status cases, missing-import refusal, and ThrowForHostBoundaryTest with a nonnull exception output. This audit performs no builds, installs, native tests or target execution and makes no Unity/BepInEx claim.

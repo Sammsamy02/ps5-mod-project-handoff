@@ -1,0 +1,49 @@
+--- a/NativePropertyReadBackend.inl	2026-10-08 11:23:10
++++ b/NativePropertyReadBackend.inl	2026-10-08 13:10:50
+@@ -1,5 +1,8 @@
+ // Included in SeedArming: use the selected existing VQ ABI and fault ledger.
+ // Unlike startup admission, no startup deadline/callback, bank or new probe.
++// l24: PropertyImageClassRange now routes through bridge_image_range's
++// spanpub fallback (module-info when obtained, else PT_LOAD + this-capture's
++// VM records) instead of duplicating a module-info-only subset.
+ struct PropertyReadOps {
+     uint64_t now_ms() const {
+         return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+@@ -22,22 +25,22 @@
+     std::memcpy(destination,reinterpret_cast<const void*>(address),length);
+     return !budget.expired(ops.now_ms());
+ }
++// l24: the class-range check now uses the bridge's full policy instead of
++// duplicating a module-info-only subset. The l23 version failed because it
++// required module-info mappings (image_segment_source=2 = never obtained on
++// this console), making from_profile always return false with 0 mappings.
++// The bridge's spanpub fallback provides the missing proof from this-capture
++// VM records (g_spanpub_records, g_image_mapping_count).
+ static bool PropertyImageClassRange(uintptr_t address,size_t length) {
+-    const uint64_t actual_base=module_view_base();
+-    const rc::codecache::Metadata* image=nullptr;
+-    if(bridge_code_cache_context(actual_base,&image)!=1 || !image || !image->ready || image->base!=actual_base) return false;
+-    // Authenticated profile PT_LOAD and observed mappings must agree. Never
+-    // accept a heap FFieldClass simply because its name/flags look familiar.
+-    if(image->segment_count>rc::codecache::kMaxLoads || image->reported_count>4) return false;
+-    rc::imagecoverage::Segment segments[rc::codecache::kMaxLoads]{};
+-    for(size_t i=0;i<image->segment_count;++i) {
+-        const auto& segment=image->segments[i];
+-        segments[i]={segment.vaddr,segment.filesz,segment.memsz,segment.flags,segment.index};
+-    }
+-    rc::imagecoverage::Mapping maps[4]{};
+-    for(size_t i=0;i<image->reported_count;++i) maps[i]={image->reported[i].start,image->reported[i].end,image->reported[i].protection};
+-    const auto hit=rc::imagecoverage::from_profile(segments,image->segment_count,image->base,actual_base,address,length,maps,image->reported_count);
+-    if(!hit.readable || bridge_copyin_range_faulted(address,length)!=0) return false;
++    // Primary: route through the bridge's existing policy (module-info when
++    // obtained, else PT_LOAD + spanpub VM records). Same fail-closed
++    // semantics — no proof means refuse.
++    rc::imagecoverage::Hit hit{};
++    if (bridge_image_range(static_cast<uint64_t>(address), length, &hit) != 1) return false;
++    if (!hit.readable || bridge_copyin_range_faulted(address, length) != 0) return false;
++    // Secondary: the same admission-coverage proof as l23 (budgeted VQ +
++    // fault-ledger re-check). This is the post-range proof that the bytes
++    // are actually readable, independent of the range source.
+     PropertyReadOps ops; admission::Budget budget(ops.now_ms(),1000);
+     return admission::coverage(ops,budget,address,length).verdict==admission::Verdict::Readable;
+ }

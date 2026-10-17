@@ -1,0 +1,10 @@
+#define HOST_NATIVE 1
+#define HOST_ENTRY_NATIVE 1
+#define HOST_ADDRESS "ps5-host-not-configured.invalid"
+#define HOST_PROFILE "development_lan"
+#define HOST_LIFETIME 600
+#define TLS_SERVER_ADDRESS "ps5-host-not-configured.invalid"
+#define TLS_SERVER_PORT 8443
+#define TLS_EXPECTED_HOSTNAME "native-https.modbridge.test"
+#define TLS_CONFIG_ID "8d9e101cc46d2a52d16613f55fb5a5eda611826cc6380add9d754ea886b107a1"
+#define TLS_SOURCE_ORIGIN "reviewed_kern_arnd"

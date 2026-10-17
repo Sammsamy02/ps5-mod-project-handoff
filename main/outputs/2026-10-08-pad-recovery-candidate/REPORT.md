@@ -1,0 +1,7 @@
+# Controller recovery candidate — Mac-only
+
+The exact prior helper fails negative-result retry, user-tuple rebind and retired-result invalidation in normal and fatal ASan/UBSan controls. The candidate corrects those paths while preserving startup deferral and never closing a borrowed game handle. It retains and joins the worker rather than detaching it. A hung SDK call stays the sole in-flight call; it is never canceled or overlapped. A single live borrowed lease is supported, matching the sole processing-source contract. Concurrent-source ownership is not claimed.
+
+Seven actual helper-body controls pass in normal, fatal ASan/UBSan and TSan modes (21 runs), including busy-worker stop refusal and concurrent pending requests. Four actual C entry controls pass in normal and fatal sanitizer modes (8 runs): running/unknown helpers refuse finalization even without an active runtime. The whole selected SDK native helper and guarded entry compile. Per-helper UND additions are thread::join and __cxa_end_catch; these require full composition comparison, not a new-import claim.
+
+The new module-stop entry consumes the helper residence export. Stop closes admission before any owner finalization, and a running worker forces retention. These host seams and target compilation do not prove PS5 load/unload behavior, GetHandle semantics, native input delivery or a menu. PS5PadSource read-error recovery and the current console mapping remain unresolved. Original mod/config/frozen runtime artifacts are untouched; no console contact.

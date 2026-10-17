@@ -1,0 +1,11 @@
+# Native Lua property checkpoint — October 1, 2026
+
+The shared experimental Lua property binding passed its original eight fixture cases on the PS5: 9,353 checks, zero failures and a synthetic fixture return of zero. The checks include exhaustive Boolean mask behavior and synthetic Lua method/property operations over owned data. They do not represent game API calls or downloaded mods.
+
+The native caller retained the exact frozen fixture and binding sources; only the fixture's final main symbol was renamed in an inclusion copy, with the inverse byte identity verified. It wrote an entry marker before the fixture and a bounded result afterward in a fresh private namespace. Both files were created exclusively, synced and read back by the caller. Independent FTP readback then matched the complete 240-byte marker and 662-byte result to the frozen expected bytes. The result binds the profile, fixture and adapter hashes. One payload dispatch was recorded; no game destination, downloaded script, engine memory or autoload configuration was accessed.
+
+The strict PS5 build passed with 41 dynamic imports matched against the retained SDK stubs and valid ELF load/dynamic geometry. The same wrapper also passed its host test and rejected a repeat invocation before running the fixture, leaving both existing files unchanged. The target result proves completion of the synthetic fixture; it does not prove the final caller return, final root-handle close or process exit. Ordinary inherited SDK startup effects are outside the leaf fixture claim.
+
+The engine connection is still missing: PS5 object/name discovery, reflection layouts, object lifetime validation, function calls on the game thread and hooks. Menu, minimap and stamina have not run in the game. The Nexus account/download flow is also not integrated into a finished PS5-only installer. The next work uses shared engine and dependency adapters, with game facts in profiles and unchanged mod downloads.
+
+Private source/build evidence is retained under `.superpowers/native-dependency-spike/ue4ss-lua-bool-property-experiment-1` and `ue4ss-lua-bool-console-caller-1`; actual console state, marker and result are under `.superpowers/native-observations/lua-bool-console-2026-10-01`. Original downloads, built payloads and captured game data remain ignored private files.

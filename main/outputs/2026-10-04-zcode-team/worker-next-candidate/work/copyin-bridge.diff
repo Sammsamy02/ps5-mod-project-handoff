@@ -1,0 +1,220 @@
+--- outputs/2026-10-04-zcode-controller/launch10-build/final-units/runtime_start_bridge_r14_diag_spanpub.cpp	2026-10-05 19:45:28
++++ outputs/2026-10-04-zcode-team/worker-copyin-unit/staging/runtime_start_bridge_r14_diag_spanpub.cpp	2026-10-05 20:47:10
+@@ -832,6 +832,217 @@
+     return (rc == 0) ? 1 : (not_mapped ? 0 : -1);
+ }
+ 
++// ---- v5.1 (worker-copyin-unit, STAGED NEXT-candidate; the current bridge
++// ---- candidate is under a live incident investigation — this hunk is a
++// ---- worker-dir staging, NOT a lineage edit): fresh per-address
++// ---- WRITE(2)-COPYIN owned-read probe, sibling of
++// ---- bridge_kernel_range_verdict above.
++//
++// Evidence class (worker-write-copyin, builds prospero-186dab02e289 /
++// prospero-98d370be8eeb, 2026-10-06, standalone payload — NEVER
++// game-process evidence): write(2) of [addr, addr+len) into a REAL owned
++// file is a kernel-mediated read + readability oracle. Image .bss / stack /
++// malloc-heap sources transfer byte-true (rc==len, host-verified contents);
++// munmap hole / PROT_NONE / DM-class 0x22C0000000 / high unmapped
++// 0x4000000000 all refuse with EFAULT leaving the sink byte-empty
++// (all-or-nothing per copyin call; partials never observed). /dev/null is
++// VACUOUS (rc==len, nothing copied) — a real file sink is mandatory and
++// every success classification verifies the sink byte length.
++//
++// SEMANTICS HONESTY (address-class-unknown): the kernel enforces a
++// SOURCE-REGION-CLASS allowlist on copyin — a runtime mmap(MAP_ANON) page
++// that is directly CPU-readable still EFAULTs (proven twice). This
++// probe answers "kernel-copyin-readable", NOT "CPU-readable"; a refused
++// verdict (0) never implies unmapped (unmapped OR PROT_NONE OR
++// non-allowlisted class all EFAULT identically). In-game image/heap
++// classes are the ones that succeeded standalone; in-game semantics are a
++// hypothesis on the untestable-until-game-run list.
++//
++// SHAPE LAW (the 16 MiB-class cap question resolves to this, not a new
++// semantic constant): len==8 is the unambiguous refusal probe shape;
++// larger ranges step page-granular, each write confined to ONE page (a
++// copyin call is all-or-nothing per call, so a write spanning two pages
++// would make the refusal ambiguous). Total per-call bytes are budget-
++// capped at 16 MiB class (kMaxProbeBytes) — a larger request is invalid
++// (code 3), never partially probed.
++//
++// CONVENTION LAW: unlike mincore (whose generic-trampoline form returns
++// raw-positive kernel errors), the write-copyin campaign observed the
++// -1/errno wrapper convention — while THIS TU reaches the kernel through
++// the same generic variadic trampoline as SYS_mincore above, whose
++// evidence-backed form is raw-positive errors with errno untouched. The
++// classifier accepts BOTH conventions WITHOUT conflating them: the raw rc
++// is captured and emitted, errno is captured fresh, and the SINK BYTE
++// COUNT (lseek SEEK_END truth) is the disambiguator — never the rc shape
++// alone (a raw EFAULT=14 over a 0x1000 chunk would otherwise read as a
++// 14-byte partial).
++//
++// CLEANUP LAW: the sink is a FIXED bridge-owned path under /data with the
++// modbridge- prefix convention; unlink-first clears any stale leaked sink;
++// close + unlink run on EVERY path once the sink exists (an EFAULT leaves
++// 0 bytes but the file exists). The append-only diagnostic record stays as
++// provenance; no sink bytes are trusted after unlink.
++//
++// Returns (readable: 1 / refused: 0 / unavailable: -1). Diagnostic tags,
++// same code classes as pool_range_verdict_fresh:
++//   pool_copyin_probe_fresh  1 readable / 0 refused / 2 unavailable /
++//                            3 invalid request class
++//   pool_copyin_probe_rc     raw write(2) rc of the last chunk (u32;
++//                            0xFFFFFFFF encodes -1)
++//   pool_copyin_probe_errno  errno captured after that write (0 under the
++//                            raw-positive trampoline form, by evidence)
++//   pool_copyin_probe_sink   final sink byte count (u32; <= 16 MiB)
++// The capture accessor below hands the FIRST kSinkCaptureBytes of the sink
++// to the initializer so the entry-0 'None' anchor verification reads the
++// SAME sink bytes the kernel-mediated read produced (owned-read discipline
++// end to end; never a direct block read on the copyin-admitted path).
++static uint8_t g_write_copyin_sink_capture[0x1000]; // first page of the sink
++static uint32_t g_write_copyin_sink_len = 0;        // valid bytes in capture
++static bool g_write_copyin_sink_valid = false;      // set only on READABLE
++
++extern "C" int bridge_write_copyin_sink_bytes(const uint8_t **out_bytes, uint32_t *out_len)
++{
++    if (out_bytes == nullptr || out_len == nullptr || !g_write_copyin_sink_valid) {
++        return 0;
++    }
++    *out_bytes = g_write_copyin_sink_capture;
++    *out_len = g_write_copyin_sink_len;
++    return 1;
++}
++
++extern "C" int bridge_kernel_write_copyin_probe(uint64_t addr, uint64_t len)
++{
++    static constexpr uint64_t kPage = 0x1000;
++    static constexpr uint64_t kMaxProbeBytes = 0x1000000; // 16 MiB class budget cap
++    static const char *kSinkPath = "/data/modbridge-copyin-sink.bin";
++    if (len == 0 || len > kMaxProbeBytes) {
++        ::diagnostic_event("pool_copyin_probe_fresh", 3u); // invalid request class
++        return -1; // no syscalls, no sink, no target bytes touched
++    }
++    const int errno_before = errno; // fresh pre-probe capture (campaign law:
++    (void)errno_before;             // wrapper convention shows 0-before); the
++                                    // trampoline form leaves it untouched
++    // Unlink-first law (stale-leak tolerance), then the real-file sink
++    // open. /dev/null-style sinks are vacuous (rc==len, no copyin) — the
++    // sink byte-count verification below refuses them.
++    (void)::syscall(SYS_unlink, reinterpret_cast<long>(kSinkPath));
++    const long fd = ::syscall(SYS_open, reinterpret_cast<long>(kSinkPath),
++                              static_cast<long>(O_WRONLY | O_CREAT | O_TRUNC),
++                              static_cast<long>(0644));
++    if (fd < 0) {
++        ::diagnostic_event("pool_copyin_probe_fresh", 2u); // unavailable (sink open class)
++        ::diagnostic_event("pool_copyin_probe_rc", static_cast<uint32_t>(fd));
++        ::diagnostic_event("pool_copyin_probe_errno", static_cast<uint32_t>(errno));
++        return -1; // target bytes untouched
++    }
++    uint64_t landed = 0;    // sink byte truth (lseek SEEK_END after each write)
++    uint64_t cursor = addr; // NOT dereferenced CPU-side: write(2) carries it
++    int verdict = -1;       // unavailable unless proven otherwise
++    uint32_t code = 2u;     // diagnostic class (unavailable default)
++    bool completed = false; // every chunk transferred fully
++    long last_rc = 0;
++    int errno_at_write = 0;
++    while (cursor < addr + len) {
++        // Page-granular step: a chunk never crosses a page boundary, so a
++        // refusal is unambiguous for that page. len==8 yields the single
++        // 8-byte probe shape.
++        const uint64_t page_remaining = kPage - (cursor & (kPage - 1));
++        const uint64_t range_left = addr + len - cursor;
++        const uint64_t chunk = page_remaining < range_left ? page_remaining : range_left;
++        errno_at_write = errno; // pre-write capture (fresh; see convention law)
++        last_rc = ::syscall(SYS_write, static_cast<long>(fd),
++                            reinterpret_cast<long>(cursor),
++                            static_cast<long>(chunk));
++        errno_at_write = errno; // post-write capture BEFORE any further syscall
++        const long sink_end = ::syscall(SYS_lseek, static_cast<long>(fd),
++                                        0L, static_cast<long>(SEEK_END));
++        if (sink_end < 0 || static_cast<uint64_t>(sink_end) == landed) {
++            // Nothing landed for this chunk: copyin refusal (EFAULT class
++            // under either convention). All-or-nothing per call — the sink
++            // holds the previously landed pages only. Refused (0), never
++            // "unmapped" (the source class is address-class-unknown).
++            // EXCEPTION — policy abort: rc==-1/errno==EPERM (or the raw
++            // EPERM form) maps to UNAVAILABLE (2), never to a source
++            // refusal: the design note's policy-wall row ("no per-address
++            // retries"). EPERM was NEVER observed on the write-copyin route
++            // (the prior ptrace EPERM wall does not apply here), so this is
++            // an unseen-class honest demotion, and a single ambiguous raw
++            // EPERM==1 cannot admit (1 < chunk for every legal shape).
++            if ((last_rc == -1 && errno_at_write == EPERM) || last_rc == EPERM) {
++                code = 2u;
++                verdict = -1;
++            } else {
++                code = 0u;
++                verdict = 0;
++            }
++            break;
++        }
++        if (static_cast<uint64_t>(sink_end) != landed + chunk) {
++            // Partial transfer (never observed in the campaign): recorded
++            // honestly as unavailable with the raw rc/errno — never admitted.
++            // (A raw-positive lseek ERROR masquerading as a small byte count
++            // also lands here — the safe direction: never admits.)
++            code = 2u;
++            verdict = -1;
++            break;
++        }
++        landed = static_cast<uint64_t>(sink_end);
++        cursor += chunk;
++    }
++    if (verdict == -1 && landed == len) {
++        completed = true;
++    }
++    // Independent read-side sink cross-check (the vacuity law, second
++    // observation): reopen O_RDONLY and demand lseek SEEK_END == len. This
++    // rules out /dev/null-class vacuous sinks (rc==len, nothing copied) AND
++    // the pathological raw-positive lseek-error masquerade on the write fd.
++    // Only a double-verified full sink classifies READABLE (1).
++    long rfd = -1;
++    if (completed) {
++        rfd = ::syscall(SYS_open, reinterpret_cast<long>(kSinkPath),
++                        static_cast<long>(O_RDONLY), 0L);
++        if (rfd < 0) {
++            completed = false; // sink vanished between close and reopen
++        } else {
++            const long rsize = ::syscall(SYS_lseek, static_cast<long>(rfd),
++                                         0L, static_cast<long>(SEEK_END));
++            if (rsize < 0 || static_cast<uint64_t>(rsize) != len) {
++                completed = false;
++            }
++        }
++    }
++    if (completed) {
++        code = 1u;
++        verdict = 1;
++    }
++    // Byte capture BEFORE cleanup: the sink's FIRST page (the entry-0
++    // 'None' anchor needs 2 + 4 bytes at offset 0). Capture failure does
++    // not change the verdict (the range IS readable) — it only leaves the
++    // accessor empty, and the initializer's anchor refuses loudly on a
++    // short capture rather than falling back to a direct block read.
++    if (rfd >= 0) {
++        if (verdict == 1) {
++            const long got = ::syscall(SYS_read, static_cast<long>(rfd),
++                                       reinterpret_cast<long>(g_write_copyin_sink_capture),
++                                       static_cast<long>(sizeof(g_write_copyin_sink_capture)));
++            if (got > 0) {
++                g_write_copyin_sink_len = static_cast<uint32_t>(got);
++                g_write_copyin_sink_valid = true;
++            }
++        }
++        ::syscall(SYS_close, static_cast<long>(rfd));
++    }
++    // Cleanup law: close + unlink ALWAYS once the sink exists (refusal
++    // paths included — an EFAULT leaves 0 bytes but the file exists).
++    ::syscall(SYS_close, static_cast<long>(fd));
++    (void)::syscall(SYS_unlink, reinterpret_cast<long>(kSinkPath));
++    ::diagnostic_event("pool_copyin_probe_fresh", code);
++    ::diagnostic_event("pool_copyin_probe_rc", static_cast<uint32_t>(last_rc));
++    ::diagnostic_event("pool_copyin_probe_errno", static_cast<uint32_t>(errno_at_write));
++    ::diagnostic_event("pool_copyin_probe_sink", static_cast<uint32_t>(landed));
++    return verdict;
++}
++
+ // L3: the pre-lease coverage gate. Recomputes EXACTLY the ranges the
+ // conversion will lease — records of the same frozen snapshot that contain
+ // `observed_base`, are kve-readable, and intersect the extent (the adapter's
